@@ -129,8 +129,10 @@ description: >-
 validation-criteria: >-
   `cargo test --locked` in `template-service/` runs the service against
   Toha's library on a Unix socket: `tests/create.rs` covers create, rejected
-  answers, generation into an initialized repository, numbers, revision
-  pinning, flow ends, hook and I/O failures; `tests/upgrade.rs` covers an
+  answers, generation into an initialized repository, revision pinning and
+  flow ends; `tests/hooks.rs` covers hook folders, hook and I/O failures;
+  `tests/numbers.rs` covers number values through the session and the
+  applied record; `tests/upgrade.rs` covers an
   upgrade between two template versions that asks only the new question and
   keeps local edits, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;
