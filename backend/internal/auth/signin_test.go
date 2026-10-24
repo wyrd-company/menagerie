@@ -294,6 +294,7 @@ func TestSignInReturnsOnlyToLocalPaths(t *testing.T) {
 		"/workspaces/a/upgrade":  "/workspaces/a/upgrade",
 		"https://evil.example/":  "/",
 		"//evil.example/":        "/",
+		"///evil.example/":       "/",
 		"/\\evil.example/":       "/",
 		"javascript:alert(1)":    "/",
 		"page/relative":          "/",

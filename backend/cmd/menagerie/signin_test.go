@@ -169,6 +169,11 @@ func (m *menagerie) do(c *http.Client, method, path, body string, header http.He
 		m.t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	// An event stream does not end while its job runs; its status and
+	// headers are the answer.
+	if resp.Header.Get("Content-Type") == "text/event-stream" {
+		return answer{resp.StatusCode, resp.Header, "(event stream)"}
+	}
 	b, _ := io.ReadAll(resp.Body)
 	return answer{resp.StatusCode, resp.Header, string(b)}
 }
