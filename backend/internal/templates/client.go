@@ -32,9 +32,6 @@ const (
 	pathUpgradeApply     = "/v1/upgrades/apply"
 )
 
-// maxReply bounds a reply body read from the template service.
-const maxReply = 64 << 20
-
 // Selector names the workspace, its folder and the approved template every
 // request carries.
 type Selector struct {
@@ -260,12 +257,11 @@ func (c *Client) post(ctx context.Context, path string, body any) (json.RawMessa
 		return nil, &UnavailableError{Err: err}
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxReply+1))
+	// A reply carries the whole interview session, which has no size
+	// bound in the template service; it is read whole.
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, &UnavailableError{Err: fmt.Errorf("read reply: %w", err)}
-	}
-	if len(data) > maxReply {
-		return nil, &UnavailableError{Err: fmt.Errorf("reply exceeds %d bytes", maxReply)}
 	}
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
 		return nil, &UnavailableError{Err: fmt.Errorf("reply %d is not JSON", resp.StatusCode)}

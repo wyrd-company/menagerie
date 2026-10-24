@@ -119,9 +119,13 @@ func TestAnswersRouteChecksTheJobAndBody(t *testing.T) {
 	for _, body := range []string{
 		``, `{}`, `{"session":{}}`, `{"session":null,"submission":{}}`, `{"session":{},"submission":[]}`,
 		`{"session":{},"submission":{},"extra":1}`, `{"session":{},"submission":{}} {}`, `not json`,
+		// Large bodies keep the same checks.
+		`{"session":{"big":"` + strings.Repeat("x", 2<<20) + `"},"submission":{}} {}`,
+		`{"session":{"big":"` + strings.Repeat("x", 2<<20) + `"},"submission":{},"extra":1}`,
+		`{"session":{"big":"` + strings.Repeat("x", 2<<20) + `"}`,
 	} {
 		if status, got := w.do(t, http.MethodPost, "/api/jobs/"+job.ID()+"/answers", body); status != 400 || !strings.Contains(got, "invalid-request") {
-			t.Errorf("body %q: %d %s", body, status, got)
+			t.Errorf("body %.80q: %d %s", body, status, got)
 		}
 	}
 	if job.Snapshot().State != jobs.WaitingForAnswers || len(w.tmpl.seen()) != 1 {
@@ -181,5 +185,40 @@ func TestAnAdmittedAnswerIsRefusedWhenTheInterviewCloses(t *testing.T) {
 	}
 	if _, err := w.Answer(t.Context(), "job", json.RawMessage(`{}`), json.RawMessage(`{}`)); err != api.ErrNotWaiting {
 		t.Fatalf("answer after close: %v", err)
+	}
+}
+
+// TestAnAnswerCarriesASessionOfAnySize sends a session and submission far
+// above the bound of a job request: the template service receives both
+// unchanged, and its reply of the same size comes back unchanged.
+func TestAnAnswerCarriesASessionOfAnySize(t *testing.T) {
+	w := newWorld(t)
+	big := strings.Repeat("x", 3<<20)
+	session := `{"big":"` + big + `","n":12345678901234567890,"exp":1e2}`
+	reply := `{"session":{"grown":"` + big + big + `","n":1.50},"state":"completed","document":null,"warnings":[]}`
+	var gotSession, gotSubmission string
+	w.tmpl.answerInterview = func(_ templates.Selector, session, submission json.RawMessage) (*templates.Reply, error) {
+		gotSession, gotSubmission = string(session), string(submission)
+		return &templates.Reply{Raw: json.RawMessage(reply), Session: json.RawMessage(`{"grown":"` + big + big + `","n":1.50}`), State: templates.Completed, Document: json.RawMessage("null")}, nil
+	}
+	job := w.startJob(t, "create", "alpha", "sample-v1")
+	waitWaiting(t, job, 0)
+	submission := `{"template":"sample@1","answers":{"label":"` + big + `"}}`
+	body := `{"session":` + session + `,"submission":` + submission + `}`
+	if len(body) <= 6<<20 {
+		t.Fatalf("body is only %d bytes", len(body))
+	}
+	status, got := w.do(t, http.MethodPost, "/api/jobs/"+job.ID()+"/answers", body)
+	if status != http.StatusOK || got != reply {
+		t.Fatalf("answer %d (%d bytes)", status, len(got))
+	}
+	if gotSession != session || gotSubmission != submission {
+		t.Fatal("the session or submission changed on the way")
+	}
+	if snap := waitEnded(t, job); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if w.tmpl.session("generate") != `{"grown":"`+big+big+`","n":1.50}` {
+		t.Fatal("generation did not receive the large completed session")
 	}
 }

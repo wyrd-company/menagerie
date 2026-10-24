@@ -39,8 +39,11 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, apiError{Kind: "job-not-found", Message: "no job with this id in this process"})
 		return
 	}
+	// The body carries the whole interview session, which the template
+	// service accepts at any size, so it is not held to the bound of a job
+	// request.
 	var req AnswerRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, apiError{Kind: "invalid-request", Message: err.Error()})

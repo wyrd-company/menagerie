@@ -219,3 +219,18 @@ func TestAbsentSocketIsUnavailable(t *testing.T) {
 		t.Fatalf("error %T %v", err, err)
 	}
 }
+
+// TestRepliesOfAnySizeAreReadWhole checks that a reply carrying a session
+// larger than any earlier read bound arrives whole.
+func TestRepliesOfAnySizeAreReadWhole(t *testing.T) {
+	f := newFake(t)
+	big := strings.Repeat("y", 65<<20)
+	f.answer(200, `{"session":{"big":"`+big+`"},"state":"questions","document":{},"warnings":[]}`)
+	reply, err := New(f.socket).AnswerInterview(context.Background(), sel, json.RawMessage(session), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Session) != len(`{"big":""}`)+len(big) {
+		t.Fatalf("session of %d bytes", len(reply.Session))
+	}
+}

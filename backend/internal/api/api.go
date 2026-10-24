@@ -204,7 +204,8 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job.Snapshot())
 }
 
-// maxRequestBody bounds a JSON request body.
+// maxRequestBody bounds a job request body. An interview answer is not
+// held to it: it carries the whole session.
 const maxRequestBody = 1 << 20
 
 func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
