@@ -202,7 +202,7 @@ async fn a_session_is_pinned_to_its_template_target_and_flow() {
         "{}",
         tampered.json
     );
-    // A moving address keeps the session's commit, which must still exist.
+    // A moving address keeps the session's commit only when a start admitted it.
     let moving = world.select("alpha", "sample-main");
     let branch = service.post("/v1/interviews", &moving).await;
     let mut missing = branch.json["session"].clone();
@@ -216,9 +216,9 @@ async fn a_session_is_pinned_to_its_template_target_and_flow() {
             ),
         )
         .await;
-    assert_eq!(tampered.status, 422, "{}", tampered.json);
-    assert!(
-        tampered.kind().starts_with("template-"),
+    assert_eq!(
+        (tampered.status, tampered.kind()),
+        (409, "session-mismatch"),
         "{}",
         tampered.json
     );

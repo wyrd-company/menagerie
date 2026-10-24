@@ -56,16 +56,25 @@ description: >-
   continues after a service restart.
 
 
-  Revisions. A tag or commit address fixes one revision: a session on any
-  other revision is refused as `session-mismatch` before replay. A branch
-  address, or one without a reference, moves only when an operation starts:
-  a start uses the branch's current commit and its session keeps that commit
-  until it ends. The service learns whether a named reference is a tag or a
-  branch from Toha's fetch, so answering or applying a session of such an
-  address reads its repository. A start first refreshes an approved template
+  Revisions. A start admits the revision its approved address resolves to:
+  a tag or commit address its fixed commit, a branch address, or one
+  without a reference, the branch's current commit. Its session keeps that
+  revision until it ends. The admission is Toha's source cache entry for
+  the approved template, the folder Toha replays a resumed revision from:
+  a start that resolves through Toha's cache records it there, and one that
+  resolves through an installation materializes it there through Toha's
+  resume. Before any replay, a session's commit must be a full Git object
+  id whose cache entry for the approved template, inside the service's
+  cache, is a checkout of exactly that commit from the approved source.
+  Otherwise the session is admitted only when the approved address
+  resolves to exactly its commit now, without any refresh; else it is
+  refused as `session-mismatch`. An admitted session replays from the cache
+  without reaching its source. A start first refreshes an approved template
   installed in Toha's user registry the way Toha's catalog update does: an
   installed branch moves to its current commit, an installed tag or commit
-  stays, and an installed tag fixes the installed commit.
+  stays. The admission covers what reaches Toha's cache: clearing the cache
+  leaves a session only the resolution check, and Toha also caches the base
+  revision named by a workspace's applied record when an upgrade starts.
 
 
   Create. `/v1/interviews` refuses an existing folder. Its first batch asks
@@ -117,6 +126,7 @@ description: >-
   `target-changed` (409). Toha refusals: `template-not-found` (422),
   `template-stale-revision` (422), `template-ambiguous` (422),
   `template-resolve-failed` (422), `template-refresh-failed` (422),
+  `template-cache-conflict` (409),
   `template-invalid` (422),
   `missing-requirements` (422), `document-invalid` (422), `parts-invalid`
   (422), `context-invalid` (422), `environment-refused` (422),
@@ -148,8 +158,9 @@ validation-criteria: >-
   answers, generation into an initialized repository, revision pinning and
   flow ends; `tests/hooks.rs` covers hook folders, hook and I/O failures;
   `tests/numbers.rs` covers number values through the session and the
-  applied record; `tests/revisions.rs` covers fixed and moving addresses,
-  installed branches and tags; `tests/upgrade.rs` covers an
+  applied record; `tests/revisions.rs` covers admitted revisions for
+  fixed and moving addresses, installed branches and tags;
+  `tests/offline.rs` resumes every route offline after a restart; `tests/upgrade.rs` covers an
   upgrade between two template versions that asks only the new question and
   keeps local edits, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;

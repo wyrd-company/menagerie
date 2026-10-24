@@ -43,6 +43,12 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
         host::INTERACTIVE,
         &mut environment,
     )?;
+    crate::revision::admit(
+        &prepared.resolved.formal_name,
+        &prepared.resolved.commit,
+        &service.host,
+        &config,
+    )?;
     warnings.extend(prepared.warnings.iter().cloned());
     let session = UpdateSession::start(
         prepared,
@@ -67,7 +73,11 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;
     crate::revision::check(
         &record,
-        &crate::revision::admitted(selected.template, &service.host, &config, &registry)?,
+        &expected.formal_name,
+        selected.template,
+        &service.host,
+        &config,
+        &registry,
     )?;
     let answers = checks::submission(&record, &request.submission)?;
     let mut source = ProcessEnvironment;
@@ -88,7 +98,11 @@ pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, Ser
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;
     crate::revision::check(
         &record,
-        &crate::revision::admitted(selected.template, &service.host, &config, &registry)?,
+        &expected.formal_name,
+        selected.template,
+        &service.host,
+        &config,
+        &registry,
     )?;
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);

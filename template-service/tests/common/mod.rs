@@ -159,6 +159,14 @@ impl World {
             flows_template(&dir, hook);
             commit_all(&dir, "flows");
         }
+        // A different repository whose address folds to the same Toha cache
+        // key as `sample@v1`.
+        let collision = root.join("templates/sample_v1");
+        std::fs::create_dir_all(&collision).unwrap();
+        git(&collision, &["init", "-q", "-b", "main"]);
+        sample_template(&collision, 1);
+        write(&collision, "template/local.txt", "first: collision\n");
+        commit_all(&collision, "collision");
         let workspaces = root.join("workspaces");
         std::fs::create_dir_all(&workspaces).unwrap();
         let data = root.join("data");
@@ -171,7 +179,7 @@ impl World {
             &root,
             "config.yml",
             format!(
-                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n",
+                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n",
                 workspaces.display(),
                 socket.display(),
                 v1 = v1,
@@ -202,6 +210,15 @@ impl World {
         host.prepare().unwrap();
         let catalog = toha::catalog::Catalog::load(host.paths.clone(), &host.cwd).unwrap();
         toha::catalog::add(&catalog, address, None, false, &host.cwd).unwrap();
+    }
+
+    /// Make every template repository unreachable, as an offline remote is.
+    pub fn offline(&self) {
+        std::fs::rename(
+            self.root.join("templates"),
+            self.root.join("templates.offline"),
+        )
+        .unwrap();
     }
 
     pub fn address(&self, reference: &str) -> String {
@@ -246,6 +263,15 @@ impl Running {
             socket: world.socket.clone(),
             stop: Some(stop),
             task: Some(task),
+        }
+    }
+
+    /// A client of a service started elsewhere, such as the binary.
+    pub fn attach(world: &World) -> Self {
+        Self {
+            socket: world.socket.clone(),
+            stop: None,
+            task: None,
         }
     }
 

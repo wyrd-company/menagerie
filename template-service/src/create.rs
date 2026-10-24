@@ -43,6 +43,12 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
         &[],
         &RawAnswers::new(),
     )?;
+    crate::revision::admit(
+        &preparation.resolved.formal_name,
+        &preparation.resolved.commit,
+        &service.host,
+        &config,
+    )?;
     let context = preparation.context(
         EnvironmentDecision::CarryStageGrant,
         host::host_facts(),
@@ -72,7 +78,11 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;
     crate::revision::check(
         &record,
-        &crate::revision::admitted(selected.template, &service.host, &config, &registry)?,
+        &expected.formal_name,
+        selected.template,
+        &service.host,
+        &config,
+        &registry,
     )?;
     let answers = checks::submission(&record, &request.submission)?;
     let mut session = resume(service, record, &selected.target, config, &registry)?;
@@ -92,7 +102,11 @@ pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, 
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;
     crate::revision::check(
         &record,
-        &crate::revision::admitted(selected.template, &service.host, &config, &registry)?,
+        &expected.formal_name,
+        selected.template,
+        &service.host,
+        &config,
+        &registry,
     )?;
     checks::fresh_repository(&selected.folder, &selected.target)?;
     let session = resume(service, record, &selected.target, config, &registry)?;

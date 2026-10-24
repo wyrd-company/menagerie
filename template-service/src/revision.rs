@@ -1,114 +1,152 @@
-//! Which template revision an approved address admits, and refreshing an
-//! installed branch when an operation starts.
+//! Which template revision a session may use, and refreshing an installed
+//! branch when an operation starts.
 //!
-//! A tag or commit address fixes one revision: a session on any other
-//! revision is refused. A branch address (or an address without a reference)
-//! moves: an operation starts on the branch's current commit, and its session
-//! keeps that commit until it ends.
+//! A start admits the revision it resolves. The admission is recorded in
+//! Toha's source cache in the service's data folder, the same cache Toha
+//! replays a resumed revision from: an entry for the approved template's
+//! formal name holding a checkout of exactly that commit from the approved
+//! source. A resumed session may use only an admitted revision, so editing a
+//! session cannot select a revision no start of that approved template
+//! admitted, and an admitted revision replays without reaching its source.
 use crate::config::ApprovedTemplate;
 use crate::error::ServiceError;
 use crate::host::TohaHost;
+use std::path::PathBuf;
 use toha::registry::{Layer, Registry};
-use toha::source::{self, Address, RefKind};
+use toha::source::{self, Address};
 use toha::staging::StagedRecord;
 
-/// The revisions an approved address admits.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Admitted {
-    /// Exactly this commit; empty for a folder template, which has none.
-    Fixed(String),
-    /// The commit an operation started on.
-    Moving,
+/// Record that a start admitted `commit` of the approved template `formal`.
+/// A Git template resolved from Toha's cache is already recorded; one
+/// resolved from an installation is materialized into the cache through
+/// Toha's resume with no registry, the way Toha replays it once the
+/// installation has moved on.
+pub fn admit(
+    formal: &str,
+    commit: &str,
+    host: &TohaHost,
+    config: &toha::config::Config,
+) -> Result<(), ServiceError> {
+    let Some(repo) = git_source(formal, host, config) else {
+        return Ok(());
+    };
+    if authentic(formal, commit, &repo, host) {
+        return Ok(());
+    }
+    let resolved = toha::resolve::resume_template(
+        formal,
+        commit,
+        false,
+        config,
+        &Registry::default(),
+        &host.paths,
+        &host.cwd,
+    )?;
+    if resolved.formal_name != formal
+        || resolved.commit != commit
+        || !authentic(formal, commit, &repo, host)
+    {
+        return Err(ServiceError::conflict(
+            "template-cache-conflict",
+            format!(
+                "Toha's cache entry for {formal} at {commit} does not hold that commit from that source"
+            ),
+        ));
+    }
+    Ok(())
 }
 
-/// What the approved address admits, from Toha's own address parsing and
-/// fetch. A named reference is fetched into a temporary folder to learn
-/// whether it is a tag, a commit or a branch; an installed template keeps the
-/// commit Toha installed.
-pub fn admitted(
+/// The session's revision is one a start of the approved template admitted.
+/// Without a cached admission, the session is admitted only when the approved
+/// address resolves to exactly its commit now; nothing is refreshed.
+pub fn check(
+    record: &StagedRecord,
+    formal: &str,
     template: &ApprovedTemplate,
     host: &TohaHost,
     config: &toha::config::Config,
     registry: &Registry,
-) -> Result<Admitted, ServiceError> {
-    let address = source::parse(
-        &template.address,
-        &config.hosts,
-        &host.cwd,
-        &host.paths.home,
-    )
-    .map_err(|e| ServiceError::refused("template-resolve-failed", e.to_string()))?;
-    match &address {
-        Address::Folder(_) => Ok(Admitted::Fixed(String::new())),
-        Address::Git { reference, .. } => {
-            let installed = registry
-                .entries
-                .get(&address.formal_name(&config.hosts))
-                .and_then(|listed| listed.entry.commit.clone());
-            by_reference(&address, reference.as_deref(), installed, host)
+) -> Result<(), ServiceError> {
+    let admitted = match source::parse(formal, &config.hosts, &host.cwd, &host.paths.home) {
+        Ok(Address::Folder(_)) => record.commit.is_empty(),
+        Ok(Address::Git { repo, .. }) => {
+            is_commit(&record.commit)
+                && (authentic(formal, &record.commit, &repo, host)
+                    || toha::resolve::resolve_template(
+                        &template.address,
+                        config,
+                        registry,
+                        &host.paths,
+                        &host.cwd,
+                    )?
+                    .commit
+                        == record.commit)
         }
-        Address::Name(name) => match registry.resolve(name) {
-            Ok(resolved) if is_git(&resolved.entry.source) => {
-                let git = Address::Git {
-                    repo: resolved.entry.source.clone(),
-                    reference: resolved.entry.reference.clone(),
-                    path: None,
-                };
-                by_reference(
-                    &git,
-                    resolved.entry.reference.as_deref(),
-                    resolved.entry.commit.clone(),
-                    host,
-                )
-            }
-            _ => {
-                let resolved = toha::resolve::resolve_template(
-                    name,
-                    config,
-                    registry,
-                    &host.paths,
-                    &host.cwd,
-                )?;
-                Ok(Admitted::Fixed(resolved.commit))
-            }
-        },
-    }
-}
-
-fn by_reference(
-    address: &Address,
-    reference: Option<&str>,
-    installed: Option<String>,
-    host: &TohaHost,
-) -> Result<Admitted, ServiceError> {
-    let Some(reference) = reference else {
-        return Ok(Admitted::Moving);
+        _ => {
+            toha::resolve::resolve_template(formal, config, registry, &host.paths, &host.cwd)?
+                .commit
+                == record.commit
+        }
     };
-    if reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Ok(Admitted::Fixed(reference.to_ascii_lowercase()));
-    }
-    let scratch = tempfile::tempdir_in(&host.cwd)
-        .map_err(|e| ServiceError::new(500, "io-failed", e.to_string()))?;
-    let fetched = source::fetch(address, &scratch.path().join("repo"))
-        .map_err(|e| ServiceError::refused("template-resolve-failed", e.to_string()))?;
-    Ok(match fetched.reference_kind {
-        RefKind::Tag | RefKind::Commit => Admitted::Fixed(installed.unwrap_or(fetched.commit)),
-        _ => Admitted::Moving,
-    })
-}
-
-/// The session's revision is one the approved address admits.
-pub fn check(record: &StagedRecord, admitted: &Admitted) -> Result<(), ServiceError> {
-    match admitted {
-        Admitted::Fixed(commit) if &record.commit != commit => Err(ServiceError::conflict(
+    if admitted {
+        Ok(())
+    } else {
+        Err(ServiceError::conflict(
             "session-mismatch",
             format!(
-                "session revision {:?} is not the approved revision {commit:?}",
+                "session revision {:?} was not admitted for the approved template {formal:?}",
                 record.commit
             ),
-        )),
-        _ => Ok(()),
+        ))
     }
+}
+
+/// The source repository of a Git formal name, as Toha's resume parses it.
+fn git_source(formal: &str, host: &TohaHost, config: &toha::config::Config) -> Option<String> {
+    match source::parse(formal, &config.hosts, &host.cwd, &host.paths.home) {
+        Ok(Address::Git { repo, .. }) => Some(repo),
+        _ => None,
+    }
+}
+
+/// A full Git object id in Toha's spelling (lower-case SHA-1 or SHA-256).
+fn is_commit(commit: &str) -> bool {
+    matches!(commit.len(), 40 | 64)
+        && commit
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Toha's cache entry for `formal` at `commit` is a checkout whose HEAD is
+/// that commit and whose origin is `repo`. The entry path is the one Toha's
+/// resume reads and must resolve inside the service's cache.
+fn authentic(formal: &str, commit: &str, repo: &str, host: &TohaHost) -> bool {
+    let Some(root) = cache_entry(formal, commit, host) else {
+        return false;
+    };
+    let Ok(checkout) = gix::open_opts(&root, gix::open::Options::isolated()) else {
+        return false;
+    };
+    let head = checkout.head_id().map(|id| id.to_string()).ok();
+    let origin = checkout.find_remote("origin").ok().and_then(|remote| {
+        remote
+            .url(gix::remote::Direction::Fetch)
+            .map(|url| url.to_bstring().to_string())
+    });
+    head.as_deref() == Some(commit) && origin.as_deref() == Some(repo)
+}
+
+fn cache_entry(formal: &str, commit: &str, host: &TohaHost) -> Option<PathBuf> {
+    if !is_commit(commit) {
+        return None;
+    }
+    let key = source::install_key(formal);
+    if key.is_empty() || key == "." || key == ".." {
+        return None;
+    }
+    let sources = host.paths.cache.join("sources").canonicalize().ok()?;
+    let root = sources.join(key).join(commit).canonicalize().ok()?;
+    root.starts_with(&sources).then_some(root)
 }
 
 /// Refresh the approved template's installation when an operation starts, as

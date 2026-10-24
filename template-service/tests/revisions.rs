@@ -268,3 +268,199 @@ async fn installations_toha_does_not_update_are_used_as_they_are() {
     assert_eq!(folder.json["state"], "questions");
     service.stop().await;
 }
+
+/// Edit the commit of a session reply and send it to an answer route.
+fn edited(session: &Value, commit: &str) -> Value {
+    let mut session = session.clone();
+    session["commit"] = json!(commit);
+    session
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tag_replaced_by_a_branch_still_refuses_an_edited_commit() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let (selector, start) = answered(&service, &world, "alpha", "sample-v1").await;
+    git(&world.sample, &["tag", "-d", "v1"]);
+    git(&world.sample, &["branch", "v1", &world.v3]);
+    let envelope = json!({"template": start["document"]["context"]["template"], "answers": sample_answers("first")});
+    let refused = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                selector.clone(),
+                json!({"session": edited(&start["session"], &world.v2), "submission": envelope}),
+            ),
+        )
+        .await;
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (409, "session-mismatch"),
+        "{}",
+        refused.json
+    );
+    let done = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                selector.clone(),
+                json!({"session": start["session"], "submission": envelope}),
+            ),
+        )
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    let folder = world.initialize("alpha");
+    let refused = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(
+                selector,
+                json!({"session": edited(&done.json["session"], &world.v2)}),
+            ),
+        )
+        .await;
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (409, "session-mismatch"),
+        "{}",
+        refused.json
+    );
+    assert_eq!(entries(&folder), [".git"]);
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_moved_tag_keeps_an_unchanged_session() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let (selector, start) = answered(&service, &world, "alpha", "sample-v1").await;
+    git(&world.sample, &["tag", "-f", "v1", &world.v2]);
+    let done = service
+        .post("/v1/interviews/answers", &with(selector.clone(), json!({"session": start["session"],
+            "submission": {"template": start["document"]["context"]["template"], "answers": sample_answers("first")}})))
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    let folder = world.initialize("alpha");
+    let generated = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(selector, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(generated.json["outcome"], "written", "{}", generated.json);
+    assert_eq!(application(&folder)["commit"], world.v1.as_str());
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn admissions_of_other_addresses_do_not_count() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let other = service
+        .post("/v1/interviews", &world.select("beta", "sample-v2"))
+        .await;
+    assert_eq!(
+        other.json["document"]["context"]["commit"],
+        world.v2.as_str()
+    );
+    let collided = service
+        .post("/v1/interviews", &world.select("gamma", "collision"))
+        .await;
+    let foreign = collided.json["document"]["context"]["commit"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(foreign, world.v1);
+    let (selector, start) = answered(&service, &world, "alpha", "sample-v1").await;
+    for commit in [world.v2.as_str(), foreign.as_str()] {
+        let refused = service
+            .post("/v1/interviews/answers", &with(selector.clone(), json!({"session": edited(&start["session"], commit),
+                "submission": {"template": start["document"]["context"]["template"], "answers": sample_answers("first")}})))
+            .await;
+        assert_eq!(
+            (refused.status, refused.kind()),
+            (409, "session-mismatch"),
+            "{commit}: {}",
+            refused.json
+        );
+    }
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_commit_is_never_a_path() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let (selector, start) = answered(&service, &world, "alpha", "sample-v1").await;
+    let upper = world.v1.to_ascii_uppercase();
+    for commit in [
+        "../../../../templates/sample",
+        "..",
+        "",
+        upper.as_str(),
+        &world.v1[..12],
+    ] {
+        let refused = service
+            .post("/v1/interviews/answers", &with(selector.clone(), json!({"session": edited(&start["session"], commit),
+                "submission": {"template": start["document"]["context"]["template"], "answers": sample_answers("first")}})))
+            .await;
+        assert_eq!(
+            (refused.status, refused.kind()),
+            (409, "session-mismatch"),
+            "{commit:?}: {}",
+            refused.json
+        );
+    }
+    service.stop().await;
+}
+
+/// With the cache cleared, a session is admitted only when the approved
+/// address resolves to exactly its commit now.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cleared_cache_admits_only_the_current_resolution() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let (selector, start) = answered(&service, &world, "alpha", "sample-v1").await;
+    let (moving, branch) = answered(&service, &world, "beta", "sample-main").await;
+    std::fs::remove_dir_all(world.data.join("cache/sources")).unwrap();
+    git(&world.sample, &["merge", "-q", "--ff-only", "next"]);
+    let submit = |session: &Value, document: &Value| {
+        json!({"session": session,
+        "submission": {"template": document["context"]["template"], "answers": sample_answers("first")}})
+    };
+    let refused = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                selector.clone(),
+                submit(&edited(&start["session"], &world.v2), &start["document"]),
+            ),
+        )
+        .await;
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (409, "session-mismatch"),
+        "{}",
+        refused.json
+    );
+    let done = service
+        .post(
+            "/v1/interviews/answers",
+            &with(selector, submit(&start["session"], &start["document"])),
+        )
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    let moved = service
+        .post(
+            "/v1/interviews/answers",
+            &with(moving, submit(&branch["session"], &branch["document"])),
+        )
+        .await;
+    assert_eq!(
+        (moved.status, moved.kind()),
+        (409, "session-mismatch"),
+        "a moved branch admitted its old commit: {}",
+        moved.json
+    );
+    service.stop().await;
+}

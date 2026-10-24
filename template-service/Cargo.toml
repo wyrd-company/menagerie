@@ -13,13 +13,13 @@ path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+gix = { version = "0.87.1", default-features = false }
 indexmap = "2.14.2"
 jiff = "0.2.38"
 rustix = { version = "1.1.5", features = ["system", "process"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 serde_norway = "0.9.42"
-tempfile = "3.27.0"
 thiserror = "2.0.21"
 toha = { git = "https://github.com/wyrd-company/toha", rev = "161f1d6f61c033ff28b6c6b530703917a8a753ec", default-features = false }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "macros", "signal", "fs"] }
@@ -28,3 +28,4 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "macros", "s
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
+tempfile = "3.27.0"
