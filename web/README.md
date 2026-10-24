@@ -46,6 +46,33 @@ For local work, run `node test/fixture-server/main.ts` (port 4318) and
 to that fixture server. Point `MENAGERIE_URL` at a running workspace service to
 use the real one.
 
+## Integrated run
+
+`test/integrated/run.sh` drives the built UI against the real workspace
+service. It uses the test-only fixture `TestBrowserFixture`
+(`backend/cmd/menagerie`, tags `pocketid browser`), which provides:
+
+- the service composed as `main` composes it, from a configuration file;
+- the Rust template service, with a generic two-version template;
+- an isolated SSH Git host and agent holding the workspace repository;
+- a disposable Pocket ID, with a manager and a non-manager;
+- workspace devcontainers on an owned `docker:dind` daemon.
+
+No credential is read; the fixture generates every key.
+
+```sh
+web/test/integrated/run.sh up <scratch>    # builds web/ first, then starts everything
+web/test/integrated/run.sh test <scratch>  # Playwright: playwright.integrated.config.ts
+web/test/integrated/run.sh down <scratch>  # stops the fixture, removes the owned daemon
+```
+
+`<scratch>` must be a folder that the ambient Docker daemon sees at the same
+path, so a folder under `/workspaces` or `$HOME` works and a container-private
+`/tmp` does not. `up` checks this before it starts. While the fixture is up,
+the service is at `http://localhost:18630`. The control endpoint at
+`http://127.0.0.1:18631/signin-link?user=sample-manager` gives a one-time
+Pocket ID sign-in link.
+
 ## Embedding
 
 `embed.go` (package `web`) embeds `dist/` and exports `web.FS`, rooted at the
