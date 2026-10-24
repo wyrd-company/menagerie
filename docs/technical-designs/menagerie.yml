@@ -109,6 +109,16 @@ proposed-design:
   docker-access: >-
     The workspace service talks to the host Docker daemon through the mounted
     socket. Only the workspace service uses Docker.
+  registry-credentials: >-
+    Container registry credentials for pulls, builds, feature downloads and
+    Compose services come from OpenBao. Configuration names, per registry, a
+    secret in a KV version 2 mount whose `username` and `password` fields
+    hold the credentials. The workspace service reads it through the OpenBao
+    API on the Wyrwood vault socket, which supplies Menagerie's own token, and
+    hands the credentials to devcontainer-builder directly. No Docker client
+    configuration is read and no credential helper runs. A registry that
+    configuration does not name is anonymous; a named registry whose secret
+    cannot be read fails the operation.
   template-hooks: >-
     The template service runs Toha template hooks with Toha's process hook
     runner, inside the Menagerie container, in the hook's target-relative
@@ -138,14 +148,15 @@ proposed-design:
     manager.
   configuration: >-
     Configuration names the workspace root, the workspace repository, the
-    approved template list, the OIDC issuer and client, and the Wyrwood
-    consumer directory.
+    approved template list, the OIDC issuer and client, the Wyrwood
+    consumer directory and the registry credential secrets.
   deployment: >-
     The Menagerie container mounts the workspace root at the same path as on
     the host, the host Docker socket and the Wyrwood consumer directory. It
     has a Docker restart policy, so it returns after a host restart. Its UI is
     not exposed to the public internet. Menagerie is bound to a Wyrwood policy
-    that grants only the deploy key.
+    that grants only the deploy key and read access to the registry
+    credential secrets.
   dependencies: >-
     Toha exposes template resolution, fetching and caching, and the upgrade
     driver from its library, and records answers in `.toha.json`.
