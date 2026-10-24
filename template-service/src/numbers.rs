@@ -65,7 +65,7 @@ pub fn representable(token: &str) -> bool {
 }
 
 /// A JSON number's value as sign, significant digits and decimal exponent, with
-/// no leading or trailing zero digits. Zero has no sign and no digits.
+/// no leading or trailing zero digits. Zero has no digits.
 fn canonical(token: &str) -> Option<(bool, String, i128)> {
     let (negative, rest) = match token.strip_prefix('-') {
         Some(rest) => (true, rest),
@@ -79,7 +79,7 @@ fn canonical(token: &str) -> Option<(bool, String, i128)> {
     let digits = format!("{whole}{fraction}");
     let significant = digits.trim_start_matches('0');
     if significant.is_empty() {
-        return Some((false, String::new(), 0));
+        return Some((negative, String::new(), 0));
     }
     let trimmed = significant.trim_end_matches('0');
     let exponent: i128 = match exponent {
