@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -127,5 +128,76 @@ func TestServerServesCreateAndUpgrade(t *testing.T) {
 		if body.Error.Kind != tc.kind {
 			t.Errorf("%s %s: kind %q, want %q", tc.path, tc.body, body.Error.Kind, tc.kind)
 		}
+	}
+}
+
+// TestServerTakesInterviewAnswers checks that the composed server hands an
+// answer to a waiting create job's interview: a template service on the
+// configured socket keeps asking, and each answer gets its reply.
+func TestServerTakesInterviewAnswers(t *testing.T) {
+	dir := t.TempDir()
+	sockDir, err := os.MkdirTemp("", "ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	socket := filepath.Join(sockDir, "template.sock")
+	l, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const asking = `{"session":{"step":1},"state":"questions","document":{"status":"questions"},"warnings":[]}`
+	templateService := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(asking))
+	}))
+	templateService.Listener = l
+	templateService.Start()
+	defer templateService.Close()
+
+	root, err := workspace.NewRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	manager := jobs.NewManager(ctx)
+	defer manager.Wait()
+	defer cancel()
+	cfg := &config.Config{
+		WorkspaceRoot:   dir,
+		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
+		TemplateService: config.TemplateService{Socket: socket},
+	}
+	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), manager))
+	defer server.Close()
+	resp, err := http.Post(server.URL+"/api/jobs", "application/json", strings.NewReader(`{"operation":"create","workspace":"alpha","templateId":"sample"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap jobs.Snapshot
+	_ = json.NewDecoder(resp.Body).Decode(&snap)
+	resp.Body.Close()
+	job, ok := manager.Get(snap.JobID)
+	if !ok {
+		t.Fatalf("no job: %+v", snap)
+	}
+	for {
+		_, ended, changed := job.EventsAfter(0)
+		if job.Snapshot().State == jobs.WaitingForAnswers {
+			break
+		}
+		if ended {
+			t.Fatalf("job ended: %+v", job.Snapshot())
+		}
+		<-changed
+	}
+	resp, err = http.Post(server.URL+"/api/jobs/"+job.ID()+"/answers", "application/json", strings.NewReader(`{"session":{"step":1},"submission":{"template":"t","answers":{}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != asking {
+		t.Fatalf("answer %d %s", resp.StatusCode, body)
 	}
 }
