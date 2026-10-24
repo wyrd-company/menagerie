@@ -537,6 +537,10 @@ async fn a_hook_runs_in_its_target_relative_folder() {
         .await;
     assert_eq!(generated.json["outcome"], "written", "{}", generated.json);
     assert_eq!(read(&folder, "sub/hook-marker.txt"), "ran\n");
+    assert!(
+        read(&folder, "out.txt").ends_with(&format!("host: {}\n", hostname())),
+        "the fixed environment was not captured"
+    );
     assert!(!folder.join("hook-marker.txt").exists());
     service.stop().await;
 }

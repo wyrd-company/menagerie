@@ -85,7 +85,7 @@ fn sample_template(dir: &Path, version: u8) {
         dir,
         "template/result.txt",
         format!(
-            "label: {{{{ label }}}}\nnote: {{{{ note }}}}\ntitle: {{{{ catalog.title }}}}\nsize: {{{{ catalog.size }}}}\nratio: {{{{ catalog.ratio }}}}\n{extra_line}"
+            "label: {{{{ label }}}}\nnote: {{{{ note }}}}\ntitle: {{{{ catalog.title }}}}\nsize: {{{{ catalog.size }}}}\nratio: {{{{ catalog.ratio }}}}\nhost: {{{{ toha_env_hostname }}}}\n{extra_line}"
         ),
     );
     write(
@@ -110,7 +110,7 @@ fn flows_template(dir: &Path, hook: &str) {
     write(
         dir,
         "template/out.txt",
-        "label: {{ label }}\nsecond: {{ second }}\n",
+        "label: {{ label }}\nsecond: {{ second }}\nhost: {{ toha_env_hostname }}\n",
     );
     write(dir, "template/sub/kept.txt", "kept\n");
 }
@@ -371,6 +371,15 @@ pub async fn create(world: &World, service: &Running, workspace: &str, template:
     );
     commit_all(&folder, "document input");
     folder
+}
+
+/// The host name Toha captures as `toha_env_hostname`.
+pub fn hostname() -> String {
+    rustix::system::uname()
+        .nodename()
+        .to_str()
+        .unwrap()
+        .to_owned()
 }
 
 /// Every entry of a folder, sorted.

@@ -117,6 +117,10 @@ async fn an_upgrade_asks_only_the_new_question_and_keeps_local_edits() {
         "admitted document not kept: {result}"
     );
     assert!(result.contains("extra: added\n"), "{result}");
+    assert!(
+        result.contains(&format!("host: {}\n", hostname())),
+        "{result}"
+    );
     let application = application(&folder);
     assert_eq!(application["commit"], world.v2.as_str());
     assert_eq!(application["answers"]["extra"], "added");
