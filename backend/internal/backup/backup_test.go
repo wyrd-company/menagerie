@@ -383,3 +383,73 @@ func TestTheAppliedRecordIsCommittedEvenWhenIgnored(t *testing.T) {
 		t.Fatalf("tree %v", got)
 	}
 }
+
+// TestAnExistingPreservationRefIsNeverOverwritten adopts the independent
+// review's probe: when the ref that would keep a template's history already
+// exists, the root commit is refused and HEAD, the branch, the index, the
+// existing ref and the template's commits are left as they were.
+func TestAnExistingPreservationRefIsNeverOverwritten(t *testing.T) {
+	for _, detached := range []bool{false, true} {
+		t.Run(map[bool]string{false: "branch", true: "detached"}[detached], func(t *testing.T) {
+			folder := newWorkspace(t, "alpha")
+			first := hookCommit(t, folder, "first.txt")
+			second := hookCommit(t, folder, "second.txt")
+			repo, _ := git.PlainOpen(folder)
+			name := PreservedBranch
+			if detached {
+				name = PreservedHead
+				if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.HEAD, second)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := repo.Storer.SetReference(plumbing.NewHashReference(name, first)); err != nil {
+				t.Fatal(err)
+			}
+			out := generate(t, folder)
+			headBefore, _ := repo.Storer.Reference(plumbing.HEAD)
+			branchBefore, _ := repo.Reference("refs/heads/alpha", false)
+			indexBefore, err := os.ReadFile(filepath.Join(folder, ".git", "index"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := CommitRoot(folder, "alpha", out, "Create", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "already exists") {
+				t.Fatalf("collision: %v", err)
+			}
+			headAfter, _ := repo.Storer.Reference(plumbing.HEAD)
+			branchAfter, _ := repo.Reference("refs/heads/alpha", false)
+			indexAfter, _ := os.ReadFile(filepath.Join(folder, ".git", "index"))
+			kept, _ := repo.Reference(name, false)
+			if headBefore.String() != headAfter.String() || branchBefore.String() != branchAfter.String() || !bytes.Equal(indexBefore, indexAfter) || kept.Hash() != first {
+				t.Fatal("the refused root changed HEAD, the branch, the index or the existing ref")
+			}
+			if _, err := repo.CommitObject(second); err != nil {
+				t.Fatalf("the template's commit is gone: %v", err)
+			}
+		})
+	}
+}
+
+// TestACollisionOnEitherRefKeepsTheOther covers a detached HEAD whose
+// workspace branch also has commits: a collision on the branch's ref
+// leaves no new ref for HEAD's commit either.
+func TestACollisionOnEitherRefKeepsTheOther(t *testing.T) {
+	folder := newWorkspace(t, "alpha")
+	first := hookCommit(t, folder, "first.txt")
+	second := hookCommit(t, folder, "second.txt")
+	repo, _ := git.PlainOpen(folder)
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.HEAD, first)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(PreservedBranch, first)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CommitRoot(folder, "alpha", generate(t, folder), "Create", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), string(PreservedBranch)) {
+		t.Fatalf("collision: %v", err)
+	}
+	if _, err := repo.Reference(PreservedHead, false); err == nil {
+		t.Fatal("a refused root left a new ref for HEAD's commit")
+	}
+	if branch, err := repo.Reference("refs/heads/alpha", false); err != nil || branch.Hash() != second {
+		t.Fatalf("workspace branch %v %v", branch, err)
+	}
+}

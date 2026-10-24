@@ -200,26 +200,33 @@ func independentRoot(repo *git.Repository, branch plumbing.ReferenceName) ([]plu
 	if err != nil {
 		return nil, fmt.Errorf("read HEAD: %w", err)
 	}
+	// Every ref to keep is named and checked before any ref changes, so a
+	// collision leaves the repository as it was.
+	keep := map[plumbing.ReferenceName]plumbing.Hash{}
+	if head.Type() == plumbing.HashReference {
+		keep[PreservedHead] = head.Hash()
+	}
+	existing, err := repo.Reference(branch, false)
+	onBranch := err == nil
+	if onBranch {
+		keep[PreservedBranch] = existing.Hash()
+	}
 	var preserved []plumbing.ReferenceName
-	keep := func(name plumbing.ReferenceName, hash plumbing.Hash) error {
-		if _, err := repo.Reference(name, false); err == nil {
-			return fmt.Errorf("cannot keep the template's Git history: %s already exists", name)
+	for _, name := range []plumbing.ReferenceName{PreservedHead, PreservedBranch} {
+		if _, ok := keep[name]; !ok {
+			continue
 		}
-		if err := repo.Storer.SetReference(plumbing.NewHashReference(name, hash)); err != nil {
-			return err
+		if _, err := repo.Reference(name, false); err == nil {
+			return nil, fmt.Errorf("cannot keep the template's Git history: %s already exists", name)
 		}
 		preserved = append(preserved, name)
-		return nil
 	}
-	if head.Type() == plumbing.HashReference {
-		if err := keep(PreservedHead, head.Hash()); err != nil {
+	for _, name := range preserved {
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(name, keep[name])); err != nil {
 			return nil, err
 		}
 	}
-	if existing, err := repo.Reference(branch, false); err == nil {
-		if err := keep(PreservedBranch, existing.Hash()); err != nil {
-			return nil, err
-		}
+	if onBranch {
 		if err := repo.Storer.RemoveReference(branch); err != nil {
 			return nil, err
 		}
