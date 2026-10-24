@@ -6,12 +6,19 @@ info:
     Browser API of the Menagerie workspace service. Jobs and their events are
     held in this process's memory only: a restart of Menagerie drops every job
     and its history, an unknown job id answers 404, and the workspace list is
-    rebuilt from the workspace folders and Docker.
+    rebuilt from the workspace folders and Docker. Every route except
+    /healthz requires a manager session cookie from the OIDC sign-in routes
+    under /auth/ (see the authentication specification); without one the
+    API answers 401 `unauthenticated`, and a cross-origin request that
+    changes state answers 403 `cross-origin-request`.
+security:
+  - session: []
 paths:
   /healthz:
     get:
       operationId: health
       summary: Liveness of the workspace service.
+      security: []
       responses:
         "200":
           description: The service answers.
@@ -158,6 +165,14 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
 components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-menagerie-session
+      description: >-
+        Manager session from sign-in at /auth/login. The cookie is named
+        menagerie-session when the redirect URL uses http.
   parameters:
     JobID:
       name: id

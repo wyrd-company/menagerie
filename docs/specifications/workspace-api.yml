@@ -4,11 +4,20 @@ relationships:
     - menagerie
     - configuration
     - job-without-timeout-blocks-workspace
+    - authentication
 format: openapi
 description: >-
   The workspace service serves a JSON API to the browser, defined by
   `assets/workspace-api/openapi.yaml`. Every error answers with the envelope
   `{"error":{"kind","message"}}`; `workspace-busy` adds `activeJobId`.
+
+
+  Every route except `GET /healthz` requires a manager session, as the
+  authentication specification defines. Without one an API request answers
+  401 `unauthenticated` and the browser signs in at
+  `/auth/login?return=<page>`; a page request is redirected there. A
+  request that changes state from another origin answers 403
+  `cross-origin-request`. Neither runs an operation or reads a job.
 
 
   `GET /api/workspaces` lists every folder directly under the workspace root,

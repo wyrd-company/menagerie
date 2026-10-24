@@ -9,10 +9,14 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/wyrd-company/menagerie/backend/internal/auth/authtest"
 )
@@ -357,10 +361,11 @@ func TestCallbackRejectsInvalidIDTokens(t *testing.T) {
 		"other issuer": func(is *authtest.Issuer) {
 			is.Tamper = func(c map[string]any) { c["iss"] = "https://issuer.example.invalid" }
 		},
-		"other audience": func(is *authtest.Issuer) { is.Tamper = func(c map[string]any) { c["aud"] = "other-client" } },
-		"bad signature":  func(is *authtest.Issuer) { is.SignWith = other },
-		"other nonce":    func(is *authtest.Issuer) { is.Tamper = func(c map[string]any) { c["nonce"] = randomToken() } },
-		"no nonce":       func(is *authtest.Issuer) { is.Tamper = func(c map[string]any) { delete(c, "nonce") } },
+		"other audience":  func(is *authtest.Issuer) { is.Tamper = func(c map[string]any) { c["aud"] = "other-client" } },
+		"bad signature":   func(is *authtest.Issuer) { is.SignWith = other },
+		"symmetric HS256": func(is *authtest.Issuer) { is.SignHS256 = true },
+		"other nonce":     func(is *authtest.Issuer) { is.Tamper = func(c map[string]any) { c["nonce"] = randomToken() } },
+		"no nonce":        func(is *authtest.Issuer) { is.Tamper = func(c map[string]any) { delete(c, "nonce") } },
 		"expired": func(is *authtest.Issuer) {
 			is.Tamper = func(c map[string]any) { c["exp"] = time.Now().Add(-time.Hour).Unix() }
 		},
@@ -813,5 +818,39 @@ func TestConfigValidation(t *testing.T) {
 	if _, err := New(Config{Issuer: "issuer.example.invalid", ClientID: "", RedirectURL: "x"}); err == nil ||
 		!strings.Contains(err.Error(), "issuer must be") || !strings.Contains(err.Error(), "client id") || !strings.Contains(err.Error(), "redirect URL") {
 		t.Errorf("New accepted an invalid configuration: %v", err)
+	}
+}
+
+func TestSpecificationNamesThePublicRoutes(t *testing.T) {
+	data, err := os.ReadFile("../../../docs/specifications/authentication.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec struct {
+		Description string `yaml:"description"`
+	}
+	if err := yaml.Unmarshal(data, &spec); err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(spec.Description), " ")
+	_, after, ok := strings.Cut(text, "Public routes are exactly ")
+	if !ok {
+		t.Fatal("specification does not list the public routes")
+	}
+	list, _, _ := strings.Cut(after, ", compared on")
+	var documented []string
+	for _, item := range strings.Split(strings.ReplaceAll(list, " and ", ", "), ", ") {
+		route := strings.Trim(item, "`")
+		_, path, _ := strings.Cut(route, " ")
+		documented = append(documented, path)
+	}
+	var code []string
+	for p := range publicPaths {
+		code = append(code, p)
+	}
+	slices.Sort(documented)
+	slices.Sort(code)
+	if !slices.Equal(documented, code) {
+		t.Fatalf("specification lists %q, code exempts %q", documented, code)
 	}
 }

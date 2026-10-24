@@ -61,6 +61,10 @@ type Issuer struct {
 	Tamper func(map[string]any)
 	// SignWith, when set, signs ID tokens with this key instead.
 	SignWith *rsa.PrivateKey
+	// SignHS256 advertises HS256 and signs ID tokens with HMAC-SHA256
+	// keyed by a digest of the client id, as a provider that allows
+	// symmetric algorithms might.
+	SignHS256 bool
 	// UserinfoGroups, when set, is the userinfo groups claim.
 	UserinfoGroups any
 	// UserinfoSubject, when set, replaces the userinfo subject.
@@ -174,6 +178,9 @@ func (is *Issuer) discovery(w http.ResponseWriter, _ *http.Request) {
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"code_challenge_methods_supported":      []string{"S256"},
 	}
+	if is.SignHS256 {
+		doc["id_token_signing_alg_values_supported"] = []string{"RS256", "HS256"}
+	}
 	if is.AdvertiseIss {
 		doc["authorization_response_iss_parameter_supported"] = true
 	}
@@ -265,10 +272,15 @@ func (is *Issuer) token(w http.ResponseWriter, r *http.Request) {
 	if is.SignWith != nil {
 		key = is.SignWith
 	}
+	idToken := is.sign(key, claims)
+	if is.SignHS256 {
+		sum := sha256.Sum256([]byte(grant.clientID))
+		idToken = is.signHS256(sum[:], claims)
+	}
 	access := randomToken()
 	is.access[access] = grant.user
 	writeJSONBody(w, http.StatusOK, map[string]any{
-		"access_token": access, "token_type": "Bearer", "expires_in": 300, "id_token": is.sign(key, claims),
+		"access_token": access, "token_type": "Bearer", "expires_in": 300, "id_token": idToken,
 	})
 }
 
@@ -287,6 +299,21 @@ func (is *Issuer) sign(key *rsa.PrivateKey, claims map[string]any) string {
 	if err != nil {
 		is.t.Fatal(err)
 	}
+	return out
+}
+
+func (is *Issuer) signHS256(key []byte, claims map[string]any) string {
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: key},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", is.keyID))
+	if err != nil {
+		is.t.Fatal(err)
+	}
+	payload, _ := json.Marshal(claims)
+	sig, err := signer.Sign(payload)
+	if err != nil {
+		is.t.Fatal(err)
+	}
+	out, _ := sig.CompactSerialize()
 	return out
 }
 
