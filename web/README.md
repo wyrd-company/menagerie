@@ -68,8 +68,13 @@ web/test/integrated/run.sh down <scratch>  # stops this run's fixture, removes i
 
 `<scratch>` must be a folder that the ambient Docker daemon sees at the same
 path, so a folder under `/workspaces` or `$HOME` works and a container-private
-`/tmp` does not. `up` checks this before it starts. Each subcommand acts on the run whose state `up` saved in `<scratch>`. `down` shuts down the saved control endpoint only after `/identity` answers with that run's root, so `down` stops only its own run, whatever ports the environment names. While the fixture is up,
-the service is at `http://localhost:18630`. The control endpoint at
+`/tmp` does not. `up` checks this before it starts. Each subcommand acts on
+the run whose state `up` saved in `<scratch>`. `down` shuts down the saved
+control endpoint only after `/identity` answers with that run's root, so
+`down` stops only its own run, whatever ports the environment names. From the
+repository root, `task test:integrated` runs `up` and `test` in a new folder
+under `~/.cache/menagerie` and always ends with `down`. While the fixture is
+up, the service is at `http://localhost:18630`. The control endpoint at
 `http://127.0.0.1:18631/signin-link?user=sample-manager` gives a one-time
 Pocket ID sign-in link.
 

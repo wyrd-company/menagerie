@@ -1,0 +1,36 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>wyrd-company/.github:renovate-config"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Versions named by a renovate comment on the line above them",
+      "managerFilePatterns": ["/^Dockerfile$/", "/^taskfile\\.yml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?\\s+(?:ARG \\S+=|- go install \\S+@|- cargo install --locked \\S+ --version |\\S+: )(?<currentValue>[^\\s\"]+)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Test images pinned by tag and digest in Go tests and test scripts",
+      "managerFilePatterns": ["/^backend/.+_test\\.go$/", "/^scripts/.+\\.sh$/", "/^web/test/.+\\.sh$/"],
+      "matchStrings": [
+        "(?<depName>(?:ghcr\\.io/|docker\\.io/)?[a-z0-9][a-z0-9./_-]*):(?<currentValue>[a-zA-Z0-9][a-zA-Z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Pocket ID upgrades can change the API the sign-in gate drives: run task test:pocketid and task test:image",
+      "matchPackageNames": ["ghcr.io/pocket-id/pocket-id"],
+      "prBodyNotes": ["Pocket ID drives `task test:pocketid`, `task test:integrated` and `task test:image`. Run them before merging."]
+    },
+    {
+      "description": "The OIDC client libraries move together",
+      "matchPackageNames": ["github.com/coreos/go-oidc/v3", "golang.org/x/oauth2"],
+      "groupName": "OIDC client",
+      "prBodyNotes": ["Run `task test:pocketid` before merging."]
+    }
+  ]
+}

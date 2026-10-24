@@ -1,0 +1,19 @@
+# Hooks invoke tasks, never raw commands. One definition of how anything runs.
+#
+# pre-push stays cheap deliberately. A pre-push hook that runs the full suite
+# teaches you to pass --no-verify, which silently disables pre-commit too.
+# CI is the gate; hooks are fast feedback.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: format
+      run: task format
+      stage_fixed: true
+    - name: lint
+      run: task lint
+
+commit-msg:
+  jobs:
+    - name: conventional-commit
+      run: task lint:commit-msg -- {1}

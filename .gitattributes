@@ -1,0 +1,25 @@
+# Normalize line endings in the repository; check out native on each platform.
+* text=auto
+
+# Files that must keep LF regardless of platform: scripts, and everything the
+# image copies in, whose s6 service scripts have no extension.
+*.sh text eol=lf
+*.mjs text eol=lf
+taskfile.yml text eol=lf
+Dockerfile text eol=lf
+image/rootfs/** text eol=lf
+
+# Generated output. Collapsed in pull request diffs, excluded from language stats.
+web/dist/** linguist-generated=true
+CHANGELOG.md linguist-generated=true
+
+# Lockfiles are authored by tooling, not by hand.
+pnpm-lock.yaml linguist-generated=true
+Cargo.lock linguist-generated=true
+go.sum linguist-generated=true
+
+# Binary assets.
+*.png binary
+*.jpg binary
+*.gif binary
+*.woff2 binary

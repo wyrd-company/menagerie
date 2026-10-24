@@ -41,6 +41,12 @@ vars:
   SCRATCH: '{{.MENAGERIE_SCRATCH | default (print .HOME "/.cache/menagerie")}}'
   IMAGE: '{{.MENAGERIE_IMAGE | default "menagerie:dev"}}'
   IMAGE_REPOSITORY: ghcr.io/wyrd-company/menagerie
+  # The YAML this repository's tooling owns; package documents have their
+  # own owners and checks.
+  REPOSITORY_YAML: >-
+    taskfile.yml backend/taskfile.yml template-service/taskfile.yml web/taskfile.yml
+    deploy/compose.yml deploy/config.yml .github/*.yml .github/workflows/*.yml
+    .config/lefthook.yml .ryl.yml
 
 tasks:
   default:
@@ -68,12 +74,26 @@ tasks:
       - task: web:test:browser
 
   lint:
-    desc: Static analysis of every package, non-mutating
+    desc: Static analysis of every package and of the repository's workflows, scripts, YAML and Markdown, non-mutating
     cmds:
       - task: backend:lint
       - task: template-service:lint
       - task: template-service:dependencies
       - task: web:lint
+      - actionlint .github/workflows/*.yml
+      - shellcheck scripts/*.sh web/test/integrated/run.sh
+      - shellcheck -s sh image/rootfs/etc/s6-overlay/scripts/* image/rootfs/etc/s6-overlay/s6-rc.d/*/finish image/rootfs/usr/local/bin/*
+      - ryl check --config-file .ryl.yml {{.REPOSITORY_YAML}}
+      - rumdl check .
+      - node scripts/check-renovate-pins.mjs > /dev/null
+
+  lint:commit-msg:
+    desc: Check a conventional commit subject, given as text or as a commit message file
+    silent: true
+    cmds:
+      # The subject arrives as one shell-quoted argument, so a title with
+      # quotes or metacharacters is data rather than script.
+      - sh scripts/check-commit-subject.sh {{.CLI_ARGS}}
 
   format:
     desc: Apply formatting to every package
@@ -230,11 +250,84 @@ tasks:
         --tag '{{.IMAGE_REPOSITORY}}:{{.RELEASE_TAG}}'
         --push .
 
+  setup:
+    desc: Install every tool the checks use and the Git hooks (the devcontainer runs this)
+    cmds:
+      - task: tools:install:linters
+      - task: tools:install:intentional
+      - task: tools:install:openbao
+      - task: tools:install:browser
+      # renovate: datasource=go depName=github.com/evilmartians/lefthook/v2
+      - go install github.com/evilmartians/lefthook/v2@v2.2.2
+      - lefthook install
+
+  tools:install:linters:
+    desc: Install the repository linters (Debian or Ubuntu, amd64)
+    cmds:
+      - sudo apt-get update
+      - sudo apt-get install --yes shellcheck
+      # renovate: datasource=go depName=github.com/rhysd/actionlint
+      - go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - '[ -z "${GITHUB_PATH:-}" ] || go env GOPATH | sed "s|$|/bin|" >> "$GITHUB_PATH"'
+      # renovate: datasource=crate depName=ryl
+      - cargo install --locked ryl --version 0.21.0
+      # renovate: datasource=crate depName=rumdl
+      - cargo install --locked rumdl --version 0.3.0
+
   tools:install:intentional:
     desc: Install Intentional
     cmds:
       # renovate: datasource=crate depName=intentional-cli
       - cargo install --locked intentional-cli --version 0.1.6
+
+  tools:install:openbao:
+    desc: Install OpenBao's bao, checked against its release checksums (Linux amd64)
+    vars:
+      # renovate: datasource=github-releases depName=openbao/openbao extractVersion=^v(?<version>.*)$
+      OPENBAO_VERSION: 2.7.1
+    cmds:
+      - |
+        set -eu
+        dir=$(mktemp -d)
+        url=https://github.com/openbao/openbao/releases/download/v{{.OPENBAO_VERSION}}
+        archive=openbao_{{.OPENBAO_VERSION}}_linux_amd64.tar.gz
+        curl -fsSL -o "$dir/$archive" "$url/$archive"
+        curl -fsSL -o "$dir/checksums.txt" "$url/checksums.txt"
+        (cd "$dir" && grep " $archive\$" checksums.txt | sha256sum -c -)
+        mkdir -p "$HOME/.local/bin"
+        tar -xzf "$dir/$archive" -C "$HOME/.local/bin" bao
+        [ -z "${GITHUB_PATH:-}" ] || echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/bao" version
+
+  tools:install:browser:
+    desc: Install the Chromium revision Playwright names, with its system packages
+    deps: [web:install]
+    dir: web
+    cmds:
+      - pnpm exec playwright install --with-deps chromium
+
+  settings:credentials:
+    desc: Fail unless the repo-settings app's id and private key are configured (reconcile workflow only)
+    cmds:
+      - sh scripts/require-env.sh REPO_SETTINGS_APP_ID REPO_SETTINGS_APP_PRIVATE_KEY
+
+  settings:apply:
+    desc: Apply .github/repo-settings.yml to REPO with GH_TOKEN (reconcile workflow only)
+    cmds:
+      - scripts/apply-settings.sh
+
+  audit:summary:
+    desc: Append the scheduled audit outcome to the GitHub job summary
+    requires:
+      vars: [GITHUB_STEP_SUMMARY, AIRLOCK_OUTCOME, AIRLOCK_COMPLETE]
+    cmds:
+      - |
+        {
+          echo "## Airlock audit"
+          echo
+          echo "- Outcome: \`$AIRLOCK_OUTCOME\`"
+          echo "- Complete: \`$AIRLOCK_COMPLETE\`"
+        } >> "$GITHUB_STEP_SUMMARY"
 
   check:
     desc: Everything CI runs; run this before pushing
