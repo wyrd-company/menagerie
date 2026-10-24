@@ -129,8 +129,8 @@ test("returns the staged session byte for byte, and the fixture would notice oth
       submission: { template: "https://example.test/templates/sample-kit@v1", answers: {} },
     },
   });
-  expect(changed.status()).toBe(400);
-  expect((await changed.json()).error.kind).toBe("session-changed");
+  expect(changed.status()).toBe(409);
+  expect((await changed.json()).error.kind).toBe("session-mismatch");
 
   // The browser's own request carries the exact text it received.
   const sent = page.waitForRequest((r) => r.url().endsWith("/answers"));

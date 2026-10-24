@@ -5,9 +5,32 @@ import type { FixtureJob, StoredEvent } from "./state.ts";
 
 const documentsDir = new URL("../fixtures/toha/documents/", import.meta.url);
 
-/** A Toha-produced document, as text. */
+/**
+ * Removes whitespace outside strings, as the workspace service compacts each
+ * event payload to one line without changing its text, numbers included.
+ */
+export function compactJson(text: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (inString) {
+      out += c;
+      if (c === "\\") out += text[++i] ?? "";
+      else if (c === '"') inString = false;
+    } else if (c === '"') {
+      inString = true;
+      out += c;
+    } else if (!" \t\n\r".includes(c)) {
+      out += c;
+    }
+  }
+  return out;
+}
+
+/** A Toha-produced document, as compact text. */
 export function document(name: string): string {
-  return readFileSync(new URL(name, documentsDir), "utf8").trim();
+  return compactJson(readFileSync(new URL(name, documentsDir), "utf8"));
 }
 
 /**

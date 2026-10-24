@@ -84,7 +84,7 @@ async function complete(world: World, job: FixtureJob) {
     finish(
       job,
       "failed",
-      { kind: "merge-conflict", message: "The upgrade left 1 path with conflicts" },
+      { kind: "merge-conflicted", message: "The upgrade left 1 path with conflicts" },
       {
         outcome: "conflicted",
         files,

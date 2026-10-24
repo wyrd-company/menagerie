@@ -94,7 +94,7 @@ test("reports merge conflicts as a failed upgrade with the conflicted paths", as
   await page.getByRole("button", { name: "Send answers" }).click();
   const job = page.getByRole("region", { name: "Upgrade job" });
   await expect(job.locator(".outcome")).toContainText("Failed.");
-  await expect(job.locator(".outcome")).toContainText("merge-conflict");
+  await expect(job.locator(".outcome")).toContainText("merge-conflicted");
   await expect(job.locator(".apply")).toContainText("conflicted");
   await expect(job.locator(".apply .notice")).toContainText("README.md");
   await shot(page, "upgrade-conflicted");

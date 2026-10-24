@@ -190,7 +190,7 @@ export function createFixture(options: { distDir: string }) {
       if (operation === "create" && ws)
         return fail(res, 409, "workspace-exists", `workspace ${name} already exists`);
       if (operation !== "create" && !ws)
-        return fail(res, 404, "unknown-workspace", `no workspace ${name}`);
+        return fail(res, 404, "workspace-not-found", `no workspace ${name}`);
       const active = [...jobs.values()].find((j) => j.workspace === name && j.finishedAt === null);
       if (active) {
         return fail(
@@ -262,7 +262,7 @@ export function createFixture(options: { distDir: string }) {
           return fail(res, 409, "job-not-waiting", "the job is not waiting for answers");
         }
         if (!body.includes(`"session":${job.sentSession}`)) {
-          return fail(res, 400, "session-changed", "the session did not come back byte for byte");
+          return fail(res, 409, "session-mismatch", "the session did not come back byte for byte");
         }
         const submission = parsed.submission;
         if (
