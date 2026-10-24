@@ -1,0 +1,247 @@
+/* ---- Job console ---- */
+.job-panel {
+  display: grid;
+  gap: 1.4rem;
+}
+
+.console {
+  background: var(--night);
+  color: var(--tape-ink);
+  border-radius: 6px;
+  padding: 1.2rem 1.3rem 1.3rem;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 1rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.console::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgb(255 255 255 / 2.5%) 0 1px, transparent 1px 3px);
+}
+
+.console .eyebrow {
+  color: var(--tape-dim);
+}
+
+.console-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 1rem;
+}
+
+.console-title {
+  font-size: 1.5rem;
+  color: #f6ecd2;
+}
+
+.console-title .mono {
+  font-size: 0.75em;
+  color: var(--phosphor);
+}
+
+.console .stamp {
+  background: rgb(0 0 0 / 30%);
+}
+
+.console .stamp-running {
+  --stamp: var(--phosphor);
+}
+
+.console .stamp-succeeded,
+.console .stamp-waiting-for-answers {
+  --stamp: #7fc4b2;
+}
+
+.console .stamp-failed {
+  --stamp: #f07b62;
+}
+
+.console .stamp-stopped,
+.console .stamp-ended {
+  --stamp: #a9b4bc;
+}
+
+.phase-rail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.phase-rail li {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid #3a3328;
+  border-radius: 999px;
+  color: var(--tape-dim);
+}
+
+.phase-rail li.is-done::before {
+  content: "✓ ";
+  color: #7fc4b2;
+}
+
+.phase-rail li.is-current {
+  color: var(--night);
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+  font-weight: 700;
+}
+
+.tape {
+  background: #0d0b08;
+  border: 1px solid #2c271f;
+  border-radius: 4px;
+}
+
+.tape-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid #2c271f;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tape-dim);
+}
+
+.follow {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.tape-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0.6rem 0;
+  max-height: 22rem;
+  min-height: 7rem;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.tape-lines li {
+  display: grid;
+  grid-template-columns: 3.2rem 1fr;
+  padding: 0 0.75rem 0 0;
+}
+
+.tape-lines li:hover {
+  background: rgb(224 184 90 / 8%);
+}
+
+.tape-n {
+  color: #574e3f;
+  text-align: right;
+  padding-right: 0.8rem;
+  user-select: none;
+}
+
+.tape-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tape-empty {
+  color: var(--tape-dim);
+  padding-left: 1rem !important;
+  display: block !important;
+}
+
+.outcome {
+  border-top: 1px dashed #3a3328;
+  padding-top: 0.9rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.outcome-title {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-style: italic;
+}
+
+.outcome-succeeded .outcome-title {
+  color: #7fc4b2;
+}
+
+.outcome-failed .outcome-title {
+  color: #f07b62;
+}
+
+.outcome-error .mono {
+  color: #f07b62;
+  margin-right: 0.4rem;
+}
+
+.console .notice {
+  color: var(--ink);
+}
+
+.apply table.files {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.files caption {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tape-dim);
+  padding-bottom: 0.3rem;
+}
+
+.files th,
+.files td {
+  text-align: left;
+  padding: 0.25rem 0.5rem 0.25rem 0;
+  border-bottom: 1px solid #2c271f;
+}
+
+.hooks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.hook {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 2px;
+}
+
+.hook.ok {
+  background: #1f3a33;
+}
+
+.hook.bad {
+  background: #4a1d14;
+}
+
+@media (max-width: 720px) {
+  .tape-lines li {
+    grid-template-columns: 2.4rem 1fr;
+  }
+}

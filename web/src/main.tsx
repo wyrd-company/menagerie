@@ -6,7 +6,10 @@ import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
 import "@fontsource-variable/jetbrains-mono";
 import "./styles/base.css";
-import "./styles/screens.css";
+import "./styles/shell.css";
+import "./styles/register.css";
+import "./styles/console.css";
+import "./styles/forms.css";
 import { App } from "./App.tsx";
 
 const root = document.getElementById("root");
