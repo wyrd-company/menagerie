@@ -21,8 +21,8 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
-// TestSignedInManagersAnswerInterviewsOfAnySize composes the service as
-// run does, newServer behind signedIn, with a template service that keeps
+// TestSignedInManagersAnswerInterviewsOfAnySize serves newHandler, the
+// composition run serves, with a template service that keeps
 // asking. A manager's answer far above the job-request bound reaches the
 // template service whole; an anonymous or cross-site answer never does.
 func TestSignedInManagersAnswerInterviewsOfAnySize(t *testing.T) {
@@ -61,17 +61,19 @@ func TestSignedInManagersAnswerInterviewsOfAnySize(t *testing.T) {
 	manager := jobs.NewManager(ctx)
 	t.Cleanup(manager.Wait)
 	t.Cleanup(cancel)
-	cfg := &config.Config{
-		WorkspaceRoot:   dir,
-		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
-		TemplateService: config.TemplateService{Socket: socket},
-	}
 	var h http.Handler
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
 	t.Cleanup(srv.Close)
 	issuer := authtest.New(t, clientID, srv.URL+auth.CallbackPath)
 	issuer.User = authtest.User{Subject: "subject-manager", Name: "Sample Manager", Groups: []string{auth.ManagersGroup}}
-	h, err = signedIn(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), manager), config.OIDC{Issuer: issuer.URL(), ClientID: clientID, RedirectURL: srv.URL + auth.CallbackPath})
+	cfg := &config.Config{
+		WorkspaceRoot:   dir,
+		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
+		TemplateService: config.TemplateService{Socket: socket},
+		OIDC:            config.OIDC{Issuer: issuer.URL(), ClientID: clientID, RedirectURL: srv.URL + auth.CallbackPath},
+	}
+	// The composition run serves.
+	h, err = newHandler(cfg, root, devcontainer.New(nil, devcontainer.Options{}), manager)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -68,8 +68,7 @@ func run(configPath string) error {
 	}
 	runtime := devcontainer.New(docker, devcontainer.Options{Credentials: credentials})
 	manager := jobs.NewManager(ctx)
-	server := newServer(cfg, root, runtime, manager)
-	handler, err := signedIn(server, cfg.OIDC)
+	handler, err := newHandler(cfg, root, runtime, manager)
 	if err != nil {
 		return err
 	}
@@ -94,6 +93,12 @@ func run(configPath string) error {
 		return err
 	}
 	return nil
+}
+
+// newHandler is the workspace service's whole HTTP surface: the workspace
+// API behind manager sign-in.
+func newHandler(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager) (http.Handler, error) {
+	return signedIn(newServer(cfg, root, runtime, manager), cfg.OIDC)
 }
 
 // signedIn serves server behind manager sign-in: the sign-in routes are
