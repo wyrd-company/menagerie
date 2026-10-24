@@ -13,6 +13,7 @@ pub mod error;
 pub mod host;
 pub mod numbers;
 pub mod reply;
+pub mod revision;
 pub mod server;
 pub mod upgrade;
 

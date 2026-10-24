@@ -196,6 +196,26 @@ async fn a_session_is_pinned_to_its_template_target_and_flow() {
             &answer(selector.clone(), recommitted),
         )
         .await;
+    assert_eq!(
+        (tampered.status, tampered.kind()),
+        (409, "session-mismatch"),
+        "{}",
+        tampered.json
+    );
+    // A moving address keeps the session's commit, which must still exist.
+    let moving = world.select("alpha", "sample-main");
+    let branch = service.post("/v1/interviews", &moving).await;
+    let mut missing = branch.json["session"].clone();
+    missing["commit"] = json!("0".repeat(40));
+    let tampered = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                moving,
+                json!({"session": missing, "submission": submission(&branch, json!({}))}),
+            ),
+        )
+        .await;
     assert_eq!(tampered.status, 422, "{}", tampered.json);
     assert!(
         tampered.kind().starts_with("template-"),

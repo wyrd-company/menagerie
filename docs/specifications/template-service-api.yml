@@ -53,9 +53,16 @@ description: >-
   interview completed. A rejected submission answers 200 with the same
   batch, its `errors` and an unchanged session. An abort does not record its
   batch. Every request rebuilds the interview from the session, so it
-  continues after a service restart. Resuming keeps the session's revision;
-  only a start resolves the approved address, so a branch address moves to
-  its newest commit at the next start, never during an interview.
+  continues after a service restart.
+
+
+  Revisions. A tag or commit address fixes one revision: a session on any
+  other revision is refused as `session-mismatch` before replay. A branch
+  address, or one without a reference, moves only when an operation starts:
+  a start uses the branch's current commit and its session keeps that commit
+  until it ends. The service learns whether a named reference is a tag or a
+  branch from Toha's fetch, so answering or applying a session of such an
+  address reads its repository. An installed tag fixes the installed commit.
 
 
   Create. `/v1/interviews` refuses an existing folder. Its first batch asks
@@ -137,7 +144,7 @@ validation-criteria: >-
   answers, generation into an initialized repository, revision pinning and
   flow ends; `tests/hooks.rs` covers hook folders, hook and I/O failures;
   `tests/numbers.rs` covers number values through the session and the
-  applied record; `tests/upgrade.rs` covers an
+  applied record; `tests/revisions.rs` covers fixed addresses; `tests/upgrade.rs` covers an
   upgrade between two template versions that asks only the new question and
   keeps local edits, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;

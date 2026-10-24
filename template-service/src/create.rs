@@ -67,6 +67,10 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     let (config, registry, warnings) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;
+    crate::revision::check(
+        &record,
+        &crate::revision::admitted(selected.template, &service.host, &config, &registry)?,
+    )?;
     let answers = checks::submission(&record, &request.submission)?;
     let mut session = resume(service, record, &selected.target, config, &registry)?;
     reply::asking(&session.state()?)?;
@@ -83,6 +87,10 @@ pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, 
     let (config, registry, _) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;
+    crate::revision::check(
+        &record,
+        &crate::revision::admitted(selected.template, &service.host, &config, &registry)?,
+    )?;
     checks::fresh_repository(&selected.folder, &selected.target)?;
     let session = resume(service, record, &selected.target, config, &registry)?;
     let done = reply::completed(session.state()?)?;

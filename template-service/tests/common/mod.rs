@@ -171,9 +171,10 @@ impl World {
             &root,
             "config.yml",
             format!(
-                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n",
+                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n",
                 workspaces.display(),
-                socket.display()
+                socket.display(),
+                v1 = v1,
             ),
         );
         Self {

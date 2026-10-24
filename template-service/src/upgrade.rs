@@ -62,6 +62,10 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     let (config, registry, _) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;
+    crate::revision::check(
+        &record,
+        &crate::revision::admitted(selected.template, &service.host, &config, &registry)?,
+    )?;
     let answers = checks::submission(&record, &request.submission)?;
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);
@@ -79,6 +83,10 @@ pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, Ser
     let (config, registry, _) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;
+    crate::revision::check(
+        &record,
+        &crate::revision::admitted(selected.template, &service.host, &config, &registry)?,
+    )?;
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);
     let session = resume(service, record, &selected.target, &mut environment)?;
