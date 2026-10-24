@@ -1,0 +1,9 @@
+$schema: https://refinery.systems/ontology/term
+title: Workspace
+description: >-
+  A folder under the workspace root, generated from a Toha template, together
+  with the devcontainer it defines. Menagerie creates, lists, starts, stops,
+  rebuilds and upgrades workspaces. Its container is found through the
+  `devcontainer.local_folder` label.
+terms:
+  - workspace-root
