@@ -40,6 +40,7 @@ vars:
   CARGO_TARGET: '{{.CARGO_TARGET_DIR | default (print .ROOT_DIR "/template-service/target")}}'
   SCRATCH: '{{.MENAGERIE_SCRATCH | default (print .HOME "/.cache/menagerie")}}'
   IMAGE: '{{.MENAGERIE_IMAGE | default "menagerie:dev"}}'
+  IMAGE_REPOSITORY: ghcr.io/wyrd-company/menagerie
 
 tasks:
   default:
@@ -188,10 +189,58 @@ tasks:
             echo "$binary: aarch64"
           done'
 
+  release:rehearse:
+    desc: Rehearse the next release in a scratch clone of HEAD, establishing the baseline there when none exists
+    cmds:
+      - scripts/release.sh rehearse
+
+  release:credentials:
+    desc: Fail unless the release app's id and private key are configured (release workflow only)
+    cmds:
+      - sh scripts/require-env.sh RELEASE_APP_ID RELEASE_APP_PRIVATE_KEY
+
+  release:evidence:
+    desc: Prove RELEASE_SHA is main's head with a successful push-event CI run (CI only)
+    cmds:
+      - scripts/release-evidence.sh
+
+  release:cut:
+    desc: Apply the pending intents at RELEASE_SHA, commit and tag the release locally (release workflow only)
+    cmds:
+      - scripts/release.sh cut
+
+  release:push:
+    desc: Push the release commit to main, then its tags (release workflow only)
+    cmds:
+      - scripts/release.sh push
+
+  release:tag:
+    desc: Check that RELEASE_TAG is an Intentional release record to deliver (CD only)
+    cmds:
+      - scripts/release-tag.sh
+
+  release:image:
+    desc: Build the image for linux/amd64 and linux/arm64 and push it as IMAGE_REPOSITORY:RELEASE_TAG (CD only)
+    requires:
+      vars: [RELEASE_TAG]
+    cmds:
+      - >-
+        docker buildx build --platform linux/amd64,linux/arm64
+        --build-arg VERSION='{{.RELEASE_TAG}}'
+        --tag '{{.IMAGE_REPOSITORY}}:{{.RELEASE_TAG}}'
+        --push .
+
+  tools:install:intentional:
+    desc: Install Intentional
+    cmds:
+      # renovate: datasource=crate depName=intentional-cli
+      - cargo install --locked intentional-cli --version 0.1.6
+
   check:
     desc: Everything CI runs; run this before pushing
     cmds:
       - task: lint
       - task: test
       - task: build
+      - task: release:rehearse
       - task: test:live

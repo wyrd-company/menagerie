@@ -1,0 +1,85 @@
+# relationships:
+#   references: [taskfile]
+name: Release
+
+# The release act: a person dispatches it for one commit. It proves that the
+# commit is main's head and passed CI on push, then applies the pending
+# intents, commits the release, tags it and pushes both. It publishes
+# nothing; cd.yml delivers the image when the tag arrives.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full commit SHA to release; it must be main's head
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  evidence:
+    name: Prove the commit is main and passed CI
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: task release:evidence
+
+  release:
+    name: Apply, commit, tag and push
+    needs: evidence
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      # The release app is the only actor the main branch ruleset lets push
+      # without a pull request, and its tag push starts cd.yml.
+      - env:
+          RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: task release:credentials
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0
+          fetch-tags: true
+          # release:push pushes with this token.
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.97.1
+      - run: task tools:install:intentional
+      - env:
+          RELEASE_SHA: ${{ inputs.sha }}
+          RELEASE_ACTOR_NAME: ${{ steps.token.outputs.app-slug }}[bot]
+          RELEASE_ACTOR_EMAIL: ${{ steps.token.outputs.app-slug }}[bot]@users.noreply.github.com
+          RELEASE_PLAN: ${{ runner.temp }}/release-plan.json
+        run: task release:cut
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-plan
+          path: ${{ runner.temp }}/release-plan.json*
+          if-no-files-found: error
+          retention-days: 90
+      - env:
+          RELEASE_PLAN: ${{ runner.temp }}/release-plan.json
+        run: task release:push
