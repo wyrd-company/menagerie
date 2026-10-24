@@ -1,0 +1,78 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  references:
+    - menagerie
+    - workspace-api
+    - browser-session-value-tampering
+    - job-without-timeout-blocks-workspace
+format: json
+description: >-
+  Create and upgrade are interview jobs. They extend the workspace API
+  (`docs/specifications/workspace-api.yml`): its job, event, error and
+  replay rules apply unchanged, and this specification adds the members an
+  interview needs. The browser and the workspace service both follow it.
+
+
+  Starting. `POST /api/jobs` accepts `{"operation":"create","workspace",
+  "templateId"}` and `{"operation":"upgrade","workspace","templateId"}`.
+  `templateId` is the `id` of an approved template from `GET /api/templates`;
+  for an upgrade it names the template version to upgrade to. A create names
+  a new folder; an existing folder is refused. The job takes the workspace's
+  slot as any job does, and keeps it while it waits for answers.
+
+
+  Waiting. While the job needs answers its state is `waiting-for-answers`.
+  This state has no expiry and no deadline. A flow `stop` or `abort` ends the
+  job in the terminal state `ended`; nothing is written.
+
+
+  Interview events. The job stream adds the event type `interview`. Its data
+  is an InterviewReply: `{"session", "state", "document", "warnings"}`.
+  `session` is Toha's staged record, carried as opaque JSON. `state` is
+  `questions`, `completed` or `ended`. `document` is the Toha document
+  unchanged: the question batch (`status: questions`, with `context`,
+  `schema`, `messages` and, for a rejected submission, `errors`), the ended
+  document, or `null` when the interview completed. `warnings` lists service
+  warnings. Each reply is appended to the job's history, so a reconnecting or
+  reloading browser receives the current batch and session again.
+
+
+  Answering. `POST /api/jobs/{id}/answers` takes `{"session",
+  "submission":{"template","answers"}}`. `session` is the session of the
+  latest reply, returned byte for byte; `submission` is Toha's answers
+  envelope, whose `template` is the batch's `context.template`. The service
+  answers 200 with the next InterviewReply and also appends it as an
+  `interview` event; a client that receives the same reply twice applies it
+  once. A rejected submission is 200 with the same batch and its `errors`.
+  A job that is not waiting answers 409 `job-not-waiting`; a malformed body
+  answers 400; an unknown job answers 404.
+
+
+  Opaque values. Neither the browser nor the workspace service decodes the
+  session or a Toha document into a lossy form: numbers, member order and
+  escapes travel as received. The browser renders every property of the
+  received batch schema and never removes a question.
+
+
+  Result. An interview job's `result` event adds an optional `apply` member:
+  `{"outcome", "files", "recordPath", "messages", "hooks", "conflicts"}`.
+  `outcome` is `written`, `already-current`, `needs-trust`, `planned` or
+  `conflicted`; `files` lists `{path, action}`; `hooks` lists
+  `{id, exitCode, success}` without output; `conflicts` lists the paths
+  written with merge conflicts. Hook output is not streamed.
+
+
+  Answer semantics follow Toha's interview protocol. The browser sends only
+  the questions the person changed: a question left out takes its default,
+  or its empty answer when it has none. An explicit `null` is an empty answer
+  that takes no default. An emptied optional text question is sent as `null`;
+  an emptied required one as an empty string, for Toha to judge.
+validation-criteria: >-
+  `pnpm --dir web test` checks the byte-for-byte session handling
+  (`src/api/rawJson.test.ts`), the reading of every question type from
+  Toha-produced batches (`src/interview/fields.test.ts`), the answers built
+  from them (`src/interview/answers.test.ts`) and the folding of interview
+  events (`src/jobs/jobView.test.ts`). `pnpm --dir web test:browser` drives
+  the built UI through create, rejection, a flow stop, reload and upgrade
+  against the test-only fixture server, which refuses a session that does not
+  come back byte for byte.
