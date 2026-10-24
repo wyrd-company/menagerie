@@ -9,12 +9,20 @@
 #   test     every suite that needs no Docker daemon             (always)
 #   lint     static analysis, non-mutating                       (always)
 #   format   apply formatting, mutating                          (always)
-#   check    everything CI runs                                  (always)
+#   check    everything CI runs, the live suites included        (always)
 #   dev      the web UI with hot reload                          (applicable)
 #
 # Menagerie is a runnable application, so build and dev apply. The packages
 # keep their own taskfiles; every include sets dir so their commands run in
 # their own folder.
+#
+# The live suites (test:live) need a Docker Engine that may run privileged
+# containers, and OpenBao's bao on PATH. Builds and devcontainers run on a
+# disposable docker:dind daemon (scripts/isolated-docker.sh), never on the
+# ambient daemon's BuildKit. Scratch state lives under MENAGERIE_SCRATCH, by
+# default ~/.cache/menagerie: a path the ambient daemon sees at the same
+# path, unlike a container-private /tmp. Test binaries run with a test-only
+# 10m bound; each live suite finished in under 1 minute on the shared host.
 version: "3"
 
 includes:
@@ -30,6 +38,7 @@ includes:
 
 vars:
   CARGO_TARGET: '{{.CARGO_TARGET_DIR | default (print .ROOT_DIR "/template-service/target")}}'
+  SCRATCH: '{{.MENAGERIE_SCRATCH | default (print .HOME "/.cache/menagerie")}}'
   IMAGE: '{{.MENAGERIE_IMAGE | default "menagerie:dev"}}'
 
 tasks:
@@ -82,9 +91,85 @@ tasks:
     cmds:
       - docker build -t '{{.IMAGE}}' .
 
+  test:live:
+    desc: Run every suite that needs Docker or OpenBao
+    cmds:
+      - task: test:docker
+      - task: test:openbao
+      - task: test:pocketid
+      - task: test:templateservice
+      - task: test:templateservice:docker
+      - task: test:integrated
+      - task: test:image
+
+  test:docker:
+    desc: Run the devcontainer runtime's Docker suite on a disposable Docker daemon
+    vars:
+      STATE: '{{.SCRATCH}}/docker'
+    cmds:
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}'
+      - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/devcontainer.test' ./backend/internal/devcontainer/
+      - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/devcontainer.test' -test.v -test.count=1 -test.timeout 10m
+
+  test:openbao:
+    desc: Read registry credentials from a disposable OpenBao dev server (needs bao on PATH)
+    cmds:
+      - task: backend:test:openbao
+
+  test:pocketid:
+    desc: Sign in through a disposable Pocket ID on the ambient Docker daemon
+    cmds:
+      - task: backend:test:pocketid
+
+  test:templateservice:
+    desc: Run create and upgrade against the template service binary, without Docker
+    cmds:
+      - task: backend:test:templateservice
+
+  test:templateservice:docker:
+    desc: Run create and upgrade with the acceptance devcontainer on a disposable Docker daemon
+    vars:
+      STATE: '{{.SCRATCH}}/templateservice'
+    cmds:
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}'
+      - cargo build --locked --release --manifest-path template-service/Cargo.toml --target-dir '{{.CARGO_TARGET}}'
+      - CGO_ENABLED=0 go test -c -tags 'templateservice docker' -o '{{.STATE}}/workflows.test' ./backend/internal/workflows/
+      - >-
+        scripts/isolated-docker.sh run '{{.STATE}}'
+        -c '{{.CARGO_TARGET}}/release/menagerie-template-service'
+        -e MENAGERIE_TEMPLATE_SERVICE=/menagerie-work/bin/menagerie-template-service
+        '{{.STATE}}/workflows.test' -test.v -test.count=1 -test.timeout 10m
+
+  test:integrated:
+    desc: Drive the built UI against the real workspace service, template service, Pocket ID and an owned Docker daemon
+    vars:
+      STATE:
+        sh: mkdir -p "{{.SCRATCH}}" && mktemp -d "{{.SCRATCH}}/integrated.XXXXXX"
+    cmds:
+      # run.sh builds the UI before the workspace service that embeds it.
+      - defer: web/test/integrated/run.sh down '{{.STATE}}'
+      - web/test/integrated/run.sh up '{{.STATE}}'
+      - web/test/integrated/run.sh test '{{.STATE}}'
+
+  test:image:
+    desc: Build the image on a disposable Docker daemon, then start, sign in to, fail and stop it there
+    vars:
+      STATE: '{{.SCRATCH}}/image'
+    cmds:
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}'
+      - CGO_ENABLED=0 go test -c -tags 'pocketid image' -o '{{.STATE}}/image.test' ./backend/cmd/menagerie/
+      - scripts/isolated-docker.sh build-image '{{.STATE}}' menagerie:test
+      - >-
+        scripts/isolated-docker.sh run '{{.STATE}}' -e MENAGERIE_IMAGE=menagerie:test
+        '{{.STATE}}/image.test' -test.run '^TestImage$' -test.v -test.count=1 -test.timeout 10m
+
   check:
     desc: Everything CI runs; run this before pushing
     cmds:
       - task: lint
       - task: test
       - task: build
+      - task: test:live
