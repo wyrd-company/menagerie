@@ -26,6 +26,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -56,7 +57,11 @@ func run(configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	runtime := devcontainer.New(docker, devcontainer.Options{})
+	credentials, err := registryCredentials(cfg)
+	if err != nil {
+		return err
+	}
+	runtime := devcontainer.New(docker, devcontainer.Options{Credentials: credentials})
 	manager := jobs.NewManager(ctx)
 	templates := make([]api.Template, 0, len(cfg.Templates))
 	for _, t := range cfg.Templates {
@@ -90,4 +95,27 @@ func run(configPath string) error {
 		return err
 	}
 	return nil
+}
+
+// registryCredentials returns the per-operation registry credential source:
+// OpenBao read through the Wyrwood vault socket for the configured
+// registries, anonymous for every other registry.
+func registryCredentials(cfg *config.Config) (func(context.Context) devcontainer.RegistryAuth, error) {
+	rc := cfg.RegistryCredentials
+	if rc == nil {
+		return nil, nil
+	}
+	source, err := registrycreds.NewOpenBao(registrycreds.SocketAddress(cfg.WyrwoodDirectory), rc.KVMount)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]registrycreds.Entry, 0, len(rc.Registries))
+	for _, r := range rc.Registries {
+		entries = append(entries, registrycreds.Entry{Registry: r.Registry, Path: r.Path})
+	}
+	registries, err := registrycreds.New(source, entries)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context) devcontainer.RegistryAuth { return registries.Operation(ctx) }, nil
 }

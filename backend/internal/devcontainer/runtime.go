@@ -23,6 +23,7 @@ import (
 
 	dockerclient "github.com/docker/docker/client"
 	"github.com/wyrd-company/devcontainer-builder/pkg/builder"
+	"github.com/wyrd-company/devcontainer-builder/pkg/buildkit"
 	"github.com/wyrd-company/devcontainer-builder/pkg/features"
 	hostdocker "github.com/wyrd-company/devcontainer-builder/pkg/host/docker"
 	"github.com/wyrd-company/devcontainer-builder/pkg/host/dockercompose"
@@ -48,11 +49,9 @@ type Status struct {
 	ContainerID string
 }
 
-// RegistryAuth supplies Engine API registry credentials for image pulls.
-// *registryauth.Store satisfies it.
-type RegistryAuth interface {
-	EngineAuth(ref string) (string, error)
-}
+// RegistryAuth answers devcontainer-builder's registry credential requests:
+// BuildKit sessions, base image and feature reads, and Engine pulls.
+type RegistryAuth = buildkit.RegistryAuth
 
 // Progress receives an operation's phases and output.
 type Progress interface {
@@ -64,10 +63,11 @@ type Progress interface {
 
 // Options configure a Runtime.
 type Options struct {
-	// RegistryAuth supplies credentials for image pulls by Up. Nil reads the
-	// Docker client configuration, as devcontainer-builder's builder does,
-	// afresh for each start or rebuild.
-	RegistryAuth RegistryAuth
+	// Credentials returns the registry credentials of one start or rebuild.
+	// Nil is anonymous for every registry. Every devcontainer-builder call
+	// receives a credential source, so none reads the Docker client
+	// configuration or runs a credential helper.
+	Credentials func(ctx context.Context) RegistryAuth
 	// Environ returns the process environment used for ${localEnv:...}
 	// substitution and for initializeCommand. Defaults to os.Environ.
 	Environ func() []string
@@ -128,9 +128,6 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
-	if err := CheckNoCredentialHelpers(); err != nil {
-		return err
-	}
 	environ := r.opts.Environ()
 	env := envMap(environ)
 	if err := r.initialize(ctx, dc, folder, environ, env, p); err != nil {
@@ -142,11 +139,7 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
-	auth := r.opts.RegistryAuth
-	if auth == nil {
-		auth = registryauth.FromEnvironment()
-	}
-	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: auth}
+	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx)}
 	switch dc.Mode() {
 	case spec.ModeSingle:
 		err = r.upSingle(ctx, op, replace)
@@ -283,7 +276,7 @@ func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) er
 // whole project. A workspace without a container is already stopped.
 func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
 	p.Phase("stop")
-	host := r.dockerHost(p, nil)
+	host := r.dockerHost(p, anonymous)
 	info, err := host.Inspect(ctx, folder)
 	if errors.Is(err, hostdocker.ErrContainerNotFound) {
 		fmt.Fprintln(p.Log(""), "workspace has no container")
@@ -294,7 +287,7 @@ func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
 	}
 	if project := info.Labels[dockercompose.LabelProject]; project != "" {
 		fmt.Fprintf(p.Log(""), "stopping compose project %s\n", project)
-		return r.composeHost(p, nil).Stop(ctx, folder)
+		return r.composeHost(p, anonymous).Stop(ctx, folder)
 	}
 	fmt.Fprintf(p.Log(""), "stopping container %s\n", shortID(info.ID))
 	return host.StopByID(ctx, info.ID)
@@ -306,7 +299,7 @@ func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
 // volumes and networks are kept.
 func (r *Runtime) removeWorkspaceContainers(ctx context.Context, folder string, p Progress) error {
 	p.Phase("remove-container")
-	host := r.dockerHost(p, nil)
+	host := r.dockerHost(p, anonymous)
 	for {
 		info, err := host.Inspect(ctx, folder)
 		if errors.Is(err, hostdocker.ErrContainerNotFound) {
@@ -322,6 +315,22 @@ func (r *Runtime) removeWorkspaceContainers(ctx context.Context, folder string, 
 	}
 }
 
+// anonymous is the credential source of operations that pull and build
+// nothing. It is still a source, so no call falls back to the Docker
+// client configuration.
+var anonymous RegistryAuth = registryauth.Static{}
+
+// credentials is the credential source of one start or rebuild.
+func (r *Runtime) credentials(ctx context.Context) RegistryAuth {
+	if r.opts.Credentials == nil {
+		return anonymous
+	}
+	if auth := r.opts.Credentials(ctx); auth != nil {
+		return auth
+	}
+	return anonymous
+}
+
 func (r *Runtime) builderOptions(op *operation, tags []string) builder.Options {
 	return builder.Options{
 		Spec:            op.dc,
@@ -331,6 +340,7 @@ func (r *Runtime) builderOptions(op *operation, tags []string) builder.Options {
 		Tags:            tags,
 		Load:            true,
 		FeatureLockfile: op.lock,
+		RegistryAuth:    op.auth,
 		Logger:          logger(op.p),
 		Stdout:          op.p.Log(""),
 		Stderr:          op.p.Log(""),
@@ -338,7 +348,7 @@ func (r *Runtime) builderOptions(op *operation, tags []string) builder.Options {
 }
 
 // dockerHost and composeHost wrap the shared client with one operation's
-// output. auth is nil for operations that pull nothing.
+// output and credential source.
 func (r *Runtime) dockerHost(p Progress, auth RegistryAuth) *hostdocker.Host {
 	out := p.Log("")
 	return hostdocker.New(r.client, hostdocker.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth})

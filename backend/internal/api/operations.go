@@ -12,6 +12,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -86,9 +87,9 @@ func failureKind(err error) error {
 	if errors.As(err, &initErr) {
 		return &jobs.Failure{Kind: "initialize-command-failed", Err: err}
 	}
-	var helperErr *devcontainer.CredentialHelperError
-	if errors.As(err, &helperErr) {
-		return &jobs.Failure{Kind: "credential-helper-unsupported", Err: err}
+	var credErr *registrycreds.Error
+	if errors.As(err, &credErr) {
+		return &jobs.Failure{Kind: "registry-credentials-unavailable", Err: err}
 	}
 	return err
 }

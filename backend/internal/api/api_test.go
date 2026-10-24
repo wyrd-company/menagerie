@@ -18,6 +18,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -345,9 +346,9 @@ func TestJobOutlivesTheRequest(t *testing.T) {
 
 func TestFailureKinds(t *testing.T) {
 	cases := map[string]error{
-		"initialize-command-failed":     &devcontainer.InitializeError{Err: errors.New("exit status 3")},
-		"credential-helper-unsupported": fmt.Errorf("start: %w", &devcontainer.CredentialHelperError{ConfigFile: "/sample/config.json"}),
-		"operation-failed":              errors.New("up: boom"),
+		"initialize-command-failed":        &devcontainer.InitializeError{Err: errors.New("exit status 3")},
+		"registry-credentials-unavailable": fmt.Errorf("up: pull: %w", &registrycreds.Error{Registry: "registry.example.test", Reason: "the secret does not exist"}),
+		"operation-failed":                 errors.New("up: boom"),
 	}
 	for kind, failure := range cases {
 		f := newFixture(t, nil)

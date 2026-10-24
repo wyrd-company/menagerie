@@ -42,7 +42,7 @@ description: >-
   `phase` names the current step, for example `read-definition`,
   `initialize-command`, `build`, `remove-container`, `up` or `stop`. A failed
   job carries `error.kind`: `initialize-command-failed`,
-  `credential-helper-unsupported`, `operation-failed` or `internal-error`.
+  `registry-credentials-unavailable`, `operation-failed` or `internal-error`.
   No timeout is applied to a job.
 
 
@@ -87,15 +87,18 @@ description: >-
   privilege and restart policy they ask for.
 
 
-  Registry credentials come from the Docker client configuration of the
-  Menagerie process (`$DOCKER_CONFIG/config.json`, else
-  `~/.docker/config.json`): its `auths` entries and the
-  `DOCKER_AUTH_CONFIG` environment variable, for image pulls, builds and
-  feature fetches. Menagerie runs no credential helper program: before
-  each `start` or `rebuild` it reads that configuration and fails the job
-  with `credential-helper-unsupported` when it names `credsStore` or
-  `credHelpers`. The check reads the configuration at that moment; the
-  build and pulls read it again when they need credentials.
+  Registry credentials come only from Menagerie's `registry-credentials`
+  configuration. Every devcontainer-builder call receives one credential
+  source per `start` or `rebuild`, covering Engine pulls, BuildKit builds,
+  base image and feature reads and Compose service builds, so no call reads
+  a Docker client configuration or runs a credential helper. A registry the
+  configuration names is read from OpenBao through the Wyrwood vault socket
+  the first time the operation uses it and kept for the rest of the
+  operation; any other registry is anonymous. When a named registry's
+  secret cannot be read (missing, denied, malformed, no Wyrwood token, or an
+  unreachable socket) the job fails with `registry-credentials-unavailable`
+  and a fixed reason; credential values and OpenBao response text never
+  appear in a job's log, events or error.
 
 
   The service also serves the built web UI when one is supplied: `/assets/*`
