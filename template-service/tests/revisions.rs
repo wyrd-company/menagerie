@@ -188,24 +188,25 @@ async fn an_installed_tag_stays_on_its_revision() {
     world.install(&world.address("@v1"));
     let service = Running::start(&world).await;
     git(&world.sample, &["merge", "-q", "--ff-only", "next"]);
-    let start = service
-        .post("/v1/interviews", &world.select("alpha", "sample-v1"))
-        .await;
+    // Moving the tag upstream does not move the installed revision.
+    git(&world.sample, &["tag", "-f", "v1", &world.v2]);
+    let selector = world.select("alpha", "sample-v1");
+    let start = service.post("/v1/interviews", &selector).await;
     assert_eq!(
         start.json["document"]["context"]["commit"],
         world.v1.as_str(),
         "{}",
         start.json
     );
+    let envelope = submission(&start, sample_answers("first"));
     let mut moved = start.json["session"].clone();
     moved["commit"] = json!(world.v2);
     let refused = service
         .post(
             "/v1/interviews/answers",
             &with(
-                world.select("alpha", "sample-v1"),
-                json!({"session": moved,
-            "submission": submission(&start, sample_answers("first"))}),
+                selector.clone(),
+                json!({"session": moved, "submission": envelope}),
             ),
         )
         .await;
@@ -215,5 +216,45 @@ async fn an_installed_tag_stays_on_its_revision() {
         "{}",
         refused.json
     );
+    let kept = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                selector,
+                json!({"session": start.json["session"], "submission": envelope}),
+            ),
+        )
+        .await;
+    assert_eq!(kept.json["state"], "completed", "{}", kept.json);
+    service.stop().await;
+}
+
+/// Toha's catalog updates only Git templates installed in the user layer;
+/// other installations are used as they are.
+#[tokio::test(flavor = "multi_thread")]
+async fn installations_toha_does_not_update_are_used_as_they_are() {
+    let world = World::new();
+    world.install(&world.address(""));
+    let user = world.data.join("data/templates.yml");
+    let system = world.data.join("system/data/templates.yml");
+    std::fs::create_dir_all(system.parent().unwrap()).unwrap();
+    std::fs::rename(&user, &system).unwrap();
+    git(&world.sample, &["merge", "-q", "--ff-only", "next"]);
+    let service = Running::start(&world).await;
+    let start = service
+        .post("/v1/interviews", &world.select("alpha", "sample-main"))
+        .await;
+    assert_eq!(start.status, 200, "{}", start.json);
+    assert_eq!(
+        start.json["document"]["context"]["commit"],
+        world.v1.as_str()
+    );
+
+    world.install(&format!("{}/templates/flows", world.root.display()));
+    let folder = service
+        .post("/v1/interviews", &world.select("beta", "flows-folder"))
+        .await;
+    assert_eq!(folder.status, 200, "{}", folder.json);
+    assert_eq!(folder.json["state"], "questions");
     service.stop().await;
 }
