@@ -5,7 +5,7 @@ go 1.27.3
 require (
 	github.com/docker/cli v28.5.2+incompatible
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/wyrd-company/devcontainer-builder v0.0.0-20261020074153-5ca13fc5c200
+	github.com/wyrd-company/devcontainer-builder v0.0.0-20261024131825-0aa6b18bdd7b
 	gopkg.in/yaml.v3 v3.0.1
 )
 
