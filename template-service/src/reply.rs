@@ -181,3 +181,39 @@ pub fn merged(merged: toha::applied::Merged, report: toha::applied::UpdateReport
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn files_without_the_applied_record_are_a_failed_generation() {
+        for record in [
+            toha::applied::RecordOutcome::NotGit,
+            toha::applied::RecordOutcome::Internal,
+        ] {
+            let applied = toha::Applied::Written {
+                files: vec![],
+                record,
+                hooks_run: 0,
+                hooks: vec![],
+                after_apply: None,
+                git: None,
+            };
+            let error = generated(applied, &[], vec![]).unwrap_err();
+            assert_eq!((error.status, error.kind), (500, "record-not-written"));
+        }
+        let applied = toha::Applied::Written {
+            files: vec![],
+            record: toha::applied::RecordOutcome::Written(".toha.json".into()),
+            hooks_run: 0,
+            hooks: vec![],
+            after_apply: Some("done".into()),
+            git: None,
+        };
+        let reply = generated(applied, &[], vec!["first".into()]).unwrap();
+        assert_eq!(reply.outcome, Outcome::Written);
+        assert_eq!(reply.record_path.as_deref(), Some(".toha.json"));
+        assert_eq!(reply.messages, ["first", "done"]);
+    }
+}

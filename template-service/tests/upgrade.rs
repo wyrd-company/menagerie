@@ -256,9 +256,23 @@ async fn a_stale_application_or_dirty_workspace_is_refused() {
     );
     assert_eq!(head(&folder), before);
 
+    let third = service
+        .post("/v1/upgrades", &world.select("alpha", "sample-v1"))
+        .await;
+    assert_eq!(third.json["state"], "completed", "{}", third.json);
     write(&folder, "result.txt", "uncommitted\n");
     let dirty = service.post("/v1/upgrades", &selector).await;
     assert_eq!((dirty.status, dirty.kind()), (409, "dirty-target"));
+    let resumed = service
+        .post(
+            "/v1/upgrades/apply",
+            &with(
+                world.select("alpha", "sample-v1"),
+                json!({"session": third.json["session"]}),
+            ),
+        )
+        .await;
+    assert_eq!((resumed.status, resumed.kind()), (409, "dirty-target"));
     assert_eq!(read(&folder, "result.txt"), "uncommitted\n");
     service.stop().await;
 }
@@ -376,5 +390,31 @@ async fn an_overlapping_local_edit_is_reported_as_conflicted() {
     );
     assert_eq!(applied.json["recordPath"], ".toha.json");
     assert!(read(&folder, "local.txt").contains("<<<<<<<"));
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_upgrade_to_the_recorded_version_is_already_current() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let folder = create(&world, &service, "alpha", "sample-v1").await;
+    let before = head(&folder);
+    let selector = world.select("alpha", "sample-v1");
+    let start = service.post("/v1/upgrades", &selector).await;
+    assert_eq!(start.json["state"], "completed", "{}", start.json);
+    assert_eq!(start.json["document"], Value::Null);
+    let applied = service
+        .post(
+            "/v1/upgrades/apply",
+            &with(selector, json!({"session": start.json["session"]})),
+        )
+        .await;
+    assert_eq!(
+        applied.json["outcome"], "already-current",
+        "{}",
+        applied.json
+    );
+    assert_eq!(applied.json["recordPath"], Value::Null);
+    assert_eq!(head(&folder), before);
     service.stop().await;
 }

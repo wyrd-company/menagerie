@@ -65,7 +65,7 @@ fn sample_template(dir: &Path, version: u8) {
         dir,
         "template.yml",
         format!(
-            "name: sample\nschemas: schemas\ninterview:\n{label}  - {{id: note, type: text, prompt: Note}}\n  - {{id: catalog, type: document, prompt: Catalog, schema: '{CATALOG}', input: catalog.json}}\n{extra}hooks:\n  - run: [sh, -c, 'echo ran >> hook-marker.txt']\n"
+            "name: sample\nschemas: schemas\ninterview:\n{label}  - {{id: note, type: text, prompt: Note}}\n  - {{id: catalog, type: document, prompt: Catalog, schema: '{CATALOG}', input: catalog.json}}\n{extra}hooks:\n  - run: [sh, -c, 'echo ran > hook-marker.txt']\n"
         ),
     );
     write(
@@ -104,7 +104,7 @@ fn flows_template(dir: &Path, hook: &str) {
         dir,
         "template.yml",
         format!(
-            "name: flows\ninterview:\n  - {{id: label, type: text, prompt: Label, required: true}}\n  - flow: stop\n    when: label == 'stop'\n  - flow: abort\n    when: label == 'cancel'\n  - {{id: second, type: text, prompt: Second, required: true}}\nhooks:\n  - run: [sh, -c, '{hook}']\n"
+            "name: flows\ninterview:\n  - {{id: label, type: text, prompt: Label, required: true}}\n  - flow: stop\n    when: label == 'stop'\n  - flow: abort\n    when: label == 'cancel'\n  - {{id: second, type: text, prompt: Second, required: true}}\nhooks:\n  - run: [sh, -c, '{hook}']\n    cwd: sub\n"
         ),
     );
     write(
@@ -112,6 +112,7 @@ fn flows_template(dir: &Path, hook: &str) {
         "template/out.txt",
         "label: {{ label }}\nsecond: {{ second }}\n",
     );
+    write(dir, "template/sub/kept.txt", "kept\n");
 }
 
 /// Template repositories, a workspace root and the service settings.
@@ -366,7 +367,7 @@ pub async fn create(world: &World, service: &Running, workspace: &str, template:
     write(
         &folder,
         "catalog.json",
-        json!({"$schema": CATALOG, "title": "first"}).to_string(),
+        sample_answers("first")["catalog"].to_string(),
     );
     commit_all(&folder, "document input");
     folder
