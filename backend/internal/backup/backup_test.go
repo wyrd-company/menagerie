@@ -142,7 +142,12 @@ func TestInitCreatesAnUnbornWorkspaceBranchInAnEmptyFolder(t *testing.T) {
 		t.Fatalf("branch is born: %v", err)
 	}
 	if err := Init(folder, "alpha"); err == nil {
-		t.Fatal("Init accepted a non-empty folder")
+		t.Fatal("Init accepted a folder holding a repository")
+	}
+	occupied := filepath.Join(t.TempDir(), "occupied")
+	write(t, occupied, "file.txt", "x")
+	if err := Init(occupied, "occupied"); err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("Init accepted a non-empty folder: %v", err)
 	}
 	other := filepath.Join(t.TempDir(), "x")
 	_ = os.Mkdir(other, 0o755)
