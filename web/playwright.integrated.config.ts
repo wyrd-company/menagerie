@@ -11,6 +11,8 @@ const info = JSON.parse(readFileSync(infoPath, "utf8")) as { site: string };
 
 export default defineConfig({
   testDir: "test/integrated",
+  // run.test.ts in the same folder is a Vitest suite for run.sh.
+  testMatch: "**/*.spec.ts",
   fullyParallel: false,
   workers: 1,
   reporter: [["list"]],
