@@ -16,6 +16,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"golang.org/x/crypto/ssh/agent"
+
+	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 )
 
 func write(t *testing.T, root, rel, body string) {
@@ -151,9 +153,9 @@ func TestInitCreatesAnUnbornWorkspaceBranchInAnEmptyFolder(t *testing.T) {
 }
 
 func TestBackupsOverSSHKeepAnIndependentRootAndHistory(t *testing.T) {
-	f := newSSHFixture(t)
-	remoteRepo := bare(t, f.dir, "backups.git")
-	remote := &Remote{URL: f.url("backups.git"), Auth: AgentAuth(f.agentPath, f.knownHosts)}
+	f := backuptest.New(t)
+	remoteRepo := bare(t, f.Dir, "backups.git")
+	remote := &Remote{URL: f.URL("backups.git"), Auth: AgentAuth(f.AgentPath, f.KnownHosts)}
 	ctx := context.Background()
 
 	folder := newWorkspace(t, "alpha")
@@ -180,7 +182,7 @@ func TestBackupsOverSSHKeepAnIndependentRootAndHistory(t *testing.T) {
 	if err != nil || !pushed {
 		t.Fatalf("push: %v %v", pushed, err)
 	}
-	if got := f.seen(); len(got) != 1 || got[0] != "git-receive-pack '"+filepath.Join(f.dir, "backups.git")+"'" {
+	if got := f.Commands(); len(got) != 1 || got[0] != "git-receive-pack '"+filepath.Join(f.Dir, "backups.git")+"'" {
 		t.Fatalf("remote commands %q", got)
 	}
 	commits := history(t, remoteRepo, "alpha")
@@ -246,8 +248,8 @@ func TestBackupsOverSSHKeepAnIndependentRootAndHistory(t *testing.T) {
 }
 
 func TestPushReplacesTheRemoteBranchAndFetchesNothing(t *testing.T) {
-	f := newSSHFixture(t)
-	remoteRepo := bare(t, f.dir, "backups.git")
+	f := backuptest.New(t)
+	remoteRepo := bare(t, f.Dir, "backups.git")
 	ctx := context.Background()
 
 	// Another history already on the remote branch, plus an unrelated branch.
@@ -257,7 +259,7 @@ func TestPushReplacesTheRemoteBranchAndFetchesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	local := &Remote{URL: filepath.Join(f.dir, "backups.git")}
+	local := &Remote{URL: filepath.Join(f.Dir, "backups.git")}
 	if _, err := local.Push(ctx, elsewhere, "alpha", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +276,7 @@ func TestPushReplacesTheRemoteBranchAndFetchesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := &Remote{URL: f.url("backups.git"), Auth: AgentAuth(f.agentPath, f.knownHosts)}
+	remote := &Remote{URL: f.URL("backups.git"), Auth: AgentAuth(f.AgentPath, f.KnownHosts)}
 	if pushed, err := remote.Push(ctx, folder, "alpha", nil); err != nil || !pushed {
 		t.Fatalf("push: %v %v", pushed, err)
 	}
@@ -305,30 +307,30 @@ func TestPushReplacesTheRemoteBranchAndFetchesNothing(t *testing.T) {
 }
 
 func TestPushVerifiesTheHostKeyAndUsesOnlyTheAgent(t *testing.T) {
-	f := newSSHFixture(t)
-	remoteRepo := bare(t, f.dir, "backups.git")
+	f := backuptest.New(t)
+	remoteRepo := bare(t, f.Dir, "backups.git")
 	folder := newWorkspace(t, "alpha")
 	if _, err := CommitRoot(folder, "alpha", generate(t, folder), "Create", &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
 
-	other := newSSHFixture(t)
+	other := backuptest.New(t)
 	wrongHosts := filepath.Join(t.TempDir(), "known_hosts")
-	f.writeKnownHosts(t, wrongHosts, other.hostKey)
-	emptyAgent := f.serveAgent(t, agent.NewKeyring())
+	f.WriteKnownHosts(t, wrongHosts, other.HostKey)
+	emptyAgent := f.ServeAgent(t, agent.NewKeyring())
 	cases := []struct {
 		name string
 		auth Auth
 		want string
 	}{
-		{"unknown host key", AgentAuth(f.agentPath, wrongHosts), "key mismatch"},
-		{"agent without the key", AgentAuth(emptyAgent, f.knownHosts), "unable to authenticate"},
-		{"no agent", AgentAuth(filepath.Join(t.TempDir(), "absent.sock"), f.knownHosts), "ssh agent"},
+		{"unknown host key", AgentAuth(f.AgentPath, wrongHosts), "key mismatch"},
+		{"agent without the key", AgentAuth(emptyAgent, f.KnownHosts), "unable to authenticate"},
+		{"no agent", AgentAuth(filepath.Join(t.TempDir(), "absent.sock"), f.KnownHosts), "ssh agent"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := (&Remote{URL: f.url("backups.git"), Auth: tc.auth}).Push(ctx, folder, "alpha", nil)
+			_, err := (&Remote{URL: f.URL("backups.git"), Auth: tc.auth}).Push(ctx, folder, "alpha", nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error %v, want %q", err, tc.want)
 			}
@@ -340,19 +342,19 @@ func TestPushVerifiesTheHostKeyAndUsesOnlyTheAgent(t *testing.T) {
 }
 
 func TestAgentAuthUsesTheDefaultKnownHostsWhenNoneAreGiven(t *testing.T) {
-	f := newSSHFixture(t)
-	t.Setenv("SSH_KNOWN_HOSTS", f.knownHosts)
-	bare(t, f.dir, "backups.git")
+	f := backuptest.New(t)
+	t.Setenv("SSH_KNOWN_HOSTS", f.KnownHosts)
+	bare(t, f.Dir, "backups.git")
 	folder := newWorkspace(t, "alpha")
 	if _, err := CommitRoot(folder, "alpha", generate(t, folder), "Create", &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (&Remote{URL: f.url("backups.git"), Auth: AgentAuth(f.agentPath)}).Push(context.Background(), folder, "alpha", nil); err != nil {
+	if _, err := (&Remote{URL: f.URL("backups.git"), Auth: AgentAuth(f.AgentPath)}).Push(context.Background(), folder, "alpha", nil); err != nil {
 		t.Fatal(err)
 	}
-	other := newSSHFixture(t)
+	other := backuptest.New(t)
 	t.Setenv("SSH_KNOWN_HOSTS", filepath.Join(t.TempDir(), "absent"))
-	_, err := (&Remote{URL: other.url("x.git"), Auth: AgentAuth(other.agentPath)}).Push(context.Background(), folder, "alpha", nil)
+	_, err := (&Remote{URL: other.URL("x.git"), Auth: AgentAuth(other.AgentPath)}).Push(context.Background(), folder, "alpha", nil)
 	if err == nil {
 		t.Fatal("push trusted a host with no known key")
 	}
