@@ -195,6 +195,19 @@ impl World {
         Settings::load(&self.config, &self.data).unwrap()
     }
 
+    /// Install an approved address into the service's Toha registry, as an
+    /// operator does with Toha's catalog.
+    pub fn install(&self, address: &str) {
+        let host = menagerie_template_service::host::TohaHost::new(&self.data);
+        host.prepare().unwrap();
+        let catalog = toha::catalog::Catalog::load(host.paths.clone(), &host.cwd).unwrap();
+        toha::catalog::add(&catalog, address, None, false, &host.cwd).unwrap();
+    }
+
+    pub fn address(&self, reference: &str) -> String {
+        format!("file://{}{reference}", self.sample.display())
+    }
+
     pub fn folder(&self, workspace: &str) -> PathBuf {
         self.workspaces.join(workspace)
     }

@@ -23,7 +23,10 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
             ),
         ));
     }
-    let (config, registry, mut warnings) = service.host.context()?;
+    let (mut config, mut registry, mut warnings) = service.host.context()?;
+    if crate::revision::refresh(selected.template, &service.host, &config, &registry)? {
+        (config, registry, warnings) = service.host.context()?;
+    }
     let resolved = toha::resolve::resolve_template(
         &selected.template.address,
         &config,

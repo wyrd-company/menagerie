@@ -1,4 +1,5 @@
-//! Which template revision an approved address admits.
+//! Which template revision an approved address admits, and refreshing an
+//! installed branch when an operation starts.
 //!
 //! A tag or commit address fixes one revision: a session on any other
 //! revision is refused. A branch address (or an address without a reference)
@@ -7,7 +8,7 @@
 use crate::config::ApprovedTemplate;
 use crate::error::ServiceError;
 use crate::host::TohaHost;
-use toha::registry::Registry;
+use toha::registry::{Layer, Registry};
 use toha::source::{self, Address, RefKind};
 use toha::staging::StagedRecord;
 
@@ -108,6 +109,33 @@ pub fn check(record: &StagedRecord, admitted: &Admitted) -> Result<(), ServiceEr
         )),
         _ => Ok(()),
     }
+}
+
+/// Refresh the approved template's installation when an operation starts, as
+/// Toha's catalog update does: an installed branch moves to its current
+/// commit, an installed tag or commit stays. Only a Git template installed in
+/// the user registry layer, which Toha's catalog updates, is refreshed.
+/// Returns whether the registry may have changed.
+pub fn refresh(
+    template: &ApprovedTemplate,
+    host: &TohaHost,
+    config: &toha::config::Config,
+    registry: &Registry,
+) -> Result<bool, ServiceError> {
+    let formal =
+        toha::resolve::formal_name(&template.address, config, registry, &host.paths, &host.cwd)?;
+    let Some(listed) = registry.entries.get(&formal) else {
+        return Ok(false);
+    };
+    if listed.layer != Layer::User || !is_git(&listed.entry.source) {
+        return Ok(false);
+    }
+    let failed = |e: toha::catalog::CatalogError| {
+        ServiceError::refused("template-refresh-failed", e.to_string())
+    };
+    let catalog = toha::catalog::Catalog::load(host.paths.clone(), &host.cwd).map_err(failed)?;
+    toha::catalog::update(&catalog, Some(formal)).map_err(failed)?;
+    Ok(true)
 }
 
 /// Toha's test for a Git source in its catalog update.

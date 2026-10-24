@@ -62,7 +62,10 @@ description: >-
   a start uses the branch's current commit and its session keeps that commit
   until it ends. The service learns whether a named reference is a tag or a
   branch from Toha's fetch, so answering or applying a session of such an
-  address reads its repository. An installed tag fixes the installed commit.
+  address reads its repository. A start first refreshes an approved template
+  installed in Toha's user registry the way Toha's catalog update does: an
+  installed branch moves to its current commit, an installed tag or commit
+  stays, and an installed tag fixes the installed commit.
 
 
   Create. `/v1/interviews` refuses an existing folder. Its first batch asks
@@ -113,7 +116,8 @@ description: >-
   `target-drift` (409), `target-symlink` (409), `target-occupied` (409),
   `target-changed` (409). Toha refusals: `template-not-found` (422),
   `template-stale-revision` (422), `template-ambiguous` (422),
-  `template-resolve-failed` (422), `template-invalid` (422),
+  `template-resolve-failed` (422), `template-refresh-failed` (422),
+  `template-invalid` (422),
   `missing-requirements` (422), `document-invalid` (422), `parts-invalid`
   (422), `context-invalid` (422), `environment-refused` (422),
   `evaluation-failed` (422), `plan-failed` (422), `record-invalid` (422),
@@ -144,7 +148,8 @@ validation-criteria: >-
   answers, generation into an initialized repository, revision pinning and
   flow ends; `tests/hooks.rs` covers hook folders, hook and I/O failures;
   `tests/numbers.rs` covers number values through the session and the
-  applied record; `tests/revisions.rs` covers fixed addresses; `tests/upgrade.rs` covers an
+  applied record; `tests/revisions.rs` covers fixed and moving addresses,
+  installed branches and tags; `tests/upgrade.rs` covers an
   upgrade between two template versions that asks only the new question and
   keeps local edits, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;

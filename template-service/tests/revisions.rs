@@ -1,5 +1,6 @@
 //! The approved address decides which revision a session may use: a tag or
-//! commit address fixes one revision.
+//! commit address fixes one revision, a branch address moves only when an
+//! operation starts.
 mod common;
 use common::*;
 use serde_json::{Value, json};
@@ -116,5 +117,103 @@ async fn a_fixed_upgrade_address_refuses_a_session_on_another_revision() {
     );
     assert_eq!(git(&folder, &["rev-parse", "HEAD"]), before);
     assert_eq!(git(&folder, &["status", "--porcelain"]), "");
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_installed_branch_moves_at_a_new_operation_and_never_on_resume() {
+    let world = World::new();
+    world.install(&world.address(""));
+    let service = Running::start(&world).await;
+    let (selector, pending) = answered(&service, &world, "gamma", "sample-main").await;
+    assert_eq!(pending["document"]["context"]["commit"], world.v1.as_str());
+    let folder = create(&world, &service, "alpha", "sample-main").await;
+    assert_eq!(application(&folder)["commit"], world.v1.as_str());
+
+    git(&world.sample, &["merge", "-q", "--ff-only", "next"]);
+
+    let resumed = service
+        .post("/v1/interviews/answers", &with(selector, json!({"session": pending["session"],
+            "submission": {"template": pending["document"]["context"]["template"], "answers": sample_answers("first")}})))
+        .await;
+    assert_eq!(
+        resumed.json["state"], "completed",
+        "resume moved to the newer revision: {}",
+        resumed.json
+    );
+    assert_eq!(resumed.json["session"]["commit"], world.v1.as_str());
+
+    let fresh = service
+        .post("/v1/interviews", &world.select("beta", "sample-main"))
+        .await;
+    assert_eq!(
+        fresh.json["document"]["context"]["commit"],
+        world.v2.as_str(),
+        "{}",
+        fresh.json
+    );
+
+    let selector = world.select("alpha", "sample-main");
+    let upgrade = service.post("/v1/upgrades", &selector).await;
+    assert_eq!(upgrade.json["state"], "questions", "{}", upgrade.json);
+    assert_eq!(questions(&upgrade), ["extra"]);
+    assert_eq!(
+        upgrade.json["document"]["context"]["commit"],
+        world.v2.as_str()
+    );
+    let done = service
+        .post(
+            "/v1/upgrades/answers",
+            &with(
+                selector.clone(),
+                json!({"session": upgrade.json["session"],
+            "submission": submission(&upgrade, json!({"extra": "added"}))}),
+            ),
+        )
+        .await;
+    let applied = service
+        .post(
+            "/v1/upgrades/apply",
+            &with(selector, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(applied.json["outcome"], "written", "{}", applied.json);
+    assert_eq!(application(&folder)["commit"], world.v2.as_str());
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_installed_tag_stays_on_its_revision() {
+    let world = World::new();
+    world.install(&world.address("@v1"));
+    let service = Running::start(&world).await;
+    git(&world.sample, &["merge", "-q", "--ff-only", "next"]);
+    let start = service
+        .post("/v1/interviews", &world.select("alpha", "sample-v1"))
+        .await;
+    assert_eq!(
+        start.json["document"]["context"]["commit"],
+        world.v1.as_str(),
+        "{}",
+        start.json
+    );
+    let mut moved = start.json["session"].clone();
+    moved["commit"] = json!(world.v2);
+    let refused = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                world.select("alpha", "sample-v1"),
+                json!({"session": moved,
+            "submission": submission(&start, sample_answers("first"))}),
+            ),
+        )
+        .await;
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (409, "session-mismatch"),
+        "{}",
+        refused.json
+    );
     service.stop().await;
 }
