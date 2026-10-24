@@ -1,0 +1,29 @@
+# ---
+# relationships:
+#   references: [workspace-api, configuration]
+# ---
+# Workspace service checks. The repository Taskfile includes these.
+version: "3"
+
+tasks:
+  build:
+    desc: Compile every workspace service package
+    cmds:
+      - go build ./...
+
+  lint:
+    desc: Check formatting and vet the workspace service
+    cmds:
+      - test -z "$(gofmt -l .)"
+      - go vet ./...
+      - go vet -tags docker ./...
+
+  test:
+    desc: Run the workspace service unit tests with the race detector
+    cmds:
+      - go test -race -count=1 ./...
+
+  test:docker:
+    desc: Run the Docker smoke tests (needs a local Docker Engine and alpine:3.22)
+    cmds:
+      - go test -tags docker -count=1 -v ./internal/devcontainer/
