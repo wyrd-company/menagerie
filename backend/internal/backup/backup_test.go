@@ -364,3 +364,17 @@ func TestOutputPathsMustStayInTheWorkspace(t *testing.T) {
 		}
 	}
 }
+
+func TestTheAppliedRecordIsCommittedEvenWhenIgnored(t *testing.T) {
+	folder := newWorkspace(t, "alpha")
+	write(t, folder, ".gitignore", ".toha.json\n")
+	write(t, folder, ".toha.json", "{}\n")
+	root, err := CommitRoot(folder, "alpha", Output{Reported: []string{".gitignore"}, Record: ".toha.json"}, "Create", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := git.PlainOpen(folder)
+	if got := tree(t, repo, root.Hash); !reflect.DeepEqual(got, []string{".gitignore", ".toha.json"}) {
+		t.Fatalf("tree %v", got)
+	}
+}
