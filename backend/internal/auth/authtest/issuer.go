@@ -69,6 +69,11 @@ type Issuer struct {
 	OmitUserinfo bool
 	// Down makes discovery fail.
 	Down bool
+	// AdvertiseIss sets authorization_response_iss_parameter_supported.
+	AdvertiseIss bool
+	// Iss, when set, is sent as the iss parameter of every authorization
+	// response (RFC 9207).
+	Iss string
 
 	codes          map[string]grant
 	access         map[string]User
@@ -169,6 +174,9 @@ func (is *Issuer) discovery(w http.ResponseWriter, _ *http.Request) {
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"code_challenge_methods_supported":      []string{"S256"},
 	}
+	if is.AdvertiseIss {
+		doc["authorization_response_iss_parameter_supported"] = true
+	}
 	if !is.OmitUserinfo {
 		doc["userinfo_endpoint"] = is.srv.URL + "/userinfo"
 	}
@@ -179,7 +187,10 @@ func (is *Issuer) jwks(w http.ResponseWriter, _ *http.Request) {
 	writeJSONBody(w, http.StatusOK, jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: is.key.Public(), KeyID: is.keyID, Algorithm: "RS256", Use: "sig"}}})
 }
 
-func redirectWith(w http.ResponseWriter, r *http.Request, target string, v url.Values) {
+func (is *Issuer) redirectWith(w http.ResponseWriter, r *http.Request, target string, v url.Values) {
+	if is.Iss != "" {
+		v.Set("iss", is.Iss)
+	}
 	u, _ := url.Parse(target)
 	u.RawQuery = v.Encode()
 	http.Redirect(w, r, u.String(), http.StatusFound)
@@ -196,17 +207,17 @@ func (is *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	if q.Get("response_type") != "code" || !strings.Contains(" "+q.Get("scope")+" ", " openid ") ||
 		q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" {
-		redirectWith(w, r, is.redirect, url.Values{"error": {"invalid_request"}, "state": {q.Get("state")}})
+		is.redirectWith(w, r, is.redirect, url.Values{"error": {"invalid_request"}, "state": {q.Get("state")}})
 		return
 	}
 	if is.Refuse != "" {
-		redirectWith(w, r, is.redirect, url.Values{"error": {is.Refuse}, "state": {q.Get("state")}})
+		is.redirectWith(w, r, is.redirect, url.Values{"error": {is.Refuse}, "state": {q.Get("state")}})
 		return
 	}
 	code := randomToken()
 	is.codes[code] = grant{clientID: q.Get("client_id"), redirectURI: q.Get("redirect_uri"),
 		challenge: q.Get("code_challenge"), nonce: q.Get("nonce"), user: is.User}
-	redirectWith(w, r, is.redirect, url.Values{"code": {code}, "state": {q.Get("state")}})
+	is.redirectWith(w, r, is.redirect, url.Values{"code": {code}, "state": {q.Get("state")}})
 }
 
 func tokenError(w http.ResponseWriter, code string) {

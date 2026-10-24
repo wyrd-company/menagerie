@@ -104,6 +104,14 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request) {
 		page(w, http.StatusBadRequest, pageSignInFailed, "sign-in-expired", "This sign-in is no longer pending in this browser. Start it again.")
 		return
 	}
+	// RFC 9207: an authorization response that names its issuer must name
+	// ours, so a code from another provider is never sent to our token
+	// endpoint.
+	if q.Has("iss") && q.Get("iss") != a.cfg.Issuer {
+		log.Printf("auth: authorization response from issuer %q", sanitize(q.Get("iss")))
+		page(w, http.StatusUnauthorized, pageSignInFailed, "sign-in-rejected", "The sign-in came from another identity provider. Start it again.")
+		return
+	}
 	if code := q.Get("error"); code != "" {
 		log.Printf("auth: identity provider refused sign-in: %s", sanitize(code))
 		page(w, http.StatusUnauthorized, pageSignInFailed, "sign-in-refused", "The identity provider refused the sign-in ("+sanitize(code)+").")
@@ -119,6 +127,14 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("auth: discovery at %s failed: %v", a.cfg.Issuer, err)
 		page(w, http.StatusBadGateway, pageSignInFailed, "identity-provider-unavailable", "The identity provider cannot be reached. Try again later.")
+		return
+	}
+	var meta struct {
+		IssParameter bool `json:"authorization_response_iss_parameter_supported"`
+	}
+	if err := p.Claims(&meta); err == nil && meta.IssParameter && !q.Has("iss") {
+		log.Printf("auth: authorization response without the iss parameter its provider advertises")
+		page(w, http.StatusUnauthorized, pageSignInFailed, "sign-in-rejected", "The sign-in did not name its identity provider. Start it again.")
 		return
 	}
 	token, err := oc.Exchange(ctx, code, oauth2.VerifierOption(pending.verifier))

@@ -458,6 +458,44 @@ func TestCallbackRequiresTheBrowsersPendingState(t *testing.T) {
 	})
 }
 
+func TestCallbackChecksTheIssParameter(t *testing.T) {
+	cases := []struct {
+		name   string
+		set    func(*authtest.Issuer)
+		status int
+		kind   string
+	}{
+		{"names our issuer", func(is *authtest.Issuer) { is.AdvertiseIss = true; is.Iss = is.URL() }, http.StatusOK, ""},
+		{"absent and not advertised", func(*authtest.Issuer) {}, http.StatusOK, ""},
+		{"names another issuer", func(is *authtest.Issuer) { is.Iss = "https://issuer.example.invalid" }, http.StatusUnauthorized, "sign-in-rejected"},
+		{"another issuer on an error response", func(is *authtest.Issuer) {
+			is.Iss = "https://issuer.example.invalid"
+			is.Refuse = "access_denied"
+		}, http.StatusUnauthorized, "sign-in-rejected"},
+		{"advertised but absent", func(is *authtest.Issuer) { is.AdvertiseIss = true }, http.StatusUnauthorized, "sign-in-rejected"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSite(t)
+			s.issuer.Set(c.set)
+			b := s.browser()
+			r := b.get(s.srv.URL + "/page/home")
+			if r.status != c.status {
+				t.Fatalf("answered %d %q", r.status, r.body)
+			}
+			if c.status == http.StatusOK {
+				return
+			}
+			if pageKind(t, r) != c.kind || b.cookie(s, "menagerie-session") != "" {
+				t.Fatalf("answered %q", r.body)
+			}
+			if n := s.issuer.RequestCount("POST /token"); n != 0 {
+				t.Fatalf("code sent to the token endpoint %d times", n)
+			}
+		})
+	}
+}
+
 func TestProviderRefusalAndOutage(t *testing.T) {
 	s := newSite(t)
 	s.issuer.Set(func(is *authtest.Issuer) { is.Refuse = "access_denied" })
