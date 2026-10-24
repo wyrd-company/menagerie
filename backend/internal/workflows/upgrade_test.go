@@ -115,8 +115,20 @@ func TestAConflictedUpgradeIsBackedUpButNotRebuilt(t *testing.T) {
 		return appliedReply(templates.Conflicted, []templates.File{{Path: "local.txt", Action: "conflicted"}}, []string{"local.txt"}), nil
 	}
 	job, snap := w.upgraded(t)
-	if snap.State != jobs.Failed || snap.Error.Kind != KindMergeConflicted || !strings.Contains(snap.Error.Message, "merge conflict markers into local.txt") || !strings.Contains(snap.Error.Message, "not rebuilt") {
+	if snap.State != jobs.Failed || snap.Error.Kind != KindMergeConflicted {
 		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	history := w.remoteHistory(t, "alpha")
+	for _, part := range []string{
+		"the upgrade is not complete",
+		"merge conflict markers into local.txt, which need manual resolution",
+		"committed and backed up as " + history[0].Hash.String(),
+		"the state before the upgrade as " + history[1].Hash.String(),
+		"the devcontainer was not rebuilt: resolve the conflicts, then rebuild",
+	} {
+		if !strings.Contains(snap.Error.Message, part) {
+			t.Errorf("message lacks %q: %s", part, snap.Error.Message)
+		}
 	}
 	if !strings.Contains(result(job), `"apply":{"outcome":"conflicted"`) || !strings.Contains(result(job), `"conflicts":["local.txt"]`) {
 		t.Fatalf("result %s", result(job))

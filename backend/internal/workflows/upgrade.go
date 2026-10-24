@@ -89,7 +89,7 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	if applied.Outcome == templates.Conflicted {
-		return &jobs.Failure{Kind: KindMergeConflicted, Err: fmt.Errorf("the upgrade wrote merge conflict markers into %s; it is committed and backed up as %s; the devcontainer was not rebuilt: resolve the conflicts, then rebuild", strings.Join(applied.Conflicts, ", "), commit.Hash)}
+		return &jobs.Failure{Kind: KindMergeConflicted, Err: fmt.Errorf("the upgrade is not complete: it wrote merge conflict markers into %s, which need manual resolution; the conflicted files are committed and backed up as %s, and the state before the upgrade as %s; the devcontainer was not rebuilt: resolve the conflicts, then rebuild", strings.Join(applied.Conflicts, ", "), commit.Hash, before.Hash)}
 	}
 	if err := u.w.opts.Runtime.Rebuild(ctx, u.folder, run); err != nil {
 		return api.ContainerFailure(fmt.Errorf("the workspace was upgraded and backed up as %s, but its devcontainer did not rebuild: %w", commit.Hash, err))
