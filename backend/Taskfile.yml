@@ -1,6 +1,6 @@
 # ---
 # relationships:
-#   references: [workspace-api, configuration]
+#   references: [workspace-api, configuration, authentication]
 # ---
 # Workspace service checks. The repository Taskfile includes these.
 version: "3"
@@ -18,6 +18,7 @@ tasks:
       - go vet ./...
       - go vet -tags docker ./...
       - go vet -tags openbao ./...
+      - go vet -tags pocketid ./...
 
   test:
     desc: Run the workspace service unit tests with the race detector
@@ -33,3 +34,8 @@ tasks:
     desc: Read registry credentials from a disposable OpenBao dev server through a Wyrwood-contract socket (needs bao on PATH)
     cmds:
       - go test -tags openbao -count=1 -v ./internal/registrycreds/
+
+  test:pocketid:
+    desc: Sign a manager and a non-manager in through a disposable Pocket ID container (pulls the pinned Pocket ID image when missing)
+    cmds:
+      - go test -tags pocketid -count=1 -v -run TestSignInThroughPocketID ./cmd/menagerie/
