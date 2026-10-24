@@ -10,6 +10,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -69,6 +70,10 @@ type Failure struct {
 func (f *Failure) Error() string { return f.Err.Error() }
 func (f *Failure) Unwrap() error { return f.Err }
 
+// ErrEnded is returned by a runner to end its job in the terminal state
+// ended, as an interview's flow stop or abort does. It is not a failure.
+var ErrEnded = errors.New("job ended")
+
 // Snapshot is the public view of a job.
 type Snapshot struct {
 	JobID       string     `json:"jobId"`
@@ -84,7 +89,7 @@ type Snapshot struct {
 
 // Runner performs a job's work. It runs on a goroutine owned by the
 // Manager with the Manager's context, not a request's. Returning nil ends
-// the job as succeeded, unless the runner already ended it.
+// the job as succeeded, ErrEnded as ended, and any other error as failed.
 type Runner func(ctx context.Context, run *Run) error
 
 // BusyError reports that a workspace already has an unfinished job.
@@ -157,11 +162,14 @@ func (m *Manager) run(job *Job, runner Runner) {
 		err = runner(m.ctx, run)
 	}()
 	run.flush()
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrEnded):
+		job.finish(Ended, nil)
+	case err != nil:
 		job.finish(Failed, toError(err))
-		return
+	default:
+		job.finish(Succeeded, nil)
 	}
-	job.finish(Succeeded, nil)
 }
 
 func toError(err error) *Error {
@@ -218,6 +226,7 @@ type Job struct {
 	phase    string
 	finished *time.Time
 	err      *Error
+	apply    json.RawMessage
 	events   []Event
 	changed  chan struct{}
 }
@@ -264,8 +273,9 @@ type stateData struct {
 }
 
 type resultData struct {
-	State State  `json:"state"`
-	Error *Error `json:"error"`
+	State State           `json:"state"`
+	Error *Error          `json:"error"`
+	Apply json.RawMessage `json:"apply,omitempty"`
 }
 
 func (j *Job) appendEvent(eventType string, data any) {
@@ -303,7 +313,6 @@ func (j *Job) setState(state State, phase string) {
 func (j *Job) finish(state State, jobErr *Error) {
 	m := j.manager
 	now := m.now()
-	raw, _ := json.Marshal(resultData{State: state, Error: jobErr})
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	j.mu.Lock()
@@ -311,11 +320,27 @@ func (j *Job) finish(state State, jobErr *Error) {
 	if j.state.Terminal() {
 		return
 	}
+	raw, err := marshalCompact(resultData{State: state, Error: jobErr, Apply: j.apply})
+	if err != nil {
+		raw, _ = json.Marshal(resultData{State: state, Error: jobErr})
+	}
 	if m.active[j.workspace] == j {
 		delete(m.active, j.workspace)
 	}
 	j.state, j.err, j.finished = state, jobErr, &now
 	j.appendLocked(EventResult, raw)
+}
+
+// marshalCompact encodes v without HTML escaping, so opaque payloads keep
+// their text.
+func marshalCompact(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 func newID() string {

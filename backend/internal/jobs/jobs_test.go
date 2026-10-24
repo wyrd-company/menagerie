@@ -301,3 +301,65 @@ func TestListNewestFirst(t *testing.T) {
 		t.Fatal("unknown id found")
 	}
 }
+
+func TestEndedRunnerEndsTheJobAndReleasesTheWorkspace(t *testing.T) {
+	m := NewManager(context.Background())
+	job, err := m.Start("alpha", "create", func(context.Context, *Run) error {
+		return fmt.Errorf("flow stop: %w", ErrEnded)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := waitEnded(t, job)
+	if snap.State != Ended || snap.Error != nil || snap.FinishedAt == nil {
+		t.Fatalf("snapshot %+v error %+v", snap, snap.Error)
+	}
+	events, _, _ := job.EventsAfter(0)
+	if last := events[len(events)-1]; last.Type != EventResult || string(last.Data) != `{"state":"ended","error":null}` {
+		t.Fatalf("result %s %s", last.Type, last.Data)
+	}
+	if _, err := m.Start("alpha", "start", func(context.Context, *Run) error { return nil }); err != nil {
+		t.Fatalf("ended job kept the workspace: %v", err)
+	}
+	m.Wait()
+}
+
+func TestResultCarriesTheApplyOutcomeText(t *testing.T) {
+	m := NewManager(context.Background())
+	var id string
+	job, _ := m.Start("alpha", "upgrade", func(_ context.Context, run *Run) error {
+		id = run.JobID()
+		if err := run.SetApply(json.RawMessage("{not json")); err == nil {
+			return errors.New("invalid apply accepted")
+		}
+		if err := run.SetApply(json.RawMessage(`{"outcome":"planned"}`)); err != nil {
+			return err
+		}
+		return run.SetApply(json.RawMessage("{\n \"outcome\": \"conflicted\", \"n\": 1e2, \"path\": \"a<b>&c\"\n}"))
+	})
+	waitEnded(t, job)
+	if id != job.ID() {
+		t.Fatalf("run job id %q, job id %q", id, job.ID())
+	}
+	events, _, _ := job.EventsAfter(0)
+	want := `{"state":"succeeded","error":null,"apply":{"outcome":"conflicted","n":1e2,"path":"a<b>&c"}}`
+	if last := events[len(events)-1]; string(last.Data) != want {
+		t.Fatalf("result %s\nwant   %s", last.Data, want)
+	}
+}
+
+func TestFailedResultKeepsTheApplyOutcome(t *testing.T) {
+	m := NewManager(context.Background())
+	job, _ := m.Start("alpha", "upgrade", func(_ context.Context, run *Run) error {
+		if err := run.SetApply(json.RawMessage(`{"outcome":"conflicted"}`)); err != nil {
+			return err
+		}
+		return &Failure{Kind: "merge-conflicted", Err: errors.New("conflicts")}
+	})
+	waitEnded(t, job)
+	events, _, _ := job.EventsAfter(0)
+	want := `{"state":"failed","error":{"kind":"merge-conflicted","message":"conflicts"},"apply":{"outcome":"conflicted"}}`
+	if last := events[len(events)-1]; string(last.Data) != want {
+		t.Fatalf("result %s", last.Data)
+	}
+}

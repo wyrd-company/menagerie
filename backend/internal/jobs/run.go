@@ -22,6 +22,9 @@ type Run struct {
 	writers []*lineWriter
 }
 
+// JobID returns the identifier of the run's job.
+func (r *Run) JobID() string { return r.job.id }
+
 // Phase records the step the job is in. It keeps the job running.
 func (r *Run) Phase(name string) { r.job.setState(Running, name) }
 
@@ -49,6 +52,20 @@ func (r *Run) Emit(eventType string, data json.RawMessage) error {
 	r.job.mu.Lock()
 	defer r.job.mu.Unlock()
 	r.job.appendLocked(eventType, compact.Bytes())
+	return nil
+}
+
+// SetApply records the template apply outcome reported as the result
+// event's apply member. The payload is opaque JSON, compacted to one line;
+// invalid JSON is refused. A later call replaces an earlier one.
+func (r *Run) SetApply(data json.RawMessage) error {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, data); err != nil {
+		return fmt.Errorf("apply result: %w", err)
+	}
+	r.job.mu.Lock()
+	defer r.job.mu.Unlock()
+	r.job.apply = compact.Bytes()
 	return nil
 }
 
