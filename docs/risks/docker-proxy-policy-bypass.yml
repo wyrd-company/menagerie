@@ -11,8 +11,13 @@ description: >-
   daemon's lets a request reach the daemon with privileges it was not
   granted. Mitigation: the proxy denies unknown routes and malformed or
   duplicate-key bodies; the fork resolves symlinks on every bind source
-  before the prefix check; tests cover each HostConfig field
-  devcontainer-builder can set.
+  before the prefix check at create, and resolves the container's mounts
+  again at every start and restart requested through the proxy; tests cover
+  each HostConfig field devcontainer-builder can set. The daemon resolves
+  bind sources again at every start, so two gaps remain: a path swapped in
+  the moment between the proxy's start check and the daemon's mount, and a
+  restart the daemon performs by restart policy, which never passes through
+  the proxy.
 categories:
   - security
 likelihood: 3

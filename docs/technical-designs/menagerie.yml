@@ -107,7 +107,8 @@ proposed-design:
     Menagerie never receives the Docker socket. It connects to a fork of
     Sockguard that runs outside the Menagerie container and forwards to the
     host daemon. The proxy allows only the Engine endpoints devcontainer-builder
-    uses, resolves symlinks on every bind source before checking it, allows
+    uses, resolves symlinks on every bind source before checking it at
+    create and again at every start and restart, allows
     bind sources only under the workspace root, and denies privileged mode,
     added capabilities, host namespaces and devices unless the workspace has an
     exception. The proxy denies unknown BuildKit gRPC methods, and the daemon
