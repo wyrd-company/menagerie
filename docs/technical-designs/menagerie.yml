@@ -79,12 +79,14 @@ proposed-design:
     Only templates on the approved template list can be used. Each entry names
     a Toha template address. The list is configuration.
   create-flow: >-
-    After the interview completes, the template service builds Toha's plan
-    and applies it into a new folder under the workspace root, which records
-    the answers in the applied record `.toha.json`. The workspace service then
-    initializes the git repository, commits, backs the commit up to an orphan
-    branch named after the workspace in the workspace repository, and starts
-    the devcontainer through devcontainer-builder.
+    After the interview completes, the workspace service creates a new folder
+    under the workspace root and initializes its git repository. The template
+    service builds Toha's plan and applies it into that folder, recording the
+    answers in the applied record `.toha.json`. Generation completes when Toha
+    reports that the applied record was written. The workspace service commits,
+    backs the commit up to an orphan branch named after the workspace in the
+    workspace repository, and starts the devcontainer through
+    devcontainer-builder.
   upgrade-flow: >-
     The workspace service commits any local changes to tracked files so the
     pre-upgrade state is backed up. Toha fetches the newer template version.
