@@ -41,8 +41,9 @@ proposed-design:
     Rust. It embeds Toha and serves template interviews, generation and
     upgrades to the workspace service over an internal API. Docker access goes
     through a body-inspecting socket proxy outside the container. Git access
-    goes through Wyrwood's SSH-agent socket. The workspace root is mounted at
-    the same path on the host and in the container.
+    goes through Wyrwood's SSH-agent socket. The workspace root and the
+    template cache are mounted at the same paths on the host and in the
+    container.
   terms: >-
     A workspace is a folder under the workspace root, generated from a Toha
     template, together with the devcontainer it defines. Every folder directly
@@ -158,12 +159,14 @@ proposed-design:
     the `menagerie_managers` group claim. Every authenticated user is a
     manager.
   configuration: >-
-    Configuration names the workspace root, the workspace repository, the
+    Configuration names the workspace root, the template cache, the
+    workspace repository, the
     approved template list, the OIDC issuer and client, the proxy
     socket, the Wyrwood consumer directory and the exception policy file.
   deployment: >-
-    The Menagerie container mounts the workspace root at the same path as on
-    the host, the proxy socket, the Wyrwood consumer directory and the
+    The Menagerie container mounts the workspace root and the template cache
+    at the same paths as on the host, so that command containers can bind
+    them, and mounts the proxy socket, the Wyrwood consumer directory and the
     exception policy file. The proxy runs as its own container or host service
     with the host Docker socket. Menagerie is bound to a Wyrwood policy that
     grants only the deploy key.
