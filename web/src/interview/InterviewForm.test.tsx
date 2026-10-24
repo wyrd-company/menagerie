@@ -138,3 +138,26 @@ describe("InterviewForm while submitting", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });
+
+describe("InterviewForm error summary", () => {
+  it("links every question kind to a control that exists", () => {
+    const ids = Object.keys(batch1.schema.properties);
+    const errors = Object.fromEntries(ids.map((id) => [id, ["needs attention"]]));
+    render(
+      <InterviewForm
+        document={{ ...(batch1 as unknown as BatchDocument), errors }}
+        ordinal={1}
+        submitting={false}
+        submitError={null}
+        onSubmit={() => {}}
+      />,
+    );
+    const links = within(screen.getByRole("alert")).getAllByRole("link");
+    expect(links).toHaveLength(ids.length);
+    for (const link of links) {
+      const target = document.getElementById(link.getAttribute("href")!.slice(1));
+      expect(target, link.textContent ?? "").not.toBeNull();
+      expect(["INPUT", "TEXTAREA", "BUTTON"]).toContain(target!.tagName);
+    }
+  });
+});
