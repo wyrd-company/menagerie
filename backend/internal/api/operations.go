@@ -86,5 +86,9 @@ func failureKind(err error) error {
 	if errors.As(err, &initErr) {
 		return &jobs.Failure{Kind: "initialize-command-failed", Err: err}
 	}
+	var helperErr *devcontainer.CredentialHelperError
+	if errors.As(err, &helperErr) {
+		return &jobs.Failure{Kind: "credential-helper-unsupported", Err: err}
+	}
 	return err
 }

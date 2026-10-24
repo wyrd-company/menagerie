@@ -26,6 +26,7 @@ import (
 	"github.com/wyrd-company/devcontainer-builder/pkg/features"
 	hostdocker "github.com/wyrd-company/devcontainer-builder/pkg/host/docker"
 	"github.com/wyrd-company/devcontainer-builder/pkg/host/dockercompose"
+	"github.com/wyrd-company/devcontainer-builder/pkg/registryauth"
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
 )
 
@@ -63,7 +64,9 @@ type Progress interface {
 
 // Options configure a Runtime.
 type Options struct {
-	// RegistryAuth is used for image pulls by Up. Nil pulls anonymously.
+	// RegistryAuth supplies credentials for image pulls by Up. Nil reads the
+	// Docker client configuration, as devcontainer-builder's builder does,
+	// afresh for each start or rebuild.
 	RegistryAuth RegistryAuth
 	// Environ returns the process environment used for ${localEnv:...}
 	// substitution and for initializeCommand. Defaults to os.Environ.
@@ -125,6 +128,9 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
+	if err := CheckNoCredentialHelpers(); err != nil {
+		return err
+	}
 	environ := r.opts.Environ()
 	env := envMap(environ)
 	if err := r.initialize(ctx, dc, folder, environ, env, p); err != nil {
@@ -136,7 +142,11 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
-	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.opts.RegistryAuth}
+	auth := r.opts.RegistryAuth
+	if auth == nil {
+		auth = registryauth.FromEnvironment()
+	}
+	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: auth}
 	switch dc.Mode() {
 	case spec.ModeSingle:
 		err = r.upSingle(ctx, op, replace)

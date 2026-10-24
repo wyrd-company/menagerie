@@ -41,8 +41,9 @@ description: >-
   and every client that sees the result event can start the next job.
   `phase` names the current step, for example `read-definition`,
   `initialize-command`, `build`, `remove-container`, `up` or `stop`. A failed
-  job carries `error.kind`: `initialize-command-failed`, `operation-failed`
-  or `internal-error`. No timeout is applied to a job.
+  job carries `error.kind`: `initialize-command-failed`,
+  `credential-helper-unsupported`, `operation-failed` or `internal-error`.
+  No timeout is applied to a job.
 
 
   `GET /api/jobs/{id}/events` streams the job's events as Server-Sent Events.
@@ -85,6 +86,16 @@ description: >-
   interval belongs to the stop, not to the job. Definitions get every
   privilege and restart policy they ask for.
 
+
+  Registry credentials come from the Docker client configuration of the
+  Menagerie process (`$DOCKER_CONFIG/config.json`, else
+  `~/.docker/config.json`): its `auths` entries and the
+  `DOCKER_AUTH_CONFIG` environment variable, for image pulls, builds and
+  feature fetches. Menagerie runs no credential helper program: before
+  each `start` or `rebuild` it reads that configuration and fails the job
+  with `credential-helper-unsupported` when it names `credsStore` or
+  `credHelpers`. The check reads the configuration at that moment; the
+  build and pulls read it again when they need credentials.
 
 
   The service also serves the built web UI when one is supplied: `/assets/*`

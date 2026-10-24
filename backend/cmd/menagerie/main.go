@@ -21,7 +21,6 @@ import (
 	"syscall"
 
 	dockerclient "github.com/docker/docker/client"
-	"github.com/wyrd-company/devcontainer-builder/pkg/registryauth"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
@@ -57,9 +56,7 @@ func run(configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Builds read the Docker client configuration through devcontainer-builder;
-	// pulls by Up use the same source.
-	runtime := devcontainer.New(docker, devcontainer.Options{RegistryAuth: registryauth.FromEnvironment()})
+	runtime := devcontainer.New(docker, devcontainer.Options{})
 	manager := jobs.NewManager(ctx)
 	templates := make([]api.Template, 0, len(cfg.Templates))
 	for _, t := range cfg.Templates {

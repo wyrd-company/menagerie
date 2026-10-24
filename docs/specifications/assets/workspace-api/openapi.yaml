@@ -257,7 +257,7 @@ components:
       properties:
         kind:
           type: string
-          examples: [operation-failed, initialize-command-failed, internal-error]
+          examples: [operation-failed, initialize-command-failed, credential-helper-unsupported, internal-error]
         message:
           type: string
     StateEvent:

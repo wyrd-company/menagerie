@@ -343,16 +343,23 @@ func TestJobOutlivesTheRequest(t *testing.T) {
 	f.manager.Wait()
 }
 
-func TestInitializeFailureKind(t *testing.T) {
-	f := newFixture(t, nil)
-	f.rt.fail = &devcontainer.InitializeError{Err: errors.New("exit status 3")}
-	_, data := f.do(t, "POST", "/api/jobs", `{"operation":"start","workspace":"alpha"}`)
-	snap := decode[jobs.Snapshot](t, data)
-	f.manager.Wait()
-	_, data = f.do(t, "GET", "/api/jobs/"+snap.JobID, "")
-	done := decode[jobs.Snapshot](t, data)
-	if done.State != jobs.Failed || done.Error == nil || done.Error.Kind != "initialize-command-failed" {
-		t.Fatalf("%s", data)
+func TestFailureKinds(t *testing.T) {
+	cases := map[string]error{
+		"initialize-command-failed":     &devcontainer.InitializeError{Err: errors.New("exit status 3")},
+		"credential-helper-unsupported": fmt.Errorf("start: %w", &devcontainer.CredentialHelperError{ConfigFile: "/sample/config.json"}),
+		"operation-failed":              errors.New("up: boom"),
+	}
+	for kind, failure := range cases {
+		f := newFixture(t, nil)
+		f.rt.fail = failure
+		_, data := f.do(t, "POST", "/api/jobs", `{"operation":"start","workspace":"alpha"}`)
+		snap := decode[jobs.Snapshot](t, data)
+		f.manager.Wait()
+		_, data = f.do(t, "GET", "/api/jobs/"+snap.JobID, "")
+		done := decode[jobs.Snapshot](t, data)
+		if done.State != jobs.Failed || done.Error == nil || done.Error.Kind != kind {
+			t.Errorf("%s: %s", kind, data)
+		}
 	}
 }
 
