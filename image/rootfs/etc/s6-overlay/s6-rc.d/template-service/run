@@ -1,0 +1,5 @@
+#!/command/with-contenv sh
+# The template service: Toha interviews, generation and upgrades on the
+# private Unix socket. It reads /etc/menagerie/config.yml and keeps Toha's
+# data under /var/lib/menagerie/toha.
+exec /usr/local/bin/menagerie-template-service

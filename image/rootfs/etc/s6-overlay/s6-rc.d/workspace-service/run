@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+# The workspace service: the web UI, sign-in, the workspace API and Docker.
+# It reads /etc/menagerie/config.yml.
+exec /usr/local/bin/menagerie

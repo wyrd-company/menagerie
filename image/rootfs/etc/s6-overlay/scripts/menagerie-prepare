@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs once before either service starts. The template service's socket
+# folder admits only root, so only the two services can reach the socket.
+set -eu
+# A restarted container may keep /run: clear the previous stop's marker.
+rm -rf /run/menagerie-stopping
+install -d -m 0700 -o root -g root /run/menagerie
+install -d -m 0755 /var/lib/menagerie /var/lib/menagerie/toha

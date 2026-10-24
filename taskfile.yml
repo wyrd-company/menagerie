@@ -30,6 +30,7 @@ includes:
 
 vars:
   CARGO_TARGET: '{{.CARGO_TARGET_DIR | default (print .ROOT_DIR "/template-service/target")}}'
+  IMAGE: '{{.MENAGERIE_IMAGE | default "menagerie:dev"}}'
 
 tasks:
   default:
@@ -75,6 +76,11 @@ tasks:
     desc: Serve the web UI with hot reload against the fixture server, or MENAGERIE_URL when set
     cmds:
       - task: web:dev
+
+  build:image:
+    desc: Build the Menagerie image for this machine's platform on the ambient Docker daemon, tagged IMAGE (menagerie:dev)
+    cmds:
+      - docker build -t '{{.IMAGE}}' .
 
   check:
     desc: Everything CI runs; run this before pushing
