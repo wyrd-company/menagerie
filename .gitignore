@@ -43,3 +43,6 @@ target/
 
 # cargo-mutants output
 **/mutants.out*/
+
+# Root build output (task build)
+/bin/

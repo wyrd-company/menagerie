@@ -2,7 +2,7 @@
 # relationships:
 #   references: [workspace-api, configuration, authentication, template-service-api]
 # ---
-# Workspace service checks. The repository Taskfile includes these.
+# Workspace service checks. The repository taskfile includes these.
 version: "3"
 
 tasks:
@@ -10,6 +10,11 @@ tasks:
     desc: Compile every workspace service package
     cmds:
       - go build ./...
+
+  format:
+    desc: Apply Go formatting
+    cmds:
+      - gofmt -w .
 
   lint:
     desc: Check formatting and vet the workspace service

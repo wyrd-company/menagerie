@@ -1,0 +1,84 @@
+# ---
+# relationships:
+#   references: [menagerie]
+# ---
+# The same verb means the same thing in every repository.
+#
+#   build    the UI, the workspace service with the UI embedded, and the
+#            template service, into bin/                       (applicable)
+#   test     every suite that needs no Docker daemon             (always)
+#   lint     static analysis, non-mutating                       (always)
+#   format   apply formatting, mutating                          (always)
+#   check    everything CI runs                                  (always)
+#   dev      the web UI with hot reload                          (applicable)
+#
+# Menagerie is a runnable application, so build and dev apply. The packages
+# keep their own taskfiles; every include sets dir so their commands run in
+# their own folder.
+version: "3"
+
+includes:
+  backend:
+    taskfile: ./backend
+    dir: ./backend
+  template-service:
+    taskfile: ./template-service
+    dir: ./template-service
+  web:
+    taskfile: ./web
+    dir: ./web
+
+vars:
+  CARGO_TARGET: '{{.CARGO_TARGET_DIR | default (print .ROOT_DIR "/template-service/target")}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build the UI, then the workspace service that embeds it, then the template service, into bin/
+    cmds:
+      # The workspace service embeds web/dist, so the UI builds first.
+      - task: web:build
+      - mkdir -p bin
+      - CGO_ENABLED=0 go build -trimpath -o bin/menagerie ./backend/cmd/menagerie
+      - cargo build --locked --release --manifest-path template-service/Cargo.toml --target-dir '{{.CARGO_TARGET}}'
+      - cp '{{.CARGO_TARGET}}/release/menagerie-template-service' bin/menagerie-template-service
+
+  test:
+    desc: Run every suite that needs no Docker daemon, OpenBao or identity provider
+    cmds:
+      - task: backend:test
+      - task: template-service:test
+      - task: web:test
+      - task: web:test:browser
+
+  lint:
+    desc: Static analysis of every package, non-mutating
+    cmds:
+      - task: backend:lint
+      - task: template-service:lint
+      - task: template-service:dependencies
+      - task: web:lint
+
+  format:
+    desc: Apply formatting to every package
+    cmds:
+      - task: backend:format
+      - task: template-service:format
+      - task: web:format
+
+  dev:
+    desc: Serve the web UI with hot reload against the fixture server, or MENAGERIE_URL when set
+    cmds:
+      - task: web:dev
+
+  check:
+    desc: Everything CI runs; run this before pushing
+    cmds:
+      - task: lint
+      - task: test
+      - task: build

@@ -5,19 +5,19 @@ tasks:
   check:
     desc: Run every template service check.
     cmds:
-      - task: format
       - task: lint
       - task: dependencies
       - task: test
 
   format:
-    desc: Check Rust formatting.
+    desc: Apply Rust formatting.
     cmds:
-      - cargo fmt --check
+      - cargo fmt
 
   lint:
-    desc: Lint every target with warnings as errors.
+    desc: Check Rust formatting and lint every target with warnings as errors.
     cmds:
+      - cargo fmt --check
       - cargo clippy --locked --all-targets -- -D warnings
 
   test:
