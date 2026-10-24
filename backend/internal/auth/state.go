@@ -87,10 +87,10 @@ func (p *pendingLogins) take(state string) (pendingLogin, bool) {
 	return l, true
 }
 
-// Session is a signed-in manager.
+// Session is a signed-in manager, named in the service log at sign-in and
+// sign-out.
 type Session struct {
 	Subject string
-	Name    string
 }
 
 // sessions holds manager sessions by id, in memory only. A session ends at
@@ -120,8 +120,11 @@ func (s *sessions) get(id string) (Session, bool) {
 	return sess, ok
 }
 
-func (s *sessions) end(id string) {
+// end removes the session id names and returns it.
+func (s *sessions) end(id string) (Session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	sess, ok := s.byID[id]
 	delete(s.byID, id)
+	return sess, ok
 }

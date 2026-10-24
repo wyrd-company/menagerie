@@ -159,22 +159,25 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request) {
 	// before deciding, so a refused user never inherits it.
 	if old := a.sessionID(r); old != "" {
 		a.sessions.end(old)
-		a.clearCookie(w, a.cookies.session)
 	}
 	if !slices.Contains(who.groups, ManagersGroup) {
 		log.Printf("auth: %s signed in without %s membership", sanitize(who.Subject), ManagersGroup)
+		a.clearCookie(w, a.cookies.session)
 		page(w, http.StatusForbidden, pageForbidden, "not-a-manager", "You signed in as "+who.Name+", who is not a member of the "+ManagersGroup+" group.")
 		return
 	}
 	// A fresh id at every sign-in, so no id chosen before sign-in survives
 	// it.
 	id := a.sessions.create(who.Session)
+	log.Printf("auth: manager %s signed in", sanitize(who.Subject))
 	http.SetCookie(w, a.cookie(a.cookies.session, id))
 	redirect(w, pending.returnTo)
 }
 
 type identity struct {
 	Session
+	// Name is the user's display name, for the refusal page.
+	Name   string
 	groups []string
 }
 
@@ -214,7 +217,7 @@ func (a *Authenticator) verify(ctx context.Context, p *oidc.Provider, token *oau
 	if err := idToken.Claims(&c); err != nil {
 		return identity{}, err
 	}
-	who := identity{Session: Session{Subject: idToken.Subject, Name: c.displayName()}}
+	who := identity{Session: Session{Subject: idToken.Subject}, Name: c.displayName()}
 	groups := c.Groups
 	if len(groups) == 0 && p.UserInfoEndpoint() != "" {
 		info, err := p.UserInfo(ctx, oauth2.StaticTokenSource(token))
@@ -244,8 +247,8 @@ func (a *Authenticator) verify(ctx context.Context, p *oidc.Provider, token *oau
 // and cross-origin protection refuses a forged request. The identity
 // provider's own session is left alone.
 func (a *Authenticator) logout(w http.ResponseWriter, r *http.Request) {
-	if id := a.sessionID(r); id != "" {
-		a.sessions.end(id)
+	if sess, ok := a.sessions.end(a.sessionID(r)); ok {
+		log.Printf("auth: manager %s signed out", sanitize(sess.Subject))
 	}
 	a.clearCookie(w, a.cookies.session)
 	w.Header().Set("Cache-Control", "no-store")
