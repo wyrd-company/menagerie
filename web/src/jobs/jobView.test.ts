@@ -114,3 +114,20 @@ describe("decodeEvent", () => {
     );
   });
 });
+
+describe("interview replies keep the document text", () => {
+  it("keeps the document's raw text for its defaults", () => {
+    const text = `{"session":{},"state":"questions","document":{"schema":{"properties":{"d":{"default":9007199254740993}}}},"warnings":[]}`;
+    const event = decodeEvent("interview", "1", text) as Extract<JobEvent, { type: "interview" }>;
+    expect(event.data.documentText).toBe(
+      '{"schema":{"properties":{"d":{"default":9007199254740993}}}}',
+    );
+    expect(
+      decodeEvent(
+        "interview",
+        "2",
+        `{"session":{},"state":"completed","document":null,"warnings":[]}`,
+      ).data,
+    ).toMatchObject({ documentText: null });
+  });
+});

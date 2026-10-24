@@ -80,3 +80,49 @@ function scanValue(text: string, i: number): number {
   JSON.parse(text.slice(i, j));
   return j;
 }
+
+/** The raw text of a nested member, following object member names. */
+export function rawPath(text: string, path: string[]): string | undefined {
+  let current: string | undefined = text;
+  for (const name of path) {
+    if (current === undefined || !current.trimStart().startsWith("{")) return undefined;
+    current = topLevelMembers(current).get(name);
+  }
+  return current;
+}
+
+/** A JSON value the person typed, sent as its own text so numbers keep every digit. */
+export class RawValue {
+  readonly text: string;
+
+  constructor(text: string) {
+    // Validates that the text is exactly one JSON value.
+    JSON.parse(text);
+    this.text = text.trim();
+  }
+
+  /**
+   * Keeps JSON.stringify exact for a primitive where the runtime offers
+   * JSON.rawJSON (which takes primitives only), and makes it fail otherwise,
+   * so the typed text is never silently replaced.
+   */
+  toJSON(): unknown {
+    const rawJSON = (JSON as { rawJSON?: (text: string) => unknown }).rawJSON;
+    const primitive = !this.text.startsWith("{") && !this.text.startsWith("[");
+    if (rawJSON && primitive) return rawJSON(this.text);
+    throw new TypeError("serialize answers with stringifyJson to keep typed JSON exact");
+  }
+}
+
+/** JSON.stringify that writes each RawValue's text unchanged. */
+export function stringifyJson(value: unknown): string {
+  if (value instanceof RawValue) return value.text;
+  if (Array.isArray(value)) return `[${value.map((v) => stringifyJson(v ?? null)).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const members = Object.keys(value)
+      .filter((k) => (value as Record<string, unknown>)[k] !== undefined)
+      .map((k) => `${JSON.stringify(k)}:${stringifyJson((value as Record<string, unknown>)[k])}`);
+    return `{${members.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}

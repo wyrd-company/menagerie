@@ -223,3 +223,47 @@ test.describe("narrow viewport", () => {
     await shot(page, "create-narrow");
   });
 });
+
+test("sends one answers request at a time, however often Ctrl+Enter is pressed", async ({
+  page,
+}) => {
+  await beginCreate(page);
+  const held: (() => Promise<void>)[] = [];
+  await page.route("**/answers", (route) => {
+    held.push(() => route.continue());
+  });
+  await page.getByLabel(/^Title/).fill("Sample project");
+  await page.getByLabel(/^Title/).press("Control+Enter");
+  await page.getByLabel(/^Title/).press("Control+Enter");
+  await page.getByLabel(/^Title/).press("Enter");
+  await expect(page.getByRole("button", { name: "Sending answers…" })).toBeDisabled();
+  await expect.poll(() => held.length).toBe(1);
+  await page.getByLabel(/^Title/).press("Control+Enter");
+  expect(held).toHaveLength(1);
+  await held[0]!();
+  await page.unroute("**/answers");
+  await expect(page.getByText("Question batch 2")).toBeVisible();
+});
+
+test("sends a document's large integers exactly as typed", async ({ page }) => {
+  await beginCreate(page);
+  const text =
+    '{"$schema":"https://schemas.example.test/sample-settings/1","name":"sample","count":9007199254740993}';
+  await page.getByLabel(/^Title/).fill("Sample project");
+  await page.getByLabel(/^Settings document/).fill(text);
+  const sent = page.waitForRequest((r) => r.url().endsWith("/answers"));
+  await page.getByRole("button", { name: "Send answers" }).click();
+  expect((await sent).postData()).toContain(`"settings":${text}`);
+});
+
+test("moves focus to a choice question from the error summary", async ({ page }) => {
+  await control(page.request, "options", { upgradeDocument: "uncovered" });
+  await page.goto("/workspaces/sample-gamma/upgrade");
+  await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
+  await page.getByRole("button", { name: "Begin upgrade" }).click();
+  await page.getByRole("button", { name: "Send answers" }).click();
+  await page.locator(".error-summary").getByRole("link", { name: "Region" }).click();
+  await expect(page.getByRole("radio", { name: "north" })).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("radio", { name: "south" })).toBeChecked();
+});

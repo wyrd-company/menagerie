@@ -112,3 +112,13 @@ describe("readField fallbacks", () => {
     ).toBe(true);
   });
 });
+
+describe("readFields with the document text", () => {
+  it("keeps each default's own JSON text beside the decoded value", () => {
+    const text = `{"protocol":1,"status":"questions","context":{"target":"/t","template":"t","commit":null},"schema":{"type":"object","properties":{"doc":{"type":"object","x-toha-type":"document","default":{"count":9007199254740993}},"plain":{"type":"string","x-toha-type":"text"}}},"messages":[]}`;
+    const [doc, plain] = readFields(JSON.parse(text) as BatchDocument, text);
+    expect(doc?.defaultText).toBe('{"count":9007199254740993}');
+    expect(doc?.default).toEqual({ count: 9007199254740992 });
+    expect(plain?.defaultText).toBeUndefined();
+  });
+});

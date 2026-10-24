@@ -4,7 +4,9 @@
 // document leaves it out, and treats an explicit null as an empty answer that
 // does not take the default. So the form sends only the questions the person
 // changed; an untouched question is left out and Toha applies its own default.
+import { RawValue, stringifyJson } from "../api/rawJson.ts";
 import type { Submission } from "../api/types.ts";
+import { own } from "../own.ts";
 import type { Field, TextRules } from "./fields.ts";
 
 export type Choice = string | null | undefined;
@@ -45,12 +47,17 @@ export function initialValue(field: Field): FieldValue {
     case "multiselect":
       return { kind: "set", values: Array.isArray(d) ? d.map(String) : [] };
     case "document":
+      // The producer's own text keeps every digit; the decoded default may not.
+      if (field.defaultText !== undefined && field.defaultText !== "null") {
+        return { kind: "json", text: field.defaultText };
+      }
       if (field.hasDefault && d !== null) return { kind: "json", text: pretty(d) };
       return {
         kind: "json",
         text: field.schemas.length === 1 ? pretty({ $schema: field.schemas[0] }) : "",
       };
     case "json":
+      if (field.defaultText !== undefined) return { kind: "json", text: field.defaultText };
       return { kind: "json", text: field.hasDefault ? pretty(d) : "" };
   }
 }
@@ -62,7 +69,7 @@ export function initialForm(fields: Field[]): FormState {
 /** A value the browser cannot turn into an answer, with the reason. */
 export class AnswerError extends Error {}
 
-/** The answer a changed field sends. */
+/** The answer a changed field sends. A JSON answer is a RawValue holding the person's text. */
 export function answerFor(field: Field, value: FieldValue): unknown {
   switch (value.kind) {
     case "text":
@@ -93,7 +100,8 @@ export function answerFor(field: Field, value: FieldValue): unknown {
       ) {
         throw new AnswerError("A document answer is one JSON object.");
       }
-      return parsed;
+      // The text is sent as typed: parsing and re-serializing would round large integers.
+      return new RawValue(value.text);
     }
   }
 }
@@ -171,10 +179,17 @@ export function problemsFor(field: Field, state: FieldState): string[] {
 
 /** The answers document for the changed fields of this batch. */
 export function buildSubmission(template: string, fields: Field[], form: FormState): Submission {
-  const answers: Record<string, unknown> = {};
-  for (const field of fields) {
-    const state = form[field.id];
-    if (state?.dirty) answers[field.id] = answerFor(field, state.value);
-  }
+  // Object.fromEntries defines own members, so an id such as "__proto__" stays an answer.
+  const answers = Object.fromEntries(
+    fields.flatMap((field) => {
+      const state = own(form, field.id);
+      return state?.dirty ? [[field.id, answerFor(field, state.value)]] : [];
+    }),
+  );
   return { template, answers };
+}
+
+/** The answers envelope as JSON text, with each typed JSON answer exactly as typed. */
+export function serializeSubmission(submission: Submission): string {
+  return stringifyJson(submission);
 }

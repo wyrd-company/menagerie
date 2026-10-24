@@ -75,7 +75,7 @@ function sameReply(a: InterviewReply | null, b: InterviewReply): boolean {
     a !== null &&
     a.session === b.session &&
     a.state === b.state &&
-    JSON.stringify(a.document) === JSON.stringify(b.document)
+    a.documentText === b.documentText
   );
 }
 

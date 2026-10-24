@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import type { BatchDocument, Submission } from "../api/types.ts";
+import { own } from "../own.ts";
 import { buildSubmission, initialForm, problemsFor, type FormState } from "./answers.ts";
 import { FieldInput } from "./FieldInput.tsx";
 import { readFields } from "./fields.ts";
@@ -7,6 +8,8 @@ import { Messages } from "./Messages.tsx";
 
 interface Props {
   document: BatchDocument;
+  /** The document's text as received, so JSON defaults keep the producer's digits. */
+  documentText?: string | null;
   /** A batch number shown to the person; it counts batches seen in this job. */
   ordinal: number;
   submitting: boolean;
@@ -23,8 +26,9 @@ function propertyKey(document: BatchDocument): string {
  * same batch with errors; the person's answers stay in place so they can fix
  * them. Any other batch starts from its own defaults.
  */
-export function InterviewForm({ document, ordinal, submitting, submitError, onSubmit }: Props) {
-  const fields = useMemo(() => readFields(document), [document]);
+export function InterviewForm(props: Props) {
+  const { document, documentText, ordinal, submitting, submitError, onSubmit } = props;
+  const fields = useMemo(() => readFields(document, documentText), [document, documentText]);
   const [form, setForm] = useState<FormState>(() => initialForm(fields));
   const [shownDocument, setShownDocument] = useState(document);
   const [checked, setChecked] = useState(false);
@@ -49,14 +53,14 @@ export function InterviewForm({ document, ordinal, submitting, submitError, onSu
   const localProblems = Object.fromEntries(
     fields.map((f) => [
       f.id,
-      problemsFor(f, form[f.id] ?? { value: { kind: "text", text: "" }, dirty: false }),
+      problemsFor(f, own(form, f.id) ?? { value: { kind: "text", text: "" }, dirty: false }),
     ]),
   );
   const shownErrors = (id: string): string[] => {
-    const own = checked ? (localProblems[id] ?? []) : [];
+    const local = checked ? (own(localProblems, id) ?? []) : [];
     // A server error stays until the person changes that answer.
-    const server = edited.has(id) ? [] : (serverErrors[id] ?? []);
-    return [...new Set([...server, ...own])];
+    const server = edited.has(id) ? [] : (own(serverErrors, id) ?? []);
+    return [...new Set([...server, ...local])];
   };
   const errorCount = fields.filter((f) => shownErrors(f.id).length > 0).length + strayErrors.length;
 
@@ -71,8 +75,10 @@ export function InterviewForm({ document, ordinal, submitting, submitError, onSu
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    // One answers request at a time: the session it carries is only valid once.
+    if (submitting) return;
     setChecked(true);
-    const blocking = fields.filter((f) => (localProblems[f.id] ?? []).length > 0);
+    const blocking = fields.filter((f) => (own(localProblems, f.id) ?? []).length > 0);
     if (blocking.length > 0) {
       setBlockedAttempts((n) => n + 1);
       return;
@@ -106,7 +112,10 @@ export function InterviewForm({ document, ordinal, submitting, submitError, onSu
               .filter((f) => shownErrors(f.id).length > 0)
               .map((f) => (
                 <li key={f.id}>
-                  <a href={`#q-${f.id}`}>{f.title}</a>: {shownErrors(f.id).join("; ")}
+                  <a href={`#q-${f.id}`} onClick={(e) => focusQuestion(e, f.id)}>
+                    {f.title}
+                  </a>
+                  : {shownErrors(f.id).join("; ")}
                 </li>
               ))}
             {strayErrors.map(([id, list]) => (
@@ -122,7 +131,7 @@ export function InterviewForm({ document, ordinal, submitting, submitError, onSu
           <FieldInput
             key={field.id}
             field={field}
-            value={(form[field.id] ?? { value: { kind: "text", text: "" } }).value}
+            value={(own(form, field.id) ?? { value: { kind: "text", text: "" } }).value}
             errors={shownErrors(field.id)}
             onChange={(value) => {
               setForm((current) => ({ ...current, [field.id]: { value, dirty: true } }));
@@ -149,4 +158,13 @@ export function InterviewForm({ document, ordinal, submitting, submitError, onSu
       </div>
     </form>
   );
+}
+
+/** Moves focus to a question's first control from an error-summary link. */
+function focusQuestion(event: MouseEvent<HTMLAnchorElement>, id: string) {
+  const target = globalThis.document.getElementById(`q-${id}`);
+  if (!target) return;
+  event.preventDefault();
+  target.focus();
+  target.scrollIntoView?.({ block: "center" });
 }

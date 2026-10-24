@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApplyReply } from "../api/types.ts";
+import { own } from "../own.ts";
 import { StateStamp } from "../ui/StateStamp.tsx";
 import { isTerminal, type JobView } from "./jobView.ts";
 
@@ -28,7 +29,7 @@ export function JobConsole({ view, onReconnect, heading }: Props) {
     if (el && follow) el.scrollTop = el.scrollHeight;
   }, [view.logs.length, follow]);
 
-  const operation = job ? (operationVerb[job.operation] ?? job.operation) : "Job";
+  const operation = job ? (own(operationVerb, job.operation) ?? job.operation) : "Job";
   const terminal = isTerminal(view);
   const error = view.result?.error ?? job?.error ?? null;
   const phases = view.phases.length > 0 || view.phase === "" ? view.phases : [view.phase];

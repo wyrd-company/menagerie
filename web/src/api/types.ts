@@ -107,6 +107,8 @@ export interface InterviewReply {
   session: RawJson;
   state: "questions" | "completed" | "ended" | (string & {});
   document: BatchDocument | EndedDocument | null;
+  /** The document's text as the service sent it, so defaults keep every digit. */
+  documentText: string | null;
   warnings: string[];
 }
 

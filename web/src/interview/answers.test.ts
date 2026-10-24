@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { BatchDocument } from "../api/types.ts";
+import { RawValue } from "../api/rawJson.ts";
 import batch1 from "../../test/fixtures/toha/documents/create-batch-1.json";
 import {
   AnswerError,
   answerFor,
+  serializeSubmission,
   buildSubmission,
   initialForm,
   problemsFor,
@@ -63,7 +65,11 @@ describe("buildSubmission", () => {
       kind: "json",
       text: '{"$schema":"https://schemas.example.test/sample-settings/1","name":"sample","count":2}',
     });
-    expect(buildSubmission("t", fields, form).answers).toEqual({
+    const body = serializeSubmission(buildSubmission("t", fields, form));
+    expect(body).toContain(
+      '"settings":{"$schema":"https://schemas.example.test/sample-settings/1","name":"sample","count":2}',
+    );
+    expect(JSON.parse(body).answers).toEqual({
       title: "Sample project",
       notes: "line one\nline two",
       remote: "https://example.test/sample.git",
@@ -97,7 +103,7 @@ describe("answerFor", () => {
 
   it("parses a raw JSON answer for an unknown question type", () => {
     const odd = readField("odd", { type: "integer", "x-toha-type": "number" }, true);
-    expect(answerFor(odd, { kind: "json", text: "42" })).toBe(42);
+    expect(answerFor(odd, { kind: "json", text: "42" })).toEqual(new RawValue("42"));
     expect(() => answerFor(odd, { kind: "json", text: "" })).toThrow(AnswerError);
   });
 });
@@ -148,5 +154,39 @@ describe("problemsFor", () => {
     expect(problemsFor(field("settings"), state({ kind: "json", text: "{" }))[0]).toMatch(
       /Not valid JSON/,
     );
+  });
+});
+
+describe("JSON answers keep the person's numbers", () => {
+  it("sends a document's integers above 2^53 exactly as typed", () => {
+    let form = initialForm(fields);
+    const text =
+      '{"$schema":"https://schemas.example.test/sample-settings/1","name":"sample","count":9007199254740993,"ratio":1.0}';
+    form = edit(form, "settings", { kind: "json", text });
+    const body = serializeSubmission(buildSubmission("t", fields, form));
+    expect(body).toBe(`{"template":"t","answers":{"settings":${text}}}`);
+  });
+
+  it("sends a raw JSON answer exactly as typed", () => {
+    const odd = readField("odd", { type: "integer", "x-toha-type": "number" }, true);
+    const form: FormState = {
+      odd: { value: { kind: "json", text: " 12345678901234567890 " }, dirty: true },
+    };
+    expect(serializeSubmission(buildSubmission("t", [odd], form))).toBe(
+      '{"template":"t","answers":{"odd":12345678901234567890}}',
+    );
+  });
+
+  it("shows a document default with the producer's own digits", () => {
+    const field = readField(
+      "doc",
+      { type: "object", "x-toha-type": "document", default: { count: 9007199254740992 } },
+      true,
+      '{"count":9007199254740993}',
+    );
+    expect(initialForm([field]).doc?.value).toEqual({
+      kind: "json",
+      text: '{"count":9007199254740993}',
+    });
   });
 });

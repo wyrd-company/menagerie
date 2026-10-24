@@ -1,3 +1,5 @@
+import { own } from "../own.ts";
+
 const labels: Record<string, string> = {
   running: "Running",
   stopped: "Stopped",
@@ -12,7 +14,7 @@ const labels: Record<string, string> = {
 export function StateStamp({ state, detail }: { state: string; detail?: string }) {
   return (
     <span className={`stamp stamp-${state.replace(/[^a-z-]/g, "")}`} data-state={state}>
-      <span className="stamp-label">{labels[state] ?? state}</span>
+      <span className="stamp-label">{own(labels, state) ?? state}</span>
       {detail ? <span className="stamp-detail">{detail}</span> : null}
     </span>
   );

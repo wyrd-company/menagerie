@@ -1,4 +1,4 @@
-import { objectFromRaw, topLevelMembers, type RawJson } from "./rawJson.ts";
+import { objectFromRaw, stringifyJson, topLevelMembers, type RawJson } from "./rawJson.ts";
 import type {
   ErrorBody,
   InterviewReply,
@@ -98,6 +98,7 @@ export function parseInterviewReply(text: string): InterviewReply {
     session: session as RawJson,
     state: parse("state") as InterviewReply["state"],
     document: (parse("document") ?? null) as InterviewReply["document"],
+    documentText: members.get("document") === "null" ? null : (members.get("document") ?? null),
     warnings: (parse("warnings") as string[] | undefined) ?? [],
   };
 }
@@ -110,7 +111,8 @@ export async function answerJob(
 ): Promise<InterviewReply | null> {
   const body = objectFromRaw([
     ["session", session],
-    ["submission", JSON.stringify(submission)],
+    // Typed JSON answers go out as typed, so their numbers keep every digit.
+    ["submission", stringifyJson(submission)],
   ]);
   const response = await request(`/api/jobs/${encodeURIComponent(jobId)}/answers`, {
     method: "POST",

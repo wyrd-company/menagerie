@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { ApiError, listJobs, listWorkspaces, startJob } from "../api/client.ts";
 import type { Job, Operation, Workspace } from "../api/types.ts";
 import { JobPanel } from "../jobs/JobPanel.tsx";
+import { own } from "../own.ts";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
 import { StateStamp } from "../ui/StateStamp.tsx";
@@ -125,8 +126,8 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
           <ol className="ledger" aria-label="Workspaces">
             {workspaces.map((ws, index) => {
               const active = ws.activeJob;
-              const busy = active !== null || pending[ws.name] !== undefined;
-              const rowError = rowErrors[ws.name];
+              const busy = active !== null || own(pending, ws.name) !== undefined;
+              const rowError = own(rowErrors, ws.name);
               return (
                 <li
                   key={ws.name}
@@ -146,7 +147,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                     <StateStamp state={ws.state} />
                     {active ? (
                       <Link className="busy-link" href={paths.list(active.jobId)}>
-                        {operationLabel[active.operation] ?? active.operation} · {active.state}
+                        {own(operationLabel, active.operation) ?? active.operation} · {active.state}
                       </Link>
                     ) : null}
                   </div>

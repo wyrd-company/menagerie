@@ -119,3 +119,22 @@ describe("InterviewForm", () => {
     );
   });
 });
+
+describe("InterviewForm while submitting", () => {
+  it("sends nothing on Ctrl+Enter", async () => {
+    const onSubmit = vi.fn<(s: Submission) => void>();
+    render(
+      <InterviewForm
+        document={batch2 as unknown as BatchDocument}
+        ordinal={2}
+        submitting
+        submitError={null}
+        onSubmit={onSubmit}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/^Folder name/));
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});

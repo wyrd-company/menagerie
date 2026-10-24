@@ -1,6 +1,7 @@
 // Reads a Toha question batch schema into typed fields. Every property in the
 // received schema becomes a field; a property this reader does not recognise
 // becomes a raw JSON field, so no question is ever dropped.
+import { rawPath, topLevelMembers } from "../api/rawJson.ts";
 import type { BatchDocument, PropertySchema } from "../api/types.ts";
 
 interface Base {
@@ -13,6 +14,8 @@ interface Base {
   nullable: boolean;
   hasDefault: boolean;
   default?: unknown;
+  /** The default as the producer wrote it, when the document's text is known. */
+  defaultText?: string;
   /** The question type Toha declared in x-toha-type, verbatim. */
   tohaType: string;
 }
@@ -70,7 +73,12 @@ function itemBounds(schema: PropertySchema): { minItems?: number; maxItems?: num
   return bounds;
 }
 
-export function readField(id: string, schema: PropertySchema, required: boolean): Field {
+export function readField(
+  id: string,
+  schema: PropertySchema,
+  required: boolean,
+  defaultText?: string,
+): Field {
   const t = types(schema);
   const base: Base = {
     id,
@@ -82,6 +90,7 @@ export function readField(id: string, schema: PropertySchema, required: boolean)
   };
   if (typeof schema.description === "string") base.description = schema.description;
   if (base.hasDefault) base.default = schema.default;
+  if (base.hasDefault && defaultText !== undefined) base.defaultText = defaultText;
   const example = schema.examples?.[0];
   if (typeof example === "string") base.placeholder = example;
 
@@ -120,10 +129,17 @@ export function readField(id: string, schema: PropertySchema, required: boolean)
   }
 }
 
-/** The batch's fields, in the order the schema lists its properties. */
-export function readFields(document: BatchDocument): Field[] {
+/**
+ * The batch's fields, in the order the schema lists its properties. With the
+ * document's text, each default also keeps the producer's own JSON text.
+ */
+export function readFields(document: BatchDocument, documentText?: string | null): Field[] {
   const required = new Set(document.schema.required ?? []);
-  return Object.entries(document.schema.properties ?? {}).map(([id, schema]) =>
-    readField(id, schema, required.has(id)),
-  );
+  const rawProperties = documentText ? rawPath(documentText, ["schema", "properties"]) : undefined;
+  const rawDefaults = rawProperties ? topLevelMembers(rawProperties) : new Map<string, string>();
+  return Object.entries(document.schema.properties ?? {}).map(([id, schema]) => {
+    const rawProperty = rawDefaults.get(id);
+    const defaultText = rawProperty ? rawPath(rawProperty, ["default"]) : undefined;
+    return readField(id, schema, required.has(id), defaultText);
+  });
 }

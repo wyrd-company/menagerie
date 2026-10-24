@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, answerJob } from "../api/client.ts";
 import type { EndedDocument, Submission } from "../api/types.ts";
 import { InterviewForm } from "../interview/InterviewForm.tsx";
@@ -18,6 +18,8 @@ export function JobPanel({ jobId, heading, onFinished }: Props) {
   const { view, applyReply, reconnect } = useJob(jobId);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Set before the request starts, so a second keypress in the same frame cannot send again.
+  const inFlight = useRef(false);
   const terminal = isTerminal(view);
 
   useEffect(() => {
@@ -34,7 +36,8 @@ export function JobPanel({ jobId, heading, onFinished }: Props) {
     !terminal;
 
   const submit = async (submission: Submission) => {
-    if (!reply) return;
+    if (!reply || inFlight.current) return;
+    inFlight.current = true;
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -43,6 +46,7 @@ export function JobPanel({ jobId, heading, onFinished }: Props) {
     } catch (e) {
       setSubmitError(e instanceof ApiError ? `${e.kind}: ${e.message}` : String(e));
     } finally {
+      inFlight.current = false;
       setSubmitting(false);
     }
   };
@@ -52,6 +56,7 @@ export function JobPanel({ jobId, heading, onFinished }: Props) {
       {asking && reply.document?.status === "questions" ? (
         <InterviewForm
           document={reply.document}
+          documentText={reply.documentText}
           ordinal={view.batch}
           submitting={submitting}
           submitError={submitError}

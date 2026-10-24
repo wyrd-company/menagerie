@@ -128,6 +128,7 @@ export function FieldInput({ field, value, errors, onChange }: Props) {
       control = (
         <ChoiceGroup
           name={field.id}
+          firstId={inputId}
           options={[
             { label: "Yes", value: "true" },
             { label: "No", value: "false" },
@@ -146,6 +147,7 @@ export function FieldInput({ field, value, errors, onChange }: Props) {
       control = (
         <ChoiceGroup
           name={field.id}
+          firstId={inputId}
           options={[
             ...field.options.map((o) => ({ label: o, value: `=${o}` })),
             ...(field.nullable ? [{ label: "No answer", value: "null" }] : []),
@@ -161,10 +163,11 @@ export function FieldInput({ field, value, errors, onChange }: Props) {
       const chosen = value.kind === "set" ? value.values : [];
       control = (
         <div className="choices" role="group" {...common}>
-          {field.options.map((option) => (
+          {field.options.map((option, index) => (
             <label key={option} className="choice">
               <input
                 type="checkbox"
+                id={index === 0 ? inputId : undefined}
                 name={field.id}
                 checked={chosen.includes(option)}
                 onChange={(e) =>
@@ -240,6 +243,8 @@ function choiceKey(choice: Choice): string | undefined {
 
 function ChoiceGroup(props: {
   name: string;
+  /** The first option's id, the target of the question's error-summary link. */
+  firstId: string;
   options: { label: string; value: string }[];
   selected: string | undefined;
   onSelect: (value: string) => void;
@@ -247,13 +252,14 @@ function ChoiceGroup(props: {
 }) {
   return (
     <div className="choices" role="radiogroup" {...props.common}>
-      {props.options.map((option) => (
+      {props.options.map((option, index) => (
         <label
           key={option.value}
           className={`choice${option.value === "null" ? " choice-null" : ""}`}
         >
           <input
             type="radio"
+            id={index === 0 ? props.firstId : undefined}
             name={props.name}
             value={option.value}
             checked={props.selected === option.value}
