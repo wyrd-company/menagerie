@@ -1,0 +1,8 @@
+$id: https://schemas.example.test/sample-settings/1
+type: object
+required: [name]
+properties:
+  name:
+    type: string
+  count:
+    type: integer

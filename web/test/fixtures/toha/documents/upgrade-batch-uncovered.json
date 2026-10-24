@@ -1,0 +1,29 @@
+{
+  "context": {
+    "commit": "8a09d02305ead8bf501d8829ebdbe428b9eaded7",
+    "target": "/srv/workspaces/sample-space",
+    "template": "https://example.test/templates/sample-kit@v2"
+  },
+  "messages": [],
+  "protocol": 1,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "region": {
+        "description": "Added by version 2 of the sample template.",
+        "enum": [
+          "north",
+          "south"
+        ],
+        "title": "Region",
+        "type": "string",
+        "x-toha-type": "select"
+      }
+    },
+    "required": [
+      "region"
+    ],
+    "type": "object"
+  },
+  "status": "questions"
+}

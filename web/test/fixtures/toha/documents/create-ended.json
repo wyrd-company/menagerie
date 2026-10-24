@@ -1,0 +1,14 @@
+{
+  "context": {
+    "commit": "101fb54d273904667a8fa9cc6f9fbc8a5f0f93e6",
+    "target": "/srv/workspaces/ended-space",
+    "template": "https://example.test/templates/sample-kit@v1"
+  },
+  "kind": "stop",
+  "label": "halt-requested",
+  "messages": [
+    "Sample kit for Sample project."
+  ],
+  "protocol": 1,
+  "status": "ended"
+}
