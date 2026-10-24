@@ -9,8 +9,8 @@ description: >-
   has root on the host through Menagerie. Compromise of the
   identity provider, of an account in the group, or of an administrator who
   can change group membership grants that access. Mitigation: membership is
-  checked at every sign-in; the group name is configuration that the UI
-  cannot change.
+  checked at every sign-in; the group name is fixed by Menagerie, and the
+  UI cannot change it.
 categories:
   - security
 likelihood: 2
