@@ -1,0 +1,20 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: template-code-runs-in-command-containers
+title: Template code runs with write access to the workspace
+description: >-
+  Toha hooks, `initializeCommand` and a command image built from a template
+  Dockerfile all run code the template author wrote. That code can change or
+  delete anything in the workspace folder and can reach the network.
+  Mitigation: only templates on the approved template list are used; command
+  containers mount only the workspace folder and the template root,
+  receive no environment from Menagerie, and have no access to the Docker
+  proxy or Wyrwood sockets.
+categories:
+  - security
+likelihood: 2
+impact: 3
+response-strategy: mitigate
+status: open

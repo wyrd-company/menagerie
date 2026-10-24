@@ -110,7 +110,9 @@ proposed-design:
     uses, resolves symlinks on every bind source before checking it, allows
     bind sources only under the workspace root, and denies privileged mode,
     added capabilities, host namespaces and devices unless the workspace has an
-    exception.
+    exception. The proxy denies unknown BuildKit gRPC methods, and the daemon
+    keeps the BuildKit entitlements `security.insecure` and `network.host`
+    disabled.
   privileged-exceptions: >-
     Before a start or rebuild, the workspace service resolves the merged
     devcontainer configuration, including feature metadata. When it asks for

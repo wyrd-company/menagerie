@@ -1,0 +1,16 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: backup-force-push-overwrites-branch
+title: A backup push overwrites commits pushed from elsewhere
+description: >-
+  The local workspace is the source of truth and Menagerie force-pushes its
+  branch. Commits pushed to a workspace branch from anywhere else are lost
+  on the next backup. Workspace branches are written only by Menagerie.
+categories:
+  - operational
+likelihood: 1
+impact: 2
+response-strategy: accept
+status: accepted

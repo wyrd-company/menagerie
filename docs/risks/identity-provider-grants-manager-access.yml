@@ -1,0 +1,19 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: identity-provider-grants-manager-access
+title: The identity provider decides who manages the fleet
+description: >-
+  Every member of the `menagerie_managers` group is a manager. A manager can
+  approve privileged exceptions, which is root on the host. Compromise of the
+  identity provider, of an account in the group, or of an administrator who
+  can change group membership grants that access. Mitigation: membership is
+  checked at every sign-in; the group name is configuration that the UI
+  cannot change.
+categories:
+  - security
+likelihood: 2
+impact: 5
+response-strategy: mitigate
+status: open

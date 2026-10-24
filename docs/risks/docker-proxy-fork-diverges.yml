@@ -1,0 +1,20 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: docker-proxy-fork-diverges
+title: The Sockguard fork falls behind a single-maintainer upstream
+description: >-
+  Sockguard has one maintainer and a breaking major version in release
+  candidates. The fork's changes to bind checks and exceptions touch the
+  filter code upstream changes most, so security fixes become harder to take
+  over time. Mitigation: the fork is pinned to a released version and keeps
+  its changes small and isolated; upstream security releases are reviewed
+  and rebased onto the fork.
+categories:
+  - technical
+  - security
+likelihood: 4
+impact: 3
+response-strategy: mitigate
+status: open

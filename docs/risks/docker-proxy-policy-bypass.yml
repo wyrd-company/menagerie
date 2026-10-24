@@ -1,0 +1,21 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: docker-proxy-policy-bypass
+title: A create request slips past the Docker proxy's body checks
+description: >-
+  The proxy is the only boundary between Menagerie and a rootful daemon. A
+  field the proxy does not parse, a bind source that is a symlink out of the
+  workspace root, or a difference between the proxy's JSON decoding and the
+  daemon's lets a request reach the daemon with privileges it was not
+  granted. Mitigation: the proxy denies unknown routes and malformed or
+  duplicate-key bodies; the fork resolves symlinks on every bind source
+  before the prefix check; tests cover each HostConfig field
+  devcontainer-builder can set.
+categories:
+  - security
+likelihood: 3
+impact: 5
+response-strategy: mitigate
+status: open
