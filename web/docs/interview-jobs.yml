@@ -50,8 +50,12 @@ description: >-
 
   Opaque values. Neither the browser nor the workspace service decodes the
   session or a Toha document into a lossy form: numbers, member order and
-  escapes travel as received. The browser renders every property of the
-  received batch schema and never removes a question.
+  escapes travel as received. A document or raw JSON answer is sent as the
+  text the person typed, and a JSON default is shown from the producer's own
+  text. The browser renders every property of the received batch schema and
+  never removes a question. Question ids and workspace names are plain
+  names; one that is also a JavaScript object member, such as
+  `constructor` or `__proto__`, behaves like any other.
 
 
   Result. An interview job's `result` event adds an optional `apply` member:
