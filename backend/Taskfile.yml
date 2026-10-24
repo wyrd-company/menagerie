@@ -24,6 +24,6 @@ tasks:
       - go test -race -count=1 ./...
 
   test:docker:
-    desc: Run the Docker smoke tests (needs a local Docker Engine and alpine:3.22)
+    desc: Run the Docker smoke tests (needs a local Docker Engine with alpine:3.22 and busybox:1.37)
     cmds:
       - go test -tags docker -count=1 -v ./internal/devcontainer/
