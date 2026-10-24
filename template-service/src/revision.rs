@@ -20,20 +20,22 @@ use toha::staging::StagedRecord;
 /// A Git template resolved from Toha's cache is already recorded; one
 /// resolved from an installation is materialized into the cache through
 /// Toha's resume with no registry, the way Toha replays it once the
-/// installation has moved on.
+/// installation has moved on. When Toha cannot fetch it that way, the
+/// installation itself admits the commit while it holds it, as Toha's resume
+/// replays from it.
 pub fn admit(
+    template: &ApprovedTemplate,
     formal: &str,
     commit: &str,
     host: &TohaHost,
     config: &toha::config::Config,
+    registry: &Registry,
 ) -> Result<(), ServiceError> {
-    let Some(repo) = git_source(formal, host, config) else {
-        return Ok(());
-    };
-    if authentic(formal, commit, &repo, host) {
+    let sources = sources(template, formal, host, config);
+    if sources.is_empty() || authentic(formal, commit, &sources, host) {
         return Ok(());
     }
-    let resolved = toha::resolve::resume_template(
+    let resolved = match toha::resolve::resume_template(
         formal,
         commit,
         false,
@@ -41,10 +43,14 @@ pub fn admit(
         &Registry::default(),
         &host.paths,
         &host.cwd,
-    )?;
+    ) {
+        Ok(resolved) => resolved,
+        Err(_) if installed(formal, commit, registry) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
     if resolved.formal_name != formal
         || resolved.commit != commit
-        || !authentic(formal, commit, &repo, host)
+        || !authentic(formal, commit, &sources, host)
     {
         return Err(ServiceError::conflict(
             "template-cache-conflict",
@@ -56,10 +62,11 @@ pub fn admit(
     Ok(())
 }
 
-/// The session's revision is one a start of the approved template admitted.
-/// When the cache holds no admission at all for the approved template, as
-/// after the cache was cleared, the session is admitted only when the
-/// approved address resolves to exactly its commit now; nothing is refreshed.
+/// The session's revision is one a start of the approved template admitted:
+/// its authentic cache entry, or the installation that holds it. When the
+/// cache holds no admission at all for the approved template, as after the
+/// cache was cleared, the session is admitted only when the approved address
+/// resolves to exactly its commit now; nothing is refreshed.
 pub fn check(
     record: &StagedRecord,
     formal: &str,
@@ -68,11 +75,13 @@ pub fn check(
     config: &toha::config::Config,
     registry: &Registry,
 ) -> Result<(), ServiceError> {
+    let sources = sources(template, formal, host, config);
     let admitted = match source::parse(formal, &config.hosts, &host.cwd, &host.paths.home) {
         Ok(Address::Folder(_)) => record.commit.is_empty(),
-        Ok(Address::Git { repo, .. }) => {
+        Ok(Address::Git { .. }) => {
             is_commit(&record.commit)
-                && (authentic(formal, &record.commit, &repo, host)
+                && (authentic(formal, &record.commit, &sources, host)
+                    || installed(formal, &record.commit, registry)
                     || uncached(formal, host)
                         && toha::resolve::resolve_template(
                             &template.address,
@@ -103,12 +112,37 @@ pub fn check(
     }
 }
 
-/// The source repository of a Git formal name, as Toha's resume parses it.
-fn git_source(formal: &str, host: &TohaHost, config: &toha::config::Config) -> Option<String> {
-    match source::parse(formal, &config.hosts, &host.cwd, &host.paths.home) {
-        Ok(Address::Git { repo, .. }) => Some(repo),
-        _ => None,
+/// The repositories Toha fetches the approved template from, as written by
+/// `toha::source::parse`: the approved address, which a start fetches, and
+/// the template's formal name, which Toha's resume fetches. Toha's formal
+/// name drops a `.git` suffix and maps a known host to its shorthand, so the
+/// two can differ for one template. Empty for a template that is not Git.
+fn sources(
+    template: &ApprovedTemplate,
+    formal: &str,
+    host: &TohaHost,
+    config: &toha::config::Config,
+) -> Vec<String> {
+    let mut sources = Vec::new();
+    for address in [template.address.as_str(), formal] {
+        if let Ok(Address::Git { repo, .. }) =
+            source::parse(address, &config.hosts, &host.cwd, &host.paths.home)
+            && !sources.contains(&repo)
+        {
+            sources.push(repo);
+        }
     }
+    sources
+}
+
+/// Toha's installation of `formal` holds exactly `commit`, so Toha's resume
+/// replays it from the installation.
+fn installed(formal: &str, commit: &str, registry: &Registry) -> bool {
+    registry
+        .entries
+        .get(formal)
+        .and_then(|listed| listed.entry.commit.as_deref())
+        == Some(commit)
 }
 
 /// A full Git object id in Toha's spelling (lower-case SHA-1 or SHA-256).
@@ -120,9 +154,10 @@ fn is_commit(commit: &str) -> bool {
 }
 
 /// Toha's cache entry for `formal` at `commit` is a checkout whose HEAD is
-/// that commit and whose origin is `repo`. The entry path is the one Toha's
-/// resume reads and must resolve inside the service's cache.
-fn authentic(formal: &str, commit: &str, repo: &str, host: &TohaHost) -> bool {
+/// that commit and whose origin is one of `sources`, compared exactly. The
+/// entry path is the one Toha's resume reads and must resolve inside the
+/// service's cache.
+fn authentic(formal: &str, commit: &str, sources: &[String], host: &TohaHost) -> bool {
     let Some(root) = cache_entry(formal, commit, host) else {
         return false;
     };
@@ -135,7 +170,7 @@ fn authentic(formal: &str, commit: &str, repo: &str, host: &TohaHost) -> bool {
             .url(gix::remote::Direction::Fetch)
             .map(|url| url.to_bstring().to_string())
     });
-    head.as_deref() == Some(commit) && origin.as_deref() == Some(repo)
+    head.as_deref() == Some(commit) && origin.is_some_and(|origin| sources.contains(&origin))
 }
 
 /// No admission of the approved template is cached: its cache key holds no entry.
@@ -191,4 +226,129 @@ pub fn refresh(
 /// Toha's test for a Git source in its catalog update.
 fn is_git(source: &str) -> bool {
     source.contains("://") || source.starts_with("git@")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use std::process::Command;
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "Example User")
+            .env("GIT_AUTHOR_EMAIL", "user@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Example User")
+            .env("GIT_COMMITTER_EMAIL", "user@example.invalid")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    fn approved(address: &str) -> ApprovedTemplate {
+        ApprovedTemplate {
+            id: "sample".into(),
+            name: "Sample".into(),
+            address: address.into(),
+        }
+    }
+
+    /// A cache entry for each address's formal name whose origin is set to
+    /// each candidate; only the repositories Toha fetches from match, exactly.
+    #[test]
+    fn cached_origins_are_the_sources_toha_fetches_from() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        git(&source, &["init", "-q", "-b", "main"]);
+        std::fs::write(source.join("file.txt"), "content\n").unwrap();
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-q", "-m", "sample"]);
+        let commit = git(&source, &["rev-parse", "HEAD"]);
+        let host = TohaHost::new(&root.join("data"));
+        host.prepare().unwrap();
+        let (config, registry, _) = host.context().unwrap();
+        for (address, accepted, refused) in [
+            (
+                "https://git.example.invalid/o/r.git@v1",
+                &[
+                    "https://git.example.invalid/o/r.git",
+                    "https://git.example.invalid/o/r",
+                ][..],
+                &[
+                    "https://git.example.invalid/o/other.git",
+                    "https://other.example.invalid/o/r.git",
+                    "https://git.example.invalid/fork/r.git",
+                    "http://git.example.invalid/o/r.git",
+                ][..],
+            ),
+            (
+                "git@github.com:o/r.git@v1",
+                &["git@github.com:o/r.git", "https://github.com/o/r"][..],
+                &[
+                    "git@github.com:o/other.git",
+                    "git@gitlab.com:o/r.git",
+                    "git@github.com:fork/r.git",
+                    "ssh://git@github.com/o/r.git",
+                    "https://github.com/o/r.git",
+                ][..],
+            ),
+            (
+                "gh:o/r@v1",
+                &["https://github.com/o/r"][..],
+                &["git@github.com:o/r.git", "https://gitlab.com/o/r"][..],
+            ),
+        ] {
+            let template = approved(address);
+            let formal =
+                toha::resolve::formal_name(address, &config, &registry, &host.paths, &host.cwd)
+                    .unwrap();
+            let sources = sources(&template, &formal, &host, &config);
+            assert_eq!(sources, accepted, "{address}");
+            let entry = host
+                .paths
+                .cache
+                .join("sources")
+                .join(source::install_key(&formal))
+                .join(&commit);
+            // The SSH address formalizes to the `gh` shorthand, so two cases share an entry.
+            if !entry.exists() {
+                std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+                git(
+                    &root,
+                    &[
+                        "clone",
+                        "-q",
+                        source.to_str().unwrap(),
+                        entry.to_str().unwrap(),
+                    ],
+                );
+            }
+            for origin in accepted {
+                git(&entry, &["remote", "set-url", "origin", origin]);
+                assert!(
+                    authentic(&formal, &commit, &sources, &host),
+                    "{address}: {origin} refused"
+                );
+            }
+            for origin in refused {
+                git(&entry, &["remote", "set-url", "origin", origin]);
+                assert!(
+                    !authentic(&formal, &commit, &sources, &host),
+                    "{address}: {origin} accepted"
+                );
+            }
+        }
+    }
 }

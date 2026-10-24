@@ -180,6 +180,18 @@ impl World {
                 fork.to_str().unwrap(),
             ],
         );
+        // A clone of `sample` whose repository name ends in `.git`, which
+        // Toha's formal name drops.
+        let dotted = root.join("templates/dotted.git");
+        git(
+            &root,
+            &[
+                "clone",
+                "-q",
+                sample.to_str().unwrap(),
+                dotted.to_str().unwrap(),
+            ],
+        );
         let workspaces = root.join("workspaces");
         std::fs::create_dir_all(&workspaces).unwrap();
         let data = root.join("data");
@@ -192,7 +204,7 @@ impl World {
             &root,
             "config.yml",
             format!(
-                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n  - {{id: fork, name: Fork, address: 'file://{f}'}}\n",
+                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n  - {{id: fork, name: Fork, address: 'file://{f}'}}\n  - {{id: dotted-v1, name: Dotted, address: 'file://{t}/dotted.git@v1'}}\n  - {{id: dotted-v2, name: Dotted, address: 'file://{t}/dotted.git@v2'}}\n  - {{id: dotted-main, name: Dotted, address: 'file://{t}/dotted.git'}}\n",
                 workspaces.display(),
                 socket.display(),
                 v1 = v1,

@@ -44,10 +44,12 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
         &RawAnswers::new(),
     )?;
     crate::revision::admit(
+        selected.template,
         &preparation.resolved.formal_name,
         &preparation.resolved.commit,
         &service.host,
         &config,
+        &registry,
     )?;
     let context = preparation.context(
         EnvironmentDecision::CarryStageGrant,

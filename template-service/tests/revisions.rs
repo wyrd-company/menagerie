@@ -572,3 +572,114 @@ async fn a_fork_cannot_be_admitted_from_another_sources_cache_entry() {
     assert_eq!(fork.json["state"], "questions", "{}", fork.json);
     service.stop().await;
 }
+
+/// A `.git` repository address, whose suffix Toha's formal name drops, is
+/// admitted from the cache Toha wrote from that address, on every route and
+/// without its source.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dot_git_address_is_admitted_on_every_route() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let folder = create(&world, &service, "alpha", "dotted-v1").await;
+    assert_eq!(application(&folder)["commit"], world.v1.as_str());
+    let upgrade_selector = world.select("alpha", "dotted-v2");
+    let upgrade = service.post("/v1/upgrades", &upgrade_selector).await;
+    assert_eq!(upgrade.json["state"], "questions", "{}", upgrade.json);
+    let create_selector = world.select("beta", "dotted-v1");
+    let pending = service.post("/v1/interviews", &create_selector).await;
+    assert_eq!(pending.json["state"], "questions", "{}", pending.json);
+    world.offline();
+    let done = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                create_selector.clone(),
+                json!({"session": pending.json["session"],
+            "submission": submission(&pending, sample_answers("first"))}),
+            ),
+        )
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    let beta = world.initialize("beta");
+    let generated = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(create_selector, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(generated.json["outcome"], "written", "{}", generated.json);
+    assert_eq!(application(&beta)["commit"], world.v1.as_str());
+    let answered = service
+        .post(
+            "/v1/upgrades/answers",
+            &with(
+                upgrade_selector.clone(),
+                json!({"session": upgrade.json["session"],
+            "submission": submission(&upgrade, json!({"extra": "added"}))}),
+            ),
+        )
+        .await;
+    assert_eq!(answered.json["state"], "completed", "{}", answered.json);
+    let applied = service
+        .post(
+            "/v1/upgrades/apply",
+            &with(
+                upgrade_selector,
+                json!({"session": answered.json["session"]}),
+            ),
+        )
+        .await;
+    assert_eq!(applied.json["outcome"], "written", "{}", applied.json);
+    assert_eq!(application(&folder)["commit"], world.v2.as_str());
+    service.stop().await;
+}
+
+/// An installed `.git` source resumes from its installation, as Toha's
+/// resume does, and an edited commit is still refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_installed_dot_git_source_is_admitted() {
+    let world = World::new();
+    world.install(&format!(
+        "file://{}/templates/dotted.git",
+        world.root.display()
+    ));
+    let service = Running::start(&world).await;
+    let (selector, start) = answered(&service, &world, "alpha", "dotted-main").await;
+    assert_eq!(start["document"]["context"]["commit"], world.v1.as_str());
+    let envelope = json!({"template": start["document"]["context"]["template"], "answers": sample_answers("first")});
+    let refused = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                selector.clone(),
+                json!({"session": edited(&start["session"], &world.v2), "submission": envelope}),
+            ),
+        )
+        .await;
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (409, "session-mismatch"),
+        "{}",
+        refused.json
+    );
+    let done = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                selector.clone(),
+                json!({"session": start["session"], "submission": envelope}),
+            ),
+        )
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    let folder = world.initialize("alpha");
+    let generated = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(selector, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(generated.json["outcome"], "written", "{}", generated.json);
+    assert_eq!(application(&folder)["commit"], world.v1.as_str());
+    service.stop().await;
+}

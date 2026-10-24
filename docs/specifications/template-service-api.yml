@@ -65,8 +65,15 @@ description: >-
   resolves through an installation materializes it there through Toha's
   resume. Before any replay, a session's commit must be a full Git object
   id whose cache entry for the approved template, inside the service's
-  cache, is a checkout of exactly that commit from the approved source.
-  When the cache holds no admission at all for the approved template, the
+  cache, is a checkout of exactly that commit whose origin is a repository
+  Toha fetches the approved template from: the approved address as Toha
+  parses it, or the repository Toha derives from the template's formal
+  name, which drops a `.git` suffix and writes a known host as its
+  shorthand. An installation that holds exactly that commit also admits
+  it, as Toha's resume replays from it; when Toha cannot fetch an installed
+  template from its formal name, only the installation admits the commit,
+  until the installation moves. When the cache holds no admission at all
+  for the approved template, the
   session is admitted only when the approved address resolves to exactly
   its commit now, without any refresh. Any other session is refused as
   `session-mismatch`. An admitted session replays from the cache

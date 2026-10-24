@@ -44,10 +44,12 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
         &mut environment,
     )?;
     crate::revision::admit(
+        selected.template,
         &prepared.resolved.formal_name,
         &prepared.resolved.commit,
         &service.host,
         &config,
+        &registry,
     )?;
     warnings.extend(prepared.warnings.iter().cloned());
     let session = UpdateSession::start(
