@@ -3,48 +3,7 @@
 mod common;
 use common::*;
 use serde_json::json;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
-
-const BINARY: &str = env!("CARGO_BIN_EXE_menagerie-template-service");
-
-/// A started binary, stopped when dropped so a failed assertion leaks no process.
-struct Process(Child);
-
-impl Drop for Process {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-/// Start the binary and return its first stderr line: its readiness line, or
-/// the reason it refused to start.
-fn start(world: &World) -> (Process, String) {
-    let mut child = Command::new(BINARY)
-        .arg("-config")
-        .arg(&world.config)
-        .arg("-data")
-        .arg(&world.data)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut line = String::new();
-    BufReader::new(child.stderr.as_mut().unwrap())
-        .read_line(&mut line)
-        .unwrap();
-    (Process(child), line.trim().to_owned())
-}
-
-fn launch(world: &World) -> Process {
-    let (process, line) = start(world);
-    assert_eq!(
-        line,
-        format!("template service listening on {}", world.socket.display())
-    );
-    process
-}
+use std::process::Command;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_interview_continues_after_the_service_restarts() {
