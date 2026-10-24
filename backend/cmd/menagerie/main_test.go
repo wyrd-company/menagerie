@@ -8,9 +8,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wyrd-company/menagerie/backend/internal/config"
+	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
 // TestRegistryCredentialsReadTheWyrwoodVaultSocket serves a synthetic
@@ -89,4 +93,39 @@ func TestBackupsUseTheWyrwoodAgentSocket(t *testing.T) {
 	}
 	release()
 	<-dialed
+}
+
+// TestServerServesCreateAndUpgrade checks the composed server: the
+// interview operations reach their request checks, and the answer route
+// exists.
+func TestServerServesCreateAndUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	root, err := workspace.NewRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		WorkspaceRoot:   dir,
+		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
+		TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")},
+	}
+	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background())))
+	defer server.Close()
+	for _, tc := range []struct{ path, body, kind string }{
+		{"/api/jobs", `{"operation":"create","workspace":"a..b","templateId":"sample"}`, "invalid-workspace-name"},
+		{"/api/jobs", `{"operation":"upgrade","workspace":"absent","templateId":"sample"}`, "workspace-not-found"},
+		{"/api/jobs", `{"operation":"create","workspace":"fresh","templateId":"other"}`, "unknown-template"},
+		{"/api/jobs/absent/answers", `{"session":{},"submission":{}}`, "job-not-found"},
+	} {
+		resp, err := http.Post(server.URL+tc.path, "application/json", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct{ Error struct{ Kind string } }
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		if body.Error.Kind != tc.kind {
+			t.Errorf("%s %s: kind %q, want %q", tc.path, tc.body, body.Error.Kind, tc.kind)
+		}
+	}
 }

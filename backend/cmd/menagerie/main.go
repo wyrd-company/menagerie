@@ -68,31 +68,7 @@ func run(configPath string) error {
 	}
 	runtime := devcontainer.New(docker, devcontainer.Options{Credentials: credentials})
 	manager := jobs.NewManager(ctx)
-	approved := make([]api.Template, 0, len(cfg.Templates))
-	ids := make(map[string]bool, len(cfg.Templates))
-	for _, t := range cfg.Templates {
-		approved = append(approved, api.Template{ID: t.ID, Name: t.Name})
-		ids[t.ID] = true
-	}
-	flows := workflows.New(workflows.Options{
-		Root:      root,
-		Templates: templates.New(cfg.TemplateService.Socket),
-		Approved:  ids,
-		Remote:    backupRemote(cfg),
-		Runtime:   runtime,
-	})
-	operations := api.ContainerOperations(root, runtime)
-	for name, op := range flows.Operations() {
-		operations[name] = op
-	}
-	server := api.New(api.Options{
-		Root:       root,
-		Status:     runtime,
-		Jobs:       manager,
-		Operations: operations,
-		Interviews: flows,
-		Templates:  approved,
-	})
+	server := newServer(cfg, root, runtime, manager)
 	handler, err := signedIn(server, cfg.OIDC)
 	if err != nil {
 		return err
@@ -129,6 +105,36 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 	}
 	authn.Register(server)
 	return authn.Wrap(server), nil
+}
+
+// newServer composes the workspace API: the container operations, and
+// create and upgrade with their interviews.
+func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager) *api.Server {
+	approved := make([]api.Template, 0, len(cfg.Templates))
+	ids := make(map[string]bool, len(cfg.Templates))
+	for _, t := range cfg.Templates {
+		approved = append(approved, api.Template{ID: t.ID, Name: t.Name})
+		ids[t.ID] = true
+	}
+	flows := workflows.New(workflows.Options{
+		Root:      root,
+		Templates: templates.New(cfg.TemplateService.Socket),
+		Approved:  ids,
+		Remote:    backupRemote(cfg),
+		Runtime:   runtime,
+	})
+	operations := api.ContainerOperations(root, runtime)
+	for name, op := range flows.Operations() {
+		operations[name] = op
+	}
+	return api.New(api.Options{
+		Root:       root,
+		Status:     runtime,
+		Jobs:       manager,
+		Operations: operations,
+		Interviews: flows,
+		Templates:  approved,
+	})
 }
 
 // backupRemote is the workspace repository, reached through the SSH agent
