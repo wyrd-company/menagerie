@@ -279,6 +279,10 @@ type controlFixture struct {
 
 func controlServer(t *testing.T, f controlFixture) http.Handler {
 	mux := http.NewServeMux()
+	// Which run this is: run.sh down shuts down only the run whose root it saved.
+	mux.HandleFunc("GET /identity", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]string{"root": f.rootDir})
+	})
 	// A fresh one-time sign-in link for a user.
 	mux.HandleFunc("GET /signin-link", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"url": f.p.url + "/lc/" + f.p.signInLink(r.URL.Query().Get("user"))})

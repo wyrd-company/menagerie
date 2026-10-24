@@ -29,7 +29,11 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    include: ["src/**/*.test.{ts,tsx}", "test/contract/**/*.test.ts"],
+    include: [
+      "src/**/*.test.{ts,tsx}",
+      "test/contract/**/*.test.ts",
+      "test/integrated/**/*.test.ts",
+    ],
     setupFiles: ["./src/test-setup.ts"],
     restoreMocks: true,
   },

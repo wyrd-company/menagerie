@@ -73,15 +73,33 @@ case "$cmd" in
     MENAGERIE_BROWSER_INFO="$scratch/info.json" pnpm --dir "$repo/web" exec playwright test -c playwright.integrated.config.ts
     ;;
   down)
+    # Only the state this run saved counts: the control URL and root in
+    # <scratch>/info.json, never the current environment's ports. A control
+    # endpoint is shut down only after it answers with this run's root.
+    stopped=
     if [ -s "$scratch/info.json" ]; then
-      curl -fsS -X POST "http://127.0.0.1:$control/shutdown" >/dev/null || true
+      saved_control=$(node -p 'require(process.argv[1]).control' "$scratch/info.json")
+      saved_root=$(node -p 'require(process.argv[1]).root' "$scratch/info.json")
+      served_root=$(curl -fsS "$saved_control/identity" 2>/dev/null |
+        node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(JSON.parse(s).root ?? ""); } catch {} });' || true)
+      if [ -n "$served_root" ] && [ "$served_root" = "$saved_root" ]; then
+        curl -fsS -X POST "$saved_control/shutdown" >/dev/null && stopped=1
+      else
+        echo "$saved_control does not serve this run ($saved_root); it was not shut down" >&2
+      fi
     fi
     if [ -s "$scratch/fixture.pid" ]; then
       pid=$(cat "$scratch/fixture.pid")
-      while kill -0 "$pid" 2>/dev/null; do sleep 1; done
-      tail -3 "$scratch/logs/fixture.log"
+      if kill -0 "$pid" 2>/dev/null; then
+        if [ -z "$stopped" ]; then
+          echo "fixture process $pid is still running and was not shut down; stop it, then run down again" >&2
+          exit 1
+        fi
+        while kill -0 "$pid" 2>/dev/null; do sleep 1; done
+      fi
+      tail -3 "$scratch/logs/fixture.log" 2>/dev/null || true
     fi
-    [ -s "$scratch/dind.id" ] && docker rm -fv "$(cat "$scratch/dind.id")" >/dev/null
+    if [ -s "$scratch/dind.id" ]; then docker rm -fv "$(cat "$scratch/dind.id")" >/dev/null; fi
     rm -f "$scratch/dind.id" "$scratch/fixture.pid"
     ;;
   *) echo "usage: $0 up|test|down <scratch>" >&2; exit 2 ;;
