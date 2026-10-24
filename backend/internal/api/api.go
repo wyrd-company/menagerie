@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 
@@ -211,8 +212,10 @@ func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apiError{Kind: "invalid-request", Message: err.Error()})
 		return
 	}
-	if dec.More() {
-		writeError(w, http.StatusBadRequest, apiError{Kind: "invalid-request", Message: "request body holds more than one JSON value"})
+	// The body must end after one JSON document: a second decode must reach
+	// EOF, which also rejects trailing delimiters that More does not see.
+	if err := dec.Decode(&json.RawMessage{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, apiError{Kind: "invalid-request", Message: "request body must hold exactly one JSON document"})
 		return
 	}
 	op, ok := s.opts.Operations[req.Operation]

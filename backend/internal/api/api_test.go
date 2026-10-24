@@ -370,7 +370,7 @@ func TestStartJobRejects(t *testing.T) {
 		{`{"operation":"create","workspace":"delta","templateId":"sample-template"}`, 400, "unknown-operation", `"create"`},
 		{`{"operation":"start","workspace":"alpha","extra":1}`, 400, "invalid-request", ""},
 		{`not json`, 400, "invalid-request", ""},
-		{`{"operation":"start","workspace":"alpha"} {"operation":"stop"}`, 400, "invalid-request", "more than one"},
+		{`{"operation":"start","workspace":"alpha"} {"operation":"stop"}`, 400, "invalid-request", "exactly one JSON document"},
 	}
 	for _, tc := range cases {
 		resp, data := f.do(t, "POST", "/api/jobs", tc.body)
@@ -489,4 +489,31 @@ func TestEmittedMultilinePayloadStreamsAsOneEvent(t *testing.T) {
 	if events[1].data != `{"session":{"count":12345678901234567890},"state":"questions"}` {
 		t.Fatalf("data %q", events[1].data)
 	}
+}
+
+// TestStartJobRejectsTrailingInput sends a valid job request followed by
+// extra input: each must be refused before a job or runtime call exists.
+func TestStartJobRejectsTrailingInput(t *testing.T) {
+	f := newFixture(t, nil)
+	f.rt.entered = make(chan string, 8)
+	valid := `{"operation":"start","workspace":"alpha"}`
+	for _, trailing := range []string{"}", "]", ` {"operation":"stop"}`, " x", ",", " 1", ` "s"`} {
+		resp, data := f.do(t, "POST", "/api/jobs", valid+trailing)
+		if body := decode[errorBody](t, data); resp.StatusCode != 400 || body.Error.Kind != "invalid-request" {
+			t.Errorf("trailing %q: %d %s", trailing, resp.StatusCode, data)
+		}
+	}
+	if n := len(f.manager.List()); n != 0 {
+		t.Fatalf("%d jobs created from rejected bodies", n)
+	}
+	if len(f.rt.entered) != 0 {
+		t.Fatal("runtime called for a rejected body")
+	}
+	// Trailing whitespace is still one document.
+	resp, data := f.do(t, "POST", "/api/jobs", valid+" \n\t")
+	if resp.StatusCode != 202 {
+		t.Fatalf("trailing whitespace: %d %s", resp.StatusCode, data)
+	}
+	<-f.rt.entered
+	f.manager.Wait()
 }
