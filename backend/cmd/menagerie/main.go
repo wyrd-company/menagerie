@@ -33,6 +33,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/workflows"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
+	"github.com/wyrd-company/menagerie/web"
 )
 
 func main() {
@@ -112,8 +113,8 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 	return authn.Wrap(server), nil
 }
 
-// newServer composes the workspace API: the container operations, and
-// create and upgrade with their interviews.
+// newServer composes the workspace API: the container operations, create
+// and upgrade with their interviews, and the web UI embedded at build time.
 func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager) *api.Server {
 	approved := make([]api.Template, 0, len(cfg.Templates))
 	ids := make(map[string]bool, len(cfg.Templates))
@@ -139,6 +140,7 @@ func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.R
 		Operations: operations,
 		Interviews: flows,
 		Templates:  approved,
+		UI:         web.FS,
 	})
 }
 

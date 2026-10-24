@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
+	"github.com/wyrd-company/menagerie/web"
 )
 
 // TestRegistryCredentialsReadTheWyrwoodVaultSocket serves a synthetic
@@ -199,5 +201,40 @@ func TestServerTakesInterviewAnswers(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || string(body) != asking {
 		t.Fatalf("answer %d %s", resp.StatusCode, body)
+	}
+}
+
+// TestServerServesTheEmbeddedUI checks that the composed server serves
+// web.FS: its index for each page route and its assets.
+func TestServerServesTheEmbeddedUI(t *testing.T) {
+	saved := web.FS
+	t.Cleanup(func() { web.FS = saved })
+	web.FS = fstest.MapFS{
+		"index.html":    {Data: []byte("<!doctype html><title>ui-index</title>")},
+		"assets/app.js": {Data: []byte("ui-asset")},
+	}
+	dir := t.TempDir()
+	root, err := workspace.NewRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
+	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background())))
+	defer server.Close()
+	for path, want := range map[string]string{
+		"/":                         "ui-index",
+		"/create":                   "ui-index",
+		"/workspaces/alpha/upgrade": "ui-index",
+		"/assets/app.js":            "ui-asset",
+	} {
+		resp, err := http.Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), want) {
+			t.Errorf("GET %s answered %d %q, want %q", path, resp.StatusCode, body, want)
+		}
 	}
 }
