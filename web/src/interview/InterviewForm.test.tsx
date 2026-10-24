@@ -161,3 +161,22 @@ describe("InterviewForm error summary", () => {
     }
   });
 });
+
+describe("InterviewForm error summary links", () => {
+  it("moves focus to the question a summary link names", async () => {
+    render(
+      <InterviewForm
+        document={{ ...(batch1 as unknown as BatchDocument), errors: { size: ["is required"] } }}
+        ordinal={1}
+        submitting={false}
+        submitError={null}
+        onSubmit={() => {}}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(within(screen.getByRole("alert")).getByRole("link", { name: "Size" }));
+    expect(
+      within(screen.getByRole("group", { name: /^Size/ })).getAllByRole("radio")[0],
+    ).toHaveFocus();
+  });
+});

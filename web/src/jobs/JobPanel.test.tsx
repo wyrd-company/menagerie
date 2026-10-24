@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseInterviewReply } from "../api/client.ts";
 import { initialJobView, type JobView } from "./jobView.ts";
@@ -37,9 +37,14 @@ describe("JobPanel", () => {
     vi.stubGlobal("fetch", fetch);
     render(<JobPanel jobId="job-1" />);
     const form = screen.getByRole("button", { name: "Send answers" }).closest("form")!;
-    // Both keydowns are dispatched before React re-renders with `submitting`.
-    fireEvent.keyDown(form, { key: "Enter", ctrlKey: true });
-    fireEvent.keyDown(form, { key: "Enter", ctrlKey: true });
+    // Both keydowns land in one act(), before React re-renders with `submitting`,
+    // so the form's own guard still sees `submitting: false`.
+    const press = () =>
+      new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true });
+    act(() => {
+      form.dispatchEvent(press());
+      form.dispatchEvent(press());
+    });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
