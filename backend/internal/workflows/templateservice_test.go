@@ -87,6 +87,7 @@ type accept struct {
 	manager            *jobs.Manager
 	http               *httptest.Server
 	runtime            Runtime
+	flows              *Workflows
 }
 
 func newAccept(t *testing.T, runtime Runtime) *accept {
@@ -158,6 +159,7 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 		Remote:    &backup.Remote{URL: a.host.URL("backups.git"), Auth: backup.AgentAuth(a.host.AgentPath)},
 		Runtime:   runtime,
 	})
+	a.flows = flows
 	a.http = httptest.NewServer(api.New(api.Options{Root: root, Jobs: a.manager, Operations: flows.Operations(), Interviews: flows}))
 	t.Cleanup(a.http.Close)
 	t.Cleanup(a.manager.Wait)
