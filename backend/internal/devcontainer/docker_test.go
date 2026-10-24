@@ -77,12 +77,10 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := client.ImageInspect(ctx, baseImage); err != nil {
-		t.Fatalf("%s is required: %v", baseImage, err)
-	}
 	root := t.TempDir()
 	h := &harness{t: t, ctx: ctx, client: client, rt: devcontainer.New(client, devcontainer.Options{}), root: root, runID: filepath.Base(filepath.Dir(root)) + "-" + filepath.Base(root)}
 	t.Cleanup(h.cleanup)
+	ensureImage(t, h, baseImage)
 	return h
 }
 
@@ -499,9 +497,7 @@ func readLock(t *testing.T, folder string) string {
 // feature document after the success.
 func TestFeatureLockfilePublishedOnlyAfterSuccess(t *testing.T) {
 	h := newHarness(t)
-	if _, err := h.client.ImageInspect(h.ctx, featureImage); err != nil {
-		t.Fatalf("%s is required: %v", featureImage, err)
-	}
+	ensureImage(t, h, featureImage)
 	definitions := map[string]string{
 		"single":  `{"image": "` + featureImage + `", "features": {"./local-feature": {}}, "postCreateCommand": "%s"}`,
 		"compose": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/", "features": {"./local-feature": {}}, "postCreateCommand": "%s"}`,
