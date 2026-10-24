@@ -241,13 +241,20 @@ func independentRoot(repo *git.Repository, branch plumbing.ReferenceName) ([]plu
 
 // commitOutput stages a generation's or apply's output and commits it.
 //
-// Toha writes only into a clean workspace: generation into a folder that
-// held only the new repository, an upgrade after its clean-workspace
-// recheck. Every change present afterwards is therefore the template's
-// output: the reported files, the applied record, and files its hooks
-// wrote. All of them are staged, except paths the workspace's ignore rules
-// exclude and anything inside a nested Git repository, which stays
-// untracked. The applied record is always staged.
+// It stages the paths the template service reported, the applied record,
+// and every path that the workspace status, read once after the template
+// service answered, shows as untracked, modified or deleted: files the
+// template's hooks wrote are among them. Paths the workspace's ignore rules
+// exclude, and anything inside a nested Git repository, stay unstaged; the
+// applied record is staged even when the ignore rules exclude it.
+//
+// The status does not tell who wrote a path. What bounds it is the template
+// service's refusal: it generates only into a folder that holds nothing but
+// the new repository, and it applies an upgrade only into a workspace with
+// no change and no untracked file outside the ignore rules, so an operator
+// file that exists when generation or the apply starts fails the job
+// instead. A file written after the template service's check and before
+// this status read is staged with the output.
 func commitOutput(repo *git.Repository, folder string, out Output, message string, log io.Writer) (Commit, error) {
 	w, err := repo.Worktree()
 	if err != nil {

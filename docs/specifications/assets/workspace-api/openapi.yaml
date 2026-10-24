@@ -135,7 +135,7 @@ paths:
       summary: Answer the current batch of an interview job.
       description: >-
         Accepted only while the job is waiting-for-answers, one answer at a
-        time. The reply is also appended to the job as an interview event.
+        time. The body carries the whole session and has no size bound. The reply is also appended to the job as an interview event.
         A template service refusal keeps its status and kind and the job
         keeps waiting.
       requestBody:

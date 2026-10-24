@@ -70,7 +70,9 @@ description: >-
   `{"session","state","document","warnings"}`. While questions remain the
   job is `waiting-for-answers`, with no expiry. `POST
   /api/jobs/{id}/answers` takes `{"session","submission"}`, both JSON
-  objects forwarded as received; it answers 200 with the next reply's
+  objects forwarded as received. The body carries the whole session, so
+  it has no size bound, as the template service has none; the reply is
+  read whole for the same reason. It answers 200 with the next reply's
   exact text and appends it as an event. Only a waiting job takes an
   answer, one at a time; any other answer is 409 `job-not-waiting`, a
   malformed body 400 `invalid-request`, an unknown job 404. A template
@@ -103,20 +105,34 @@ description: >-
   Upgrade. The service first commits changes to tracked files, including
   deletions, and force-pushes the branch, so the state before the upgrade
   is backed up; an unchanged workspace makes no commit and still pushes.
-  Untracked files are not committed, and Toha refuses an upgrade while
-  untracked files that the ignore rules do not exclude exist. It then runs
-  the upgrade interview and applies it. `already-current` succeeds without
+  Untracked files are not committed. It then runs the upgrade interview
+  and applies it. While a change or an untracked file outside the ignore
+  rules exists, the template service refuses the upgrade with
+  `dirty-target` and writes nothing: at the start the job fails as
+  `template-refused`, an answer is refused and the job keeps waiting, and
+  the apply fails as `upgrade-failed`. `already-current` succeeds without
   a commit or rebuild; `planned` and `needs-trust` fail as `not-applied`; a
   failed apply fails as `upgrade-failed`. `written` is committed on the
   branch, extending its history, pushed and rebuilt. `conflicted` is
   committed and pushed with its conflict markers and fails as
-  `merge-conflicted`, naming the paths, without a rebuild.
+  `merge-conflicted` without a rebuild; its message says the upgrade is not
+  complete and needs manual resolution, names the conflicted paths, the
+  conflicted commit and the backup of the state before the upgrade.
 
 
-  Backups. A commit stages the paths the template service reported, the
-  applied record and the files hooks wrote, which are every change in a
-  workspace Toha wrote while it was clean, except paths the workspace's
-  ignore rules exclude and files inside a nested Git repository. Pushes use
+  Backups. A commit after generation or an upgrade apply stages the paths
+  the template service reported, the applied record, and every path the
+  workspace status then shows as untracked, modified or deleted, which
+  includes the files hooks wrote. Paths the workspace's ignore rules
+  exclude and files inside a nested Git repository stay unstaged; the
+  applied record is staged even when the ignore rules exclude it. The
+  status does not tell who wrote a path: the template service generates
+  only into a folder that holds nothing but the new repository and applies
+  an upgrade only into a workspace with no change and no untracked file
+  outside the ignore rules, so an operator file present when generation or
+  the apply starts fails the job with nothing written, while a file written
+  after that check and before the commit is committed with the output.
+  Pushes use
   go-git with the SSH agent at `ssh-agent.sock` in the Wyrwood directory
   and the default known hosts files for host-key verification; they
   replace the remote branch named after the workspace, write no remote to
