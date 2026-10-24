@@ -634,25 +634,38 @@ async fn a_dot_git_address_is_admitted_on_every_route() {
     service.stop().await;
 }
 
-/// An installed `.git` source resumes from its installation, as Toha's
-/// resume does, and an edited commit is still refused.
+/// An installed `.git` source, which Toha cannot fetch from its formal name,
+/// resumes from its installation, as Toha's resume does, and an edited commit
+/// is still refused.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_installed_dot_git_source_is_admitted() {
     let world = World::new();
+    let service = Running::start(&world).await;
+    // An earlier start of the uninstalled address caches its v1 admission,
+    // so only the installation can admit the later v2.
+    let (_, earlier) = answered(&service, &world, "zeta", "dotted-main").await;
+    assert_eq!(earlier["document"]["context"]["commit"], world.v1.as_str());
+    git(
+        &world.root.join("templates/dotted.git"),
+        &["merge", "-q", "--ff-only", "origin/next"],
+    );
     world.install(&format!(
         "file://{}/templates/dotted.git",
         world.root.display()
     ));
-    let service = Running::start(&world).await;
     let (selector, start) = answered(&service, &world, "alpha", "dotted-main").await;
-    assert_eq!(start["document"]["context"]["commit"], world.v1.as_str());
-    let envelope = json!({"template": start["document"]["context"]["template"], "answers": sample_answers("first")});
+    assert_eq!(start["document"]["context"]["commit"], world.v2.as_str());
+    let envelope = {
+        let mut answers = sample_answers("first");
+        answers["extra"] = json!("added");
+        json!({"template": start["document"]["context"]["template"], "answers": answers})
+    };
     let refused = service
         .post(
             "/v1/interviews/answers",
             &with(
                 selector.clone(),
-                json!({"session": edited(&start["session"], &world.v2), "submission": envelope}),
+                json!({"session": edited(&start["session"], &world.v3), "submission": envelope}),
             ),
         )
         .await;
@@ -680,6 +693,6 @@ async fn an_installed_dot_git_source_is_admitted() {
         )
         .await;
     assert_eq!(generated.json["outcome"], "written", "{}", generated.json);
-    assert_eq!(application(&folder)["commit"], world.v1.as_str());
+    assert_eq!(application(&folder)["commit"], world.v2.as_str());
     service.stop().await;
 }
