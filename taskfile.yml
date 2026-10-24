@@ -101,6 +101,7 @@ tasks:
       - task: test:templateservice:docker
       - task: test:integrated
       - task: test:image
+      - task: test:image:cross
 
   test:docker:
     desc: Run the devcontainer runtime's Docker suite on a disposable Docker daemon
@@ -161,10 +162,31 @@ tasks:
       - defer: scripts/isolated-docker.sh down '{{.STATE}}'
       - scripts/isolated-docker.sh up '{{.STATE}}'
       - CGO_ENABLED=0 go test -c -tags 'pocketid image' -o '{{.STATE}}/image.test' ./backend/cmd/menagerie/
-      - scripts/isolated-docker.sh build-image '{{.STATE}}' menagerie:test
+      - scripts/isolated-docker.sh build '{{.STATE}}' -t menagerie:test
       - >-
         scripts/isolated-docker.sh run '{{.STATE}}' -e MENAGERIE_IMAGE=menagerie:test
         '{{.STATE}}/image.test' -test.run '^TestImage$' -test.v -test.count=1 -test.timeout 10m
+
+  test:image:cross:
+    desc: Cross-compile both services for linux/arm64 on a disposable Docker daemon and check that each binary is aarch64
+    vars:
+      STATE: '{{.SCRATCH}}/image-cross'
+    cmds:
+      # The arm64 image's final stage installs packages as arm64 and needs
+      # emulation; CD builds it. This proves the cross-compiled binaries.
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}'
+      - >-
+        scripts/isolated-docker.sh build '{{.STATE}}' --platform linux/arm64 --target binaries
+        --output type=local,dest=/menagerie-work/arm64
+      - |
+        scripts/isolated-docker.sh shell '{{.STATE}}' '
+          set -e
+          for binary in /menagerie-work/arm64/menagerie /menagerie-work/arm64/menagerie-template-service; do
+            machine=$(od -An -t u2 -j 18 -N 2 "$binary" | tr -d " ")
+            [ "$machine" = 183 ] || { echo "$binary has ELF machine $machine, not aarch64 (183)"; exit 1; }
+            echo "$binary: aarch64"
+          done'
 
   check:
     desc: Everything CI runs; run this before pushing

@@ -74,10 +74,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     done; \
     echo "template service links: $needed"
 
+# Both service binaries alone, for checking a cross-compiled target without
+# emulation: docker build --target binaries --output type=local,dest=out .
+FROM scratch AS binaries
+COPY --from=workspace-service /out/menagerie /
+COPY --from=template-service /out/menagerie-template-service /
+
 # s6-overlay, downloaded and checked against its release checksums.
 FROM --platform=$BUILDPLATFORM $DEBIAN_IMAGE AS s6-overlay
 ARG TARGETARCH
-# renovate: datasource=github-releases depName=just-containers/s6-overlay
+# renovate: datasource=github-releases depName=just-containers/s6-overlay versioning=loose extractVersion=^v(?<version>.*)$
 ARG S6_OVERLAY_VERSION=3.2.3.2
 RUN set -eu; \
     case "$TARGETARCH" in \
@@ -117,7 +123,7 @@ COPY --from=template-service /out/menagerie-template-service /usr/local/bin/mena
 ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0
 LABEL org.opencontainers.image.title="Menagerie" \
-      org.opencontainers.image.description="Creates, upgrades and runs workspace devcontainers from Toha templates through a web UI." \
+      org.opencontainers.image.description="Manages workspaces and fleets of development containers through a web UI." \
       org.opencontainers.image.source="https://github.com/wyrd-company/menagerie" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="$VERSION"

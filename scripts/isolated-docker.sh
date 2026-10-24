@@ -2,7 +2,8 @@
 # A disposable, test-owned Docker daemon for Menagerie's live suites.
 #
 #   isolated-docker.sh up <state>                         start the daemon and the runner
-#   isolated-docker.sh build-image <state> <tag>          build the repository's image on the daemon
+#   isolated-docker.sh build <state> [build args...]      docker build the repository on the daemon
+#   isolated-docker.sh shell <state> <script>             run a shell script in the runner
 #   isolated-docker.sh run <state> [-c FILE]... [-e NAME=VALUE]... <binary> [args...]
 #                                                         run a test binary in the runner
 #   isolated-docker.sh down <state>                       remove what up created
@@ -30,7 +31,7 @@ work=/menagerie-work
 ready_attempts=${DIND_READY_ATTEMPTS:-60}
 
 usage() {
-  sed -n '2,8p' "$0" >&2
+  sed -n '2,9p' "$0" >&2
   exit 2
 }
 
@@ -82,16 +83,18 @@ case "$cmd" in
     docker inspect "$run-runner" --format 'runner image {{.Config.Image}} {{.Image}}'
     echo "run $run"
     ;;
-  build-image)
-    [ $# -eq 1 ] || usage
-    tag=$1
+  build)
     repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
     # The build context is the checkout's tracked and unignored files, as
     # .dockerignore then filters them; build output on disk never enters.
+    # A local --output dest under /menagerie-work is visible to the runner.
     (cd "$repo" && git ls-files -z --cached --others --exclude-standard |
       tar --null --no-recursion -T - -cf -) |
-      docker exec -i "$(cat "$state/run")-dind" docker build --progress plain -t "$tag" -
-    dind_exec image inspect "$tag" --format 'image {{.Id}} {{.Architecture}}'
+      docker exec -i "$(cat "$state/run")-dind" docker build --progress plain "$@" -
+    ;;
+  shell)
+    [ $# -eq 1 ] || usage
+    docker exec -w / "$(cat "$state/run")-runner" sh -c "$1"
     ;;
   run)
     run=$(cat "$state/run")
