@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Menagerie configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workspace-root", "workspace-repository", "wyrwood-directory", "oidc"],
+  "properties": {
+    "listen": {
+      "type": "string",
+      "default": ":8080",
+      "description": "HTTP listen address of the workspace service."
+    },
+    "workspace-root": {
+      "type": "string",
+      "pattern": "^/.",
+      "description": "Absolute folder whose direct child folders are the workspaces. Same path in the container and on the host; not the filesystem root."
+    },
+    "workspace-repository": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Git remote holding one backup branch per workspace."
+    },
+    "wyrwood-directory": {
+      "type": "string",
+      "pattern": "^/",
+      "description": "Absolute Wyrwood consumer directory holding the SSH agent socket."
+    },
+    "templates": {
+      "type": "array",
+      "description": "Approved templates. Ids are unique.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "address"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"},
+          "name": {"type": "string", "minLength": 1},
+          "address": {"type": "string", "minLength": 1, "description": "Toha template address."}
+        }
+      }
+    },
+    "oidc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer", "client-id"],
+      "properties": {
+        "issuer": {"type": "string", "minLength": 1},
+        "client-id": {"type": "string", "minLength": 1}
+      }
+    },
+    "template-service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "socket": {
+          "type": "string",
+          "pattern": "^/",
+          "default": "/run/menagerie/template.sock",
+          "description": "Unix socket of the template service."
+        }
+      }
+    }
+  }
+}

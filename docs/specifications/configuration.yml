@@ -1,0 +1,25 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  references:
+    - menagerie
+format: json-schema
+description: >-
+  The workspace service reads one strict YAML document, by default
+  `/etc/menagerie/config.yml` or the path given with `-config`, defined by
+  `assets/configuration/menagerie.schema.json`. Unknown keys, a second
+  document and an empty document are errors.
+
+
+  It names the workspace root, the workspace repository, the Wyrwood
+  consumer directory, the approved template list, the OIDC issuer and client,
+  the HTTP listen address and the template service socket. `workspace-root`
+  and `wyrwood-directory` are absolute paths; the workspace root is used as
+  written (cleaned, not symlink-resolved) because container labels carry
+  the path the host daemon sees, and it is never `/`. Each template has a
+  unique `id` of lower-case letters and digits separated by single dashes, a
+  display `name` and a Toha `address`; the list can be empty. Defaults:
+  listen `:8080`, template service socket `/run/menagerie/template.sock`.
+validation-criteria: >-
+  `go test ./backend/internal/config/` parses a valid document, applies the
+  defaults, rejects each invalid field, and checks that the schema's keys
+  equal the keys the parser accepts.
