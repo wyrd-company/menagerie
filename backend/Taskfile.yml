@@ -17,6 +17,7 @@ tasks:
       - test -z "$(gofmt -l .)"
       - go vet ./...
       - go vet -tags docker ./...
+      - go vet -tags openbao ./...
 
   test:
     desc: Run the workspace service unit tests with the race detector
@@ -24,6 +25,11 @@ tasks:
       - go test -race -count=1 ./...
 
   test:docker:
-    desc: Run the Docker smoke tests (needs a local Docker Engine with alpine:3.22 and busybox:1.37)
+    desc: Run the Docker smoke and registry credential tests (pulls alpine:3.22 and busybox:1.37 when missing)
     cmds:
       - go test -tags docker -count=1 -v ./internal/devcontainer/
+
+  test:openbao:
+    desc: Read registry credentials from a disposable OpenBao dev server through a Wyrwood-contract socket (needs bao on PATH)
+    cmds:
+      - go test -tags openbao -count=1 -v ./internal/registrycreds/
