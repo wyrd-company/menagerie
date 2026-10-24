@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -399,5 +400,34 @@ func TestCreateAndUpgradeRequestsAreCheckedBeforeAnyJob(t *testing.T) {
 	}
 	if len(w.manager.List()) != 0 || len(w.tmpl.seen()) != 0 {
 		t.Fatal("a refused request started a job")
+	}
+}
+
+func TestAnAdmittedAnswerIsRefusedWhenTheInterviewCloses(t *testing.T) {
+	w := New(Options{})
+	iv := w.open("job")
+	iv.mu.Lock()
+	iv.waiting = true
+	iv.mu.Unlock()
+	refused := make(chan error, 1)
+	go func() {
+		_, err := w.Answer(t.Context(), "job", json.RawMessage(`{}`), json.RawMessage(`{}`))
+		refused <- err
+	}()
+	// The answer is admitted once the mailbox holds its turn.
+	for len(iv.turns) == 0 {
+		select {
+		case err := <-refused:
+			t.Fatalf("answer returned before admission: %v", err)
+		default:
+		}
+		runtime.Gosched()
+	}
+	w.close("job", iv)
+	if err := <-refused; err != api.ErrNotWaiting {
+		t.Fatalf("admitted answer after close: %v", err)
+	}
+	if _, err := w.Answer(t.Context(), "job", json.RawMessage(`{}`), json.RawMessage(`{}`)); err != api.ErrNotWaiting {
+		t.Fatalf("answer after close: %v", err)
 	}
 }
