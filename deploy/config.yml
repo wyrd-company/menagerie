@@ -1,0 +1,30 @@
+# Menagerie configuration for the deployment example in compose.yml. The
+# container reads it at /etc/menagerie/config.yml. The full reference is
+# docs/specifications/configuration.yml.
+
+# The same path as on the host: compose.yml mounts it at its own path.
+workspace-root: /srv/menagerie/workspaces
+
+# Each workspace is backed up to its own orphan branch here, over SSH,
+# through the Wyrwood agent's ssh-agent.sock.
+workspace-repository: ssh://git@github.com/example-org/workspace-backups.git
+
+# Where compose.yml mounts the Wyrwood consumer directory.
+wyrwood-directory: /run/wyrwood
+
+oidc:
+  issuer: https://id.example.test
+  client-id: menagerie
+  redirect-url: https://menagerie.example.test/auth/callback
+
+templates:
+  - id: sample-workspace
+    name: Sample workspace
+    address: gh:example-org/workspace-templates@1.0.0#sample-workspace
+
+# Registry credentials read from OpenBao through the Wyrwood vault socket.
+# Without this section every registry is anonymous.
+# registry-credentials:
+#   kv-mount: kv
+#   registries:
+#     - {registry: ghcr.io, path: menagerie/ghcr}

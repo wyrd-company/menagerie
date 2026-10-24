@@ -1,0 +1,31 @@
+# Menagerie deployment example. Copy this folder, edit config.yml and the
+# paths below, then run `docker compose up -d`. See README.md.
+name: menagerie
+
+services:
+  menagerie:
+    image: ${MENAGERIE_IMAGE:-ghcr.io/wyrd-company/menagerie:0.1.0}
+    # Docker restarts Menagerie after a host restart, and after either of its
+    # services stops, which stops the container.
+    restart: unless-stopped
+    ports:
+      # The UI is not for the public internet: publish it on a private
+      # address, behind the HTTPS origin named by oidc.redirect-url.
+      - 127.0.0.1:8080:8080
+    environment:
+      # Toha's SSH transport reaches the Wyrwood agent through this socket.
+      SSH_AUTH_SOCK: /run/wyrwood/ssh-agent.sock
+    volumes:
+      # The workspace root at the same path on the host and in the
+      # container, so the devcontainers' bind mounts resolve on the host.
+      - ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}:${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}
+      # The host Docker daemon. Only the workspace service uses it.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The Wyrwood consumer directory: ssh-agent.sock and vault.sock.
+      - ${WYRWOOD_CONSUMER_DIRECTORY:?set the host path of Menagerie's Wyrwood consumer directory}:/run/wyrwood
+      - ./config.yml:/etc/menagerie/config.yml:ro
+      # Toha's template cache and state; it survives recreating the container.
+      - menagerie-data:/var/lib/menagerie
+
+volumes:
+  menagerie-data:
