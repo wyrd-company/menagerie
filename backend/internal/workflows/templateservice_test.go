@@ -315,9 +315,9 @@ func evidence(t *testing.T, job *jobs.Job) {
 	}
 }
 
-// acceptCreateAndUpgrade is the scenario both runtimes run. It returns the
-// workspace folder.
-func acceptCreateAndUpgrade(t *testing.T, a *accept) string {
+// acceptCreateAndUpgrade is the scenario both runtimes run. afterCreate,
+// when given, checks the created workspace before the upgrade.
+func acceptCreateAndUpgrade(t *testing.T, a *accept, afterCreate func(folder string)) {
 	folder := filepath.Join(a.root, "alpha")
 	job, asked := a.drive(t, "create", "alpha", "sample-v1", map[string]any{"label": "first"})
 	evidence(t, job)
@@ -344,6 +344,10 @@ func acceptCreateAndUpgrade(t *testing.T, a *accept) string {
 	}
 	if !strings.Contains(fileAt(t, history[0], ".toha.json"), `"label"`) {
 		t.Fatal("the applied record lacks the answers")
+	}
+
+	if afterCreate != nil {
+		afterCreate(folder)
 	}
 
 	// An operator edit to a tracked file, kept across the upgrade.
@@ -380,13 +384,12 @@ func acceptCreateAndUpgrade(t *testing.T, a *accept) string {
 	if !strings.Contains(result(job), `"apply":{"outcome":"written"`) {
 		t.Fatalf("result %s", result(job))
 	}
-	return folder
 }
 
 func TestCreateAndUpgradeThroughTheTemplateService(t *testing.T) {
 	rt := &fakeRuntime{}
 	a := newAccept(t, rt)
-	acceptCreateAndUpgrade(t, a)
+	acceptCreateAndUpgrade(t, a, nil)
 	if got := rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "rebuild alpha"}) {
 		t.Fatalf("runtime %v", got)
 	}
