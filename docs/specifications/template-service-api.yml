@@ -73,9 +73,13 @@ description: >-
   without reaching its source. A start first refreshes an approved template
   installed in Toha's user registry the way Toha's catalog update does: an
   installed branch moves to its current commit, an installed tag or commit
-  stays. The admission covers what reaches Toha's cache: clearing the cache
-  leaves a session only the resolution check, and Toha also caches the base
-  revision named by a workspace's applied record when an upgrade starts.
+  stays. A start whose commit already has another source's entry under the
+  same cache key is refused as `template-cache-conflict`. The admission is
+  only as narrow as what reaches Toha's cache: clearing the cache leaves a
+  session only the resolution check, Toha also caches the base revision
+  named by a workspace's applied record when an upgrade starts, and a cache
+  entry's files are trusted as the service's own once its HEAD and origin
+  match.
 
 
   Create. `/v1/interviews` refuses an existing folder. Its first batch asks
