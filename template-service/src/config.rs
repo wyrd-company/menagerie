@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn reads_only_its_members_and_applies_defaults() {
         let settings = Settings::parse(
-            "workspace-root: /srv/spaces/./\nworkspace-repository: git@example.invalid:o/r\noidc: {issuer: x, client-id: y}\ntemplates:\n  - {id: sample-one, name: Sample, address: 'https://example.invalid/t'}\n",
+            "workspace-root: /srv/spaces/./\nworkspace-repository: git@example.invalid:o/r\noidc: {issuer: x, client-id: y}\nwyrwood-directory: /run/wyrwood\nregistry-credentials:\n  kv-mount: kv\n  registries:\n    - {registry: registry.example.invalid, path: registries/sample}\ntemplates:\n  - {id: sample-one, name: Sample, address: 'https://example.invalid/t'}\n",
             Path::new(DATA),
         )
         .unwrap();
