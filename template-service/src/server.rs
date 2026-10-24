@@ -79,13 +79,19 @@ where
     Req: DeserializeOwned + Send + 'static,
     Rep: Serialize + Send + 'static,
 {
+    // The bounded scan runs first, so no later parse meets deeper nesting
+    // than serde_json reads; syntax is judged before any number refusal.
+    let scanned = match crate::numbers::scan(&body) {
+        Ok(scanned) => scanned,
+        Err(refusal) => return error(&refusal),
+    };
     if let Err(e) = serde_json::from_slice::<serde::de::IgnoredAny>(&body) {
         return error(&ServiceError::bad_request(
             "malformed-request",
             e.to_string(),
         ));
     }
-    if let Err(refusal) = crate::numbers::check(&body) {
+    if let Err(refusal) = scanned.check() {
         return error(&refusal);
     }
     let request: Req = match serde_json::from_slice(&body) {

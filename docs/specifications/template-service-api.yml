@@ -95,6 +95,7 @@ description: >-
   and `warnings`. Request and session: `malformed-request` (400),
   `malformed-session` (400), `malformed-submission` (400),
   `submission-template-mismatch` (400), `number-not-representable` (400),
+  `nesting-too-deep` (400),
   `invalid-workspace` (400), `target-mismatch` (400), `unknown-template`
   (404), `workspace-not-found` (404), `not-found` (404),
   `method-not-allowed` (405), `target-outside-root` (409),
@@ -114,6 +115,10 @@ description: >-
   (422), `hook-failed` (422). Faults: `io-failed` (500), `hook-io-failed`
   (500), `record-failed` (500), `record-not-written` (500),
   `workspace-root-unavailable` (500), `internal-error` (500).
+
+
+  Nesting. A request nested deeper than 127 levels, the most serde_json
+  reads into a value, is refused as `nesting-too-deep` before it is parsed.
 
 
   Numbers. Toha holds JSON numbers as 64-bit integers or floating-point
@@ -137,5 +142,6 @@ validation-criteria: >-
   keeps local edits, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;
   `tests/requests.rs` covers every request check; `tests/restart.rs` runs
-  the binary across a restart; `tests/contract.rs` checks that this
+  the binary across a restart; `tests/limits.rs` sends the binary a request
+  nested far deeper than any value; `tests/contract.rs` checks that this
   specification names every route and error kind the service uses.
