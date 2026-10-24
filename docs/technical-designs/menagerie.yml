@@ -17,15 +17,15 @@ design-challenges:
     Menagerie runs in a container but tells the host Docker daemon what to
     bind-mount. The daemon resolves bind sources on the host.
   docker-is-root: >-
-    The daemon is rootful. Access to it is root on the host, and devcontainers
-    legitimately need container create, exec, BuildKit and, for some features,
-    privileged mode.
+    The daemon is rootful, so access to it is root on the host. Menagerie has
+    the same access a manager running devcontainer-builder on the host has,
+    and it is reachable through a web UI.
   interview-across-requests: >-
     A Toha interview spans many HTTP requests. Toha's pending interview borrows
     its template and cannot be held between requests.
   template-hooks: >-
-    Toha template hooks and a workspace's `initializeCommand` run arbitrary
-    commands. They must not run with Menagerie's Docker or signing access.
+    Toha template hooks and a workspace's `initializeCommand` run commands the
+    template author wrote. devcontainer-builder runs no commands on the host.
   git-credentials: >-
     Menagerie backs up each workspace to GitHub. No credential may be stored
     in the Menagerie container.
@@ -39,11 +39,10 @@ proposed-design:
     users through OIDC, discovers workspaces, drives Docker through
     devcontainer-builder, and owns git. The template service is written in
     Rust. It embeds Toha and serves template interviews, generation and
-    upgrades to the workspace service over an internal API. Docker access goes
-    through a body-inspecting socket proxy outside the container. Git access
-    goes through Wyrwood's SSH-agent socket. The workspace root and the
-    template cache are mounted at the same paths on the host and in the
-    container.
+    upgrades to the workspace service over an internal API. The container
+    mounts the host Docker socket. Git access goes through Wyrwood's
+    SSH-agent socket. The workspace root is mounted at the same path on the
+    host and in the container.
   terms: >-
     A workspace is a folder under the workspace root, generated from a Toha
     template, together with the devcontainer it defines. Every folder directly
@@ -78,10 +77,7 @@ proposed-design:
     batch or a completed interview.
   approved-templates: >-
     Only templates on the approved template list can be used. Each entry names
-    a Toha template address and the command image: either an image name or
-    the path of a Dockerfile in the template. The command image runs the
-    template's hooks and the `initializeCommand` of workspaces created from
-    it. The list is configuration.
+    a Toha template address. The list is configuration.
   create-flow: >-
     After the interview completes, the template service builds Toha's plan
     and applies it into a new folder under the workspace root, which records
@@ -99,55 +95,35 @@ proposed-design:
   container-operations: >-
     Start, stop and rebuild call devcontainer-builder for the workspace
     folder. Rebuild recreates the container from the current definition.
+    Devcontainers get whatever their definition asks for, including
+    privileged mode, as they do when devcontainer-builder runs on the host.
+    A workspace that must start after a host restart sets a Docker restart
+    policy in its definition; the daemon restarts it.
   operations-and-jobs: >-
     Each create, upgrade, start, stop or rebuild is a job. A workspace has at
     most one job at a time. Jobs and their logs are held in memory and
     streamed to the UI. A restart of Menagerie drops job history. No timeout
     is applied to jobs.
-  docker-boundary: >-
-    Menagerie never receives the Docker socket. It connects to a fork of
-    Sockguard that runs outside the Menagerie container and forwards to the
-    host daemon. The proxy allows only the Engine endpoints devcontainer-builder
-    uses, resolves symlinks on every bind source before checking it at
-    create and again at every start and restart, allows
-    bind sources only under the workspace root, and denies privileged mode,
-    added capabilities, host namespaces and devices unless the workspace has an
-    exception. The proxy denies unknown BuildKit gRPC methods, and the daemon
-    keeps the BuildKit entitlements `security.insecure` and `network.host`
-    disabled.
-  privileged-exceptions: >-
-    Before a start or rebuild, the workspace service resolves the merged
-    devcontainer configuration, including feature metadata. When it asks for
-    privileged mode, added capabilities or host namespaces and the workspace
-    has no exception, the list shows the workspace as needing approval. A
-    manager approves in the UI. The workspace service writes the exception to
-    a policy file keyed by workspace path. The proxy reloads that file and
-    matches each create request to a workspace by its `devcontainer.local_folder`
-    label and bind sources.
+  docker-access: >-
+    The workspace service talks to the host Docker daemon through the mounted
+    socket. Only the workspace service uses Docker.
   template-hooks: >-
-    The template service supplies Toha with a hook runner that asks the
-    workspace service to run each hook in a command container: a throwaway
-    container from the approved template entry's command image, built through
-    devcontainer-builder when the entry names a Dockerfile. It mounts the new
-    workspace folder and, read-only, the template root, and runs the hook's
-    argv in its target-relative working directory. It receives no environment
-    from Menagerie and has no access to the proxy or Wyrwood sockets. The
-    runner returns the exit status and captured output to Toha. The
-    container is removed when the hook ends.
+    The template service runs Toha template hooks with Toha's process hook
+    runner, inside the Menagerie container, in the hook's target-relative
+    working directory.
   initialize-command: >-
     devcontainer-builder runs no commands on the host, so the workspace
     service runs `initializeCommand` itself. Before each start or rebuild it
     reads `initializeCommand` from the resolved devcontainer configuration
-    and, when present, runs it in a command container that mounts the
-    workspace folder at its own path and uses it as the working directory.
-    The container receives no environment from Menagerie and has no access to
-    the proxy or Wyrwood sockets. A failing command fails the job before the
-    devcontainer starts.
+    and, when present, runs it inside the Menagerie container with the
+    workspace folder as the working directory. A failing command fails the
+    job before the devcontainer starts.
   git-and-credentials: >-
     The workspace repository is a backup, not a synchronized copy. The local
     workspace is the source of truth; the workspace service uses go-git to
     init, commit and force-push the workspace branch, and never fetches or
-    pulls it. Template fetching belongs to Toha. Authentication uses the SSH agent at Wyrwood's
+    pulls it. Template fetching belongs to Toha. Authentication uses the SSH
+    agent at Wyrwood's
     `ssh-agent.sock`, mounted from the host consumer directory. The agent's key
     is an OpenBao Transit key added as a deploy key with write access on the
     workspace repository. Toha fetches private templates over SSH through
@@ -159,27 +135,22 @@ proposed-design:
     the `menagerie_managers` group claim. Every authenticated user is a
     manager.
   configuration: >-
-    Configuration names the workspace root, the template cache, the
-    workspace repository, the
-    approved template list, the OIDC issuer and client, the proxy
-    socket, the Wyrwood consumer directory and the exception policy file.
+    Configuration names the workspace root, the workspace repository, the
+    approved template list, the OIDC issuer and client, and the Wyrwood
+    consumer directory.
   deployment: >-
-    The Menagerie container mounts the workspace root and the template cache
-    at the same paths as on the host, so that command containers can bind
-    them, and mounts the proxy socket, the Wyrwood consumer directory and the
-    exception policy file. The proxy runs as its own container or host service
-    with the host Docker socket. Menagerie is bound to a Wyrwood policy that
-    grants only the deploy key.
+    The Menagerie container mounts the workspace root at the same path as on
+    the host, the host Docker socket and the Wyrwood consumer directory. It
+    has a Docker restart policy, so it returns after a host restart. Its UI is
+    not exposed to the public internet. Menagerie is bound to a Wyrwood policy
+    that grants only the deploy key.
   dependencies: >-
     Toha exposes template resolution, fetching and caching, and the upgrade
-    driver from its library, and records answers in `.toha.json`. The
-    Sockguard fork adds symlink resolution on bind sources and per-workspace
-    exceptions read from the policy file.
+    driver from its library, and records answers in `.toha.json`.
   verification: >-
-    The acceptance scenario uses a test template with a hook and a feature
-    that needs privileged mode. A manager signs in, creates a workspace, sees
-    it running in the list, stops and starts it, approves the privileged
-    exception, rebuilds it, and upgrades it to a newer template version that
-    adds one question. Only that question is asked, and the pushed branch
-    contains the upgraded files. A container not created by Menagerie never
-    appears in the list.
+    The acceptance scenario uses a test template with a hook and an
+    `initializeCommand`. A manager signs in, creates a workspace, sees it
+    running in the list, stops and starts it, rebuilds it, and upgrades it to
+    a newer template version that adds one question. Only that question is
+    asked, and the pushed branch contains the upgraded files. A container not
+    created by Menagerie never appears in the list.
