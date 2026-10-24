@@ -63,18 +63,44 @@
       "additionalProperties": false,
       "required": [
         "issuer",
-        "client-id"
+        "client-id",
+        "redirect-url"
       ],
       "properties": {
         "issuer": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^https?://[^/]",
+          "description": "OIDC issuer URL; discovery reads {issuer}/.well-known/openid-configuration."
         },
         "client-id": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Id of the public client registered for Menagerie."
+        },
+        "redirect-url": {
+          "type": "string",
+          "pattern": "^https?://[^/?#@]+/auth/callback$",
+          "description": "Redirect URI registered for the client: the origin browsers use for Menagerie followed by /auth/callback. With https every cookie is Secure."
+        },
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "contains": {
+            "const": "openid"
+          },
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\s\"\\\\]+$"
+          },
+          "default": [
+            "openid",
+            "profile",
+            "groups"
+          ],
+          "description": "Scopes requested at sign-in. They must include openid; the provider must then release the groups claim in the ID token or userinfo."
         }
-      }
+      },
+      "description": "Identity provider and Menagerie's public OIDC client. The client has no secret: it uses the authorization code flow with PKCE S256."
     },
     "template-service": {
       "type": "object",

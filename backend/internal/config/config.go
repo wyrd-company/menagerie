@@ -19,6 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/wyrd-company/menagerie/backend/internal/auth"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 )
 
@@ -66,10 +67,18 @@ type Template struct {
 	Address string `yaml:"address"`
 }
 
-// OIDC names the identity provider and client.
+// OIDC names the identity provider and Menagerie's public client.
 type OIDC struct {
-	Issuer   string `yaml:"issuer"`
+	// Issuer is the OIDC issuer URL.
+	Issuer string `yaml:"issuer"`
+	// ClientID is the public client's id. The client has no secret.
 	ClientID string `yaml:"client-id"`
+	// RedirectURL is the redirect URI registered for the client: the
+	// browser-facing origin followed by /auth/callback.
+	RedirectURL string `yaml:"redirect-url"`
+	// Scopes are the requested scopes; absent, openid, profile and
+	// groups.
+	Scopes []string `yaml:"scopes"`
 }
 
 // TemplateService locates the internal template service.
@@ -167,9 +176,21 @@ func (c *Config) validate() error {
 	}
 	if c.OIDC.Issuer == "" {
 		errs = append(errs, errors.New("oidc.issuer is required"))
+	} else if err := auth.ValidateIssuer(c.OIDC.Issuer); err != nil {
+		errs = append(errs, fmt.Errorf("oidc.issuer %w", err))
 	}
 	if c.OIDC.ClientID == "" {
 		errs = append(errs, errors.New("oidc.client-id is required"))
+	}
+	if c.OIDC.RedirectURL == "" {
+		errs = append(errs, errors.New("oidc.redirect-url is required"))
+	} else if err := auth.ValidateRedirectURL(c.OIDC.RedirectURL); err != nil {
+		errs = append(errs, fmt.Errorf("oidc.redirect-url %w", err))
+	}
+	if c.OIDC.Scopes != nil && len(c.OIDC.Scopes) == 0 {
+		errs = append(errs, errors.New("oidc.scopes must not be empty when given"))
+	} else if err := auth.ValidateScopes(c.OIDC.Scopes); err != nil {
+		errs = append(errs, fmt.Errorf("oidc.scopes %w", err))
 	}
 	seen := map[string]bool{}
 	for i, t := range c.Templates {

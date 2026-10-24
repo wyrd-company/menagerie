@@ -14,6 +14,7 @@ wyrwood-directory: /run/wyrwood/containers/example
 oidc:
   issuer: https://id.example.test
   client-id: example-client
+  redirect-url: https://menagerie.example.test/auth/callback
 templates:
   - id: sample-template
     name: Sample template
@@ -34,7 +35,8 @@ func TestParseValidDocument(t *testing.T) {
 	if len(cfg.Templates) != 1 || cfg.Templates[0].ID != "sample-template" || cfg.Templates[0].Address == "" {
 		t.Errorf("templates %+v", cfg.Templates)
 	}
-	if cfg.OIDC.Issuer != "https://id.example.test" || cfg.OIDC.ClientID != "example-client" {
+	if cfg.OIDC.Issuer != "https://id.example.test" || cfg.OIDC.ClientID != "example-client" ||
+		cfg.OIDC.RedirectURL != "https://menagerie.example.test/auth/callback" || cfg.OIDC.Scopes != nil {
 		t.Errorf("oidc %+v", cfg.OIDC)
 	}
 }
@@ -100,6 +102,13 @@ func TestParseRejects(t *testing.T) {
 		{"relative socket", valid + "template-service:\n  socket: template.sock\n", "template-service.socket must be an absolute path"},
 		{"missing issuer", strings.Replace(valid, "  issuer: https://id.example.test\n", "", 1), "oidc.issuer is required"},
 		{"missing client", strings.Replace(valid, "  client-id: example-client\n", "", 1), "oidc.client-id is required"},
+		{"issuer not a URL", strings.Replace(valid, "issuer: https://id.example.test", "issuer: id.example.test", 1), "oidc.issuer must be an http or https URL"},
+		{"missing redirect", strings.Replace(valid, "  redirect-url: https://menagerie.example.test/auth/callback\n", "", 1), "oidc.redirect-url is required"},
+		{"redirect path", strings.Replace(valid, "example.test/auth/callback", "example.test/callback", 1), "oidc.redirect-url must have the path /auth/callback"},
+		{"redirect scheme", strings.Replace(valid, "redirect-url: https:", "redirect-url: ftp:", 1), "oidc.redirect-url must use http or https"},
+		{"empty scopes", strings.Replace(valid, "templates:", "  scopes: []\ntemplates:", 1), "oidc.scopes must not be empty when given"},
+		{"scopes without openid", strings.Replace(valid, "templates:", "  scopes: [profile, groups]\ntemplates:", 1), "oidc.scopes must include openid"},
+		{"client secret", strings.Replace(valid, "templates:", "  client-secret: x\ntemplates:", 1), "field client-secret not found"},
 		{"bad template id", strings.Replace(valid, "id: sample-template", "id: Sample_Template", 1), "templates[0].id must be"},
 		{"duplicate template", valid + "  - id: sample-template\n    name: Again\n    address: a\n", `templates[1].id "sample-template" is not unique`},
 		{"template name", strings.Replace(valid, "    name: Sample template\n", "", 1), "templates[0].name is required"},

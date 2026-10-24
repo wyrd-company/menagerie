@@ -78,6 +78,15 @@ func ValidateRedirectURL(raw string) error {
 	return nil
 }
 
+// ValidateIssuer checks that raw is an absolute http or https URL.
+func ValidateIssuer(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return errors.New("must be an http or https URL")
+	}
+	return nil
+}
+
 // ValidateScopes checks that scopes, when given, include openid.
 func ValidateScopes(scopes []string) error {
 	if len(scopes) > 0 && !slices.Contains(scopes, "openid") {
@@ -93,8 +102,8 @@ func ValidateScopes(scopes []string) error {
 
 func (c *Config) validate() error {
 	var errs []error
-	if u, err := url.Parse(c.Issuer); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		errs = append(errs, errors.New("issuer must be an http or https URL"))
+	if err := ValidateIssuer(c.Issuer); err != nil {
+		errs = append(errs, fmt.Errorf("issuer %w", err))
 	}
 	if c.ClientID == "" {
 		errs = append(errs, errors.New("client id is required"))

@@ -21,6 +21,18 @@ description: >-
   listen `:8080`, template service socket `/run/menagerie/template.sock`.
 
 
+  `oidc` names the identity provider and Menagerie's public client, which
+  has no secret. `issuer` is an http or https URL whose discovery document
+  names the same issuer; `client-id` is the client's id; `redirect-url` is
+  the redirect URI registered for the client, an http or https URL with a
+  host, no user information, query or fragment, and exactly the path
+  `/auth/callback`. Its origin is the one browsers use for Menagerie, and
+  an `https` scheme makes every Menagerie cookie `Secure`. Optional
+  `scopes` lists the requested scopes, which must include `openid`;
+  absent, Menagerie requests `openid profile groups`. There is no
+  client-secret key.
+
+
   Optional `registry-credentials` names the OpenBao secrets that hold
   container registry credentials. `kv-mount` is a KV version 2 mount path
   and `registries` lists `{registry, path}` entries: `registry` is a host or
@@ -37,4 +49,5 @@ description: >-
 validation-criteria: >-
   `go test ./backend/internal/config/` parses a valid document, applies the
   defaults, rejects each invalid field, and checks that the schema's keys
-  equal the keys the parser accepts.
+  equal the keys the parser accepts and that its default scopes equal the
+  scopes the workspace service requests.

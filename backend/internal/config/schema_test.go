@@ -2,11 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/wyrd-company/menagerie/backend/internal/auth"
 )
 
 type schemaNode struct {
@@ -78,6 +81,13 @@ func TestSchemaAgreesWithParser(t *testing.T) {
 	}
 	if got := root.Properties["template-service"].Properties["socket"].Default; got != DefaultTemplateSocket {
 		t.Errorf("socket default %v", got)
+	}
+	oidc := root.Properties["oidc"]
+	if got := strings.Join(oidc.Required, ","); got != "issuer,client-id,redirect-url" {
+		t.Errorf("oidc required %s", got)
+	}
+	if got, want := fmt.Sprint(oidc.Properties["scopes"].Default), fmt.Sprint(auth.DefaultScopes); got != want {
+		t.Errorf("scopes default %s, auth requests %s", got, want)
 	}
 	if got := strings.Join(root.Required, ","); got != "workspace-root,workspace-repository,wyrwood-directory,oidc" {
 		t.Errorf("required %s", got)
