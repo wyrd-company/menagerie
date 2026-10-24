@@ -247,6 +247,18 @@ async fn malformed_requests_sessions_and_envelopes_are_refused() {
         (not_json.status, not_json.kind()),
         (400, "malformed-request")
     );
+    // Syntax is judged before numbers: a truncated body is malformed even
+    // when it holds a number Toha could not keep.
+    let truncated = post_bytes(
+        &world.socket,
+        "/v1/interviews",
+        b"{\"workspace\": 1e400".to_vec(),
+    )
+    .await;
+    assert_eq!(
+        (truncated.status, truncated.kind()),
+        (400, "malformed-request")
+    );
     let extra = service
         .post(
             "/v1/interviews",
