@@ -100,3 +100,17 @@ describe("jobReducer", () => {
     expect(fold([["progress", '{"n":1}']]).logs).toEqual([{ id: 1, text: '[progress] {"n":1}' }]);
   });
 });
+
+describe("decodeEvent", () => {
+  it("keeps a payload that does not decode as a visible line", () => {
+    expect(decodeEvent("state", "4", "{not json")).toEqual({
+      id: 4,
+      type: "unknown",
+      event: "state",
+      data: "{not json",
+    });
+    expect(fold([["interview", '{"state":"questions"}']]).logs[0]?.text).toBe(
+      '[interview] {"state":"questions"}',
+    );
+  });
+});

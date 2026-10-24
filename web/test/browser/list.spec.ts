@@ -54,6 +54,21 @@ test("starts a stopped workspace and streams its job to completion", async ({ pa
   await shot(page, "list-job-succeeded");
 });
 
+test("stops listening once the result arrives", async ({ page }) => {
+  const streams: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/events")) streams.push(r.url());
+  });
+  await page.goto("/");
+  await entry(page, "sample-beta").getByRole("button", { name: "Start" }).click();
+  await expect(page.getByRole("region", { name: "Job console" }).locator(".outcome")).toContainText(
+    "Completed.",
+  );
+  // The fixture asks for a 50 ms reconnect; a client still listening would reconnect within this wait.
+  await page.waitForTimeout(400);
+  expect(streams).toHaveLength(1);
+});
+
 test("allows one job per workspace while other workspaces stay usable", async ({
   page,
   request,

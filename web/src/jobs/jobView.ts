@@ -119,6 +119,15 @@ export function jobReducer(view: JobView, action: JobAction): JobView {
 export function decodeEvent(type: string, id: string, data: string): JobEvent {
   const n = Number.parseInt(id, 10);
   const eventId = Number.isFinite(n) ? n : 0;
+  try {
+    return decodeKnown(type, eventId, data);
+  } catch {
+    // A payload that does not decode is shown as text rather than lost.
+    return { id: eventId, type: "unknown", event: type, data };
+  }
+}
+
+function decodeKnown(type: string, eventId: number, data: string): JobEvent {
   switch (type) {
     case "state":
     case "log":
