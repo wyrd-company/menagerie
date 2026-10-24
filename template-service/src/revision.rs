@@ -57,8 +57,9 @@ pub fn admit(
 }
 
 /// The session's revision is one a start of the approved template admitted.
-/// Without a cached admission, the session is admitted only when the approved
-/// address resolves to exactly its commit now; nothing is refreshed.
+/// When the cache holds no admission at all for the approved template, as
+/// after the cache was cleared, the session is admitted only when the
+/// approved address resolves to exactly its commit now; nothing is refreshed.
 pub fn check(
     record: &StagedRecord,
     formal: &str,
@@ -72,15 +73,16 @@ pub fn check(
         Ok(Address::Git { repo, .. }) => {
             is_commit(&record.commit)
                 && (authentic(formal, &record.commit, &repo, host)
-                    || toha::resolve::resolve_template(
-                        &template.address,
-                        config,
-                        registry,
-                        &host.paths,
-                        &host.cwd,
-                    )?
-                    .commit
-                        == record.commit)
+                    || uncached(formal, host)
+                        && toha::resolve::resolve_template(
+                            &template.address,
+                            config,
+                            registry,
+                            &host.paths,
+                            &host.cwd,
+                        )?
+                        .commit
+                            == record.commit)
         }
         _ => {
             toha::resolve::resolve_template(formal, config, registry, &host.paths, &host.cwd)?
@@ -134,6 +136,16 @@ fn authentic(formal: &str, commit: &str, repo: &str, host: &TohaHost) -> bool {
             .map(|url| url.to_bstring().to_string())
     });
     head.as_deref() == Some(commit) && origin.as_deref() == Some(repo)
+}
+
+/// No admission of the approved template is cached: its cache key holds no entry.
+fn uncached(formal: &str, host: &TohaHost) -> bool {
+    let key = host
+        .paths
+        .cache
+        .join("sources")
+        .join(source::install_key(formal));
+    std::fs::read_dir(key).map_or(true, |mut entries| entries.next().is_none())
 }
 
 fn cache_entry(formal: &str, commit: &str, host: &TohaHost) -> Option<PathBuf> {

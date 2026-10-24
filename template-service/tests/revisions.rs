@@ -282,7 +282,7 @@ async fn a_tag_replaced_by_a_branch_still_refuses_an_edited_commit() {
     let service = Running::start(&world).await;
     let (selector, start) = answered(&service, &world, "alpha", "sample-v1").await;
     git(&world.sample, &["tag", "-d", "v1"]);
-    git(&world.sample, &["branch", "v1", &world.v3]);
+    git(&world.sample, &["branch", "v1", &world.v2]);
     let envelope = json!({"template": start["document"]["context"]["template"], "answers": sample_answers("first")});
     let refused = service
         .post(
@@ -490,10 +490,9 @@ async fn a_cache_entry_must_hold_its_commit() {
         .post("/v1/interviews/answers", &with(selector, json!({"session": edited(&start["session"], &world.v2),
             "submission": {"template": start["document"]["context"]["template"], "answers": sample_answers("first")}})))
         .await;
-    assert_eq!(refused.status, 422, "{}", refused.json);
     assert_eq!(
-        refused.kind(),
-        "template-resolve-failed",
+        (refused.status, refused.kind()),
+        (409, "session-mismatch"),
         "a forged entry was admitted: {}",
         refused.json
     );
