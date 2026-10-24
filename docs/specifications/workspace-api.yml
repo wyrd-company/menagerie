@@ -73,7 +73,10 @@ description: >-
   an array directly, and object members in parallel. A failing command fails
   the job before any container changes. `start` then builds the definition
   when it needs a build and brings the container up, reusing and starting an
-  existing one. `rebuild` builds, removes the containers labelled for the
+  existing one. When the definition uses features, an existing
+  `devcontainer-lock.json` (including an empty initialization marker) is
+  rewritten with the resolved features only after the container is up; a
+  failed operation leaves it unchanged. `rebuild` builds, removes the containers labelled for the
   workspace (in Compose the primary service; named volumes, networks and
   other services stay) and brings a new one up. `stop` selects a single
   container or the whole Compose project from the running container's
@@ -81,6 +84,7 @@ description: >-
   stop, which waits 10 seconds before the engine kills the container; that
   interval belongs to the stop, not to the job. Definitions get every
   privilege and restart policy they ask for.
+
 
 
   The service also serves the built web UI when one is supplied: `/assets/*`

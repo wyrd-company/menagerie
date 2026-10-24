@@ -3,7 +3,8 @@
 // Docker smoke tests for the devcontainer runtime. They need a Docker
 // Engine whose bind sources are this process's filesystem and the
 // alpine:3.22 image. Every resource is labelled with, or named after, the
-// test's own temporary folder and removed by that marker.
+// test's own temporary folder and removed by that marker. Feature builds
+// use busybox:1.37, whose layers must build with the daemon's BuildKit.
 //
 //	go test -tags docker ./backend/internal/devcontainer/
 package devcontainer_test
@@ -36,7 +37,10 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
-const baseImage = "alpine:3.22"
+const (
+	baseImage    = "alpine:3.22"
+	featureImage = "busybox:1.37"
+)
 
 type logProgress struct {
 	t      *testing.T
@@ -62,6 +66,8 @@ type harness struct {
 	rt     *devcontainer.Runtime
 	root   string
 	runID  string
+	// images are built images no remaining container references.
+	images []string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -88,8 +94,10 @@ func (h *harness) cleanup() {
 		h.t.Errorf("cleanup list: %v", err)
 	}
 	projects := map[string]bool{}
+	images := append([]string(nil), h.images...)
 	for _, c := range list {
 		if strings.HasPrefix(c.Labels["devcontainer.local_folder"], h.root+"/") {
+			images = append(images, c.Image)
 			if p := c.Labels[dockercompose.LabelProject]; p != "" {
 				projects[p] = true
 			}
@@ -119,6 +127,18 @@ func (h *harness) cleanup() {
 	outsiders, _ := h.client.ContainerList(ctx, container.ListOptions{All: true, Filters: filters.NewArgs(filters.Arg("label", "menagerie.test.run="+h.runID))})
 	for _, c := range outsiders {
 		_ = h.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
+	}
+	shared := map[string]bool{}
+	for _, ref := range []string{baseImage, featureImage} {
+		if info, err := h.client.ImageInspect(ctx, ref); err == nil {
+			shared[info.ID] = true
+		}
+	}
+	for _, ref := range images {
+		if info, err := h.client.ImageInspect(ctx, ref); err != nil || shared[info.ID] {
+			continue
+		}
+		_, _ = h.client.ImageRemove(ctx, ref, image.RemoveOptions{Force: true})
 	}
 	entries, _ := os.ReadDir(h.root)
 	for _, e := range entries {
@@ -449,5 +469,71 @@ func TestWorkspaceListShowsOnlyRootFolders(t *testing.T) {
 		body.Workspaces[0].Name != "listed-empty" || body.Workspaces[0].State != "no-container" || body.Workspaces[0].ContainerID != nil ||
 		body.Workspaces[1].Name != "listed-running" || body.Workspaces[1].State != "running" || body.Workspaces[1].ContainerID == nil {
 		t.Fatalf("list %+v", body.Workspaces)
+	}
+}
+
+// featureFiles is a definition with a local feature and an empty lockfile
+// initialization marker.
+func featureFiles(definition string) map[string]string {
+	return map[string]string{
+		".devcontainer/devcontainer.json":                       definition,
+		".devcontainer/devcontainer-lock.json":                  "",
+		".devcontainer/local-feature/devcontainer-feature.json": `{"id": "local-feature", "version": "1.0.0", "name": "Local feature"}`,
+		".devcontainer/local-feature/install.sh":                "#!/bin/sh\necho installed > /feature-marker\n",
+		".devcontainer/compose.yml":                             "services:\n  app:\n    image: " + featureImage + "\n    command: [\"sleep\", \"infinity\"]\n",
+	}
+}
+
+func readLock(t *testing.T, folder string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(folder, ".devcontainer", "devcontainer-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// TestFeatureLockfilePublishedOnlyAfterSuccess runs a feature build whose
+// postCreateCommand fails, then one that succeeds, in both modes. The empty
+// lockfile marker stays empty after the failure and holds the resolved
+// feature document after the success.
+func TestFeatureLockfilePublishedOnlyAfterSuccess(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.client.ImageInspect(h.ctx, featureImage); err != nil {
+		t.Fatalf("%s is required: %v", featureImage, err)
+	}
+	definitions := map[string]string{
+		"single":  `{"image": "` + featureImage + `", "features": {"./local-feature": {}}, "postCreateCommand": "%s"}`,
+		"compose": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/", "features": {"./local-feature": {}}, "postCreateCommand": "%s"}`,
+	}
+	for mode, definition := range definitions {
+		t.Run(mode, func(t *testing.T) {
+			folder := h.workspace("lock-"+mode, featureFiles(strings.Replace(definition, "%s", "exit 3", 1)))
+			err := h.rt.Start(h.ctx, folder, &logProgress{t: t})
+			// Rebuild replaces this container; keep its image for cleanup.
+			if s, statusErr := h.rt.Status(h.ctx, folder); statusErr == nil && s.ContainerID != "" {
+				h.images = append(h.images, h.inspect(s.ContainerID).Config.Image)
+			}
+			if err == nil {
+				t.Fatal("start with a failing postCreateCommand succeeded")
+			}
+			if got := readLock(t, folder); got != "" {
+				t.Fatalf("lockfile published by a failed start: %q", got)
+			}
+
+			h.write(folder, map[string]string{".devcontainer/devcontainer.json": strings.Replace(definition, "%s", "true", 1)})
+			h.mustRun(h.rt.Rebuild, folder)
+			s := h.status(folder)
+			if got := h.exec(s.ContainerID, "cat", "/feature-marker"); got != "installed" {
+				t.Fatalf("feature not installed: %q", got)
+			}
+			var lock struct {
+				Features map[string]json.RawMessage `json:"features"`
+			}
+			got := readLock(t, folder)
+			if err := json.Unmarshal([]byte(got), &lock); err != nil || lock.Features == nil {
+				t.Fatalf("lockfile after success: %q (%v)", got, err)
+			}
+		})
 	}
 }

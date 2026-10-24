@@ -130,14 +130,48 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err := r.initialize(ctx, dc, folder, environ, env, p); err != nil {
 		return err
 	}
+	// The lockfile snapshot lives for the whole operation; the builder only
+	// prepares the next generation, which is published after Up succeeds.
+	lock, err := featureLockfile(dc)
+	if err != nil {
+		return err
+	}
+	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.opts.RegistryAuth}
 	switch dc.Mode() {
 	case spec.ModeSingle:
-		return r.upSingle(ctx, dc, folder, env, p, replace)
+		err = r.upSingle(ctx, op, replace)
 	case spec.ModeCompose:
-		return r.upCompose(ctx, dc, folder, env, p, replace)
+		err = r.upCompose(ctx, op, replace)
 	default:
-		return fmt.Errorf("unsupported devcontainer mode %s", dc.Mode())
+		err = fmt.Errorf("unsupported devcontainer mode %s", dc.Mode())
 	}
+	if err != nil {
+		return err
+	}
+	if err := lock.Publish(ctx); err != nil {
+		return fmt.Errorf("publish feature lockfile: %w", err)
+	}
+	return nil
+}
+
+// operation carries one start or rebuild's inputs.
+type operation struct {
+	dc     *spec.DevContainer
+	folder string
+	env    map[string]string
+	p      Progress
+	lock   *features.LockfileState
+	auth   RegistryAuth
+}
+
+// featureLockfile reads the definition's feature lockfile snapshot, as
+// devcontainer-builder does without lockfile flags: an existing file,
+// including an empty initialization marker, is updated; none is created.
+func featureLockfile(dc *spec.DevContainer) (*features.LockfileState, error) {
+	if dc.Features.Len() == 0 {
+		return nil, nil
+	}
+	return features.ReadLockfile(dc.Path, false, false)
 }
 
 // InitializeError reports a failed initializeCommand.
@@ -163,17 +197,15 @@ func (r *Runtime) initialize(ctx context.Context, dc *spec.DevContainer, folder 
 	return nil
 }
 
-func (r *Runtime) upSingle(ctx context.Context, dc *spec.DevContainer, folder string, env map[string]string, p Progress, replace bool) error {
+func (r *Runtime) upSingle(ctx context.Context, op *operation, replace bool) error {
+	dc, folder, p := op.dc, op.folder, op.p
 	image := dc.Image
 	var built *builder.Result
 	if needsBuild(dc) {
 		p.Phase("build")
 		image = ImageName(folder)
-		opts, err := r.builderOptions(dc, folder, []string{image}, p)
-		if err != nil {
-			return err
-		}
-		if built, err = builder.New().Build(ctx, opts); err != nil {
+		var err error
+		if built, err = builder.New().Build(ctx, r.builderOptions(op, []string{image})); err != nil {
 			return fmt.Errorf("build: %w", err)
 		}
 	}
@@ -189,13 +221,13 @@ func (r *Runtime) upSingle(ctx context.Context, dc *spec.DevContainer, folder st
 		LocalWorkspace:      folder,
 		Image:               image,
 		ImageBuilt:          built != nil,
-		LocalEnv:            env,
+		LocalEnv:            op.env,
 		RemoteUserUIDUpdate: folderOwner(folder),
 	}
 	if built != nil {
 		req.Features = built.Features
 	}
-	res, err := r.dockerHost(p).Up(ctx, req)
+	res, err := r.dockerHost(p, op.auth).Up(ctx, req)
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
 	}
@@ -203,13 +235,10 @@ func (r *Runtime) upSingle(ctx context.Context, dc *spec.DevContainer, folder st
 	return nil
 }
 
-func (r *Runtime) upCompose(ctx context.Context, dc *spec.DevContainer, folder string, env map[string]string, p Progress, replace bool) error {
+func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) error {
+	dc, folder, p := op.dc, op.folder, op.p
 	p.Phase("build")
-	opts, err := r.builderOptions(dc, folder, nil, p)
-	if err != nil {
-		return err
-	}
-	primary, err := dockercompose.BuildPrimaryImage(ctx, dockercompose.BuildPrimaryInputs{Spec: dc, Workspace: folder, LocalEnv: env, BuilderOptions: opts})
+	primary, err := dockercompose.BuildPrimaryImage(ctx, dockercompose.BuildPrimaryInputs{Spec: dc, Workspace: folder, LocalEnv: op.env, BuilderOptions: r.builderOptions(op, nil)})
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
@@ -225,12 +254,12 @@ func (r *Runtime) upCompose(ctx context.Context, dc *spec.DevContainer, folder s
 		LocalWorkspace: folder,
 		PrimaryImage:   primary.Image,
 		ImageBuilt:     primary.BuildResult != nil,
-		LocalEnv:       env,
+		LocalEnv:       op.env,
 	}
 	if primary.BuildResult != nil {
 		req.Features = primary.BuildResult.Features
 	}
-	res, err := r.composeHost(p).Up(ctx, req)
+	res, err := r.composeHost(p, op.auth).Up(ctx, req)
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
 	}
@@ -244,7 +273,7 @@ func (r *Runtime) upCompose(ctx context.Context, dc *spec.DevContainer, folder s
 // whole project. A workspace without a container is already stopped.
 func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
 	p.Phase("stop")
-	host := r.dockerHost(p)
+	host := r.dockerHost(p, nil)
 	info, err := host.Inspect(ctx, folder)
 	if errors.Is(err, hostdocker.ErrContainerNotFound) {
 		fmt.Fprintln(p.Log(""), "workspace has no container")
@@ -255,7 +284,7 @@ func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
 	}
 	if project := info.Labels[dockercompose.LabelProject]; project != "" {
 		fmt.Fprintf(p.Log(""), "stopping compose project %s\n", project)
-		return r.composeHost(p).Stop(ctx, folder)
+		return r.composeHost(p, nil).Stop(ctx, folder)
 	}
 	fmt.Fprintf(p.Log(""), "stopping container %s\n", shortID(info.ID))
 	return host.StopByID(ctx, info.ID)
@@ -267,7 +296,7 @@ func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
 // volumes and networks are kept.
 func (r *Runtime) removeWorkspaceContainers(ctx context.Context, folder string, p Progress) error {
 	p.Phase("remove-container")
-	host := r.dockerHost(p)
+	host := r.dockerHost(p, nil)
 	for {
 		info, err := host.Inspect(ctx, folder)
 		if errors.Is(err, hostdocker.ErrContainerNotFound) {
@@ -283,36 +312,31 @@ func (r *Runtime) removeWorkspaceContainers(ctx context.Context, folder string, 
 	}
 }
 
-func (r *Runtime) builderOptions(dc *spec.DevContainer, folder string, tags []string, p Progress) (builder.Options, error) {
-	opts := builder.Options{
-		Spec:      dc,
-		SpecPath:  dc.Path,
-		Workspace: folder,
-		Docker:    r.client,
-		Tags:      tags,
-		Load:      true,
-		Logger:    logger(p),
-		Stdout:    p.Log(""),
-		Stderr:    p.Log(""),
+func (r *Runtime) builderOptions(op *operation, tags []string) builder.Options {
+	return builder.Options{
+		Spec:            op.dc,
+		SpecPath:        op.dc.Path,
+		Workspace:       op.folder,
+		Docker:          r.client,
+		Tags:            tags,
+		Load:            true,
+		FeatureLockfile: op.lock,
+		Logger:          logger(op.p),
+		Stdout:          op.p.Log(""),
+		Stderr:          op.p.Log(""),
 	}
-	if dc.Features.Len() > 0 {
-		lock, err := features.ReadLockfile(dc.Path, false, false)
-		if err != nil {
-			return opts, err
-		}
-		opts.FeatureLockfile = lock
-	}
-	return opts, nil
 }
 
-func (r *Runtime) dockerHost(p Progress) *hostdocker.Host {
+// dockerHost and composeHost wrap the shared client with one operation's
+// output. auth is nil for operations that pull nothing.
+func (r *Runtime) dockerHost(p Progress, auth RegistryAuth) *hostdocker.Host {
 	out := p.Log("")
-	return hostdocker.New(r.client, hostdocker.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: r.opts.RegistryAuth})
+	return hostdocker.New(r.client, hostdocker.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth})
 }
 
-func (r *Runtime) composeHost(p Progress) *dockercompose.Host {
+func (r *Runtime) composeHost(p Progress, auth RegistryAuth) *dockercompose.Host {
 	out := p.Log("")
-	return dockercompose.New(r.client, dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: r.opts.RegistryAuth})
+	return dockercompose.New(r.client, dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth})
 }
 
 // needsBuild reports whether the definition needs a derived image, as
