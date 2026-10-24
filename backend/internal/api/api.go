@@ -38,6 +38,8 @@ type Options struct {
 	Status     StatusSource
 	Jobs       *jobs.Manager
 	Operations Operations
+	// Interviews takes answers for interview jobs. Nil takes none.
+	Interviews Interviews
 	Templates  []Template
 	// UI holds the built web UI (index.html and assets/). Nil serves no UI.
 	UI fs.FS
@@ -70,6 +72,7 @@ func (s *Server) routes() []struct {
 		{Route{http.MethodPost, "/api/jobs"}, s.startJob},
 		{Route{http.MethodGet, "/api/jobs/{id}"}, s.getJob},
 		{Route{http.MethodGet, "/api/jobs/{id}/events"}, s.jobEvents},
+		{Route{http.MethodPost, "/api/jobs/{id}/answers"}, s.answerJob},
 	}
 }
 

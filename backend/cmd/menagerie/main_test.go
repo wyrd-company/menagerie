@@ -57,3 +57,36 @@ func TestRegistryCredentialsReadTheWyrwoodVaultSocket(t *testing.T) {
 		t.Fatalf("absent section: %v", err)
 	}
 }
+
+// TestBackupsUseTheWyrwoodAgentSocket checks that the composed backup
+// remote authenticates SSH pushes through ssh-agent.sock in the configured
+// Wyrwood directory.
+func TestBackupsUseTheWyrwoodAgentSocket(t *testing.T) {
+	dir, err := os.MkdirTemp("", "wyrwood")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	l, err := net.Listen("unix", filepath.Join(dir, "ssh-agent.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	dialed := make(chan struct{}, 1)
+	go func() {
+		if c, err := l.Accept(); err == nil {
+			dialed <- struct{}{}
+			c.Close()
+		}
+	}()
+	remote := backupRemote(&config.Config{WyrwoodDirectory: dir, WorkspaceRepository: "git@example.invalid:sample/backups.git"})
+	if remote.URL != "git@example.invalid:sample/backups.git" {
+		t.Fatalf("url %s", remote.URL)
+	}
+	auth, release, err := remote.Auth(context.Background(), remote.URL)
+	if err != nil || auth == nil {
+		t.Fatalf("auth %v %v", auth, err)
+	}
+	release()
+	<-dialed
+}

@@ -18,16 +18,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	dockerclient "github.com/docker/docker/client"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
+	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
+	"github.com/wyrd-company/menagerie/backend/internal/templates"
+	"github.com/wyrd-company/menagerie/backend/internal/workflows"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -64,16 +68,30 @@ func run(configPath string) error {
 	}
 	runtime := devcontainer.New(docker, devcontainer.Options{Credentials: credentials})
 	manager := jobs.NewManager(ctx)
-	templates := make([]api.Template, 0, len(cfg.Templates))
+	approved := make([]api.Template, 0, len(cfg.Templates))
+	ids := make(map[string]bool, len(cfg.Templates))
 	for _, t := range cfg.Templates {
-		templates = append(templates, api.Template{ID: t.ID, Name: t.Name})
+		approved = append(approved, api.Template{ID: t.ID, Name: t.Name})
+		ids[t.ID] = true
+	}
+	flows := workflows.New(workflows.Options{
+		Root:      root,
+		Templates: templates.New(cfg.TemplateService.Socket),
+		Approved:  ids,
+		Remote:    backupRemote(cfg),
+		Runtime:   runtime,
+	})
+	operations := api.ContainerOperations(root, runtime)
+	for name, op := range flows.Operations() {
+		operations[name] = op
 	}
 	server := api.New(api.Options{
 		Root:       root,
 		Status:     runtime,
 		Jobs:       manager,
-		Operations: api.ContainerOperations(root, runtime),
-		Templates:  templates,
+		Operations: operations,
+		Interviews: flows,
+		Templates:  approved,
 	})
 	handler, err := signedIn(server, cfg.OIDC)
 	if err != nil {
@@ -111,6 +129,15 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 	}
 	authn.Register(server)
 	return authn.Wrap(server), nil
+}
+
+// backupRemote is the workspace repository, reached through the SSH agent
+// socket in the Wyrwood consumer directory.
+func backupRemote(cfg *config.Config) *backup.Remote {
+	return &backup.Remote{
+		URL:  cfg.WorkspaceRepository,
+		Auth: backup.AgentAuth(filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName)),
+	}
 }
 
 // registryCredentials returns the per-operation registry credential source:

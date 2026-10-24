@@ -47,6 +47,13 @@ const (
 	OperationRebuild = "rebuild"
 )
 
+// Interview operations: they run a template interview and wait for its
+// answers in the waiting-for-answers state.
+const (
+	OperationCreate  = "create"
+	OperationUpgrade = "upgrade"
+)
+
 // ContainerRuntime runs container operations on a workspace folder.
 // *devcontainer.Runtime satisfies it.
 type ContainerRuntime interface {
@@ -70,7 +77,7 @@ func ContainerOperations(root *workspace.Root, rt ContainerRuntime) Operations {
 				return nil, err
 			}
 			return func(ctx context.Context, run *jobs.Run) error {
-				return failureKind(do(ctx, folder, run))
+				return ContainerFailure(do(ctx, folder, run))
 			}, nil
 		}
 	}
@@ -81,8 +88,10 @@ func ContainerOperations(root *workspace.Root, rt ContainerRuntime) Operations {
 	}
 }
 
-// failureKind names the job error kind of a container operation failure.
-func failureKind(err error) error {
+// ContainerFailure names the job error kind of a container operation
+// failure: initialize-command-failed, registry-credentials-unavailable, or
+// the default operation-failed.
+func ContainerFailure(err error) error {
 	var initErr *devcontainer.InitializeError
 	if errors.As(err, &initErr) {
 		return &jobs.Failure{Kind: "initialize-command-failed", Err: err}

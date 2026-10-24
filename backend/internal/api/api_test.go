@@ -443,10 +443,10 @@ func TestUIRoutes(t *testing.T) {
 
 func TestHandleAddsRoutes(t *testing.T) {
 	f := newFixture(t, nil)
-	f.server.Handle("POST /api/jobs/{id}/answers", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.server.Handle("POST /api/sample-extension", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
-	if resp, _ := f.do(t, "POST", "/api/jobs/x/answers", "{}"); resp.StatusCode != http.StatusTeapot {
+	if resp, _ := f.do(t, "POST", "/api/sample-extension", "{}"); resp.StatusCode != http.StatusTeapot {
 		t.Fatalf("got %d", resp.StatusCode)
 	}
 }

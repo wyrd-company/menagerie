@@ -5,6 +5,8 @@ relationships:
     - configuration
     - job-without-timeout-blocks-workspace
     - authentication
+    - template-service-api
+    - backup-force-push-overwrites-branch
 format: openapi
 description: >-
   The workspace service serves a JSON API to the browser, defined by
@@ -32,16 +34,15 @@ description: >-
   `GET /api/templates` returns the approved templates' `id` and `name`.
 
 
-  `POST /api/jobs` starts an operation on a workspace. The available
-  operations are `start`, `stop` and `rebuild` on an existing workspace
-  folder. Operations are a registry: a later operation, such as `create` or
-  `upgrade` with `templateId`, is added to it and to this specification when
-  it is implemented; until then it is refused as `unknown-operation`. The
-  service acquires the workspace's job slot before any work begins. A
-  workspace has at most one unfinished job; another request for it gets 409
-  `workspace-busy` with the holder's id, while other workspaces proceed. The
-  job runs in the service, not the request, and answers 202 with the job and
-  `Location: /api/jobs/{id}`.
+  `POST /api/jobs` starts an operation on a workspace. The operations are
+  `start`, `stop` and `rebuild` on an existing workspace folder, and the
+  interview operations `create` and `upgrade`, which also name an approved
+  template's `templateId`. Any other operation is refused as
+  `unknown-operation`. The service acquires the workspace's job slot before
+  any work begins. A workspace has at most one unfinished job; another
+  request for it gets 409 `workspace-busy` with the holder's id, while other
+  workspaces proceed. The job runs in the service, not the request, and
+  answers 202 with the job and `Location: /api/jobs/{id}`.
 
 
   A job's state is `running`, `waiting-for-answers` (a nonterminal state for
@@ -49,10 +50,79 @@ description: >-
   `succeeded`, `failed` and `ended`. The slot is released when the job ends,
   and every client that sees the result event can start the next job.
   `phase` names the current step, for example `read-definition`,
-  `initialize-command`, `build`, `remove-container`, `up` or `stop`. A failed
-  job carries `error.kind`: `initialize-command-failed`,
-  `registry-credentials-unavailable`, `operation-failed` or `internal-error`.
-  No timeout is applied to a job.
+  `initialize-command`, `build`, `remove-container`, `up`, `stop`,
+  `interview`, `initialize-repository`, `generate`, `apply`, `commit`,
+  `backup-local-changes` or `backup`. A failed job carries `error.kind`:
+  `initialize-command-failed`, `registry-credentials-unavailable`,
+  `operation-failed` or `internal-error`, and for interview operations
+  `workspace-exists`, `template-refused`, `template-service-unavailable`,
+  `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
+  or `backup-failed`. Its message says what was written and what recovery
+  is needed. No timeout is applied to a job.
+
+
+  Interview operations. A create names a workspace that is a legal Git
+  branch name and whose folder does not exist; an upgrade names an existing
+  workspace folder. Both refuse an unapproved template as 404
+  `unknown-template`, before any job exists. The job asks the template
+  service, over its Unix socket, for each interview reply and appends it as
+  an `interview` event whose data is the reply's exact text:
+  `{"session","state","document","warnings"}`. While questions remain the
+  job is `waiting-for-answers`, with no expiry. `POST
+  /api/jobs/{id}/answers` takes `{"session","submission"}`, both JSON
+  objects forwarded as received; it answers 200 with the next reply's
+  exact text and appends it as an event. Only a waiting job takes an
+  answer, one at a time; any other answer is 409 `job-not-waiting`, a
+  malformed body 400 `invalid-request`, an unknown job 404. A template
+  service refusal answers with its status and kind, such as 409
+  `session-mismatch`, and an unreachable template service 503
+  `template-service-unavailable`; in both cases the job keeps waiting. A
+  flow `stop` or `abort` ends the job as `ended` with nothing written. The
+  result event of a job that reached generation or apply adds `apply`: the
+  template service's `{"outcome","files","recordPath","messages","hooks",
+  "conflicts"}`.
+
+
+  Create. After the interview completes the service creates the workspace
+  folder, refusing one that appeared meanwhile, and initializes in it a Git
+  repository whose unborn HEAD names the branch called after the
+  workspace. The template service then generates into it. Only `written`
+  continues; `planned` and `needs-trust` fail as `not-applied`. A failed
+  generation fails as `generation-failed`; the folder keeps the files
+  written before the failure and has no applied record. A failed create
+  never removes its folder, and a second create of that workspace is
+  refused while the folder exists: recovery is manual, by inspecting the
+  folder and then removing it. On success the service commits the output as
+  the branch's first commit, which has no parent, force-pushes it to the
+  workspace repository and starts the devcontainer. A template whose hooks
+  already made Git history keeps it under `refs/menagerie/template-history`
+  (commits on the workspace branch) or `refs/menagerie/template-head` (a
+  detached HEAD); the workspace branch still starts from its own root.
+
+
+  Upgrade. The service first commits changes to tracked files, including
+  deletions, and force-pushes the branch, so the state before the upgrade
+  is backed up; an unchanged workspace makes no commit and still pushes.
+  Untracked files are not committed, and Toha refuses an upgrade while
+  untracked files that the ignore rules do not exclude exist. It then runs
+  the upgrade interview and applies it. `already-current` succeeds without
+  a commit or rebuild; `planned` and `needs-trust` fail as `not-applied`; a
+  failed apply fails as `upgrade-failed`. `written` is committed on the
+  branch, extending its history, pushed and rebuilt. `conflicted` is
+  committed and pushed with its conflict markers and fails as
+  `merge-conflicted`, naming the paths, without a rebuild.
+
+
+  Backups. A commit stages the paths the template service reported, the
+  applied record and the files hooks wrote, which are every change in a
+  workspace Toha wrote while it was clean, except paths the workspace's
+  ignore rules exclude and files inside a nested Git repository. Pushes use
+  go-git with the SSH agent at `ssh-agent.sock` in the Wyrwood directory
+  and the default known hosts files for host-key verification; they
+  replace the remote branch named after the workspace, write no remote to
+  the workspace's Git configuration and fetch nothing. A failed commit or
+  push fails as `backup-failed` and the container is not started or
+  rebuilt.
 
 
   `GET /api/jobs/{id}/events` streams the job's events as Server-Sent Events.
@@ -116,7 +186,13 @@ description: >-
 validation-criteria: >-
   `go test ./backend/internal/api/` checks that the routes the server
   registers equal the OpenAPI paths and methods, and exercises each response
-  and error contract with a held runtime. `go test -tags docker
+  and error contract with a held runtime. `go test
+  ./backend/internal/workflows/` runs create and upgrade through the API
+  with a held template service and a real local workspace repository,
+  covering waiting, single answers, flow ends, failures and slot release;
+  `go test ./backend/internal/backup/` pushes through an isolated SSH server
+  and agent; `go test -tags templateservice ./backend/internal/workflows/`
+  runs create and upgrade against the real template service. `go test -tags docker
   ./backend/internal/devcontainer/` runs start, stop, rebuild, failing
   `initializeCommand`, Compose resource preservation and the workspace list
   against a real Docker Engine.
