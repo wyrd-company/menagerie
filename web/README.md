@@ -17,9 +17,9 @@ current interview session.
 
 ## Contracts
 
-- Workspace list, templates and jobs: `docs/specifications/workspace-api.yml`
+- Workspaces, templates, jobs and interview jobs: `docs/specifications/workspace-api.yml`
   in the repository root (owned by the workspace service).
-- Create and upgrade interview jobs: [`docs/interview-jobs.yml`](docs/interview-jobs.yml).
+- How the browser answers interviews: [`docs/interview-form.yml`](docs/interview-form.yml).
 - Sign-in: any `401` sends the browser to `/auth/login?return=<path>`;
   **Sign out** posts to `/auth/logout`.
 

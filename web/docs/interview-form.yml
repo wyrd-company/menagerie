@@ -1,0 +1,56 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  references:
+    - menagerie
+    - workspace-api
+    - browser-session-value-tampering
+format: json
+description: >-
+  How the web UI answers interview jobs. The wire contract, create and
+  upgrade jobs, interview events, the answers route and the result's
+  `apply`, is the workspace API (`docs/specifications/workspace-api.yml`);
+  this specification states only what the browser does with it.
+
+
+  Rendering. The browser renders every property of the received batch
+  schema, in the order the schema lists them, and never removes a question.
+  Each `x-toha-type` has its control: text, git, multiline, confirm, select,
+  multiselect, a text list for a looped text, and a JSON editor for a
+  document; any other property is answered as raw JSON. Question ids and
+  workspace names are plain names; one that is also a JavaScript object
+  member, such as `constructor` or `__proto__`, behaves like any other.
+
+
+  Opaque values. The session is carried back exactly as the latest reply
+  sent it: the browser keeps its text and never decodes and re-encodes it. A
+  document or raw JSON answer is sent as the text the person typed, and a
+  JSON default is shown from the reply's own text, so numbers keep every
+  digit.
+
+
+  Answers. The browser sends only the questions the person changed: a
+  question left out takes its default, or its empty answer when it has none,
+  under Toha's interview protocol. An explicit `null` ("No answer") is an
+  empty answer that takes no default. An emptied optional text question is
+  sent as `null`; an emptied required one as an empty string, for Toha to
+  judge. The browser checks what it can decide without Toha (an unanswered
+  required question, character and item bounds, JSON syntax) and leaves
+  patterns to Toha. One answers request is in flight at a time.
+
+
+  Replies. A rejected submission comes back as the same batch with
+  `errors`; the person's answers stay in place, an error summary takes
+  focus, each summary link moves focus to its question, and an error clears
+  when its answer changes. A reply that arrives both as the answers response
+  and as an `interview` event is applied once.
+validation-criteria: >-
+  `pnpm --dir web test` checks the session handling (`src/api/rawJson.test.ts`),
+  the reading of every question type from Toha-produced batches
+  (`src/interview/fields.test.ts`), the answers built from them
+  (`src/interview/answers.test.ts`), names that are object members
+  (`src/interview/prototypeKeys.test.tsx`), the folding of events
+  (`src/jobs/jobView.test.ts`), and that the fixture server and the client's
+  requests keep the workspace API contract (`test/contract/openapi.test.ts`).
+  `pnpm --dir web test:browser` drives the built UI through create,
+  rejection, a flow stop, reload and upgrade against the fixture server, and
+  the integrated run drives it against the real workspace service.

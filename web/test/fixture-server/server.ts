@@ -1,5 +1,5 @@
 // Test-only fixture of the workspace service's browser contract
-// (docs/specifications/workspace-api.yml and web/docs/interview-jobs.yml).
+// (docs/specifications/workspace-api.yml and its OpenAPI document).
 // It serves the built UI and answers /api with in-memory workspaces and jobs.
 // Interviews replay the Toha documents in test/fixtures/toha/documents, which
 // a real Toha build produced.
