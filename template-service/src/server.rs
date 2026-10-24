@@ -79,8 +79,9 @@ where
     Req: DeserializeOwned + Send + 'static,
     Rep: Serialize + Send + 'static,
 {
-    // The bounded scan runs first, so no later parse meets deeper nesting
-    // than serde_json reads; syntax is judged before any number refusal.
+    // The bounded scan runs first, so a body nested too deep is refused as
+    // such even when it is also malformed; syntax is then judged before any
+    // number refusal.
     let scanned = match crate::numbers::scan(&body) {
         Ok(scanned) => scanned,
         Err(refusal) => return error(&refusal),

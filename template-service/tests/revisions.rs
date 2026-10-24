@@ -121,14 +121,12 @@ async fn a_fixed_upgrade_address_refuses_a_session_on_another_revision() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_installed_branch_moves_at_a_new_operation_and_never_on_resume() {
+async fn an_installed_branch_moves_when_a_create_starts_and_never_on_resume() {
     let world = World::new();
     world.install(&world.address(""));
     let service = Running::start(&world).await;
     let (selector, pending) = answered(&service, &world, "gamma", "sample-main").await;
     assert_eq!(pending["document"]["context"]["commit"], world.v1.as_str());
-    let folder = create(&world, &service, "alpha", "sample-main").await;
-    assert_eq!(application(&folder)["commit"], world.v1.as_str());
 
     git(&world.sample, &["merge", "-q", "--ff-only", "next"]);
 
@@ -152,6 +150,18 @@ async fn an_installed_branch_moves_at_a_new_operation_and_never_on_resume() {
         "{}",
         fresh.json
     );
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_installed_branch_moves_when_an_upgrade_starts() {
+    let world = World::new();
+    world.install(&world.address(""));
+    let service = Running::start(&world).await;
+    let folder = create(&world, &service, "alpha", "sample-main").await;
+    assert_eq!(application(&folder)["commit"], world.v1.as_str());
+
+    git(&world.sample, &["merge", "-q", "--ff-only", "next"]);
 
     let selector = world.select("alpha", "sample-main");
     let upgrade = service.post("/v1/upgrades", &selector).await;
