@@ -1,0 +1,139 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  references:
+    - menagerie
+    - configuration
+    - browser-session-value-tampering
+format: json
+description: >-
+  The template service embeds Toha and serves the workspace service, its only
+  client, with JSON over HTTP/1.1 on the Unix socket named by
+  `template-service.socket` in the Menagerie configuration. It reads that
+  file (`-config`, default `/etc/menagerie/config.yml`) only for
+  `workspace-root`, `templates` and `template-service.socket`, with the
+  workspace service's rules for them, and ignores its other members. Toha's
+  configuration, registry, cache and state live under the folder named by
+  `-data`, default `/var/lib/menagerie/toha`. On start it replaces a socket
+  file left by an ended process and refuses a live socket or another file.
+  It keeps no state between requests.
+
+
+  Routes. Every route is `POST` with a JSON body and answers JSON.
+  `/v1/interviews` starts a create interview and `/v1/upgrades` starts an
+  upgrade, both with `{"workspace","target","templateId"}`.
+  `/v1/interviews/answers` and `/v1/upgrades/answers` add `"session"` and
+  `"submission"`. `/v1/workspaces/generate` and `/v1/upgrades/apply` add
+  `"session"`. Other members are refused. `workspace` is the folder name,
+  `target` is that folder under the workspace root, and `templateId` is an
+  approved template's `id`; for an upgrade it names the template version to
+  upgrade to. Another path answers 404 `not-found`, another method 405
+  `method-not-allowed`.
+
+
+  Checks. Before Toha replays or writes anything, every route checks that
+  `workspace` is a plain folder name, that `target` is lexically the
+  workspace root joined with it, that the folder's real path, with symbolic
+  links resolved, is a direct child of the root's real path, and that
+  `templateId` is approved. A route that carries a session then checks that
+  the session's template and named flag are the approved address's formal
+  identity, computed without fetching, that it was started for this target,
+  and that it belongs to this flow: a create session has no update base, and
+  an upgrade session's base is a recorded application. A submission is
+  Toha's answers envelope `{"template","answers"}`, which Toha verifies
+  against the session's template before any answer exists.
+
+
+  Interview replies. Start and answer routes answer 200 with
+  `{"session","state","document","warnings"}`. `session` is Toha's whole
+  staged record: the pinned template and revision, the invocation context,
+  admitted documents and accepted submissions. The workspace service returns
+  it unchanged with the next request. `state` is `questions`, `completed` or
+  `ended`. `document` is Toha's batch document while questions remain,
+  Toha's ended document after a flow `stop` or `abort`, and `null` once the
+  interview completed. A rejected submission answers 200 with the same
+  batch, its `errors` and an unchanged session. An abort does not record its
+  batch. Every request rebuilds the interview from the session, so it
+  continues after a service restart. Resuming keeps the session's revision;
+  only a start resolves the approved address, so a branch address moves to
+  its newest commit at the next start, never during an interview.
+
+
+  Create. `/v1/interviews` refuses an existing folder. Its first batch asks
+  every question of the template; a document question without an input
+  file is asked as a JSON object. `/v1/workspaces/generate` applies a
+  completed session into the folder the workspace service created and
+  initialized: it must exist, hold only `.git`, and be a Git repository.
+  Template hooks run with Toha's process hook runner inside Menagerie, in
+  their target-relative working directory. Generation succeeds only when
+  Toha wrote the applied record `.toha.json`; files written without it are
+  the error `record-not-written`. A hook failure leaves the files written
+  before it and no applied record, so the folder is no longer new and a
+  second generation into it is refused.
+
+
+  Upgrade. `/v1/upgrades` reads the workspace's applied record, replays its
+  recorded answers against the newer version and asks only the questions
+  they do not answer; a recorded answer the newer version rejects is asked
+  again with its error. Document questions take the workspace's current
+  input files when the upgrade starts, and keep those values for the whole
+  session. The workspace must be clean and its applied record unchanged for
+  the whole session. `/v1/upgrades/apply` merges a completed session.
+
+
+  Apply replies. Generate and apply answer 200 with `{"outcome","files",
+  "recordPath","messages","hooks","conflicts"}`. `outcome` is `written`,
+  `conflicted`, `already-current`, `needs-trust` or `planned`; only
+  `written` and `conflicted` wrote files and the applied record at
+  `recordPath`. `conflicted` is a written merge whose `conflicts` lists the
+  paths written with conflict markers. `files` lists `{path, action}`;
+  `hooks` lists `{id, exitCode, success}` for each hook that ran. Hook output
+  is not returned.
+
+
+  Errors. A refusal answers `{"error":{"kind","message"}}`, adding `paths`
+  for refused files, `locations` and `questions` for refused request values,
+  and `warnings`. Request and session: `malformed-request` (400),
+  `malformed-session` (400), `malformed-submission` (400),
+  `submission-template-mismatch` (400), `number-not-representable` (400),
+  `invalid-workspace` (400), `target-mismatch` (400), `unknown-template`
+  (404), `workspace-not-found` (404), `not-found` (404),
+  `method-not-allowed` (405), `target-outside-root` (409),
+  `session-mismatch` (409). Interview state: `interview-complete` (409),
+  `interview-ended` (409), `interview-not-complete` (409). Workspace state:
+  `workspace-exists` (409), `target-not-new` (409), `not-git` (409),
+  `dirty-target` (409), `stale-application` (409), `target-conflict` (409),
+  `target-drift` (409), `target-symlink` (409), `target-occupied` (409),
+  `target-changed` (409). Toha refusals: `template-not-found` (422),
+  `template-stale-revision` (422), `template-ambiguous` (422),
+  `template-resolve-failed` (422), `template-invalid` (422),
+  `missing-requirements` (422), `document-invalid` (422), `parts-invalid`
+  (422), `context-invalid` (422), `environment-refused` (422),
+  `evaluation-failed` (422), `plan-failed` (422), `record-invalid` (422),
+  `project-invalid` (422), `merge-base-failed` (422), `update-refused`
+  (422), `merge-failed` (422), `operation-refused` (422), `apply-failed`
+  (422), `hook-failed` (422). Faults: `io-failed` (500), `hook-io-failed`
+  (500), `record-failed` (500), `record-not-written` (500),
+  `workspace-root-unavailable` (500), `internal-error` (500).
+
+
+  Numbers. Toha holds JSON numbers as 64-bit integers or floating-point
+  values. A request number whose value that changes is refused as
+  `number-not-representable`, naming each by its JSON Pointer in
+  `locations` and its answer's question id in `questions`. Every 64-bit
+  signed and unsigned integer and every number whose shortest
+  floating-point form has the same decimal value is accepted; its text can
+  change (`1e2` returns as `100.0`, `1.50` as `1.5`). A session the service
+  produced returns byte for byte. A document input file is read by Toha
+  itself when an upgrade starts, so a number in it that Toha's
+  representation changes is changed, not refused.
+validation-criteria: >-
+  `cargo test --locked` in `template-service/` runs the service against
+  Toha's library on a Unix socket: `tests/create.rs` covers create, rejected
+  answers, generation into an initialized repository, numbers, revision
+  pinning, flow ends, hook and I/O failures; `tests/upgrade.rs` covers an
+  upgrade between two template versions that asks only the new question and
+  keeps local edits, rejected recorded answers, fresh and kept documents,
+  stale and dirty workspaces, conflicts and the document-file number limit;
+  `tests/requests.rs` covers every request check; `tests/restart.rs` runs
+  the binary across a restart; `tests/contract.rs` checks that this
+  specification names every route and error kind the service uses.
