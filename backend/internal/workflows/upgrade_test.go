@@ -155,28 +155,37 @@ func TestUpgradeFailuresAreVisibleAndReleaseTheSlot(t *testing.T) {
 		kind    string
 		message string
 		pushes  int
+		// before is true when the job fails before its interview.
+		before bool
 	}{
 		{"pre-upgrade backup", func(t *testing.T, w *world) {
 			w.flows.opts.Remote.URL = filepath.Join(t.TempDir(), "absent.git")
-		}, KindBackupFailed, "nothing was upgraded", 1},
+		}, KindBackupFailed, "nothing was upgraded", 1, true},
 		{"refused start", func(t *testing.T, w *world) {
 			w.tmpl.startUpgrade = func(templates.Selector) (*templates.Reply, error) {
 				return nil, &templates.Error{Status: 409, Kind: "dirty-target", Message: "the workspace has uncommitted changes"}
 			}
-		}, KindTemplateRefused, "(dirty-target)", 1},
+		}, KindTemplateRefused, "(dirty-target)", 1, true},
 		{"failed apply", func(t *testing.T, w *world) {
 			w.tmpl.applyUpgrade = func(templates.Selector) (*templates.Applied, error) {
 				return nil, &templates.Error{Status: 422, Kind: "hook-failed", Message: "hook exited 3"}
 			}
-		}, KindUpgradeFailed, "the upgrade failed (hook-failed)", 1},
+		}, KindUpgradeFailed, "the upgrade failed (hook-failed)", 1, false},
 		{"needs trust", func(t *testing.T, w *world) {
 			w.tmpl.applyUpgrade = func(templates.Selector) (*templates.Applied, error) {
 				return appliedReply(templates.NeedsTrust, nil, nil), nil
 			}
-		}, KindNotApplied, "reported needs-trust and wrote nothing", 1},
+		}, KindNotApplied, "reported needs-trust and wrote nothing", 1, false},
+		{"backup after the apply", func(t *testing.T, w *world) {
+			apply := w.tmpl.applyUpgrade
+			w.tmpl.applyUpgrade = func(s templates.Selector) (*templates.Applied, error) {
+				w.flows.opts.Remote.URL = filepath.Join(t.TempDir(), "absent.git")
+				return apply(s)
+			}
+		}, KindBackupFailed, "its backup failed", 1, false},
 		{"rebuild", func(t *testing.T, w *world) {
 			w.rt.fail = &devcontainer.InitializeError{Err: errors.New("exit status 3")}
-		}, "initialize-command-failed", "upgraded and backed up as", 2},
+		}, "initialize-command-failed", "upgraded and backed up as", 2, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -185,7 +194,7 @@ func TestUpgradeFailuresAreVisibleAndReleaseTheSlot(t *testing.T) {
 			tc.prepare(t, w)
 			job := w.startJob(t, "upgrade", "alpha", "sample-v2")
 			var snap jobs.Snapshot
-			if tc.kind == KindBackupFailed || tc.kind == KindTemplateRefused {
+			if tc.before {
 				snap = waitEnded(t, job)
 			} else {
 				waitWaiting(t, job, 0)
@@ -197,6 +206,11 @@ func TestUpgradeFailuresAreVisibleAndReleaseTheSlot(t *testing.T) {
 			}
 			if _, ok := w.manager.Active("alpha"); ok {
 				t.Fatal("the failed upgrade kept the slot")
+			}
+			for _, call := range w.rt.seen() {
+				if call == "rebuild alpha" && tc.kind != "initialize-command-failed" {
+					t.Fatal("rebuilt after a failed upgrade")
+				}
 			}
 			w.flows.opts.Remote.URL = w.remote
 			if got := len(w.remoteHistory(t, "alpha")); got != tc.pushes {
