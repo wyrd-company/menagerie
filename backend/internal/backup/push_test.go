@@ -120,9 +120,10 @@ func TestAgentAuthUsesTheDefaultKnownHostsWhenNoneAreGiven(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := backuptest.New(t)
+	bare(t, other.Dir, "x.git")
 	t.Setenv("SSH_KNOWN_HOSTS", filepath.Join(t.TempDir(), "absent"))
 	_, err := (&Remote{URL: other.URL("x.git"), Auth: AgentAuth(other.AgentPath)}).Push(context.Background(), folder, "alpha", nil)
-	if err == nil {
-		t.Fatal("push trusted a host with no known key")
+	if err == nil || !strings.Contains(err.Error(), "knownhosts") && !strings.Contains(err.Error(), "known hosts") {
+		t.Fatalf("push to a host with no known key: %v", err)
 	}
 }
