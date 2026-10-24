@@ -287,15 +287,10 @@ func (c *Client) post(ctx context.Context, path string, body any) (json.RawMessa
 	return compact.Bytes(), nil
 }
 
-// strictDecode decodes one JSON object into v, refusing unknown members.
+// strictDecode decodes a compacted reply into v, refusing unknown members.
+// Compacting has already refused anything after the reply's JSON value.
 func strictDecode(data []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return err
-	}
-	if dec.More() {
-		return errors.New("trailing data after the reply")
-	}
-	return nil
+	return dec.Decode(v)
 }
