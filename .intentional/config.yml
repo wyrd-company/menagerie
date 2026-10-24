@@ -1,0 +1,36 @@
+# relationships:
+#   references: [menagerie]
+#
+# One release unit: the Menagerie image. Its version lives only in tags, and
+# tags carry no v: Menagerie ships as a container image and nothing imports
+# its Go module, so Go's v-prefixed module tags are not needed. The template
+# service's Cargo.toml and the web UI's package.json are private build
+# manifests and are not versioned.
+$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+settings:
+  internal-dependency-bump: patch
+  pre-1-0-bump-mapping: component
+discovery:
+  managed-paths:
+  - detector: go-module
+    path: go.mod
+    release-unit: menagerie
+  excluded-paths:
+  - detector: cargo-package
+    path: template-service/Cargo.toml
+    evidence-digest: sha256:725c6f2bcba446f5b54d90e13859096f73f3aa3040e02f316a025c94e015e7fe
+  - detector: npm-package
+    path: web/package.json
+    evidence-digest: sha256:01d1920d054af1d6e3cabd2352fcf72ca13ac889571526cb049b40b7093501b3
+release-units:
+  menagerie:
+    path: .
+    projections:
+    - adapter: go
+      file: go.mod
+      mode: none
+    tags:
+      primary:
+        role: primary
+        template: '{version}'
