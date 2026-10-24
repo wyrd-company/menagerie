@@ -56,6 +56,35 @@ func TestLoadReadsFile(t *testing.T) {
 	}
 }
 
+const registryCredentials = `
+registry-credentials:
+  kv-mount: kv
+  registries:
+    - registry: ghcr.io
+      path: menagerie/registries/ghcr
+    - registry: Registry-1.Docker.io
+      path: menagerie/registries/hub
+`
+
+func TestParseRegistryCredentials(t *testing.T) {
+	cfg, err := Parse([]byte(valid + registryCredentials))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := cfg.RegistryCredentials
+	if rc == nil || rc.KVMount != "kv" || len(rc.Registries) != 2 || rc.Registries[1].Registry != "Registry-1.Docker.io" || rc.Registries[0].Path != "menagerie/registries/ghcr" {
+		t.Fatalf("registry credentials %+v", rc)
+	}
+	cfg, err = Parse([]byte(valid))
+	if err != nil || cfg.RegistryCredentials != nil {
+		t.Fatalf("absent section: %+v %v", cfg.RegistryCredentials, err)
+	}
+	cfg, err = Parse([]byte(valid + "registry-credentials:\n  kv-mount: kv\n"))
+	if err != nil || len(cfg.RegistryCredentials.Registries) != 0 {
+		t.Fatalf("section without registries: %v", err)
+	}
+}
+
 func TestParseRejects(t *testing.T) {
 	cases := []struct {
 		name, doc, want string
@@ -75,6 +104,14 @@ func TestParseRejects(t *testing.T) {
 		{"duplicate template", valid + "  - id: sample-template\n    name: Again\n    address: a\n", `templates[1].id "sample-template" is not unique`},
 		{"template name", strings.Replace(valid, "    name: Sample template\n", "", 1), "templates[0].name is required"},
 		{"template address", strings.Replace(valid, "    address: git@example.test:example/sample-template.git\n", "", 1), "templates[0].address is required"},
+		{"missing kv mount", valid + strings.Replace(registryCredentials, "  kv-mount: kv\n", "", 1), "registry-credentials.kv-mount is required"},
+		{"kv mount slashes", valid + strings.Replace(registryCredentials, "kv-mount: kv", "kv-mount: /kv/", 1), "registry-credentials.kv-mount \"/kv/\" must be"},
+		{"duplicate hub alias", valid + strings.Replace(registryCredentials, "ghcr.io", "docker.io", 1), "registries[1].registry names docker.io, as registries[0] does"},
+		{"registry with scheme", valid + strings.Replace(registryCredentials, "ghcr.io", "https://ghcr.io", 1), "registries[0].registry: registry \"https://ghcr.io\" is not a host"},
+		{"registry with path", valid + strings.Replace(registryCredentials, "ghcr.io", "ghcr.io/team", 1), "registries[0].registry: registry \"ghcr.io/team\" is not a host"},
+		{"dot path", valid + strings.Replace(registryCredentials, "menagerie/registries/ghcr", "menagerie/../ghcr", 1), "registries[0].path \"menagerie/../ghcr\" must be"},
+		{"missing path", valid + strings.Replace(registryCredentials, "      path: menagerie/registries/ghcr\n", "", 1), "registries[0].path is required"},
+		{"unknown registry field", valid + strings.Replace(registryCredentials, "      path: menagerie/registries/ghcr\n", "      path: menagerie/registries/ghcr\n      token: x\n", 1), "field token not found"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

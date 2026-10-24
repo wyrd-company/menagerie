@@ -15,8 +15,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 )
 
 // DefaultPath is where the workspace service looks for its configuration
@@ -48,6 +51,9 @@ type Config struct {
 	OIDC OIDC `yaml:"oidc"`
 	// TemplateService locates the internal template service.
 	TemplateService TemplateService `yaml:"template-service"`
+	// RegistryCredentials names the OpenBao secrets that hold container
+	// registry credentials. Absent, every registry is anonymous.
+	RegistryCredentials *RegistryCredentials `yaml:"registry-credentials"`
 }
 
 // Template is one approved template.
@@ -70,6 +76,22 @@ type OIDC struct {
 type TemplateService struct {
 	// Socket is the Unix socket the template service listens on.
 	Socket string `yaml:"socket"`
+}
+
+// RegistryCredentials names, per registry, the secret in a KV version 2
+// mount that holds its credentials. OpenBao is read through the vault
+// socket in the Wyrwood directory.
+type RegistryCredentials struct {
+	KVMount    string     `yaml:"kv-mount"`
+	Registries []Registry `yaml:"registries"`
+}
+
+// Registry is one registry's credential secret.
+type Registry struct {
+	// Registry is the registry host, such as ghcr.io or docker.io.
+	Registry string `yaml:"registry"`
+	// Path is the secret's path in the KV mount.
+	Path string `yaml:"path"`
 }
 
 var templateIDPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
@@ -165,5 +187,47 @@ func (c *Config) validate() error {
 			errs = append(errs, fmt.Errorf("templates[%d].address is required", i))
 		}
 	}
+	if c.RegistryCredentials != nil {
+		errs = append(errs, c.RegistryCredentials.validate()...)
+	}
 	return errors.Join(errs...)
+}
+
+func (r *RegistryCredentials) validate() []error {
+	var errs []error
+	if err := validSecretPath(r.KVMount); err != nil {
+		errs = append(errs, fmt.Errorf("registry-credentials.kv-mount %w", err))
+	}
+	seen := map[string]int{}
+	for i, reg := range r.Registries {
+		name, err := registrycreds.NormalizeRegistry(reg.Registry)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("registry-credentials.registries[%d].registry: %w", i, err))
+		default:
+			if first, dup := seen[name]; dup {
+				errs = append(errs, fmt.Errorf("registry-credentials.registries[%d].registry names %s, as registries[%d] does", i, name, first))
+			} else {
+				seen[name] = i
+			}
+		}
+		if err := validSecretPath(reg.Path); err != nil {
+			errs = append(errs, fmt.Errorf("registry-credentials.registries[%d].path %w", i, err))
+		}
+	}
+	return errs
+}
+
+// validSecretPath accepts slash-separated OpenBao path segments without
+// empty, "." or ".." segments.
+func validSecretPath(p string) error {
+	if p == "" {
+		return errors.New("is required")
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "" || seg == "." || seg == ".." || strings.TrimSpace(seg) != seg {
+			return fmt.Errorf("%q must be slash-separated segments without empty, \".\" or \"..\" segments or surrounding spaces", p)
+		}
+	}
+	return nil
 }

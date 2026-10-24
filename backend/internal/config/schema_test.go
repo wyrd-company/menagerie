@@ -35,6 +35,9 @@ func structKeys(prefix string, t reflect.Type, out map[string]bool) {
 		name := f.Tag.Get("yaml")
 		out[prefix+name] = true
 		ft := f.Type
+		if ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
 		switch ft.Kind() {
 		case reflect.Struct:
 			structKeys(prefix+name+".", ft, out)

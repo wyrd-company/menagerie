@@ -3,7 +3,12 @@
   "title": "Menagerie configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["workspace-root", "workspace-repository", "wyrwood-directory", "oidc"],
+  "required": [
+    "workspace-root",
+    "workspace-repository",
+    "wyrwood-directory",
+    "oidc"
+  ],
   "properties": {
     "listen": {
       "type": "string",
@@ -31,21 +36,44 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "name", "address"],
+        "required": [
+          "id",
+          "name",
+          "address"
+        ],
         "properties": {
-          "id": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"},
-          "name": {"type": "string", "minLength": 1},
-          "address": {"type": "string", "minLength": 1, "description": "Toha template address."}
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Toha template address."
+          }
         }
       }
     },
     "oidc": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["issuer", "client-id"],
+      "required": [
+        "issuer",
+        "client-id"
+      ],
       "properties": {
-        "issuer": {"type": "string", "minLength": 1},
-        "client-id": {"type": "string", "minLength": 1}
+        "issuer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "client-id": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "template-service": {
@@ -57,6 +85,45 @@
           "pattern": "^/",
           "default": "/run/menagerie/template.sock",
           "description": "Unix socket of the template service."
+        }
+      }
+    },
+    "registry-credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kv-mount"
+      ],
+      "description": "OpenBao secrets holding container registry credentials, read through the vault socket in wyrwood-directory. Absent, every registry is anonymous.",
+      "properties": {
+        "kv-mount": {
+          "type": "string",
+          "minLength": 1,
+          "description": "KV version 2 mount path."
+        },
+        "registries": {
+          "type": "array",
+          "description": "One entry per registry; registry names are unique after normalization (lower case, Docker Hub aliases as docker.io).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "registry",
+              "path"
+            ],
+            "properties": {
+              "registry": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Registry host or host:port; docker.io, index.docker.io, registry-1.docker.io and https://index.docker.io/v1/ name Docker Hub."
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Secret path in the KV mount; its username and password fields hold the credentials."
+              }
+            }
+          }
         }
       }
     }
