@@ -23,6 +23,7 @@ import (
 	dockerclient "github.com/docker/docker/client"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
+	"github.com/wyrd-company/menagerie/backend/internal/auth"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
@@ -74,10 +75,14 @@ func run(configPath string) error {
 		Operations: api.ContainerOperations(root, runtime),
 		Templates:  templates,
 	})
+	handler, err := signedIn(server, cfg.OIDC)
+	if err != nil {
+		return err
+	}
 
 	httpServer := &http.Server{
 		Addr:        cfg.Listen,
-		Handler:     server,
+		Handler:     handler,
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 	errc := make(chan error, 1)
@@ -95,6 +100,17 @@ func run(configPath string) error {
 		return err
 	}
 	return nil
+}
+
+// signedIn serves server behind manager sign-in: the sign-in routes are
+// added to it, and every other route requires a manager session.
+func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
+	authn, err := auth.New(auth.Config{Issuer: c.Issuer, ClientID: c.ClientID, RedirectURL: c.RedirectURL, Scopes: c.Scopes})
+	if err != nil {
+		return nil, fmt.Errorf("oidc: %w", err)
+	}
+	authn.Register(server)
+	return authn.Wrap(server), nil
 }
 
 // registryCredentials returns the per-operation registry credential source:
