@@ -464,3 +464,112 @@ async fn a_cleared_cache_admits_only_the_current_resolution() {
     );
     service.stop().await;
 }
+
+/// A cache entry admits only the commit it holds: a copy of the v1 checkout
+/// under v2's name admits nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cache_entry_must_hold_its_commit() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let (selector, start) = answered(&service, &world, "alpha", "sample-v1").await;
+    let key = std::fs::read_dir(world.data.join("cache/sources"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let copied = std::process::Command::new("cp")
+        .arg("-a")
+        .arg(key.join(&world.v1))
+        .arg(key.join(&world.v2))
+        .status()
+        .unwrap();
+    assert!(copied.success());
+    world.offline();
+    let refused = service
+        .post("/v1/interviews/answers", &with(selector, json!({"session": edited(&start["session"], &world.v2),
+            "submission": {"template": start["document"]["context"]["template"], "answers": sample_answers("first")}})))
+        .await;
+    assert_eq!(refused.status, 422, "{}", refused.json);
+    assert_eq!(
+        refused.kind(),
+        "template-resolve-failed",
+        "a forged entry was admitted: {}",
+        refused.json
+    );
+    service.stop().await;
+}
+
+/// An upgrade started on an installed branch keeps its admitted revision
+/// after a later start refreshes the installation, without its source.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_installed_upgrade_session_keeps_its_admission_offline() {
+    let world = World::new();
+    world.install(&world.address(""));
+    let service = Running::start(&world).await;
+    let folder = create(&world, &service, "alpha", "sample-main").await;
+    git(&world.sample, &["merge", "-q", "--ff-only", "next"]);
+    let selector = world.select("alpha", "sample-main");
+    let upgrade = service.post("/v1/upgrades", &selector).await;
+    assert_eq!(
+        upgrade.json["document"]["context"]["commit"],
+        world.v2.as_str(),
+        "{}",
+        upgrade.json
+    );
+    write(&world.sample, "notes.txt", "later\n");
+    let later = commit_all(&world.sample, "later");
+    let moved = service
+        .post("/v1/interviews", &world.select("beta", "sample-main"))
+        .await;
+    assert_eq!(moved.json["document"]["context"]["commit"], later.as_str());
+    world.offline();
+    let done = service
+        .post(
+            "/v1/upgrades/answers",
+            &with(
+                selector.clone(),
+                json!({"session": upgrade.json["session"],
+            "submission": submission(&upgrade, json!({"extra": "added"}))}),
+            ),
+        )
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    let applied = service
+        .post(
+            "/v1/upgrades/apply",
+            &with(selector, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(applied.json["outcome"], "written", "{}", applied.json);
+    assert_eq!(application(&folder)["commit"], world.v2.as_str());
+    service.stop().await;
+}
+
+/// A fork sharing a commit and a cache key with another approved template
+/// cannot be admitted from that template's cache entry.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fork_cannot_be_admitted_from_another_sources_cache_entry() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let (_, start) = answered(&service, &world, "alpha", "sample-v1").await;
+    assert_eq!(start["document"]["context"]["commit"], world.v1.as_str());
+    let fork = service
+        .post("/v1/interviews", &world.select("beta", "fork"))
+        .await;
+    assert_eq!(
+        (fork.status, fork.kind()),
+        (409, "template-cache-conflict"),
+        "{}",
+        fork.json
+    );
+    service.stop().await;
+
+    let fresh = World::new();
+    let service = Running::start(&fresh).await;
+    let fork = service
+        .post("/v1/interviews", &fresh.select("beta", "fork"))
+        .await;
+    assert_eq!(fork.json["state"], "questions", "{}", fork.json);
+    service.stop().await;
+}
