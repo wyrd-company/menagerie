@@ -1,4 +1,10 @@
-package auth
+// ---
+// relationships:
+//   references: authentication
+// ---
+
+// Package authtest is an OpenID Connect provider for tests.
+package authtest
 
 import (
 	"crypto/rand"
@@ -9,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,26 +24,26 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 )
 
-// testUser is an identity the test issuer signs in.
-type testUser struct {
+// User is an identity the Issuer signs in.
+type User struct {
 	Subject string
 	Name    string
 	// Groups is the groups claim value; nil omits the claim.
 	Groups any
 }
 
-// issuedGrant is an authorization code the test issuer handed out.
-type issuedGrant struct {
+// grant is an authorization code the test issuer handed out.
+type grant struct {
 	clientID, redirectURI, challenge, nonce string
-	user                                    testUser
+	user                                    User
 }
 
-// testIssuer is an OpenID Connect provider over real HTTP: discovery,
+// Issuer is an OpenID Connect provider over real HTTP: discovery,
 // JWKS, an authorization endpoint that signs in its current user without a
 // prompt, a token endpoint that checks the client, redirect URI, PKCE S256
 // verifier and single use of each code, and userinfo. Fields change its
 // behavior to model faulty or hostile providers.
-type testIssuer struct {
+type Issuer struct {
 	t      *testing.T
 	srv    *httptest.Server
 	key    *rsa.PrivateKey
@@ -46,40 +53,40 @@ type testIssuer struct {
 	redirect string
 
 	mu sync.Mutex
-	// user signs in at the authorization endpoint.
-	user testUser
-	// refuse, when set, answers the authorization request with this error.
-	refuse string
-	// tamper edits the ID token claims before signing.
-	tamper func(map[string]any)
-	// signWith, when set, signs ID tokens with this key instead.
-	signWith *rsa.PrivateKey
-	// userinfoGroups, when set, is the userinfo groups claim.
-	userinfoGroups any
-	// userinfoSubject, when set, replaces the userinfo subject.
-	userinfoSubject string
-	// omitUserinfo leaves userinfo_endpoint out of discovery.
-	omitUserinfo bool
-	// down makes discovery fail.
-	down bool
+	// User signs in at the authorization endpoint.
+	User User
+	// Refuse, when set, answers the authorization request with this error.
+	Refuse string
+	// Tamper edits the ID token claims before signing.
+	Tamper func(map[string]any)
+	// SignWith, when set, signs ID tokens with this key instead.
+	SignWith *rsa.PrivateKey
+	// UserinfoGroups, when set, is the userinfo groups claim.
+	UserinfoGroups any
+	// UserinfoSubject, when set, replaces the userinfo subject.
+	UserinfoSubject string
+	// OmitUserinfo leaves userinfo_endpoint out of discovery.
+	OmitUserinfo bool
+	// Down makes discovery fail.
+	Down bool
 
-	codes    map[string]issuedGrant
-	access   map[string]testUser
-	requests []string
-	// authorizations records each authorization request's query.
+	codes          map[string]grant
+	access         map[string]User
+	requests       []string
 	authorizations []url.Values
-	// tokenForms records each token request's form.
-	tokenForms []url.Values
+	tokenForms     []url.Values
 }
 
-func newTestIssuer(t *testing.T, clientID, redirect string) *testIssuer {
+// New starts an Issuer for one public client and redirect URI; it stops
+// when the test ends.
+func New(t *testing.T, clientID, redirect string) *Issuer {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	is := &testIssuer{t: t, key: key, keyID: "test-key", client: clientID, redirect: redirect,
-		codes: map[string]issuedGrant{}, access: map[string]testUser{}}
+	is := &Issuer{t: t, key: key, keyID: "test-key", client: clientID, redirect: redirect,
+		codes: map[string]grant{}, access: map[string]User{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", is.discovery)
 	mux.HandleFunc("GET /jwks", is.jwks)
@@ -96,15 +103,18 @@ func newTestIssuer(t *testing.T, clientID, redirect string) *testIssuer {
 	return is
 }
 
-func (is *testIssuer) URL() string { return is.srv.URL }
+// URL is the issuer URL.
+func (is *Issuer) URL() string { return is.srv.URL }
 
-func (is *testIssuer) set(f func(is *testIssuer)) {
+// Set changes the Issuer's behavior under its lock.
+func (is *Issuer) Set(f func(is *Issuer)) {
 	is.mu.Lock()
 	defer is.mu.Unlock()
 	f(is)
 }
 
-func (is *testIssuer) requestCount(prefix string) int {
+// RequestCount counts requests whose "METHOD /path" starts with prefix.
+func (is *Issuer) RequestCount(prefix string) int {
 	is.mu.Lock()
 	defer is.mu.Unlock()
 	n := 0
@@ -116,16 +126,36 @@ func (is *testIssuer) requestCount(prefix string) int {
 	return n
 }
 
+// Authorizations returns each authorization request's query.
+func (is *Issuer) Authorizations() []url.Values {
+	is.mu.Lock()
+	defer is.mu.Unlock()
+	return slices.Clone(is.authorizations)
+}
+
+// TokenForms returns each token request's form.
+func (is *Issuer) TokenForms() []url.Values {
+	is.mu.Lock()
+	defer is.mu.Unlock()
+	return slices.Clone(is.tokenForms)
+}
+
+func randomToken() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
 func writeJSONBody(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func (is *testIssuer) discovery(w http.ResponseWriter, _ *http.Request) {
+func (is *Issuer) discovery(w http.ResponseWriter, _ *http.Request) {
 	is.mu.Lock()
 	defer is.mu.Unlock()
-	if is.down {
+	if is.Down {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -139,13 +169,13 @@ func (is *testIssuer) discovery(w http.ResponseWriter, _ *http.Request) {
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"code_challenge_methods_supported":      []string{"S256"},
 	}
-	if !is.omitUserinfo {
+	if !is.OmitUserinfo {
 		doc["userinfo_endpoint"] = is.srv.URL + "/userinfo"
 	}
 	writeJSONBody(w, http.StatusOK, doc)
 }
 
-func (is *testIssuer) jwks(w http.ResponseWriter, _ *http.Request) {
+func (is *Issuer) jwks(w http.ResponseWriter, _ *http.Request) {
 	writeJSONBody(w, http.StatusOK, jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: is.key.Public(), KeyID: is.keyID, Algorithm: "RS256", Use: "sig"}}})
 }
 
@@ -155,7 +185,7 @@ func redirectWith(w http.ResponseWriter, r *http.Request, target string, v url.V
 	http.Redirect(w, r, u.String(), http.StatusFound)
 }
 
-func (is *testIssuer) authorize(w http.ResponseWriter, r *http.Request) {
+func (is *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	is.mu.Lock()
 	defer is.mu.Unlock()
@@ -169,13 +199,13 @@ func (is *testIssuer) authorize(w http.ResponseWriter, r *http.Request) {
 		redirectWith(w, r, is.redirect, url.Values{"error": {"invalid_request"}, "state": {q.Get("state")}})
 		return
 	}
-	if is.refuse != "" {
-		redirectWith(w, r, is.redirect, url.Values{"error": {is.refuse}, "state": {q.Get("state")}})
+	if is.Refuse != "" {
+		redirectWith(w, r, is.redirect, url.Values{"error": {is.Refuse}, "state": {q.Get("state")}})
 		return
 	}
 	code := randomToken()
-	is.codes[code] = issuedGrant{clientID: q.Get("client_id"), redirectURI: q.Get("redirect_uri"),
-		challenge: q.Get("code_challenge"), nonce: q.Get("nonce"), user: is.user}
+	is.codes[code] = grant{clientID: q.Get("client_id"), redirectURI: q.Get("redirect_uri"),
+		challenge: q.Get("code_challenge"), nonce: q.Get("nonce"), user: is.User}
 	redirectWith(w, r, is.redirect, url.Values{"code": {code}, "state": {q.Get("state")}})
 }
 
@@ -183,7 +213,7 @@ func tokenError(w http.ResponseWriter, code string) {
 	writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": code})
 }
 
-func (is *testIssuer) token(w http.ResponseWriter, r *http.Request) {
+func (is *Issuer) token(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		tokenError(w, "invalid_request")
 		return
@@ -217,12 +247,12 @@ func (is *testIssuer) token(w http.ResponseWriter, r *http.Request) {
 	if grant.user.Groups != nil {
 		claims["groups"] = grant.user.Groups
 	}
-	if is.tamper != nil {
-		is.tamper(claims)
+	if is.Tamper != nil {
+		is.Tamper(claims)
 	}
 	key := is.key
-	if is.signWith != nil {
-		key = is.signWith
+	if is.SignWith != nil {
+		key = is.SignWith
 	}
 	access := randomToken()
 	is.access[access] = grant.user
@@ -231,7 +261,7 @@ func (is *testIssuer) token(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (is *testIssuer) sign(key *rsa.PrivateKey, claims map[string]any) string {
+func (is *Issuer) sign(key *rsa.PrivateKey, claims map[string]any) string {
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key},
 		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", is.keyID))
 	if err != nil {
@@ -249,7 +279,7 @@ func (is *testIssuer) sign(key *rsa.PrivateKey, claims map[string]any) string {
 	return out
 }
 
-func (is *testIssuer) userinfo(w http.ResponseWriter, r *http.Request) {
+func (is *Issuer) userinfo(w http.ResponseWriter, r *http.Request) {
 	is.mu.Lock()
 	defer is.mu.Unlock()
 	user, ok := is.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
@@ -258,11 +288,11 @@ func (is *testIssuer) userinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := map[string]any{"sub": user.Subject, "name": user.Name}
-	if is.userinfoSubject != "" {
-		body["sub"] = is.userinfoSubject
+	if is.UserinfoSubject != "" {
+		body["sub"] = is.UserinfoSubject
 	}
-	if is.userinfoGroups != nil {
-		body["groups"] = is.userinfoGroups
+	if is.UserinfoGroups != nil {
+		body["groups"] = is.UserinfoGroups
 	}
 	writeJSONBody(w, http.StatusOK, body)
 }

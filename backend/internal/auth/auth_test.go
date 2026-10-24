@@ -13,13 +13,15 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/wyrd-company/menagerie/backend/internal/auth/authtest"
 )
 
 const testClientID = "sample-client"
 
 var (
-	manager    = testUser{Subject: "subject-manager", Name: "Sample Manager", Groups: []string{"other", ManagersGroup}}
-	nonManager = testUser{Subject: "subject-other", Name: "Sample Other", Groups: []string{"other"}}
+	manager    = authtest.User{Subject: "subject-manager", Name: "Sample Manager", Groups: []string{"other", ManagersGroup}}
+	nonManager = authtest.User{Subject: "subject-other", Name: "Sample Other", Groups: []string{"other"}}
 )
 
 // site is Menagerie's handler behind the Authenticator, with a protected
@@ -27,7 +29,7 @@ var (
 type site struct {
 	t      *testing.T
 	srv    *httptest.Server
-	issuer *testIssuer
+	issuer *authtest.Issuer
 	auth   *Authenticator
 	hits   atomic.Int64
 }
@@ -39,8 +41,8 @@ func newSite(t *testing.T) *site {
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
 	t.Cleanup(s.srv.Close)
 	redirect := s.srv.URL + CallbackPath
-	s.issuer = newTestIssuer(t, testClientID, redirect)
-	s.issuer.user = manager
+	s.issuer = authtest.New(t, testClientID, redirect)
+	s.issuer.User = manager
 	a, err := New(Config{Issuer: s.issuer.URL(), ClientID: testClientID, RedirectURL: redirect})
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +204,7 @@ func TestManagerSignsInAndReturnsToThePage(t *testing.T) {
 
 	// The authorization request is a PKCE S256 code request with state
 	// and nonce; the token request proves the verifier and sends no secret.
-	az := s.issuer.authorizations[0]
+	az := s.issuer.Authorizations()[0]
 	for _, k := range []string{"state", "nonce", "code_challenge"} {
 		if len(az.Get(k)) < 43 {
 			t.Errorf("authorization %s = %q", k, az.Get(k))
@@ -211,7 +213,7 @@ func TestManagerSignsInAndReturnsToThePage(t *testing.T) {
 	if az.Get("code_challenge_method") != "S256" || az.Get("response_type") != "code" || az.Get("scope") != "openid profile groups" {
 		t.Errorf("authorization request %v", az)
 	}
-	tf := s.issuer.tokenForms[0]
+	tf := s.issuer.TokenForms()[0]
 	if tf.Get("code_verifier") == "" || tf.Has("client_secret") || tf.Get("client_id") != testClientID {
 		t.Errorf("token request %v", tf)
 	}
@@ -276,7 +278,7 @@ func TestOnlyExactPublicPathsSkipTheSession(t *testing.T) {
 
 func TestNonManagerGetsNoSession(t *testing.T) {
 	s := newSite(t)
-	s.issuer.user = nonManager
+	s.issuer.User = nonManager
 	b := s.browser()
 	r := b.get(s.srv.URL + "/page/home")
 	if r.status != http.StatusForbidden || pageKind(t, r) != "not-a-manager" || !strings.Contains(r.body, "Sample Other") {
@@ -296,34 +298,34 @@ func TestNonManagerGetsNoSession(t *testing.T) {
 func TestGroupsClaimShapes(t *testing.T) {
 	cases := []struct {
 		name   string
-		user   testUser
-		set    func(*testIssuer)
+		user   authtest.User
+		set    func(*authtest.Issuer)
 		status int
 		kind   string
 	}{
-		{"empty groups", testUser{Subject: "s", Groups: []string{}}, nil, http.StatusForbidden, "not-a-manager"},
-		{"group name differs in case", testUser{Subject: "s", Groups: []string{"Menagerie_Managers"}}, nil, http.StatusForbidden, "not-a-manager"},
-		{"groups is a string", testUser{Subject: "s", Groups: ManagersGroup}, nil, http.StatusUnauthorized, "sign-in-rejected"},
-		{"groups from userinfo", testUser{Subject: "s"}, func(is *testIssuer) { is.userinfoGroups = []string{ManagersGroup} }, http.StatusOK, ""},
-		{"userinfo has no groups", testUser{Subject: "s"}, nil, http.StatusForbidden, "not-a-manager"},
-		{"no userinfo endpoint", testUser{Subject: "s"}, func(is *testIssuer) {
-			is.omitUserinfo = true
-			is.userinfoGroups = []string{ManagersGroup}
+		{"empty groups", authtest.User{Subject: "s", Groups: []string{}}, nil, http.StatusForbidden, "not-a-manager"},
+		{"group name differs in case", authtest.User{Subject: "s", Groups: []string{"Menagerie_Managers"}}, nil, http.StatusForbidden, "not-a-manager"},
+		{"groups is a string", authtest.User{Subject: "s", Groups: ManagersGroup}, nil, http.StatusUnauthorized, "sign-in-rejected"},
+		{"groups from userinfo", authtest.User{Subject: "s"}, func(is *authtest.Issuer) { is.UserinfoGroups = []string{ManagersGroup} }, http.StatusOK, ""},
+		{"userinfo has no groups", authtest.User{Subject: "s"}, nil, http.StatusForbidden, "not-a-manager"},
+		{"no userinfo endpoint", authtest.User{Subject: "s"}, func(is *authtest.Issuer) {
+			is.OmitUserinfo = true
+			is.UserinfoGroups = []string{ManagersGroup}
 		}, http.StatusForbidden, "not-a-manager"},
-		{"userinfo for another subject", testUser{Subject: "s"}, func(is *testIssuer) {
-			is.userinfoGroups = []string{ManagersGroup}
-			is.userinfoSubject = "someone-else"
+		{"userinfo for another subject", authtest.User{Subject: "s"}, func(is *authtest.Issuer) {
+			is.UserinfoGroups = []string{ManagersGroup}
+			is.UserinfoSubject = "someone-else"
 		}, http.StatusUnauthorized, "sign-in-rejected"},
-		{"id token groups win over userinfo", testUser{Subject: "s", Groups: []string{"other"}}, func(is *testIssuer) {
-			is.userinfoGroups = []string{ManagersGroup}
+		{"id token groups win over userinfo", authtest.User{Subject: "s", Groups: []string{"other"}}, func(is *authtest.Issuer) {
+			is.UserinfoGroups = []string{ManagersGroup}
 		}, http.StatusForbidden, "not-a-manager"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSite(t)
-			s.issuer.user = c.user
+			s.issuer.User = c.user
 			if c.set != nil {
-				s.issuer.set(c.set)
+				s.issuer.Set(c.set)
 			}
 			b := s.browser()
 			r := b.get(s.srv.URL + "/page/home")
@@ -351,22 +353,22 @@ func TestCallbackRejectsInvalidIDTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cases := map[string]func(*testIssuer){
-		"other issuer": func(is *testIssuer) {
-			is.tamper = func(c map[string]any) { c["iss"] = "https://issuer.example.invalid" }
+	cases := map[string]func(*authtest.Issuer){
+		"other issuer": func(is *authtest.Issuer) {
+			is.Tamper = func(c map[string]any) { c["iss"] = "https://issuer.example.invalid" }
 		},
-		"other audience": func(is *testIssuer) { is.tamper = func(c map[string]any) { c["aud"] = "other-client" } },
-		"bad signature":  func(is *testIssuer) { is.signWith = other },
-		"other nonce":    func(is *testIssuer) { is.tamper = func(c map[string]any) { c["nonce"] = randomToken() } },
-		"no nonce":       func(is *testIssuer) { is.tamper = func(c map[string]any) { delete(c, "nonce") } },
-		"expired": func(is *testIssuer) {
-			is.tamper = func(c map[string]any) { c["exp"] = time.Now().Add(-time.Hour).Unix() }
+		"other audience": func(is *authtest.Issuer) { is.Tamper = func(c map[string]any) { c["aud"] = "other-client" } },
+		"bad signature":  func(is *authtest.Issuer) { is.SignWith = other },
+		"other nonce":    func(is *authtest.Issuer) { is.Tamper = func(c map[string]any) { c["nonce"] = randomToken() } },
+		"no nonce":       func(is *authtest.Issuer) { is.Tamper = func(c map[string]any) { delete(c, "nonce") } },
+		"expired": func(is *authtest.Issuer) {
+			is.Tamper = func(c map[string]any) { c["exp"] = time.Now().Add(-time.Hour).Unix() }
 		},
 	}
 	for name, set := range cases {
 		t.Run(name, func(t *testing.T) {
 			s := newSite(t)
-			s.issuer.set(set)
+			s.issuer.Set(set)
 			b := s.browser()
 			r := b.get(s.srv.URL + "/page/home")
 			if r.status != http.StatusUnauthorized || pageKind(t, r) != "sign-in-rejected" {
@@ -458,14 +460,14 @@ func TestCallbackRequiresTheBrowsersPendingState(t *testing.T) {
 
 func TestProviderRefusalAndOutage(t *testing.T) {
 	s := newSite(t)
-	s.issuer.set(func(is *testIssuer) { is.refuse = "access_denied" })
+	s.issuer.Set(func(is *authtest.Issuer) { is.Refuse = "access_denied" })
 	b := s.browser()
 	r := b.get(s.srv.URL + "/page/home")
 	if r.status != http.StatusUnauthorized || pageKind(t, r) != "sign-in-refused" || !strings.Contains(r.body, "access_denied") {
 		t.Fatalf("refusal answered %d %q", r.status, r.body)
 	}
 
-	s.issuer.set(func(is *testIssuer) { is.refuse = ""; is.down = true })
+	s.issuer.Set(func(is *authtest.Issuer) { is.Refuse = ""; is.Down = true })
 	r = b.get(s.srv.URL + "/page/home")
 	if r.status != http.StatusBadGateway || pageKind(t, r) != "identity-provider-unavailable" {
 		t.Fatalf("outage answered %d %q", r.status, r.body)
@@ -520,12 +522,12 @@ func TestSignInRotatesTheSession(t *testing.T) {
 		}
 	})
 
-	for _, next := range []testUser{manager, nonManager} {
+	for _, next := range []authtest.User{manager, nonManager} {
 		t.Run("earlier session ends for "+next.Subject, func(t *testing.T) {
-			s.issuer.set(func(is *testIssuer) { is.user = manager })
+			s.issuer.Set(func(is *authtest.Issuer) { is.User = manager })
 			b := s.browser()
 			old := b.signIn(s)
-			s.issuer.set(func(is *testIssuer) { is.user = next })
+			s.issuer.Set(func(is *authtest.Issuer) { is.User = next })
 			b.setCookie(s, "menagerie-session", "")
 			callback := b.pendingCallback(s, "/page/home")
 			b.setCookie(s, "menagerie-session", old)
@@ -546,13 +548,13 @@ func TestLoginWithSessionReturnsWithoutSignIn(t *testing.T) {
 	s := newSite(t)
 	b := s.browser()
 	b.signIn(s)
-	before := s.issuer.requestCount("GET /authorize")
+	before := s.issuer.RequestCount("GET /authorize")
 	b.stop = "/page/again"
 	r := b.get(s.srv.URL + LoginPath + "?return=%2Fpage%2Fagain")
 	if r.status != http.StatusSeeOther || r.header.Get("Location") != "/page/again" {
 		t.Fatalf("answered %d %q", r.status, r.header.Get("Location"))
 	}
-	if s.issuer.requestCount("GET /authorize") != before {
+	if s.issuer.RequestCount("GET /authorize") != before {
 		t.Fatal("signed-in login went to the provider")
 	}
 }
@@ -669,8 +671,8 @@ func TestCookieAttributes(t *testing.T) {
 		{"http", "menagerie-session", "menagerie-login", false},
 	} {
 		t.Run(c.scheme, func(t *testing.T) {
-			is := newTestIssuer(t, testClientID, c.scheme+"://menagerie.example.invalid"+CallbackPath)
-			is.user = manager
+			is := authtest.New(t, testClientID, c.scheme+"://menagerie.example.invalid"+CallbackPath)
+			is.User = manager
 			a, err := New(Config{Issuer: is.URL(), ClientID: testClientID, RedirectURL: c.scheme + "://menagerie.example.invalid" + CallbackPath})
 			if err != nil {
 				t.Fatal(err)
