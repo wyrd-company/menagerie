@@ -1,74 +1,21 @@
 // The web UI against the real workspace service, template service, Docker
 // Engine, Git backup host and identity provider (see run.sh). One serial
 // story: each step builds on the workspace the previous step left.
-import { readFileSync } from "node:fs";
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-
-const info = JSON.parse(readFileSync(process.env.MENAGERIE_BROWSER_INFO!, "utf8")) as {
-  site: string;
-  pocket: string;
-  control: string;
-  root: string;
-};
+import { expect, test, type Page } from "@playwright/test";
+import {
+  backup,
+  console_,
+  containerFor,
+  control,
+  entry,
+  finished,
+  info,
+  ownPage,
+  shot,
+  signIn,
+} from "./support.ts";
 
 test.describe.configure({ mode: "serial" });
-
-const shot = (page: Page, name: string) =>
-  page.screenshot({ path: `evidence/integrated/${name}.png`, fullPage: true });
-
-async function control(
-  request: APIRequestContext,
-  method: "GET" | "POST" | "PUT",
-  path: string,
-  body?: string,
-) {
-  const response = await request.fetch(info.control + path, { method, data: body });
-  expect(response.ok(), `${method} ${path}`).toBeTruthy();
-  return response.json();
-}
-
-/** Signs a Pocket ID user in through its one-time link, then opens Menagerie and consents. */
-async function signIn(page: Page, user: string, target = "/") {
-  const { url } = await control(page.request, "GET", `/signin-link?user=${user}`);
-  await page.goto(url);
-  await page.waitForURL((u) => !u.pathname.startsWith("/lc/"));
-  await page.goto(info.site + target);
-  if (new URL(page.url()).pathname === "/interaction") {
-    await page.getByRole("button", { name: "Sign in" }).click();
-  }
-}
-
-const entry = (page: Page, name: string) =>
-  page
-    .getByRole("list", { name: "Workspaces" })
-    .getByRole("listitem")
-    .filter({
-      has: page.getByRole("heading", { name, exact: true }),
-    });
-const console_ = (page: Page) => page.locator("section.console");
-
-/** Waits for the console of the job just started, then for its outcome. */
-async function finished(page: Page, heading: RegExp, outcome = "Completed.") {
-  await expect(console_(page).getByRole("heading", { level: 2 })).toHaveText(heading);
-  await expect(console_(page).locator(".outcome")).toContainText(outcome);
-}
-
-async function containerFor(request: APIRequestContext, name: string) {
-  const list = (await control(request, "GET", "/containers")) as {
-    id: string;
-    state: string;
-    folder: string;
-  }[];
-  return list.find((c) => c.folder === `${info.root}/${name}`);
-}
-
-async function backup(request: APIRequestContext, branch: string) {
-  return (await control(request, "GET", `/backup?branch=${branch}`)) as {
-    exists: boolean;
-    commits: { hash: string; message: string; parents: number }[];
-    files: Record<string, string>;
-  };
-}
 
 test("a signed-in person who is not a manager is refused", async ({ page }) => {
   await signIn(page, "sample-other");
@@ -82,7 +29,7 @@ test("a signed-in person who is not a manager is refused", async ({ page }) => {
 test.describe("as a manager", () => {
   let page: Page;
   test.beforeAll(async ({ browser }) => {
-    page = await browser.newPage();
+    page = await ownPage(browser);
     await signIn(page, "sample-manager");
     await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
   });
