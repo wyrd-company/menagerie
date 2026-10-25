@@ -144,5 +144,16 @@ printf 'Sample\n\nfix: not the first line\n' >"$scratch/message"
 expect "a message file with another first line fails" 1 'not a conventional commit subject: Sample' \
   sh "$repo/scripts/check-commit-subject.sh" "$scratch/message"
 
+# Toolchain versions named in several places agree, so a bump moves them all.
+go_version=$(sed -n 's/^go //p' "$repo/go.mod")
+node_version=$(cat "$repo/.node-version")
+rust_versions=$(grep -ho 'toolchain: [0-9.]*' "$repo"/.github/workflows/*.yml | sort -u)
+expect "the image builds with go.mod's Go" 0 "golang:$go_version-" grep -o "golang:[^@]*" "$repo/Dockerfile"
+expect "the image builds with .node-version's Node.js" 0 "node:$node_version-" grep -o "node:[^@ ]*" "$repo/Dockerfile"
+expect "every workflow names one Rust toolchain" 0 '^toolchain: [0-9.]+$' echo "$rust_versions"
+rust_version=${rust_versions#toolchain: }
+expect "the image builds with the workflows' Rust" 0 "rust:$rust_version-" grep -o "rust:[^@]*" "$repo/Dockerfile"
+expect "the devcontainer has the same Go, Node.js and Rust" 0 '^3$' sh -c "grep -Ec '\"version\": \"($go_version|$node_version|$rust_version)\"' '$repo/.devcontainer/devcontainer.json'"
+
 echo "scripts: $passed passed, $failed failed"
 [ "$failed" -eq 0 ] && [ "$passed" -gt 0 ]
