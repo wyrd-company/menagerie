@@ -48,11 +48,11 @@ socket must be in a folder that only the services' user can enter.
 
 Both services run as the owner of the workspace root: the user and group
 that own `workspace-root` on the host. When `workspace-root` or
-`wyrwood-directory` is a symbolic link, its target's owner and group count. Everything Menagerie writes into a
-workspace, including the files its template hooks and `initializeCommand`
-write, belongs to that user. The devcontainer's remote user is remapped to
-the same uid, so it can edit the workspace. If root owns the workspace
-root, the services run as root.
+`wyrwood-directory` is a symbolic link, its target's owner and group count.
+Everything Menagerie writes into a workspace, including the files its
+template hooks and `initializeCommand` write, belongs to that user. The
+devcontainer's remote user is remapped to the same uid, so it can edit the
+workspace. If root owns the workspace root, the services run as root.
 
 At start-up the container gives that uid a user, `menagerie`, whose home is
 `/var/lib/menagerie/home`, unless the uid already has one. Its groups are
