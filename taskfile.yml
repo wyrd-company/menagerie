@@ -83,7 +83,7 @@ tasks:
       - task: web:lint
       - actionlint .github/workflows/*.yml
       - shellcheck scripts/*.sh web/test/integrated/run.sh
-      - shellcheck -s sh image/rootfs/etc/s6-overlay/scripts/* image/rootfs/etc/s6-overlay/s6-rc.d/*/finish image/rootfs/usr/local/bin/*
+      - shellcheck -s sh image/rootfs/etc/s6-overlay/scripts/* image/rootfs/etc/s6-overlay/s6-rc.d/*/finish image/rootfs/etc/s6-overlay/s6-rc.d/*/run image/rootfs/usr/local/bin/*
       - ryl check --config-file .ryl.yml {{.REPOSITORY_YAML}}
       - rumdl check .
       - node scripts/check-renovate-pins.mjs > /dev/null

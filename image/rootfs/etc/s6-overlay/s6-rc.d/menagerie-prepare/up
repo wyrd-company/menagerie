@@ -1,1 +1,1 @@
-/etc/s6-overlay/scripts/menagerie-prepare
+/command/with-contenv /etc/s6-overlay/scripts/menagerie-prepare

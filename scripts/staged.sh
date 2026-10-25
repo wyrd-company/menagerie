@@ -32,7 +32,7 @@ for f in "$@"; do
   esac
   case "$f" in
     *.sh) shell+=("$f") ;;
-    image/rootfs/etc/s6-overlay/scripts/* | image/rootfs/etc/s6-overlay/s6-rc.d/*/finish | image/rootfs/usr/local/bin/*) posix+=("$f") ;;
+    image/rootfs/etc/s6-overlay/scripts/* | image/rootfs/etc/s6-overlay/s6-rc.d/*/finish | image/rootfs/etc/s6-overlay/s6-rc.d/*/run | image/rootfs/usr/local/bin/*) posix+=("$f") ;;
   esac
   case "$f" in
     .github/workflows/*.yml) workflows+=("$f") ;;

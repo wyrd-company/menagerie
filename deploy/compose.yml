@@ -18,6 +18,7 @@ services:
     volumes:
       # The workspace root at the same path on the host and in the
       # container, so the devcontainers' bind mounts resolve on the host.
+      # Its owner is the user both services run as.
       - ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}:${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}
       # The host Docker daemon. Only the workspace service uses it.
       - /var/run/docker.sock:/var/run/docker.sock

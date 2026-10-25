@@ -1,8 +1,67 @@
 #!/bin/sh
-# Runs once before either service starts. The template service's socket
-# folder admits only root, so only the two services can reach the socket.
+# Runs once, as root, before either service starts. It chooses the services'
+# identity and prepares the folders that belong to Menagerie.
+#
+# Both services run as the owner of the configured workspace root, so every
+# file they, Toha's hooks and initializeCommand write into a workspace
+# belongs to the operator who owns that root. The groups add the Docker
+# socket's and the Wyrwood consumer directory's, so both stay reachable. A
+# root-owned workspace root keeps the services root.
 set -eu
+config=/etc/menagerie/config.yml
+data=/var/lib/menagerie
+fail() {
+  echo "menagerie: $1" >&2
+  exit 1
+}
+
 # A restarted container may keep /run: clear the previous stop's marker.
 rm -rf /run/menagerie-stopping
-install -d -m 0700 -o root -g root /run/menagerie
-install -d -m 0755 /var/lib/menagerie /var/lib/menagerie/toha
+
+root=$(/usr/local/bin/menagerie -config "$config" -print-workspace-root) || fail "the configuration in $config is not valid"
+wyrwood=$(/usr/local/bin/menagerie -config "$config" -print-wyrwood-directory)
+[ -d "$root" ] || fail "the workspace root $root is not mounted"
+uid=$(stat -c %u "$root")
+gid=$(stat -c %g "$root")
+
+groups=$gid
+socket=/var/run/docker.sock
+case "${DOCKER_HOST:-}" in unix://*) socket=${DOCKER_HOST#unix://} ;; esac
+for path in "$socket" "$wyrwood"; do
+  [ -e "$path" ] || continue
+  group=$(stat -c %g "$path")
+  case ",$groups," in *",$group,"*) ;; *) groups="$groups,$group" ;; esac
+done
+
+if [ "$uid" = 0 ]; then
+  user=root home=/root
+else
+  home=$data/home
+  # ssh and git look the user up; give a numeric owner a passwd entry.
+  getent group "$gid" >/dev/null || groupadd --gid "$gid" menagerie
+  if ! getent passwd "$uid" >/dev/null; then
+    useradd --uid "$uid" --gid "$gid" --no-create-home --home-dir "$home" --shell /usr/sbin/nologin menagerie
+  fi
+  user=$(getent passwd "$uid" | cut -d: -f1)
+fi
+
+# Menagerie's own folders: the template service's socket folder, open to
+# the services' user only, and Toha's data and the user's home in the data
+# volume. Only these folders are given to the user, never their contents.
+install -d -m 0700 -o "$uid" -g "$gid" /run/menagerie
+install -d -m 0755 -o "$uid" -g "$gid" "$data" "$data/toha"
+install -d -m 0700 -o "$uid" -g "$gid" "$data/home"
+other=$(find "$data/toha" "$data/home" -mindepth 1 ! -uid "$uid" -print -quit)
+[ -z "$other" ] || fail "$other in $data belongs to uid $(stat -c %u "$other"), but Menagerie runs as uid $uid, the owner of $root. Remove the data volume or give its contents to uid $uid."
+
+/command/s6-applyuidgid -u "$uid" -g "$gid" -G "$groups" test -r "$config" ||
+  fail "$config is not readable by uid $uid"
+
+cat >/run/menagerie-identity <<IDENTITY
+uid=$uid
+gid=$gid
+groups=$groups
+user=$user
+home=$home
+IDENTITY
+echo "menagerie: services run as $user (uid $uid, gid $gid, groups $groups), the owner of $root"

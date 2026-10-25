@@ -2,4 +2,8 @@
 # The template service: Toha interviews, generation and upgrades on the
 # private Unix socket. It reads /etc/menagerie/config.yml and keeps Toha's
 # data under /var/lib/menagerie/toha.
-exec /usr/local/bin/menagerie-template-service
+# It runs as the user menagerie-prepare chose.
+# shellcheck source=/dev/null disable=SC2154 # menagerie-prepare writes these values
+. /run/menagerie-identity
+export HOME="$home" USER="$user" LOGNAME="$user"
+exec /command/s6-applyuidgid -u "$uid" -g "$gid" -G "$groups" /usr/local/bin/menagerie-template-service
