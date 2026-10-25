@@ -47,7 +47,8 @@ socket must be in a folder that only the services' user can enter.
 ## Who the services run as
 
 Both services run as the owner of the workspace root: the user and group
-that own `workspace-root` on the host. Everything Menagerie writes into a
+that own `workspace-root` on the host. When `workspace-root` or
+`wyrwood-directory` is a symbolic link, its target's owner and group count. Everything Menagerie writes into a
 workspace, including the files its template hooks and `initializeCommand`
 write, belongs to that user. The devcontainer's remote user is remapped to
 the same uid, so it can edit the workspace. If root owns the workspace

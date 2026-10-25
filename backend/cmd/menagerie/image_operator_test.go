@@ -554,6 +554,64 @@ templates:
 				t.Errorf("%s/%s is %s", data, sub, got)
 			}
 		}
+		if err := p.docker.ContainerStop(ctx, o.id, container.StopOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	// The configured workspace root and Wyrwood directory may be symbolic
+	// links, like any mounted path: the identity is their targets'. Both
+	// links belong to root, the root's target to the operator and the
+	// Wyrwood directory's target to its access group.
+	t.Run("linked workspace root and Wyrwood directory give their targets' identity", func(t *testing.T) {
+		rootLink := filepath.Join(base, "workspaces-link")
+		wyrwoodLink := filepath.Join(base, "wyrwood-link")
+		link(t, rootDir, rootLink)
+		link(t, agentDir, wyrwoodLink)
+		config, err := os.ReadFile(filepath.Join(base, "config.yml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		linked := strings.Replace(string(config), "workspace-root: "+rootDir+"\n", "workspace-root: "+rootLink+"\n", 1)
+		linked = strings.Replace(linked, "wyrwood-directory: "+agentDir+"\n", "wyrwood-directory: "+wyrwoodLink+"\n", 1)
+		if linked == string(config) || !strings.Contains(linked, rootLink) || !strings.Contains(linked, wyrwoodLink) {
+			t.Fatal("the linked configuration names no link")
+		}
+		writeTo(t, base, "linked-config.yml", linked)
+		o := startWithData(t, p, ref, tmp, filepath.Join(base, "linked-config.yml"), "")
+		want := fmt.Sprintf("menagerie: services run as menagerie (uid %d, gid %d, groups %d,", operatorUID, operatorGID, operatorGID)
+		for i := 0; ; i++ {
+			logs := o.logs(time.Time{})
+			if strings.Contains(logs, "menagerie: services run as") {
+				if !strings.Contains(logs, want) || !strings.Contains(logs, fmt.Sprintf(",%d)", wyrwoodGID)) && !strings.Contains(logs, fmt.Sprintf(",%d,", wyrwoodGID)) {
+					t.Errorf("logs lack %q with group %d:\n%s", want, wyrwoodGID, logs)
+				}
+				break
+			}
+			if i == imageReadyAttempts || !o.inspect().State.Running {
+				t.Fatalf("start-up named no identity:\n%s", logs)
+			}
+			time.Sleep(imageReadyInterval)
+		}
+		for i := 0; ; i++ {
+			out, code := o.exec("", "env", fmt.Sprintf("MENAGERIE_HEALTH_URL=http://127.0.0.1:%d/healthz", port), "menagerie-healthcheck")
+			if code == 0 {
+				break
+			}
+			if i == imageReadyAttempts || !o.inspect().State.Running {
+				t.Fatalf("not healthy: %q\n%s", out, o.logs(time.Time{}))
+			}
+			time.Sleep(imageReadyInterval)
+		}
+		for _, service := range []string{"template-service", "workspace-service"} {
+			out := o.mustExec("sh", "-c", "stat -c '%u:%g' /proc/$(/command/s6-svstat -o pid /run/service/"+service+")")
+			if out != fmt.Sprintf("%d:%d", operatorUID, operatorGID) {
+				t.Errorf("%s runs as %s", service, out)
+			}
+		}
+		if err := p.docker.ContainerStop(ctx, o.id, container.StopOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	// A configuration the services' user cannot read stops start-up with a

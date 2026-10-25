@@ -21,15 +21,17 @@ rm -rf /run/menagerie-stopping
 root=$(/usr/local/bin/menagerie -config "$config" -print-workspace-root) || fail "the configuration in $config is not valid"
 wyrwood=$(/usr/local/bin/menagerie -config "$config" -print-wyrwood-directory)
 [ -d "$root" ] || fail "the workspace root $root is not mounted"
-uid=$(stat -c %u "$root")
-gid=$(stat -c %g "$root")
+# The configured paths may be symbolic links, like any mounted path; the
+# identity is their target's.
+uid=$(stat -L -c %u "$root")
+gid=$(stat -L -c %g "$root")
 
 groups=$gid
 socket=/var/run/docker.sock
 case "${DOCKER_HOST:-}" in unix://*) socket=${DOCKER_HOST#unix://} ;; esac
 for path in "$socket" "$wyrwood"; do
   [ -e "$path" ] || continue
-  group=$(stat -c %g "$path")
+  group=$(stat -L -c %g "$path")
   case ",$groups," in *",$group,"*) ;; *) groups="$groups,$group" ;; esac
 done
 
