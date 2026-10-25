@@ -4,14 +4,16 @@
 # teaches you to pass --no-verify, which silently disables pre-commit too.
 # CI is the gate; hooks are fast feedback.
 
+# pre-commit sees only the staged files. lefthook hides unstaged hunks of
+# partially staged files while the jobs run and restores them afterwards,
+# so formatting changes only what is being committed.
 pre-commit:
-  parallel: true
   jobs:
     - name: format
-      run: task format
+      run: task format:staged -- {staged_files}
       stage_fixed: true
     - name: lint
-      run: task lint
+      run: task lint:staged -- {staged_files}
 
 commit-msg:
   jobs:

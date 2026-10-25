@@ -163,6 +163,38 @@ for name in $wrappers; do
   expect "$name passes its owner token to up and to the deferred down" 0 '^true$' owner_wired "$name"
 done
 
+# The pre-commit hook formats and lints only the staged files. An unrelated
+# unstaged edit keeps its bytes, and a partially staged file keeps its
+# unstaged hunk unformatted.
+hook_case() { # hook_case <dir>: prints the outcome lines the expectations read
+  local d=$1
+  cp "$repo/.config/lefthook.yml" "$d/.config/lefthook.yml"
+  cp "$repo/taskfile.yml" "$d/taskfile.yml"
+  git -C "$d" add .config/lefthook.yml taskfile.yml
+  git_test -C "$d" commit -q --allow-empty -m "test: hooks under test"
+  printf 'func   unrelated() {}\n' >>"$d/backend/internal/jobs/run.go"
+  cp "$d/backend/internal/jobs/run.go" "$scratch/unrelated.before"
+  printf 'package jobs\n\nfunc sampleStaged() {  }\n' >"$d/backend/internal/jobs/sample_hook.go"
+  printf '\nA staged sentence.\n' >>"$d/README.md"
+  git -C "$d" add backend/internal/jobs/sample_hook.go README.md
+  printf '\nfunc   sampleUnstaged() {}\n' >>"$d/backend/internal/jobs/sample_hook.go"
+  (cd "$d" && lefthook run pre-commit --no-auto-install >"$scratch/hook.log" 2>&1) && echo "hook=passed" || echo "hook=failed"
+  cmp -s "$scratch/unrelated.before" "$d/backend/internal/jobs/run.go" && echo "unrelated=unchanged" || echo "unrelated=changed"
+  git -C "$d" diff --cached --quiet -- backend/internal/jobs/run.go && echo "unrelated-index=unchanged" || echo "unrelated-index=changed"
+  git -C "$d" show :backend/internal/jobs/sample_hook.go | grep -qx 'func sampleStaged() {}' && echo "staged=formatted" || echo "staged=unformatted"
+  grep -qx 'func   sampleUnstaged() {}' "$d/backend/internal/jobs/sample_hook.go" && echo "unstaged-hunk=kept" || echo "unstaged-hunk=lost"
+  git -C "$d" show :backend/internal/jobs/sample_hook.go | grep -q sampleUnstaged && echo "unstaged-hunk-staged=yes" || echo "unstaged-hunk-staged=no"
+}
+h=$scratch/hooks
+clone_at_head "$h"
+hook_out=$(hook_case "$h")
+expect "the pre-commit hook passes on staged files" 0 '^hook=passed$' echo "$hook_out"
+expect "the hook leaves an unrelated unstaged file's bytes" 0 '^unrelated=unchanged$' echo "$hook_out"
+expect "the hook leaves an unrelated file unstaged" 0 '^unrelated-index=unchanged$' echo "$hook_out"
+expect "the hook formats the staged hunk" 0 '^staged=formatted$' echo "$hook_out"
+expect "the hook keeps the unstaged hunk as it was" 0 '^unstaged-hunk=kept$' echo "$hook_out"
+expect "the hook does not stage the unstaged hunk" 0 '^unstaged-hunk-staged=no$' echo "$hook_out"
+
 # Toolchain versions named in several places agree, so a bump moves them all.
 go_version=$(sed -n 's/^go //p' "$repo/go.mod")
 node_version=$(cat "$repo/.node-version")

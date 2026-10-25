@@ -88,6 +88,16 @@ tasks:
       - rumdl check .
       - node scripts/check-renovate-pins.mjs > /dev/null
 
+  format:staged:
+    desc: Format only the named files (the pre-commit hook passes the staged ones)
+    cmds:
+      - scripts/staged.sh format {{.CLI_ARGS}}
+
+  lint:staged:
+    desc: Lint only the named files with their file-level linters (the pre-commit hook passes the staged ones)
+    cmds:
+      - scripts/staged.sh lint {{.CLI_ARGS}}
+
   lint:commit-msg:
     desc: Check a conventional commit subject, given as text or as a commit message file
     silent: true
