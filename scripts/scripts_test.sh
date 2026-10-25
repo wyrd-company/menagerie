@@ -209,7 +209,21 @@ hook_case() { # hook_case <dir>: prints the outcome lines the expectations read
   printf '\nA staged sentence.\n' >>"$d/README.md"
   git -C "$d" add backend/internal/jobs/sample_hook.go README.md
   printf '\nfunc   sampleUnstaged() {}\n' >>"$d/backend/internal/jobs/sample_hook.go"
+  # Rust: a parent module partially staged, one of its child modules with
+  # only an unstaged edit, and another child module staged.
+  printf '\nfn   sample_staged() {}\n' >>"$d/template-service/src/lib.rs"
+  printf 'fn   sample_staged_child() {}\n' >>"$d/template-service/src/numbers.rs"
+  git -C "$d" add template-service/src/lib.rs template-service/src/numbers.rs
+  printf '\nfn   sample_unstaged() {}\n' >>"$d/template-service/src/lib.rs"
+  printf '\nfn   sample_unstaged_child() {}\n' >>"$d/template-service/src/config.rs"
+  cp "$d/template-service/src/config.rs" "$scratch/child.before"
   (cd "$d" && lefthook run pre-commit --no-auto-install >"$scratch/hook.log" 2>&1) && echo "hook=passed" || echo "hook=failed"
+  cmp -s "$scratch/child.before" "$d/template-service/src/config.rs" && echo "rust-child=unchanged" || echo "rust-child=changed"
+  git -C "$d" diff --cached --quiet -- template-service/src/config.rs && echo "rust-child-index=unchanged" || echo "rust-child-index=changed"
+  git -C "$d" show :template-service/src/lib.rs | grep -qx 'fn sample_staged() {}' && echo "rust-staged=formatted" || echo "rust-staged=unformatted"
+  git -C "$d" show :template-service/src/numbers.rs | grep -qx 'fn sample_staged_child() {}' && echo "rust-staged-child=formatted" || echo "rust-staged-child=unformatted"
+  grep -qx 'fn   sample_unstaged() {}' "$d/template-service/src/lib.rs" && echo "rust-unstaged-hunk=kept" || echo "rust-unstaged-hunk=lost"
+  git -C "$d" show :template-service/src/lib.rs | grep -q sample_unstaged && echo "rust-unstaged-hunk-staged=yes" || echo "rust-unstaged-hunk-staged=no"
   cmp -s "$scratch/unrelated.before" "$d/backend/internal/jobs/run.go" && echo "unrelated=unchanged" || echo "unrelated=changed"
   git -C "$d" diff --cached --quiet -- backend/internal/jobs/run.go && echo "unrelated-index=unchanged" || echo "unrelated-index=changed"
   git -C "$d" show :backend/internal/jobs/sample_hook.go | grep -qx 'func sampleStaged() {}' && echo "staged=formatted" || echo "staged=unformatted"
@@ -225,6 +239,15 @@ expect "the hook leaves an unrelated file unstaged" 0 '^unrelated-index=unchange
 expect "the hook formats the staged hunk" 0 '^staged=formatted$' echo "$hook_out"
 expect "the hook keeps the unstaged hunk as it was" 0 '^unstaged-hunk=kept$' echo "$hook_out"
 expect "the hook does not stage the unstaged hunk" 0 '^unstaged-hunk-staged=no$' echo "$hook_out"
+expect "the hook leaves an unstaged Rust child module's bytes" 0 '^rust-child=unchanged$' echo "$hook_out"
+expect "the hook leaves that child module unstaged" 0 '^rust-child-index=unchanged$' echo "$hook_out"
+expect "the hook formats a staged Rust parent module's staged hunk" 0 '^rust-staged=formatted$' echo "$hook_out"
+expect "the hook formats a staged Rust child module" 0 '^rust-staged-child=formatted$' echo "$hook_out"
+expect "the hook keeps the Rust parent's unstaged hunk as it was" 0 '^rust-unstaged-hunk=kept$' echo "$hook_out"
+expect "the hook does not stage the Rust parent's unstaged hunk" 0 '^rust-unstaged-hunk-staged=no$' echo "$hook_out"
+printf 'fn   sample_lint() {}\n' >>"$h/template-service/src/numbers.rs"
+expect "lint:staged refuses an unformatted Rust file" 1 'not rustfmt-formatted: template-service/src/numbers.rs' "$h/scripts/staged.sh" lint template-service/src/numbers.rs
+expect "lint:staged passes a formatted Rust file" 0 '^$' "$h/scripts/staged.sh" lint template-service/src/create.rs
 
 # Toolchain versions named in several places agree, so a bump moves them all.
 go_version=$(sed -n 's/^go //p' "$repo/go.mod")

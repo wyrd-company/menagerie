@@ -47,10 +47,22 @@ for f in "$@"; do
   esac
 done
 
+# rustfmt_file <file> <out>: the file formatted alone. rustfmt reads it from
+# standard input, so it follows no `mod` into child module files; it runs in
+# the file's folder so it finds the same rustfmt configuration.
+# shellcheck disable=SC2094 # <file> and <out> are different files
+rustfmt_file() { (cd "$(dirname "$1")" && rustfmt --edition 2024 --emit stdout) <"$1" >"$2"; }
+
 case "$mode" in
   format)
     if [ ${#go[@]} -gt 0 ]; then gofmt -w "${go[@]}"; fi
-    if [ ${#rust[@]} -gt 0 ]; then rustfmt --edition 2024 "${rust[@]}"; fi
+    for f in ${rust[@]+"${rust[@]}"}; do
+      out=$(mktemp)
+      rustfmt_file "$f" "$out" || { rm -f "$out"; exit 1; }
+      # Rewrite in place, so the file keeps its mode, only when it changed.
+      cmp -s "$out" "$f" || cat "$out" >"$f"
+      rm -f "$out"
+    done
     if [ ${#web[@]} -gt 0 ]; then (cd web && pnpm exec prettier --write --ignore-unknown "${web[@]}"); fi
     ;;
   lint)
@@ -58,7 +70,12 @@ case "$mode" in
       unformatted=$(gofmt -l "${go[@]}")
       [ -z "$unformatted" ] || { echo "not gofmt-formatted: $unformatted" >&2; exit 1; }
     fi
-    if [ ${#rust[@]} -gt 0 ]; then rustfmt --edition 2024 --check "${rust[@]}"; fi
+    for f in ${rust[@]+"${rust[@]}"}; do
+      out=$(mktemp)
+      rustfmt_file "$f" "$out" || { rm -f "$out"; exit 1; }
+      cmp -s "$out" "$f" || { rm -f "$out"; echo "not rustfmt-formatted: $f" >&2; exit 1; }
+      rm -f "$out"
+    done
     if [ ${#web[@]} -gt 0 ]; then (cd web && pnpm exec prettier --check --ignore-unknown "${web[@]}"); fi
     if [ ${#webscript[@]} -gt 0 ]; then (cd web && pnpm exec eslint "${webscript[@]}"); fi
     if [ ${#shell[@]} -gt 0 ]; then shellcheck "${shell[@]}"; fi
