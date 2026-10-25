@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Prepare and publish a Menagerie release with Intentional.
 #
-#   release.sh rehearse   prepare, squash-merge and publish in a scratch clone
-#                         of HEAD, then discard it; nothing leaves the clone
+#   release.sh rehearse   in a scratch clone of HEAD, then discarded: with
+#                         pending intents, prepare, squash-merge and publish;
+#                         at a merged release commit, publish; otherwise
+#                         check that there is nothing to release
 #   release.sh prepare    at main's head: apply the pending intents and commit
 #                         them alone on release/<version>
 #   release.sh propose    push release/<version> and open its pull request
@@ -27,7 +29,7 @@ plan=${RELEASE_PLAN:-$repo/../release-plan.json}
 unit=menagerie
 
 usage() {
-  sed -n '2,13p' "$0" >&2
+  sed -n '2,15p' "$0" >&2
   exit 2
 }
 
@@ -37,6 +39,12 @@ fail() {
 }
 
 has_release_tags() { [ -n "$(git tag --list '[0-9]*.[0-9]*.[0-9]*')" ]; }
+
+has_pending_intents() { [ -n "$(git ls-files '.intentional/intents/*.md')" ]; }
+
+# release_commit_version: the version HEAD's subject releases, if it is a
+# release commit.
+release_commit_version() { git log -1 --format=%s | sed -n 's/^chore(release): \([0-9][0-9.]*\)$/\1/p'; }
 
 clean() { [ -z "$(git status --porcelain)" ] || fail "the checkout at $(pwd) has changes"; }
 
@@ -53,6 +61,7 @@ plan_version() {
 prepare_steps() {
   local base version baseline=
   clean
+  has_pending_intents || fail "no pending intents at $(git rev-parse HEAD): nothing to release"
   base=$(git rev-parse HEAD)
   if ! has_release_tags; then
     # Only for planning: publish makes the real baseline after review.
@@ -115,14 +124,24 @@ case "$1" in
     git checkout -q --detach "$head"
     export RELEASE_ACTOR_NAME="Release rehearsal" RELEASE_ACTOR_EMAIL="rehearsal@example.invalid"
     plan=$scratch/release-plan.json
-    echo "rehearsing the release of $head in $scratch/clone"
-    prepare_steps
-    git diff --stat HEAD~1 HEAD
-    # Squash merge: one new commit on main with the pull request's tree and title.
-    merged=$(git -c user.name="$RELEASE_ACTOR_NAME" -c user.email="$RELEASE_ACTOR_EMAIL" \
-      commit-tree "HEAD^{tree}" -p "$head" -m "$(git log -1 --format=%s)")
-    git checkout -q --detach "$merged"
-    publish_steps
+    released=$(release_commit_version)
+    if has_pending_intents; then
+      echo "rehearsing the release of $head in $scratch/clone"
+      prepare_steps
+      git diff --stat HEAD~1 HEAD
+      # Squash merge: one new commit on main with the pull request's tree and title.
+      merged=$(git -c user.name="$RELEASE_ACTOR_NAME" -c user.email="$RELEASE_ACTOR_EMAIL" \
+        commit-tree "HEAD^{tree}" -p "$head" -m "$(git log -1 --format=%s)")
+      git checkout -q --detach "$merged"
+      publish_steps
+    elif [ -n "$released" ] && [ -z "$(git tag --list "$released" --points-at HEAD)" ]; then
+      echo "$head is the merged release commit for $released: rehearsing publish in $scratch/clone"
+      publish_steps
+    else
+      if ! has_release_tags; then intentional tag --baseline --version "$unit=0.0.0" >/dev/null; fi
+      intentional check
+      echo "nothing to release at $head: no pending intents"
+    fi
     ;;
   prepare)
     cd "$repo"

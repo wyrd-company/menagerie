@@ -31,13 +31,21 @@ expect() {
 
 git_test() { git -c user.name="Example User" -c user.email=user@example.invalid "$@"; }
 
-# clone_at_head <dir>: a clone of HEAD carrying the working tree's scripts.
+# clone_at_head <dir>: a clone of HEAD carrying the working tree's scripts,
+# with no release tags, no changelog and one fixture intent in place of the
+# repository's own, so every case starts from the same first-release state
+# whatever the repository's pending intents, tags and changelog are.
 clone_at_head() {
   git clone -q --no-local "$repo" "$1"
   git -C "$1" checkout -q --detach "$(git -C "$repo" rev-parse HEAD)"
+  git -C "$1" tag --list | xargs -r git -C "$1" tag -d >/dev/null
   cp "$repo"/scripts/*.sh "$1/scripts/"
   git -C "$1" add scripts
-  git_test -C "$1" commit -q --allow-empty -m "test: scripts under test"
+  git -C "$1" ls-files -z '.intentional/intents/*.md' | xargs -r -0 git -C "$1" rm -q
+  git -C "$1" rm -q --ignore-unmatch CHANGELOG.md
+  (cd "$1" && intentional add --release-unit menagerie:minor --message "A fixture change." >/dev/null)
+  git -C "$1" add .intentional/intents
+  git_test -C "$1" commit -q -m "test: scripts and a fixture intent"
 }
 
 export RELEASE_ACTOR_NAME="Release test" RELEASE_ACTOR_EMAIL=release@example.invalid
@@ -49,8 +57,8 @@ base=$(git -C "$r" rev-parse HEAD)
 expect "prepare commits the release alone on its branch" 0 'prepared 0\.1\.0 on release/0\.1\.0' \
   env RELEASE_PLAN="$scratch/prepare.json" RELEASE_SHA="$base" "$r/scripts/release.sh" prepare
 expect "prepare leaves no tag" 0 '^$' git -C "$r" tag --list
-expect "the release commit changes only the changelog and the intents" 0 '^2$' \
-  sh -c "git -C '$r' diff --name-only HEAD~1 HEAD | grep -Ec '^(CHANGELOG\.md|\.intentional/intents/)'"
+expect "the release commit writes the changelog and deletes the fixture intent, nothing else" 0 '^D:\.intentional/intents/[a-z0-9-]+\.md A:CHANGELOG\.md $' \
+  sh -c "git -C '$r' diff --name-status HEAD~1 HEAD | sort -k2 | awk '{ printf \"%s:%s \", \$1, \$2 }'; echo"
 expect "prepare refuses another commit than RELEASE_SHA" 1 'not 0{40}' \
   env RELEASE_PLAN="$scratch/other.json" RELEASE_SHA=0000000000000000000000000000000000000000 "$r/scripts/release.sh" prepare
 release_tree=$(git -C "$r" rev-parse 'HEAD^{tree}')
@@ -60,9 +68,24 @@ merge() { # merge <tree> <subject>: a squash commit on base, checked out
 }
 
 merge "$release_tree" "chore(release): 0.1.0"
+# CI runs on the merged release commit before publish tags it.
+expect "the rehearsal at a merged release commit rehearses publish" 0 'merged release commit for 0\.1\.0' "$r/scripts/release.sh" rehearse
+expect "the rehearsal at a merged release commit publishes in its clone only" 0 'published 0\.1\.0 .* tags: 0\.0\.0 0\.1\.0' "$r/scripts/release.sh" rehearse
+expect "the rehearsal leaves the merged release untagged" 0 '^$' git -C "$r" tag --list
+if [ -z "${SCRIPTS_TEST_NESTED:-}" ]; then
+  expect "these script tests pass at a merged release commit" 0 'scripts: [0-9]+ passed, 0 failed' \
+    env SCRIPTS_TEST_NESTED=1 "$r/scripts/scripts_test.sh"
+fi
 expect "publish tags a reviewed release and its baseline" 0 'published 0\.1\.0 .* tags: 0\.0\.0 0\.1\.0' \
   env RELEASE_PLAN="$scratch/publish.json" "$r/scripts/release.sh" publish
 expect "publish puts the baseline on the release commit's parent" 0 "^$base$" git -C "$r" rev-parse '0.0.0^{commit}'
+published=$(git -C "$r" rev-parse HEAD)
+expect "the rehearsal after publish finds nothing to release" 0 'nothing to release' "$r/scripts/release.sh" rehearse
+expect "prepare refuses when no intent is pending" 1 'no pending intents' \
+  env RELEASE_PLAN="$scratch/none.json" "$r/scripts/release.sh" prepare
+git_test -C "$r" commit -q --allow-empty -m "test: an ordinary commit after the release"
+expect "the rehearsal at a later commit without intents finds nothing to release" 0 'nothing to release' "$r/scripts/release.sh" rehearse
+git -C "$r" checkout -q --detach "$published"
 
 # A merged release that someone edited after review.
 git -C "$r" checkout -q --detach "$(git -C "$r" rev-parse HEAD)"
