@@ -43,6 +43,9 @@ vars:
   IMAGE_REPOSITORY: ghcr.io/wyrd-company/menagerie
   # renovate: datasource=github-releases depName=openbao/openbao extractVersion=^v(?<version>.*)$
   OPENBAO_VERSION: 2.7.1
+  # The Wyrwood release the acceptance run's controller and agent come from.
+  # renovate: datasource=github-releases depName=wyrd-company/wyrwood
+  WYRWOOD_VERSION: 0.4.0
   # The YAML this repository's tooling owns; package documents have their
   # own owners and checks.
   REPOSITORY_YAML: >-
@@ -84,7 +87,7 @@ tasks:
       - task: template-service:dependencies
       - task: web:lint
       - actionlint .github/workflows/*.yml
-      - shellcheck scripts/*.sh web/test/integrated/run.sh
+      - shellcheck scripts/*.sh web/test/integrated/run.sh web/test/integrated/acceptance.sh docs/demo/record.sh
       - shellcheck -s sh image/rootfs/etc/s6-overlay/scripts/* image/rootfs/etc/s6-overlay/s6-rc.d/*/finish image/rootfs/etc/s6-overlay/s6-rc.d/*/run image/rootfs/usr/local/bin/*
       - ryl check --config-file .ryl.yml {{.REPOSITORY_YAML}}
       - rumdl check .
@@ -211,8 +214,7 @@ tasks:
       STATE:
         sh: mkdir -p "{{.SCRATCH}}" && mktemp -d "{{.SCRATCH}}/acceptance.XXXXXX"
     env:
-      # renovate: datasource=github-releases depName=wyrd-company/wyrwood
-      WYRWOOD_VERSION: 0.4.0
+      WYRWOOD_VERSION: '{{.WYRWOOD_VERSION}}'
       OPENBAO_VERSION: '{{.OPENBAO_VERSION}}'
     cmds:
       - defer: web/test/integrated/acceptance.sh down '{{.STATE}}'
@@ -220,6 +222,20 @@ tasks:
       - web/test/integrated/acceptance.sh suite '{{.STATE}}'
       - web/test/integrated/acceptance.sh fixture '{{.STATE}}'
       - web/test/integrated/acceptance.sh test '{{.STATE}}'
+
+  demo:
+    desc: Record docs/assets/demo.gif and the documentation's screenshots against a fresh acceptance fixture (needs ffmpeg, gifsicle and ImageMagick)
+    vars:
+      STATE:
+        sh: mkdir -p "{{.SCRATCH}}" && mktemp -d "{{.SCRATCH}}/demo.XXXXXX"
+    env:
+      WYRWOOD_VERSION: '{{.WYRWOOD_VERSION}}'
+      OPENBAO_VERSION: '{{.OPENBAO_VERSION}}'
+    cmds:
+      - defer: web/test/integrated/acceptance.sh down '{{.STATE}}'
+      - web/test/integrated/acceptance.sh up '{{.STATE}}'
+      - web/test/integrated/acceptance.sh fixture '{{.STATE}}'
+      - docs/demo/record.sh '{{.STATE}}'
 
   test:image:
     desc: Build the image on a disposable Docker daemon; start, sign in to, fail and stop it; create and upgrade an operator-owned workspace through it

@@ -21,6 +21,7 @@
     "playwright.config.ts",
     "playwright.integrated.config.ts",
     "playwright.acceptance.config.ts",
+    "playwright.demo.config.ts",
     "test"
   ]
 }
