@@ -1,0 +1,17 @@
+# The image builds from these sources only.
+*
+!go.mod
+!go.sum
+!backend/
+!web/
+!template-service/
+!image/
+
+# Local build output and dependencies are rebuilt in the image.
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+web/evidence/
+template-service/target/
+**/*.test

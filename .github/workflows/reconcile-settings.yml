@@ -1,0 +1,48 @@
+# relationships:
+#   references: [repo-settings]
+name: Reconcile settings
+
+# Agents propose, deterministic workflows dispose. The declared state in
+# .github/repo-settings.yml is applied here, by a workflow holding the
+# credential, never by an agent calling the API. It runs only on the default
+# branch, which the ruleset gates behind an approved pull request; fork pull
+# requests receive no secrets.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/repo-settings.yml
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: reconcile-settings
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Apply declared settings
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      - env:
+          REPO_SETTINGS_APP_ID: ${{ vars.REPO_SETTINGS_APP_ID }}
+          REPO_SETTINGS_APP_PRIVATE_KEY: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
+        run: task settings:credentials
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.REPO_SETTINGS_APP_ID }}
+          private-key: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+      - env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: task settings:apply

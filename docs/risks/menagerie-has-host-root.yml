@@ -1,0 +1,22 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: menagerie-has-host-root
+title: Menagerie has root on the host
+description: >-
+  Menagerie mounts the rootful Docker socket, so whoever controls Menagerie
+  controls the host. This includes a manager, an attacker who gets past
+  sign-in, and any template hook or `initializeCommand`, which run inside
+  the Menagerie container. This is the same access a manager has when
+  running devcontainer-builder on the host. Mitigation: only members of the
+  `menagerie_managers` group reach the UI; the UI is not exposed to the
+  public internet; only templates on the approved template list are used;
+  Menagerie stores no keys or tokens. A body-inspecting Docker proxy and
+  hooks in throwaway containers reduce this exposure.
+categories:
+  - security
+likelihood: 2
+impact: 5
+response-strategy: accept
+status: accepted

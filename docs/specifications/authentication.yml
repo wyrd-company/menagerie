@@ -1,0 +1,129 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  references:
+    - menagerie
+    - configuration
+    - workspace-api
+    - identity-provider-grants-manager-access
+format: http
+description: >-
+  The workspace service signs managers in through OpenID Connect and serves
+  every route except the public ones only to a browser with a manager
+  session. Menagerie is a public client: it has no client secret and uses
+  the authorization code flow with PKCE (`S256`). The OIDC libraries
+  `github.com/coreos/go-oidc/v3` and `golang.org/x/oauth2` discover the
+  provider, build the authorization request, exchange the code and verify
+  the ID token's signature (asymmetric algorithms the provider advertises),
+  issuer, audience (the client id) and expiry.
+
+
+  Public routes are exactly `GET /healthz`, `GET /auth/login`,
+  `GET /auth/callback`, `POST /auth/logout` and `GET /auth/signed-out`,
+  compared on the escaped request path. Every other path needs a session,
+  including the web UI and its assets, every `/api/` route, job event
+  streams and any route added later. Without one, a `GET` or `HEAD` outside
+  `/api/` answers `303` to `/auth/login?return=<path and query>`, and any
+  other request answers `401` with the API error envelope, kind
+  `unauthenticated`; the web UI then sends the browser to
+  `/auth/login?return=<current path>`. The gate passes requests to the API
+  without wrapping the response, so event streams flush as before.
+
+
+  `GET /auth/login?return=<path>` starts a sign-in. `return` is kept only
+  when it is a path on this origin: it starts with one `/`, is not `//` or
+  `/\`, holds no backslash or control character, has no scheme or host and
+  is not under `/auth/`; otherwise the browser returns to `/`. A browser
+  that already has a session goes straight to `return`. Otherwise the
+  service discovers the provider, records a pending sign-in (random state,
+  nonce and PKCE verifier, the return path and the browser's login-binding
+  value) and redirects to the authorization endpoint with `response_type`
+  `code`, the configured scopes, the state, the nonce and the `S256`
+  challenge. The login-binding cookie holds a random value that every tab of
+  the browser shares, so sign-ins in several tabs can complete. At most 256
+  sign-ins are pending; starting another drops the oldest, whose callback
+  then asks for a new sign-in. Pending sign-ins have no deadline.
+
+
+  `GET /auth/callback` takes the pending sign-in named by `state` exactly
+  once, whatever the outcome, and refuses it unless the browser presents
+  the login-binding value recorded for it (`400`, page kind
+  `sign-in-expired`). It refuses an `iss` parameter that names another
+  issuer, and a missing `iss` when the provider advertises
+  `authorization_response_iss_parameter_supported` (RFC 9207), before the
+  code reaches the token endpoint (`401`, `sign-in-rejected`). A provider
+  `error` answers `401` `sign-in-refused`; a missing code `400`
+  `sign-in-invalid`. The code is exchanged with the recorded verifier and no
+  client secret; a refused exchange or an ID token that fails verification
+  or carries another nonce answers `401` `sign-in-rejected`, and an
+  unreachable provider `502` `identity-provider-unavailable`, as does
+  discovery failure at login. The groups claim is read from the ID token,
+  or, when the ID token has no `groups` claim, from userinfo, whose `sub`
+  must equal the ID token's (otherwise `sign-in-rejected`). It must be an
+  array of strings (otherwise `sign-in-rejected`) and contain exactly
+  `menagerie_managers`. A verified callback first ends any session the
+  browser held. A member gets a new session with a fresh random id and
+  returns to the recorded path with `303`; anyone else answers `403` page
+  kind `not-a-manager` and gets no session, so authenticated means manager.
+  Membership is checked at every sign-in and only then. Pages carry their
+  kind as `data-kind` on `main` and a sign-in link.
+
+
+  `POST /auth/logout` ends the browser's session, if any, clears its cookie
+  and answers `303` to `/auth/signed-out`. It needs no session, so a stale
+  tab can sign out. It ends only the Menagerie session; the provider's own
+  session remains, so the next sign-in may not ask for credentials.
+
+
+  Every route, public ones included, passes through net/http's
+  `CrossOriginProtection`: `POST` and other non-safe methods are refused
+  with `403` kind `cross-origin-request` when `Sec-Fetch-Site` is present
+  and is not `same-origin` or `none`, or, without `Sec-Fetch-Site`, when an
+  `Origin` header's host differs from the request's `Host`. The origin of
+  `oidc.redirect-url` is trusted, so a reverse proxy that changes `Host`
+  does not refuse the browser. Requests without either header come from
+  non-browser clients, which carry no browser cookies, and are allowed. The
+  web UI's plain logout form and its `fetch` requests need no token.
+  `GET`, `HEAD` and `OPTIONS` change no state except the sign-in routes,
+  whose state and binding checks protect them.
+
+
+  Cookies are `HttpOnly`, `SameSite=Lax`, `Path=/`, without `Domain`,
+  `Expires` or `Max-Age`, so they end with the browser session. With an
+  `https` redirect URL they are `Secure` and named
+  `__Host-menagerie-session` and `__Host-menagerie-login`; with `http`,
+  `menagerie-session` and `menagerie-login`. Sessions are held only in the
+  memory of the running process: a restart of Menagerie signs every
+  browser out, and no session has a server-side deadline. A session ends at
+  sign-out, at the next sign-in in that browser, at a Menagerie restart, or
+  when the browser discards its session cookies. Removing a user from
+  `menagerie_managers` takes effect at that user's next sign-in; restart
+  Menagerie to end existing sessions at once. The service stores no token,
+  key or client secret; ID and access tokens are used during the callback
+  and dropped.
+
+
+  Operator setup: register a public (no secret) OIDC client with PKCE,
+  allow the redirect URI `https://<menagerie host>/auth/callback`, release
+  the `groups` claim for the `groups` scope, and create the group
+  `menagerie_managers` holding the managers. With Pocket ID: create the
+  OIDC client with "Public client" and "PKCE" on and that callback URL,
+  create a group named `menagerie_managers` and add the managers; Pocket ID
+  puts `groups` in the ID token. Then set `oidc.issuer` to the provider's
+  issuer URL, `oidc.client-id` to the client id and `oidc.redirect-url` to
+  the registered redirect URI. Set `oidc.scopes` only when the provider
+  needs other scopes to release `groups`.
+validation-criteria: >-
+  `go test ./backend/internal/auth/` runs the flow against an in-process
+  OIDC issuer over real HTTP that checks PKCE, client, redirect URI and
+  single use of codes: manager sign-in with return path, PKCE/state/nonce
+  request shape, non-manager refusal, groups from the ID token and userinfo,
+  invalid ID tokens (issuer, audience, signature, nonce, expiry), state
+  binding, replay, two tabs, stolen codes, `iss`, provider refusal and
+  outage, local return paths, session rotation, logout, cross-origin
+  refusal per `Sec-Fetch-Site`/`Origin` and cookie attributes.
+  `go test ./backend/cmd/menagerie/` composes the real API server and web
+  UI as `main` does and walks every mounted route without a session, as a
+  non-manager and cross-site, proving no operation runs, no job is created
+  and no job state or log is read, and that a manager reaches every route
+  and streams job events. `task test:pocketid` in `backend/` repeats
+  manager and non-manager sign-in through a disposable Pocket ID container.

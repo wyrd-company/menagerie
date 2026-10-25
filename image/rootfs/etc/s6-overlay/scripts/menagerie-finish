@@ -1,0 +1,19 @@
+#!/bin/sh
+# s6 runs this when a Menagerie service stops: with its exit status, or
+# with 256 and the signal number when a signal ended it. Either service
+# stopping stops the container, so the Docker restart policy restarts the
+# whole of Menagerie and `docker ps` shows the failure. The first service to
+# stop sets the container's exit code.
+service=$1 status=$2 signal=${3:-0}
+if [ "$status" -eq 256 ]; then
+  code=$((128 + signal))
+  reason="signal $signal"
+else
+  code=$status
+  reason="exit status $status"
+fi
+echo "menagerie: $service stopped ($reason); stopping the container" >&2
+if mkdir /run/menagerie-stopping 2>/dev/null; then
+  echo "$code" > /run/s6-linux-init-container-results/exitcode
+fi
+exec /run/s6/basedir/bin/halt

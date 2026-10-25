@@ -1,0 +1,12 @@
+# rumdl configuration.
+
+[global]
+# Intent files are records written by `intentional add`: YAML frontmatter plus
+# a single prose paragraph. Their shape is owned by the tool, not this repo's
+# Markdown conventions.
+exclude = [".intentional/intents", "web/node_modules", "CHANGELOG.md"]
+
+[MD013]
+# Commands and tables keep their natural width.
+code-blocks = false
+tables = false

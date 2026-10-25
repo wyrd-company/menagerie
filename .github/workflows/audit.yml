@@ -1,0 +1,45 @@
+# relationships:
+#   references: [taskfile]
+name: Audit
+
+# The organisation's repository-standards audit, read-only. Airlock refuses a
+# token it cannot prove carries no write permission.
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Audit repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      - id: airlock
+        uses: wyrd-company/airlock@042095dc6cf7a91cc1eee7c4909d24554c1b9abd # 0.0.0 (unreleased main)
+        env:
+          AIRLOCK_TOKEN: ${{ secrets.AIRLOCK_TOKEN }}
+        with:
+          format: json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.airlock.outputs.findings-location != ''
+        with:
+          name: airlock-findings
+          path: ${{ steps.airlock.outputs.findings-location }}
+          if-no-files-found: error
+      - if: always() && steps.airlock.outputs.outcome != ''
+        env:
+          AIRLOCK_OUTCOME: ${{ steps.airlock.outputs.outcome }}
+          AIRLOCK_COMPLETE: ${{ steps.airlock.outputs.complete }}
+        run: task audit:summary

@@ -1,0 +1,68 @@
+# relationships:
+#   references: [taskfile]
+name: CD
+
+# Delivers the image for a release tag. A dispatch re-delivers an existing
+# release tag for recovery; it cannot create a release.
+on:
+  push:
+    tags:
+      - '[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to deliver again
+        required: true
+        type: string
+
+permissions: {}
+
+# A cancelled push can leave the registry half updated.
+concurrency:
+  group: cd-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Check the release tag
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+          fetch-tags: true
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      - id: check
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: task release:tag
+
+  image:
+    name: Build and push the image
+    needs: tag
+    if: needs.tag.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      - env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: task release:image

@@ -1,0 +1,41 @@
+# https://taskfile.dev
+version: "3"
+
+tasks:
+  check:
+    desc: Run every template service check.
+    cmds:
+      - task: lint
+      - task: dependencies
+      - task: test
+
+  format:
+    desc: Apply Rust formatting.
+    cmds:
+      - cargo fmt
+
+  lint:
+    desc: Check Rust formatting and lint every target with warnings as errors.
+    cmds:
+      - cargo fmt --check
+      - cargo clippy --locked --all-targets -- -D warnings
+
+  test:
+    desc: Run the unit, Unix-socket and binary tests against Toha.
+    cmds:
+      - cargo test --locked
+
+  dependencies:
+    desc: Check that Toha resolves with no features, so no CLI crates enter the build.
+    cmds:
+      - |
+        features="$(cargo tree --locked -e features -i toha --prefix none | grep -F 'toha feature' || true)"
+        if [ -n "$features" ]; then echo "Toha features enabled: $features"; exit 1; fi
+        cli="$(cargo tree --locked -e normal,build --prefix none --no-dedupe | grep -E '^(clap|inquire) v' || true)"
+        if [ -n "$cli" ]; then echo "CLI crates in the build: $cli"; exit 1; fi
+        cargo tree --locked -i toha --prefix none --depth 0
+
+  build:
+    desc: Build the release binary.
+    cmds:
+      - cargo build --locked --release

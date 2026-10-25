@@ -1,0 +1,397 @@
+# ---
+# relationships:
+#   references: [menagerie]
+# ---
+# The same verb means the same thing in every repository.
+#
+#   build    the UI, the workspace service with the UI embedded, and the
+#            template service, into bin/                       (applicable)
+#   test     every suite that needs no Docker daemon             (always)
+#   lint     static analysis, non-mutating                       (always)
+#   format   apply formatting, mutating                          (always)
+#   check    everything CI runs, the live suites included        (always)
+#   dev      the web UI with hot reload                          (applicable)
+#
+# Menagerie is a runnable application, so build and dev apply. The packages
+# keep their own taskfiles; every include sets dir so their commands run in
+# their own folder.
+#
+# The live suites (test:live) need a Docker Engine that may run privileged
+# containers, and OpenBao's bao on PATH. Builds and devcontainers run on a
+# disposable docker:dind daemon (scripts/isolated-docker.sh), never on the
+# ambient daemon's BuildKit. Scratch state lives under MENAGERIE_SCRATCH, by
+# default ~/.cache/menagerie: a path the ambient daemon sees at the same
+# path, unlike a container-private /tmp. Test binaries run with a test-only
+# 10m bound; each live suite finished in under 1 minute on the shared host.
+# test:acceptance downloads the Wyrwood and OpenBao releases it runs, needs
+# the Playwright browser, and publishes ports 18640 to 18642 on 127.0.0.1
+# (MENAGERIE_ACCEPTANCE_*PORT to move them); it took about 6 minutes.
+version: "3"
+
+includes:
+  backend:
+    taskfile: ./backend
+    dir: ./backend
+  template-service:
+    taskfile: ./template-service
+    dir: ./template-service
+  web:
+    taskfile: ./web
+    dir: ./web
+
+vars:
+  CARGO_TARGET: '{{.CARGO_TARGET_DIR | default (print .ROOT_DIR "/template-service/target")}}'
+  SCRATCH: '{{.MENAGERIE_SCRATCH | default (print .HOME "/.cache/menagerie")}}'
+  IMAGE: '{{.MENAGERIE_IMAGE | default "menagerie:dev"}}'
+  IMAGE_REPOSITORY: ghcr.io/wyrd-company/menagerie
+  # renovate: datasource=github-releases depName=openbao/openbao extractVersion=^v(?<version>.*)$
+  OPENBAO_VERSION: 2.7.1
+  # The Wyrwood release the acceptance run's controller and agent come from.
+  # renovate: datasource=github-releases depName=wyrd-company/wyrwood
+  WYRWOOD_VERSION: 0.4.0
+  # The YAML this repository's tooling owns; package documents have their
+  # own owners and checks.
+  REPOSITORY_YAML: >-
+    taskfile.yml backend/taskfile.yml template-service/taskfile.yml web/taskfile.yml
+    deploy/compose.yml deploy/config.yml .github/*.yml .github/workflows/*.yml
+    .config/lefthook.yml .ryl.yml
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build the UI, then the workspace service that embeds it, then the template service, into bin/
+    cmds:
+      # The workspace service embeds web/dist, so the UI builds first.
+      - task: web:build
+      - mkdir -p bin
+      - CGO_ENABLED=0 go build -trimpath -o bin/menagerie ./backend/cmd/menagerie
+      - cargo build --locked --release --manifest-path template-service/Cargo.toml --target-dir '{{.CARGO_TARGET}}'
+      - cp '{{.CARGO_TARGET}}/release/menagerie-template-service' bin/menagerie-template-service
+
+  test:
+    desc: Run every suite that needs no Docker daemon, OpenBao or identity provider
+    cmds:
+      - task: backend:test
+      - task: template-service:test
+      - task: web:test
+      - task: web:test:browser
+      - task: test:scripts
+
+  lint:
+    desc: Static analysis of every package and of the repository's workflows, scripts, YAML and Markdown, non-mutating
+    cmds:
+      - task: backend:lint
+      - task: template-service:lint
+      - task: template-service:dependencies
+      - task: web:lint
+      - actionlint .github/workflows/*.yml
+      - shellcheck scripts/*.sh web/test/integrated/run.sh web/test/integrated/acceptance.sh docs/demo/record.sh
+      - shellcheck -s sh image/rootfs/etc/s6-overlay/scripts/* image/rootfs/etc/s6-overlay/s6-rc.d/*/finish image/rootfs/etc/s6-overlay/s6-rc.d/*/run image/rootfs/usr/local/bin/*
+      - ryl check --config-file .ryl.yml {{.REPOSITORY_YAML}}
+      - rumdl check .
+      - node scripts/check-renovate-pins.mjs > /dev/null
+      - node scripts/check-workflows.mjs
+      - node scripts/check-docs.mjs
+
+  format:staged:
+    desc: Format only the named files (the pre-commit hook passes the staged ones)
+    cmds:
+      - scripts/staged.sh format {{.CLI_ARGS}}
+
+  lint:staged:
+    desc: Lint only the named files with their file-level linters (the pre-commit hook passes the staged ones)
+    cmds:
+      - scripts/staged.sh lint {{.CLI_ARGS}}
+
+  lint:commit-msg:
+    desc: Check a conventional commit subject, given as text or as a commit message file
+    silent: true
+    cmds:
+      # The subject arrives as one shell-quoted argument, so a title with
+      # quotes or metacharacters is data rather than script.
+      - sh scripts/check-commit-subject.sh {{.CLI_ARGS}}
+
+  format:
+    desc: Apply formatting to every package
+    cmds:
+      - task: backend:format
+      - task: template-service:format
+      - task: web:format
+
+  dev:
+    desc: Serve the web UI with hot reload against the fixture server, or MENAGERIE_URL when set
+    cmds:
+      - task: web:dev
+
+  build:image:
+    desc: Build the Menagerie image for this machine's platform on the ambient Docker daemon, tagged IMAGE (menagerie:dev)
+    cmds:
+      - docker build -t '{{.IMAGE}}' .
+
+  test:scripts:
+    desc: Test the release, CI and hook scripts against real Git, Intentional and lefthook in scratch clones (needs intentional, jq, yq and lefthook)
+    cmds:
+      - scripts/scripts_test.sh
+
+  test:scripts:docker:
+    desc: Test that the disposable daemon's cleanup keeps foreign objects named like its own
+    cmds:
+      - scripts/isolated-docker_test.sh
+
+  test:live:
+    desc: Run every suite that needs Docker or OpenBao
+    cmds:
+      - task: test:scripts:docker
+      - task: test:docker
+      - task: test:openbao
+      - task: test:pocketid
+      - task: test:templateservice
+      - task: test:templateservice:docker
+      - task: test:integrated
+      - task: test:image
+      - task: test:image:cross
+      - task: test:acceptance
+
+  test:docker:
+    desc: Run the devcontainer runtime's Docker suite on a disposable Docker daemon
+    vars:
+      STATE: '{{.SCRATCH}}/docker'
+      OWNER:
+        sh: od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'
+    cmds:
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
+      - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/devcontainer.test' ./backend/internal/devcontainer/
+      - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/devcontainer.test' -test.v -test.count=1 -test.timeout 10m
+
+  test:openbao:
+    desc: Read registry credentials from a disposable OpenBao dev server (needs bao on PATH)
+    cmds:
+      - task: backend:test:openbao
+
+  test:pocketid:
+    desc: Sign in through a disposable Pocket ID on the ambient Docker daemon
+    cmds:
+      - task: backend:test:pocketid
+
+  test:templateservice:
+    desc: Run create and upgrade against the template service binary, without Docker
+    cmds:
+      - task: backend:test:templateservice
+
+  test:templateservice:docker:
+    desc: Run create and upgrade with the acceptance devcontainer on a disposable Docker daemon
+    vars:
+      STATE: '{{.SCRATCH}}/templateservice'
+      OWNER:
+        sh: od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'
+    cmds:
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
+      - cargo build --locked --release --manifest-path template-service/Cargo.toml --target-dir '{{.CARGO_TARGET}}'
+      - CGO_ENABLED=0 go test -c -tags 'templateservice docker' -o '{{.STATE}}/workflows.test' ./backend/internal/workflows/
+      - >-
+        scripts/isolated-docker.sh run '{{.STATE}}'
+        -c '{{.CARGO_TARGET}}/release/menagerie-template-service'
+        -e MENAGERIE_TEMPLATE_SERVICE=/menagerie-work/bin/menagerie-template-service
+        '{{.STATE}}/workflows.test' -test.v -test.count=1 -test.timeout 10m
+
+  test:integrated:
+    desc: Drive the built UI against the real workspace service, template service, Pocket ID and an owned Docker daemon
+    vars:
+      STATE:
+        sh: mkdir -p "{{.SCRATCH}}" && mktemp -d "{{.SCRATCH}}/integrated.XXXXXX"
+    cmds:
+      # run.sh builds the UI before the workspace service that embeds it.
+      - defer: web/test/integrated/run.sh down '{{.STATE}}'
+      - web/test/integrated/run.sh up '{{.STATE}}'
+      - web/test/integrated/run.sh test '{{.STATE}}'
+
+  test:acceptance:
+    desc: Build the image on a disposable Docker daemon, bind it with a real Wyrwood agent, and drive the UI story, failures and restart through it
+    vars:
+      STATE:
+        sh: mkdir -p "{{.SCRATCH}}" && mktemp -d "{{.SCRATCH}}/acceptance.XXXXXX"
+    env:
+      WYRWOOD_VERSION: '{{.WYRWOOD_VERSION}}'
+      OPENBAO_VERSION: '{{.OPENBAO_VERSION}}'
+    cmds:
+      - defer: web/test/integrated/acceptance.sh down '{{.STATE}}'
+      - web/test/integrated/acceptance.sh up '{{.STATE}}'
+      - web/test/integrated/acceptance.sh suite '{{.STATE}}'
+      - web/test/integrated/acceptance.sh fixture '{{.STATE}}'
+      - web/test/integrated/acceptance.sh test '{{.STATE}}'
+
+  demo:
+    desc: Record docs/assets/demo.gif and the documentation's screenshots against a fresh acceptance fixture (needs ffmpeg, gifsicle and ImageMagick)
+    vars:
+      STATE:
+        sh: mkdir -p "{{.SCRATCH}}" && mktemp -d "{{.SCRATCH}}/demo.XXXXXX"
+    env:
+      WYRWOOD_VERSION: '{{.WYRWOOD_VERSION}}'
+      OPENBAO_VERSION: '{{.OPENBAO_VERSION}}'
+    cmds:
+      - defer: web/test/integrated/acceptance.sh down '{{.STATE}}'
+      - web/test/integrated/acceptance.sh up '{{.STATE}}'
+      - web/test/integrated/acceptance.sh fixture '{{.STATE}}'
+      - docs/demo/record.sh '{{.STATE}}'
+
+  test:image:
+    desc: Build the image on a disposable Docker daemon; start, sign in to, fail and stop it; create and upgrade an operator-owned workspace, and create, start and rebuild a feature-bearing one, through it
+    vars:
+      STATE: '{{.SCRATCH}}/image'
+      OWNER:
+        sh: od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'
+    cmds:
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
+      - CGO_ENABLED=0 go test -c -tags 'pocketid image' -o '{{.STATE}}/image.test' ./backend/cmd/menagerie/
+      - scripts/isolated-docker.sh build '{{.STATE}}' -t menagerie:test
+      - >-
+        scripts/isolated-docker.sh run '{{.STATE}}' -e MENAGERIE_IMAGE=menagerie:test
+        '{{.STATE}}/image.test' -test.run '^TestImage(OperatorWorkspace|WorkspaceFeatures)?$' -test.v -test.count=1 -test.timeout 10m
+
+  test:image:cross:
+    desc: Cross-compile the image's binaries for linux/arm64 on a disposable Docker daemon and check that each is aarch64
+    vars:
+      STATE: '{{.SCRATCH}}/image-cross'
+      OWNER:
+        sh: od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'
+    cmds:
+      # The arm64 image's final stage installs packages as arm64 and needs
+      # emulation; CD builds it. This proves the cross-compiled binaries.
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
+      - >-
+        scripts/isolated-docker.sh build '{{.STATE}}' --platform linux/arm64 --target binaries
+        --output type=local,dest=/menagerie-work/arm64
+      - |
+        scripts/isolated-docker.sh shell '{{.STATE}}' '
+          set -e
+          for binary in /menagerie-work/arm64/menagerie /menagerie-work/arm64/menagerie-folders /menagerie-work/arm64/menagerie-template-service; do
+            machine=$(od -An -t u2 -j 18 -N 2 "$binary" | tr -d " ")
+            [ "$machine" = 183 ] || { echo "$binary has ELF machine $machine, not aarch64 (183)"; exit 1; }
+            echo "$binary: aarch64"
+          done'
+
+  release:
+    desc: On main, apply the pending intents, commit them as chore(release) <version> and tag it; then push with git push --atomic --follow-tags origin main
+    cmds:
+      - scripts/release.sh release
+
+  release:rehearse:
+    desc: Rehearse the next release in a scratch clone of HEAD and check that CD would deliver its tag, then discard it
+    cmds:
+      - scripts/release.sh rehearse
+
+  release:tag:
+    desc: Check that RELEASE_TAG is an Intentional release record to deliver (CD only)
+    cmds:
+      - scripts/release-tag.sh
+
+  release:image:
+    desc: Build the image for linux/amd64 and linux/arm64 and push it as IMAGE_REPOSITORY:RELEASE_TAG (CD only)
+    requires:
+      vars: [RELEASE_TAG]
+    cmds:
+      - >-
+        docker buildx build --platform linux/amd64,linux/arm64
+        --build-arg VERSION='{{.RELEASE_TAG}}'
+        --tag '{{.IMAGE_REPOSITORY}}:{{.RELEASE_TAG}}'
+        --push .
+
+  setup:
+    desc: Install every tool the checks use and the Git hooks (the devcontainer runs this)
+    cmds:
+      - task: tools:install:linters
+      - task: tools:install:intentional
+      - task: tools:install:openbao
+      - task: tools:install:browser
+      - task: tools:install:lefthook
+      - lefthook install
+
+  tools:install:linters:
+    desc: Install the repository linters (Debian or Ubuntu, amd64)
+    cmds:
+      - sudo apt-get update
+      - sudo apt-get install --yes shellcheck
+      # renovate: datasource=go depName=github.com/rhysd/actionlint
+      - go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - '[ -z "${GITHUB_PATH:-}" ] || go env GOPATH | sed "s|$|/bin|" >> "$GITHUB_PATH"'
+      # renovate: datasource=crate depName=ryl
+      - cargo install --locked ryl --version 0.21.0
+      # renovate: datasource=crate depName=rumdl
+      - cargo install --locked rumdl --version 0.3.0
+
+  tools:install:lefthook:
+    desc: Install lefthook, which the Git hooks and the hook test use
+    cmds:
+      # renovate: datasource=go depName=github.com/evilmartians/lefthook/v2
+      - go install github.com/evilmartians/lefthook/v2@v2.2.2
+      - '[ -z "${GITHUB_PATH:-}" ] || go env GOPATH | sed "s|$|/bin|" >> "$GITHUB_PATH"'
+
+  tools:install:intentional:
+    desc: Install Intentional
+    cmds:
+      # renovate: datasource=crate depName=intentional-cli
+      - cargo install --locked intentional-cli --version 0.1.6
+
+  tools:install:openbao:
+    desc: Install OpenBao's bao, checked against its release checksums (Linux amd64)
+    cmds:
+      - |
+        set -eu
+        dir=$(mktemp -d)
+        url=https://github.com/openbao/openbao/releases/download/v{{.OPENBAO_VERSION}}
+        archive=openbao_{{.OPENBAO_VERSION}}_linux_amd64.tar.gz
+        curl -fsSL -o "$dir/$archive" "$url/$archive"
+        curl -fsSL -o "$dir/checksums.txt" "$url/checksums.txt"
+        (cd "$dir" && grep " $archive\$" checksums.txt | sha256sum -c -)
+        mkdir -p "$HOME/.local/bin"
+        tar -xzf "$dir/$archive" -C "$HOME/.local/bin" bao
+        [ -z "${GITHUB_PATH:-}" ] || echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/bao" version
+
+  tools:install:browser:
+    desc: Install the Chromium revision Playwright names, with its system packages
+    deps: [web:install]
+    dir: web
+    cmds:
+      - pnpm exec playwright install --with-deps chromium
+
+  settings:credentials:
+    desc: Fail unless the repo-settings app's id and private key are configured (reconcile workflow only)
+    cmds:
+      - sh scripts/require-env.sh REPO_SETTINGS_APP_ID REPO_SETTINGS_APP_PRIVATE_KEY
+
+  settings:apply:
+    desc: Apply .github/repo-settings.yml to REPO with GH_TOKEN (reconcile workflow only)
+    cmds:
+      - scripts/apply-settings.sh
+
+  audit:summary:
+    desc: Append the scheduled audit outcome to the GitHub job summary
+    requires:
+      vars: [GITHUB_STEP_SUMMARY, AIRLOCK_OUTCOME, AIRLOCK_COMPLETE]
+    cmds:
+      - |
+        {
+          echo "## Airlock audit"
+          echo
+          echo "- Outcome: \`$AIRLOCK_OUTCOME\`"
+          echo "- Complete: \`$AIRLOCK_COMPLETE\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+  check:
+    desc: Everything CI runs; run this before pushing
+    cmds:
+      - task: lint
+      - task: test
+      - task: build
+      - task: release:rehearse
+      - task: test:live

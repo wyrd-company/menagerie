@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Menagerie configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "workspace-root",
+    "workspace-repository",
+    "wyrwood-directory",
+    "oidc"
+  ],
+  "properties": {
+    "listen": {
+      "type": "string",
+      "default": ":8080",
+      "description": "HTTP listen address of the workspace service."
+    },
+    "workspace-root": {
+      "type": "string",
+      "pattern": "^/.",
+      "description": "Absolute folder whose direct child folders are the workspaces. Same path in the container and on the host; not the filesystem root."
+    },
+    "workspace-repository": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Git remote holding one backup branch per workspace."
+    },
+    "wyrwood-directory": {
+      "type": "string",
+      "pattern": "^/",
+      "description": "Absolute Wyrwood consumer directory holding the SSH agent socket."
+    },
+    "templates": {
+      "type": "array",
+      "description": "Approved templates. Ids are unique.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "address"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Toha template address."
+          }
+        }
+      }
+    },
+    "oidc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issuer",
+        "client-id",
+        "redirect-url"
+      ],
+      "properties": {
+        "issuer": {
+          "type": "string",
+          "pattern": "^https?://[^/]",
+          "description": "OIDC issuer URL; discovery reads {issuer}/.well-known/openid-configuration."
+        },
+        "client-id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Id of the public client registered for Menagerie."
+        },
+        "redirect-url": {
+          "type": "string",
+          "pattern": "^https?://[^/?#@]+/auth/callback$",
+          "description": "Redirect URI registered for the client: the origin browsers use for Menagerie followed by /auth/callback. With https every cookie is Secure."
+        },
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "contains": {
+            "const": "openid"
+          },
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\s\"\\\\]+$"
+          },
+          "default": [
+            "openid",
+            "profile",
+            "groups"
+          ],
+          "description": "Scopes requested at sign-in. They must include openid; the provider must then release the groups claim in the ID token or userinfo."
+        }
+      },
+      "description": "Identity provider and Menagerie's public OIDC client. The client has no secret: it uses the authorization code flow with PKCE S256."
+    },
+    "template-service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "socket": {
+          "type": "string",
+          "pattern": "^/",
+          "default": "/run/menagerie/template.sock",
+          "description": "Unix socket of the template service."
+        }
+      }
+    },
+    "registry-credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kv-mount"
+      ],
+      "description": "OpenBao secrets holding container registry credentials, read through the vault socket in wyrwood-directory. Absent, every registry is anonymous.",
+      "properties": {
+        "kv-mount": {
+          "type": "string",
+          "minLength": 1,
+          "description": "KV version 2 mount path."
+        },
+        "registries": {
+          "type": "array",
+          "description": "One entry per registry; registry names are unique after normalization (lower case, Docker Hub aliases as docker.io).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "registry",
+              "path"
+            ],
+            "properties": {
+              "registry": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Registry host or host:port; docker.io, index.docker.io, registry-1.docker.io and https://index.docker.io/v1/ name Docker Hub."
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Secret path in the KV mount; its username and password fields hold the credentials."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

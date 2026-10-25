@@ -1,0 +1,85 @@
+name: sample-kit
+description: A generic sample template that asks every question type
+
+schemas: schemas
+
+interview:
+  - id: title
+    type: text
+    prompt: Title
+    description: Shown at the top of the generated readme.
+    placeholder: Sample project
+    required: true
+    validate:
+      min: 3
+      max: 40
+
+  - id: notes
+    type: multiline
+    prompt: Notes
+    description: Free text copied into the readme.
+
+  - id: remote
+    type: git
+    prompt: Remote repository
+    placeholder: https://example.test/sample.git
+
+  - id: enabled
+    type: confirm
+    prompt: Enable the sample service?
+    required: true
+    default: true
+
+  - id: verbose
+    type: confirm
+    prompt: Verbose logging?
+
+  - id: size
+    type: select
+    prompt: Size
+    required: true
+    options: [small, medium, large, halt]
+    default: medium
+
+  - id: palette
+    type: select
+    prompt: Palette
+    options: [red, green, blue]
+
+  - id: features
+    type: multiselect
+    prompt: Features
+    options: [alpha, beta, gamma, delta]
+    default: [alpha]
+    validate:
+      min: 1
+      max: 3
+
+  - id: labels
+    type: text
+    prompt: Label
+    loop:
+      min: 0
+      max: 3
+    validate:
+      regex: "^[a-z0-9-]+$"
+
+  - id: settings
+    type: document
+    prompt: Settings document
+    schema: https://schemas.example.test/sample-settings/1
+    input: settings.json
+
+  - message: "Sample kit for {{ title }}."
+
+  - flow: stop
+    label: halt-requested
+    when: size == 'halt'
+
+  - id: slug
+    type: text
+    prompt: Folder name
+    required: true
+    default: "{{ title | kebab }}"
+    validate:
+      regex: "^[a-z0-9-]+$"

@@ -1,0 +1,8 @@
+#!/command/with-contenv sh
+# The workspace service: the web UI, sign-in, the workspace API and Docker.
+# It reads /etc/menagerie/config.yml.
+# It runs as the user menagerie-prepare chose.
+# shellcheck source=/dev/null disable=SC2154 # menagerie-prepare writes these values
+. /run/menagerie-identity
+export HOME="$home" USER="$user" LOGNAME="$user"
+exec /command/s6-applyuidgid -u "$uid" -g "$gid" -G "$groups" /usr/local/bin/menagerie

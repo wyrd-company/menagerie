@@ -1,0 +1,462 @@
+openapi: 3.1.0
+info:
+  title: Menagerie workspace API
+  version: 0.1.0
+  description: >-
+    Browser API of the Menagerie workspace service. Jobs and their events are
+    held in this process's memory only: a restart of Menagerie drops every job
+    and its history, an unknown job id answers 404, and the workspace list is
+    rebuilt from the workspace folders and Docker. Every route except
+    /healthz requires a manager session cookie from the OIDC sign-in routes
+    under /auth/ (see the authentication specification); without one the
+    API answers 401 `unauthenticated`, and a cross-origin request that
+    changes state answers 403 `cross-origin-request`.
+security:
+  - session: []
+paths:
+  /healthz:
+    get:
+      operationId: health
+      summary: Liveness of the workspace service.
+      security: []
+      responses:
+        "200":
+          description: The service answers.
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: "ok\n"
+  /api/workspaces:
+    get:
+      operationId: listWorkspaces
+      summary: Every folder directly under the workspace root, with its container state.
+      responses:
+        "200":
+          description: Workspaces sorted by name.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workspaces]
+                additionalProperties: false
+                properties:
+                  workspaces:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Workspace"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/templates:
+    get:
+      operationId: listTemplates
+      summary: The approved template list.
+      responses:
+        "200":
+          description: Approved templates in configuration order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [templates]
+                additionalProperties: false
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Template"
+  /api/jobs:
+    get:
+      operationId: listJobs
+      summary: Every job of this process, newest first.
+      responses:
+        "200":
+          description: Jobs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobs]
+                additionalProperties: false
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Job"
+    post:
+      operationId: startJob
+      summary: Start an operation on a workspace.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobRequest"
+      responses:
+        "202":
+          description: The job holds the workspace and runs.
+          headers:
+            Location:
+              description: /api/jobs/{jobId}
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/jobs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/JobID"
+    get:
+      operationId: getJob
+      summary: One job.
+      responses:
+        "200":
+          description: The job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/jobs/{id}/answers:
+    parameters:
+      - $ref: "#/components/parameters/JobID"
+    post:
+      operationId: answerJob
+      summary: Answer the current batch of an interview job.
+      description: >-
+        Accepted only while the job is waiting-for-answers, one answer at a
+        time. The body carries the whole session and has no size bound. The reply is also appended to the job as an interview event.
+        A template service refusal keeps its status and kind and the job
+        keeps waiting.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnswerRequest"
+      responses:
+        "200":
+          description: The next interview reply, as the template service produced it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterviewReply"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/jobs/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/JobID"
+    get:
+      operationId: jobEvents
+      summary: The job's events as Server-Sent Events.
+      description: >-
+        Each event has `id` (its sequence number in the job, from 1), `event`
+        (state, log, result, or a type added by a later operation such as
+        interview) and one line of JSON `data`. A `Last-Event-ID` header, or
+        the `lastEventId` query parameter, replays only later events. The
+        stream ends after the result event. There is no keepalive and no
+        deadline; a client reconnects with Last-Event-ID.
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+            pattern: "^[0-9]+$"
+        - name: lastEventId
+          in: query
+          schema:
+            type: string
+            pattern: "^[0-9]+$"
+      responses:
+        "200":
+          description: >-
+            Event stream. Data payloads: state is StateEvent, log is
+            LogEvent, interview is InterviewReply, result is ResultEvent.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-menagerie-session
+      description: >-
+        Manager session from sign-in at /auth/login. The cookie is named
+        menagerie-session when the redirect URL uses http.
+  parameters:
+    JobID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Workspace:
+      type: object
+      required: [name, state, containerId, activeJob]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        state:
+          type: string
+          enum: [running, stopped, no-container]
+        containerId:
+          type: [string, "null"]
+        activeJob:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [jobId, operation, state]
+              additionalProperties: false
+              properties:
+                jobId:
+                  type: string
+                operation:
+                  type: string
+                state:
+                  $ref: "#/components/schemas/JobState"
+    Template:
+      type: object
+      required: [id, name]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    JobRequest:
+      type: object
+      required: [operation, workspace]
+      additionalProperties: false
+      properties:
+        operation:
+          type: string
+          enum: [start, stop, rebuild, create, upgrade]
+        workspace:
+          type: string
+        templateId:
+          type: string
+          description: >-
+            Required by create and upgrade: an approved template's id. For
+            an upgrade it names the template version to upgrade to.
+    JobState:
+      type: string
+      enum: [running, waiting-for-answers, succeeded, failed, ended]
+    Job:
+      type: object
+      required: [jobId, workspace, operation, state, phase, createdAt, finishedAt, lastEventId, error]
+      additionalProperties: false
+      properties:
+        jobId:
+          type: string
+        workspace:
+          type: string
+        operation:
+          type: string
+        state:
+          $ref: "#/components/schemas/JobState"
+        phase:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        lastEventId:
+          type: integer
+          minimum: 0
+        error:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/JobError"
+    JobError:
+      type: object
+      required: [kind, message]
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          examples:
+            - operation-failed
+            - initialize-command-failed
+            - registry-credentials-unavailable
+            - internal-error
+            - workspace-exists
+            - template-refused
+            - template-service-unavailable
+            - generation-failed
+            - upgrade-failed
+            - not-applied
+            - merge-conflicted
+            - backup-failed
+        message:
+          type: string
+    StateEvent:
+      type: object
+      required: [state, phase]
+      properties:
+        state:
+          $ref: "#/components/schemas/JobState"
+        phase:
+          type: string
+    LogEvent:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+    ResultEvent:
+      type: object
+      required: [state, error]
+      properties:
+        state:
+          $ref: "#/components/schemas/JobState"
+        error:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/JobError"
+        apply:
+          $ref: "#/components/schemas/ApplyResult"
+    AnswerRequest:
+      type: object
+      required: [session, submission]
+      additionalProperties: false
+      properties:
+        session:
+          type: object
+          description: The latest reply's session, returned byte for byte.
+        submission:
+          type: object
+          description: Toha's answers envelope.
+          required: [template, answers]
+          properties:
+            template:
+              type: string
+            answers:
+              type: object
+    InterviewReply:
+      type: object
+      required: [session, state, document, warnings]
+      properties:
+        session:
+          type: object
+          description: Toha's staged record, opaque.
+        state:
+          type: string
+          enum: [questions, completed, ended]
+        document:
+          description: >-
+            Toha's batch document while questions remain, its ended document
+            after a flow stop or abort, null once the interview completed.
+          oneOf:
+            - type: "null"
+            - type: object
+        warnings:
+          type: array
+          items:
+            type: string
+    ApplyResult:
+      type: object
+      required: [outcome, files, recordPath, messages, hooks, conflicts]
+      properties:
+        outcome:
+          type: string
+          enum: [written, conflicted, already-current, needs-trust, planned]
+        files:
+          type: array
+          items:
+            type: object
+            required: [path, action]
+            properties:
+              path:
+                type: string
+              action:
+                type: string
+        recordPath:
+          type: [string, "null"]
+        messages:
+          type: array
+          items:
+            type: string
+        hooks:
+          type: array
+          items:
+            type: object
+            required: [id, exitCode, success]
+            properties:
+              id:
+                type: [string, "null"]
+              exitCode:
+                type: [integer, "null"]
+              success:
+                type: boolean
+        conflicts:
+          type: array
+          items:
+            type: string
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [kind, message]
+          properties:
+            kind:
+              type: string
+              examples:
+                - invalid-request
+                - unknown-operation
+                - invalid-workspace-name
+                - workspace-not-found
+                - workspace-busy
+                - workspace-exists
+                - unknown-template
+                - job-not-found
+                - job-not-waiting
+                - template-service-unavailable
+                - not-found
+                - docker-unavailable
+                - workspace-root-unreadable
+                - internal-error
+            message:
+              type: string
+            activeJobId:
+              type: string
+              description: Present with workspace-busy.

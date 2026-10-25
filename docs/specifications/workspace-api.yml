@@ -1,0 +1,214 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  references:
+    - menagerie
+    - configuration
+    - job-without-timeout-blocks-workspace
+    - authentication
+    - template-service-api
+    - backup-force-push-overwrites-branch
+format: openapi
+description: >-
+  The workspace service serves a JSON API to the browser, defined by
+  `assets/workspace-api/openapi.yaml`. Every error answers with the envelope
+  `{"error":{"kind","message"}}`; `workspace-busy` adds `activeJobId`.
+
+
+  Every route except `GET /healthz` requires a manager session, as the
+  authentication specification defines. Without one an API request answers
+  401 `unauthenticated` and the browser signs in at
+  `/auth/login?return=<page>`; a page request is redirected there. A
+  request that changes state from another origin answers 403
+  `cross-origin-request`. Neither runs an operation or reads a job.
+
+
+  `GET /api/workspaces` lists every folder directly under the workspace root,
+  sorted by name. Each folder is joined to the newest container whose
+  `devcontainer.local_folder` label equals the folder path; its state is
+  `running`, `stopped` or `no-container`. The service asks Docker only about
+  root folders, so a container labelled for any other path, or without the
+  label, never appears. `activeJob` names the folder's unfinished job. When
+  Docker cannot answer, the request fails with `docker-unavailable` (503).
+
+
+  `GET /api/templates` returns the approved templates' `id` and `name`.
+
+
+  `POST /api/jobs` starts an operation on a workspace. The operations are
+  `start`, `stop` and `rebuild` on an existing workspace folder, and the
+  interview operations `create` and `upgrade`, which also name an approved
+  template's `templateId`. Any other operation is refused as
+  `unknown-operation`. The service acquires the workspace's job slot before
+  any work begins. A workspace has at most one unfinished job; another
+  request for it gets 409 `workspace-busy` with the holder's id, while other
+  workspaces proceed. The job runs in the service, not the request, and
+  answers 202 with the job and `Location: /api/jobs/{id}`.
+
+
+  A job's state is `running`, `waiting-for-answers` (a nonterminal state for
+  interview operations, which keeps the slot), or one of the terminal states
+  `succeeded`, `failed` and `ended`. The slot is released when the job ends,
+  and every client that sees the result event can start the next job.
+  `phase` names the current step, for example `read-definition`,
+  `initialize-command`, `build`, `remove-container`, `up`, `stop`,
+  `interview`, `initialize-repository`, `generate`, `apply`, `commit`,
+  `backup-local-changes` or `backup`. A failed job carries `error.kind`:
+  `initialize-command-failed`, `registry-credentials-unavailable`,
+  `operation-failed` or `internal-error`, and for interview operations
+  `workspace-exists`, `template-refused`, `template-service-unavailable`,
+  `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
+  or `backup-failed`. Its message says what was written and what recovery
+  is needed. No timeout is applied to a job.
+
+
+  Interview operations. A create names a workspace that is a legal Git
+  branch name and whose folder does not exist; an upgrade names an existing
+  workspace folder. Both refuse an unapproved template as 404
+  `unknown-template`, before any job exists. The job asks the template
+  service, over its Unix socket, for each interview reply and appends it as
+  an `interview` event whose data is the reply's exact text:
+  `{"session","state","document","warnings"}`. While questions remain the
+  job is `waiting-for-answers`, with no expiry. `POST
+  /api/jobs/{id}/answers` takes `{"session","submission"}`, both JSON
+  objects forwarded as received. The body carries the whole session, so
+  it has no size bound, as the template service has none; the reply is
+  read whole for the same reason. It answers 200 with the next reply's
+  exact text and appends it as an event. Only a waiting job takes an
+  answer, one at a time; any other answer is 409 `job-not-waiting`, a
+  malformed body 400 `invalid-request`, an unknown job 404. A template
+  service refusal answers with its status and kind, such as 409
+  `session-mismatch`, and an unreachable template service 503
+  `template-service-unavailable`; in both cases the job keeps waiting. A
+  flow `stop` or `abort` ends the job as `ended` with nothing written. The
+  result event of a job that reached generation or apply adds `apply`: the
+  template service's `{"outcome","files","recordPath","messages","hooks",
+  "conflicts"}`.
+
+
+  Create. After the interview completes the service creates the workspace
+  folder, refusing one that appeared meanwhile, and initializes in it a Git
+  repository whose unborn HEAD names the branch called after the
+  workspace. The template service then generates into it. Only `written`
+  continues; `planned` and `needs-trust` fail as `not-applied`. A failed
+  generation fails as `generation-failed`; the folder keeps the files
+  written before the failure and has no applied record. A failed create
+  never removes its folder, and a second create of that workspace is
+  refused while the folder exists: recovery is manual, by inspecting the
+  folder and then removing it. On success the service commits the output as
+  the branch's first commit, which has no parent, force-pushes it to the
+  workspace repository and starts the devcontainer. A template whose hooks
+  already made Git history keeps it under `refs/menagerie/template-history`
+  (commits on the workspace branch) or `refs/menagerie/template-head` (a
+  detached HEAD); the workspace branch still starts from its own root.
+
+
+  Upgrade. The service first commits changes to tracked files, including
+  deletions, and force-pushes the branch, so the state before the upgrade
+  is backed up; an unchanged workspace makes no commit and still pushes.
+  Untracked files are not committed. It then runs the upgrade interview
+  and applies it. While a change or an untracked file outside the ignore
+  rules exists, the template service refuses the upgrade with
+  `dirty-target` and writes nothing: at the start the job fails as
+  `template-refused`, an answer is refused and the job keeps waiting, and
+  the apply fails as `upgrade-failed`. `already-current` succeeds without
+  a commit or rebuild; `planned` and `needs-trust` fail as `not-applied`; a
+  failed apply fails as `upgrade-failed`. `written` is committed on the
+  branch, extending its history, pushed and rebuilt. `conflicted` is
+  committed and pushed with its conflict markers and fails as
+  `merge-conflicted` without a rebuild; its message says the upgrade is not
+  complete and needs manual resolution, names the conflicted paths, the
+  conflicted commit and the backup of the state before the upgrade.
+
+
+  Backups. A commit after generation or an upgrade apply stages the paths
+  the template service reported, the applied record, and every path the
+  workspace status then shows as untracked, modified or deleted, which
+  includes the files hooks wrote. Paths the workspace's ignore rules
+  exclude and files inside a nested Git repository stay unstaged; the
+  applied record is staged even when the ignore rules exclude it. The
+  status does not tell who wrote a path: the template service generates
+  only into a folder that holds nothing but the new repository and applies
+  an upgrade only into a workspace with no change and no untracked file
+  outside the ignore rules, so an operator file present when generation or
+  the apply starts fails the job with nothing written, while a file written
+  after that check and before the commit is committed with the output.
+  Pushes use
+  go-git with the SSH agent at `ssh-agent.sock` in the Wyrwood directory
+  and the default known hosts files for host-key verification; they
+  replace the remote branch named after the workspace, write no remote to
+  the workspace's Git configuration and fetch nothing. A failed commit or
+  push fails as `backup-failed` and the container is not started or
+  rebuilt.
+
+
+  `GET /api/jobs/{id}/events` streams the job's events as Server-Sent Events.
+  Event ids are the job's sequence numbers from 1. `state` carries
+  `{state, phase}`, `log` carries one output line `{text}`, and `result`
+  carries `{state, error}` and ends the stream. An operation can add event
+  types with opaque JSON data, such as `interview`; the service compacts
+  each payload to one line without changing its text, numbers included, and
+  frames every payload line as its own data field. `Last-Event-ID`, or the
+  `lastEventId` query parameter, replays the events after that id, so a
+  reconnecting client misses nothing. The stream has no keepalive and no
+  deadline.
+
+
+  Jobs, events and logs are held only in the memory of the running process.
+  A restart of Menagerie drops every job and its history: job ids from
+  before the restart answer 404 `job-not-found`, and the browser refreshes
+  the workspace list, which is rebuilt from the folders and Docker. Applied
+  answers and workspace folders are unaffected.
+
+
+  Container operations use devcontainer-builder as a library. Before each
+  start or rebuild the service reads `initializeCommand` from the same
+  definition snapshot used for the build, substitutes `${localWorkspaceFolder}`,
+  `${localEnv:...}`, `${containerWorkspaceFolder}` and `${devcontainerId}`
+  with the workspace's discovery labels, and runs it inside Menagerie with
+  the workspace folder as working directory: a string through `/bin/sh -c`,
+  an array directly, and object members in parallel. A failing command fails
+  the job before any container changes. `start` then builds the definition
+  when it needs a build and brings the container up, reusing and starting an
+  existing one. When the definition uses features, an existing
+  `devcontainer-lock.json` (including an empty initialization marker) is
+  rewritten with the resolved features only after the container is up; a
+  failed operation leaves it unchanged. `rebuild` builds, removes the containers labelled for the
+  workspace (in Compose the primary service; named volumes, networks and
+  other services stay) and brings a new one up. `stop` selects a single
+  container or the whole Compose project from the running container's
+  labels, not the definition. A stop is devcontainer-builder's graceful
+  stop, which waits 10 seconds before the engine kills the container; that
+  interval belongs to the stop, not to the job. Definitions get every
+  privilege and restart policy they ask for.
+
+
+  Registry credentials come only from Menagerie's `registry-credentials`
+  configuration. Every devcontainer-builder call receives one credential
+  source per `start` or `rebuild`, covering Engine pulls, BuildKit builds,
+  base image and feature reads and Compose service builds, so no call reads
+  a Docker client configuration or runs a credential helper. A registry the
+  configuration names is read from OpenBao through the Wyrwood vault socket
+  the first time the operation uses it and kept for the rest of the
+  operation; any other registry is anonymous. When a named registry's
+  secret cannot be read (missing, denied, malformed, no Wyrwood token, or an
+  unreachable socket) the job fails with `registry-credentials-unavailable`
+  and a fixed reason; credential values and OpenBao response text never
+  appear in a job's log, events or error.
+
+
+  The service also serves the built web UI when one is supplied: `/assets/*`
+  from the build, and `index.html` for `/`, `/create` and
+  `/workspaces/{name}/upgrade`.
+validation-criteria: >-
+  `go test ./backend/internal/api/` checks that the routes the server
+  registers equal the OpenAPI paths and methods, and exercises each response
+  and error contract with a held runtime. `go test
+  ./backend/internal/workflows/` runs create and upgrade through the API
+  with a held template service and a real local workspace repository,
+  covering waiting, single answers, flow ends, failures and slot release;
+  `go test ./backend/internal/backup/` pushes through an isolated SSH server
+  and agent; `go test -tags templateservice ./backend/internal/workflows/`
+  runs create and upgrade against the real template service. `go test -tags docker
+  ./backend/internal/devcontainer/` runs start, stop, rebuild, failing
+  `initializeCommand`, Compose resource preservation and the workspace list
+  against a real Docker Engine.

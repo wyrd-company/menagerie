@@ -1,0 +1,15 @@
+#!/bin/sh
+# Healthy when both services run and answer: the template service on its
+# socket and the workspace service on its HTTP listener. Set
+# MENAGERIE_TEMPLATE_SOCKET or MENAGERIE_HEALTH_URL when the configuration
+# moves them from their defaults.
+set -eu
+for service in template-service workspace-service; do
+  if [ "$(/command/s6-svstat -o up "/run/service/$service")" != true ]; then
+    echo "$service is not running" >&2
+    exit 1
+  fi
+done
+# Any HTTP answer shows the template service serves; it has no GET routes.
+curl -sS -o /dev/null --unix-socket "${MENAGERIE_TEMPLATE_SOCKET:-/run/menagerie/template.sock}" http://template-service/
+curl -fsS -o /dev/null "${MENAGERIE_HEALTH_URL:-http://127.0.0.1:8080/healthz}"

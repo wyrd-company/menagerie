@@ -1,0 +1,7 @@
+$schema: https://refinery.systems/ontology/term
+title: Workspace root
+description: >-
+  The folder Menagerie mounts at the same path as on the host. Every folder
+  directly under it is a workspace.
+terms:
+  - workspace

@@ -1,0 +1,58 @@
+# ---
+# relationships:
+#   references: [workspace-api]
+# ---
+# Web UI checks. The repository taskfile includes these; pnpm scripts in
+# package.json hold each command.
+version: "3"
+
+tasks:
+  install:
+    desc: Install the locked dependencies
+    run: once
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  build:
+    desc: Type-check and write the production build to dist/, which the workspace service embeds
+    deps: [install]
+    cmds:
+      - pnpm build
+
+  lint:
+    desc: Type-check, ESLint and the Prettier check
+    deps: [install]
+    cmds:
+      - pnpm typecheck
+      - pnpm lint
+
+  format:
+    desc: Apply Prettier formatting
+    deps: [install]
+    cmds:
+      - pnpm format
+
+  test:
+    desc: Run the unit and component tests
+    deps: [install]
+    cmds:
+      - pnpm test
+
+  test:browser:
+    desc: Build, then run the browser tests against the fixture server (needs Playwright's Chromium)
+    deps: [install]
+    cmds:
+      - pnpm build
+      - pnpm test:browser
+
+  dev:
+    desc: Serve the UI with hot reload; Vite proxies /api and /auth to MENAGERIE_URL, by default the fixture server started here
+    deps: [install]
+    cmds:
+      - |
+        if [ -z "${MENAGERIE_URL:-}" ]; then
+          node test/fixture-server/main.ts &
+          fixture=$!
+          trap 'kill "$fixture"' EXIT
+        fi
+        pnpm dev

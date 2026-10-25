@@ -1,0 +1,401 @@
+/* Menagerie: a keeper's register. Paper and ink, verdigris for action,
+   brass for life, vermilion for trouble. */
+:root {
+  --paper: #f1e9d8;
+  --paper-deep: #e7dcc4;
+  --card: #f8f3e8;
+  --ink: #1c1915;
+  --ink-soft: #4b443a;
+  --ink-faint: #7a705f;
+  --rule: #c2b393;
+  --rule-strong: #8f7f5f;
+  --verdigris: #1f5c52;
+  --verdigris-bright: #2b7a6c;
+  --verdigris-wash: #d7e4dc;
+  --brass: #a8771c;
+  --brass-wash: #f1e1b5;
+  --vermilion: #b53a24;
+  --vermilion-wash: #f4d9cf;
+  --slate: #5a6670;
+  --night: #15130f;
+  --night-2: #221e18;
+  --tape-ink: #eadfc6;
+  --tape-dim: #8a7e66;
+  --phosphor: #e0b85a;
+
+  --font-display: "Fraunces Variable", "Iowan Old Style", Georgia, serif;
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  --radius: 3px;
+  --shadow: 0 1px 0 rgb(28 25 21 / 6%), 0 12px 30px -18px rgb(28 25 21 / 45%);
+  --focus: 0 0 0 3px var(--paper), 0 0 0 5px var(--verdigris-bright);
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* The body background paints the whole canvas, so long pages have no seam. */
+html {
+  color: var(--ink);
+  font: 400 17px/1.55 var(--font-body);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  position: relative;
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgb(255 255 255 / 45%), transparent 60%),
+    radial-gradient(90% 70% at 100% 100%, rgb(168 119 28 / 9%), transparent 70%), var(--paper);
+}
+
+/* Paper grain. */
+body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+  opacity: 0.16;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .3 0 0 0 0 .22 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 560;
+  font-variation-settings:
+    "opsz" 72,
+    "SOFT" 40;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2.1rem, 4.6vw, 3.4rem);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--verdigris);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  color: var(--verdigris-bright);
+}
+
+.mono,
+code,
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  letter-spacing: -0.01em;
+}
+
+kbd {
+  border: 1px solid var(--rule-strong);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 0 0.35em;
+  background: var(--card);
+}
+
+.muted {
+  color: var(--ink-faint);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ink-faint);
+  margin: 0 0 0.4rem;
+  font-weight: 500;
+}
+
+.eyebrow a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+  border-radius: var(--radius);
+}
+
+.skip {
+  position: absolute;
+  left: 1rem;
+  top: -4rem;
+  z-index: 200;
+  background: var(--ink);
+  color: var(--paper);
+  padding: 0.5rem 0.9rem;
+}
+
+.skip:focus {
+  top: 1rem;
+}
+
+/* ---- Buttons ---- */
+button,
+.button {
+  font: 600 0.9rem/1 var(--font-body);
+  letter-spacing: 0.01em;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 0.62rem 0.95rem;
+  min-height: 2.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  text-decoration: none;
+  box-shadow: 0 2px 0 var(--rule);
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    background 120ms ease;
+}
+
+button:hover:not(:disabled),
+.button:hover:not(.disabled) {
+  background: #fffaf0;
+  color: var(--ink);
+}
+
+button:active:not(:disabled),
+.button:active:not(.disabled) {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 var(--rule);
+}
+
+button:disabled,
+.button.disabled {
+  cursor: not-allowed;
+  color: var(--ink-faint);
+  background: transparent;
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.primary {
+  background: var(--verdigris);
+  border-color: var(--verdigris);
+  color: #f6efdc;
+  box-shadow: 0 2px 0 #123832;
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--verdigris-bright);
+  color: #fff;
+}
+
+.danger {
+  background: var(--vermilion);
+  border-color: var(--vermilion);
+  color: #fff4ea;
+  box-shadow: 0 2px 0 #7a2414;
+}
+
+.danger:hover:not(:disabled) {
+  background: #c94a32;
+  color: #fff;
+}
+
+.ghost {
+  background: transparent;
+  box-shadow: none;
+  border-color: transparent;
+  color: var(--verdigris);
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+
+.ghost:hover:not(:disabled) {
+  background: var(--verdigris-wash);
+}
+
+/* ---- Inputs ---- */
+input[type="text"],
+input[type="url"],
+input:not([type]),
+textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+  box-shadow: inset 0 2px 0 rgb(28 25 21 / 5%);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 5rem;
+}
+
+textarea.mono,
+input.mono {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #a2967d;
+}
+
+[aria-invalid="true"] {
+  border-color: var(--vermilion) !important;
+  background: #fbefe9 !important;
+}
+
+input[type="radio"],
+input[type="checkbox"] {
+  accent-color: var(--verdigris);
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+}
+
+/* ---- Stamps: states inked onto the page ---- */
+.stamp {
+  --stamp: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--stamp);
+  border: 2px solid var(--stamp);
+  border-radius: 2px;
+  padding: 0.22rem 0.55rem 0.18rem;
+  transform: rotate(-1.6deg);
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--stamp) 8%, transparent);
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Cfilter id='r'%3E%3CfeTurbulence baseFrequency='.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.2 1.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23r)'/%3E%3C/svg%3E");
+}
+
+.stamp::before {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--stamp);
+}
+
+.stamp-running {
+  --stamp: var(--brass);
+}
+
+.stamp-running::before {
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.stamp-stopped {
+  --stamp: var(--slate);
+}
+
+.stamp-stopped::before {
+  background: transparent;
+  border: 2px solid var(--stamp);
+}
+
+.stamp-no-container {
+  --stamp: var(--ink-faint);
+  border-style: dashed;
+}
+
+.stamp-no-container::before {
+  border-radius: 0;
+  height: 2px;
+}
+
+.stamp-waiting-for-answers {
+  --stamp: var(--verdigris);
+}
+
+.stamp-waiting-for-answers::before {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.stamp-succeeded {
+  --stamp: var(--verdigris);
+}
+
+.stamp-failed {
+  --stamp: var(--vermilion);
+  transform: rotate(1.4deg);
+}
+
+.stamp-ended {
+  --stamp: var(--slate);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+    transform: scale(0.7);
+  }
+}
+
+/* ---- Notices ---- */
+.notice {
+  border-left: 4px solid var(--rule-strong);
+  background: var(--card);
+  padding: 0.8rem 1rem;
+  display: grid;
+  gap: 0.5rem;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.notice-bad {
+  border-color: var(--vermilion);
+  background: var(--vermilion-wash);
+}
+
+.notice-warn {
+  border-color: var(--brass);
+  background: var(--brass-wash);
+}
+
+.notice-good {
+  border-color: var(--verdigris);
+  background: var(--verdigris-wash);
+}
+
+.notice button {
+  justify-self: start;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

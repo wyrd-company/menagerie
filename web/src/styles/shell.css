@@ -1,0 +1,109 @@
+/* ---- Shell ---- */
+.shell {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 0 clamp(1rem, 3vw, 2.5rem) 4rem;
+}
+
+.masthead {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: end;
+  gap: 1.5rem;
+  padding: 1.6rem 0 0.9rem;
+  border-bottom: 3px double var(--rule-strong);
+  margin-bottom: 2.2rem;
+}
+
+.wordmark {
+  display: grid;
+  text-decoration: none;
+  color: var(--ink);
+  line-height: 0.9;
+}
+
+.wordmark-name {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: clamp(2rem, 4vw, 2.7rem);
+  font-weight: 640;
+  font-variation-settings:
+    "opsz" 144,
+    "SOFT" 100,
+    "WONK" 1;
+  letter-spacing: -0.03em;
+  color: var(--verdigris);
+}
+
+.wordmark-sub {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding-left: 0.2rem;
+  margin-top: 0.3rem;
+}
+
+.masthead nav {
+  display: flex;
+  gap: 1.4rem;
+  justify-self: start;
+  padding-bottom: 0.35rem;
+}
+
+.masthead nav a {
+  color: var(--ink-soft);
+  text-decoration: none;
+  font-weight: 700;
+  padding-bottom: 0.2rem;
+  border-bottom: 2px solid transparent;
+}
+
+.masthead nav a[aria-current="page"] {
+  color: var(--ink);
+  border-color: var(--brass);
+}
+
+main:focus {
+  outline: none;
+}
+
+.screen-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: end;
+  gap: 1rem;
+  margin-bottom: 1.6rem;
+}
+
+.screen-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+@media (max-width: 720px) {
+  html {
+    font-size: 16px;
+  }
+
+  .masthead {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "mark out" "nav nav";
+    gap: 0.8rem;
+  }
+
+  .wordmark {
+    grid-area: mark;
+  }
+
+  .masthead nav {
+    grid-area: nav;
+  }
+
+  .signout {
+    grid-area: out;
+  }
+}

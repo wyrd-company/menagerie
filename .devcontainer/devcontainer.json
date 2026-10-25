@@ -1,0 +1,23 @@
+{
+  "name": "menagerie",
+  "image": "mcr.microsoft.com/devcontainers/base:trixie",
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": { "version": "1.27.3" },
+    "ghcr.io/devcontainers/features/rust:1": { "version": "1.97.1", "profile": "default" },
+    "ghcr.io/devcontainers/features/node:1": { "version": "24.22.0", "pnpmVersion": "11.10.0" },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false },
+    "ghcr.io/devcontainers-extra/features/go-task:1": {}
+  },
+  "postCreateCommand": "task setup",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "rust-lang.rust-analyzer",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "github.vscode-github-actions"
+      ]
+    }
+  }
+}

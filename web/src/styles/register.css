@@ -1,0 +1,203 @@
+/* ---- Workspace register ---- */
+.fleet {
+  display: grid;
+  gap: 2rem;
+}
+
+.fleet.has-console {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--rule-strong);
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: 4.2rem minmax(10rem, 1.3fr) minmax(9rem, 1fr) auto;
+  grid-template-areas: "no name state actions" "no error error error";
+  align-items: center;
+  gap: 0.3rem 1.2rem;
+  padding: 1rem 0.6rem 1rem 0;
+  border-bottom: 1px solid var(--rule);
+  position: relative;
+  animation: entry-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+.entry:hover {
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 45%) 20%, transparent);
+}
+
+.entry.is-busy {
+  background: repeating-linear-gradient(-45deg, transparent 0 12px, rgb(31 92 82 / 5%) 12px 24px);
+}
+
+@keyframes entry-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.entry-no {
+  grid-area: no;
+  font-size: 1.7rem;
+  font-weight: 300;
+  color: transparent;
+  -webkit-text-stroke: 1px var(--rule-strong);
+  text-align: right;
+  align-self: start;
+  padding-top: 0.1rem;
+}
+
+.entry-name {
+  grid-area: name;
+  min-width: 0;
+}
+
+.entry-name h2 {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.entry-container {
+  color: var(--ink-faint);
+  font-size: 0.76rem;
+  margin-top: 0.15rem;
+}
+
+.entry-state {
+  grid-area: state;
+  display: grid;
+  justify-items: start;
+  gap: 0.35rem;
+}
+
+.busy-link {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.entry-actions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: end;
+}
+
+.entry-actions button,
+.entry-actions .button {
+  min-height: 2.25rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.84rem;
+}
+
+.confirm {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.entry-error {
+  grid-area: error;
+  color: var(--vermilion);
+  font-size: 0.9rem;
+}
+
+.empty {
+  border: 1px dashed var(--rule-strong);
+  padding: 2rem;
+  display: grid;
+  gap: 1rem;
+  justify-items: start;
+}
+
+.recent {
+  margin-top: 2.5rem;
+}
+
+.recent ol {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.recent li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px dotted var(--rule);
+  font-size: 0.9rem;
+}
+
+.recent li.is-open {
+  background: var(--verdigris-wash);
+}
+
+.recent time {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+}
+
+.console-dock {
+  position: sticky;
+  top: 1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.dock-close {
+  display: flex;
+  justify-content: end;
+}
+
+@media (max-width: 1080px) {
+  .fleet.has-console {
+    grid-template-columns: 1fr;
+  }
+
+  .console-dock {
+    position: static;
+    order: -1;
+  }
+}
+
+@media (max-width: 720px) {
+  .entry {
+    grid-template-columns: 2.6rem 1fr;
+    grid-template-areas: "no name" "no state" "actions actions" "error error";
+    padding: 1rem 0;
+  }
+
+  .entry-no {
+    font-size: 1.2rem;
+  }
+
+  .entry-actions {
+    justify-content: start;
+  }
+
+  .entry-actions > * {
+    flex: 1 1 calc(50% - 0.4rem);
+  }
+
+  .recent li {
+    grid-template-columns: 1fr auto;
+  }
+
+  .recent time {
+    display: none;
+  }
+}

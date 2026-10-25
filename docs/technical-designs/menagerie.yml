@@ -1,0 +1,172 @@
+$schema: https://refinery.systems/ontology/technical-design
+objective: >-
+  Let a small group of trusted managers create, list, start, stop, rebuild and
+  upgrade the workspaces of one shared fleet from a web UI, so that no one
+  manages workspaces by hand on the host.
+background:
+  problems:
+    - Creating a workspace means running a Toha interview and a devcontainer
+      build by hand on the host.
+    - Template upgrades and rebuilds are manual and easy to skip.
+    - There is no single view of which workspaces exist and which are running.
+design-challenges:
+  two-languages: >-
+    Toha is a Rust crate and devcontainer-builder is a Go package. Both must be
+    used as libraries, without spawning a CLI.
+  host-paths: >-
+    Menagerie runs in a container but tells the host Docker daemon what to
+    bind-mount. The daemon resolves bind sources on the host.
+  docker-is-root: >-
+    The daemon is rootful, so access to it is root on the host. Menagerie has
+    the same access a manager running devcontainer-builder on the host has,
+    and it is reachable through a web UI.
+  interview-across-requests: >-
+    A Toha interview spans many HTTP requests. Toha's pending interview borrows
+    its template and cannot be held between requests.
+  template-hooks: >-
+    Toha template hooks and a workspace's `initializeCommand` run commands the
+    template author wrote. devcontainer-builder runs no commands on the host.
+  git-credentials: >-
+    Menagerie backs up each workspace to GitHub. No credential may be stored
+    in the Menagerie container.
+  long-running-operations: >-
+    Builds and rebuilds take minutes. The UI must show progress and must not
+    start two operations on one workspace.
+proposed-design:
+  high-level-overview: >-
+    One container image runs two services under a process supervisor. The
+    workspace service is written in Go. It serves the web UI, authenticates
+    users through OIDC, discovers workspaces, drives Docker through
+    devcontainer-builder, and owns git. The template service is written in
+    Rust. It embeds Toha and serves template interviews, generation and
+    upgrades to the workspace service over an internal API. The container
+    mounts the host Docker socket. Git access goes through Wyrwood's
+    SSH-agent socket. The workspace root is mounted at the same path on the
+    host and in the container.
+  terms: >-
+    A workspace is a folder under the workspace root, generated from a Toha
+    template, together with the devcontainer it defines. Every folder directly
+    under the workspace root is a workspace. Its git repository tracks only
+    the files the template generated; repositories cloned inside the workspace
+    are ignored by the template's `.gitignore`.
+  screens: >-
+    The UI has three screens. The workspace list shows every workspace with
+    its status (running, stopped, no container, or the operation in progress)
+    and offers start, stop, rebuild and upgrade. The create screen selects an
+    approved template, names the workspace and runs the interview. The upgrade
+    screen runs the interview for a newer template version, asking only what
+    the recorded answers do not cover.
+  workspace-discovery: >-
+    The list is built from the folders under the workspace root. Each folder
+    is joined to the container whose `devcontainer.local_folder` label equals
+    the folder path. Containers without such a label, or whose label points
+    outside the workspace root, are never shown. Menagerie keeps no database.
+  internal-api: >-
+    The template service listens on a Unix socket shared only with the
+    workspace service and speaks JSON over HTTP. It exposes: start an
+    interview for a template, answer an interview, generate a workspace from a
+    completed interview, start an upgrade for a workspace, answer an upgrade,
+    and apply an upgrade. The template service is stateless between requests.
+  interviews: >-
+    A question batch is Toha's JSON Schema batch document; the UI renders a
+    form from it. Toha's interview session value carries the pinned template
+    identity, context, admitted documents and accepted submissions. The
+    browser holds the session value and sends it with each request. The
+    template service checks the pinned template against the approved template
+    list, rebuilds the interview from the session value and returns the next
+    batch or a completed interview.
+  approved-templates: >-
+    Only templates on the approved template list can be used. Each entry names
+    a Toha template address. The list is configuration.
+  create-flow: >-
+    After the interview completes, the workspace service creates a new folder
+    under the workspace root and initializes its git repository. The template
+    service builds Toha's plan and applies it into that folder, recording the
+    answers in the applied record `.toha.json`. Generation completes when Toha
+    reports that the applied record was written. The workspace service commits,
+    backs the commit up to an orphan branch named after the workspace in the
+    workspace repository, and starts the devcontainer through
+    devcontainer-builder.
+  upgrade-flow: >-
+    The workspace service commits any local changes to tracked files so the
+    pre-upgrade state is backed up. Toha fetches the newer template version.
+    The template service reads `.toha.json`, replays the recorded answers
+    against the newer template, asks the questions they do not answer, and
+    applies the merge. The workspace service commits, backs up and rebuilds
+    the container.
+  container-operations: >-
+    Start, stop and rebuild call devcontainer-builder for the workspace
+    folder. Rebuild recreates the container from the current definition.
+    Devcontainers get whatever their definition asks for, including
+    privileged mode, as they do when devcontainer-builder runs on the host.
+    A workspace that must start after a host restart sets a Docker restart
+    policy in its definition; the daemon restarts it.
+  operations-and-jobs: >-
+    Each create, upgrade, start, stop or rebuild is a job. A workspace has at
+    most one job at a time. Jobs and their logs are held in memory and
+    streamed to the UI. A restart of Menagerie drops job history. No timeout
+    is applied to jobs.
+  docker-access: >-
+    The workspace service talks to the host Docker daemon through the mounted
+    socket. Only the workspace service uses Docker.
+  registry-credentials: >-
+    Container registry credentials for pulls, builds, feature downloads and
+    Compose services come from OpenBao. Configuration names, per registry, a
+    secret in a KV version 2 mount whose `username` and `password` fields
+    hold the credentials. The workspace service reads it through the OpenBao
+    API on the Wyrwood vault socket, which supplies Menagerie's own token, and
+    hands the credentials to devcontainer-builder directly. No Docker client
+    configuration is read and no credential helper runs. A registry that
+    configuration does not name is anonymous; a named registry whose secret
+    cannot be read fails the operation.
+  template-hooks: >-
+    The template service runs Toha template hooks with Toha's process hook
+    runner, inside the Menagerie container, in the hook's target-relative
+    working directory.
+  initialize-command: >-
+    devcontainer-builder runs no commands on the host, so the workspace
+    service runs `initializeCommand` itself. Before each start or rebuild it
+    reads `initializeCommand` from the resolved devcontainer configuration
+    and, when present, runs it inside the Menagerie container with the
+    workspace folder as the working directory. A failing command fails the
+    job before the devcontainer starts.
+  git-and-credentials: >-
+    The workspace repository is a backup, not a synchronized copy. The local
+    workspace is the source of truth; the workspace service uses go-git to
+    init, commit and force-push the workspace branch, and never fetches or
+    pulls it. Template fetching belongs to Toha. Authentication uses the SSH
+    agent at Wyrwood's
+    `ssh-agent.sock`, mounted from the host consumer directory. The agent
+    offers one key, an OpenBao Transit key. When every approved template is
+    public, it is a deploy key with write access on the workspace
+    repository. When any template is private, it is the SSH key of a
+    machine user with write access on the workspace repository and read
+    access on the private template repositories. Toha fetches private
+    templates over SSH through the same agent; its git transport runs the
+    image's ssh client with `SSH_AUTH_SOCK` set to Wyrwood's socket. No key
+    or token is stored in the container.
+  authentication: >-
+    Every UI request requires an OIDC session. Access requires membership in
+    the `menagerie_managers` group claim. Every authenticated user is a
+    manager.
+  configuration: >-
+    Configuration names the workspace root, the workspace repository, the
+    approved template list, the OIDC issuer and client, the Wyrwood
+    consumer directory and the registry credential secrets.
+  deployment: >-
+    The Menagerie container mounts the workspace root at the same path as on
+    the host, the host Docker socket and the Wyrwood consumer directory. It
+    has a Docker restart policy, so it returns after a host restart. Its UI is
+    not exposed to the public internet. Menagerie is bound to a Wyrwood policy
+    that grants only that one Transit key and read access to the registry
+    credential secrets.
+  dependencies: >-
+    Toha exposes template resolution, fetching and caching, and the upgrade
+    driver from its library, and records answers in `.toha.json`.
+  verification: >-
+    The acceptance scenario uses a test template with a hook and an
+    `initializeCommand`. A manager signs in, creates a workspace, sees it
+    running in the list, stops and starts it, rebuilds it, and upgrades it to
+    a newer template version that adds one question. Only that question is
+    asked, and the pushed branch contains the upgraded files. A container not
+    created by Menagerie never appears in the list.

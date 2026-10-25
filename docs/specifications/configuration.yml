@@ -1,0 +1,53 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  references:
+    - menagerie
+format: json-schema
+description: >-
+  The workspace service reads one strict YAML document, by default
+  `/etc/menagerie/config.yml` or the path given with `-config`, defined by
+  `assets/configuration/menagerie.schema.json`. Unknown keys, a second
+  document and an empty document are errors.
+
+
+  It names the workspace root, the workspace repository, the Wyrwood
+  consumer directory, the approved template list, the OIDC issuer and client,
+  the HTTP listen address and the template service socket. `workspace-root`
+  and `wyrwood-directory` are absolute paths; the workspace root is used as
+  written (cleaned, not symlink-resolved) because container labels carry
+  the path the host daemon sees, and it is never `/`. Each template has a
+  unique `id` of lower-case letters and digits separated by single dashes, a
+  display `name` and a Toha `address`; the list can be empty. Defaults:
+  listen `:8080`, template service socket `/run/menagerie/template.sock`.
+
+
+  `oidc` names the identity provider and Menagerie's public client, which
+  has no secret. `issuer` is an http or https URL whose discovery document
+  names the same issuer; `client-id` is the client's id; `redirect-url` is
+  the redirect URI registered for the client, an http or https URL with a
+  host, no user information, query or fragment, and exactly the path
+  `/auth/callback`. Its origin is the one browsers use for Menagerie, and
+  an `https` scheme makes every Menagerie cookie `Secure`. Optional
+  `scopes` lists the requested scopes, which must include `openid`;
+  absent, Menagerie requests `openid profile groups`. There is no
+  client-secret key.
+
+
+  Optional `registry-credentials` names the OpenBao secrets that hold
+  container registry credentials. `kv-mount` is a KV version 2 mount path
+  and `registries` lists `{registry, path}` entries: `registry` is a host or
+  host:port, compared in lower case, where `docker.io`, `index.docker.io`,
+  `registry-1.docker.io` and `https://index.docker.io/v1/` all name Docker
+  Hub, and two entries may not name one registry; `path` is the secret's
+  path in the mount, whose string fields `username` and `password` hold the
+  credentials. Mount and paths are slash-separated segments without empty,
+  `.` or `..` segments. Menagerie reads them through the OpenBao API at the
+  Wyrwood vault socket, `unix://{wyrwood-directory}/vault.sock`, sending no
+  token and no namespace: Wyrwood supplies the binding's token and renews
+  it. A registry that no entry names is anonymous; without the section,
+  every registry is. The template service ignores this section.
+validation-criteria: >-
+  `go test ./backend/internal/config/` parses a valid document, applies the
+  defaults, rejects each invalid field, and checks that the schema's keys
+  equal the keys the parser accepts and that its default scopes equal the
+  scopes the workspace service requests.

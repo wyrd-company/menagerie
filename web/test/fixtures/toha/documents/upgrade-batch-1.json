@@ -1,0 +1,167 @@
+{
+  "context": {
+    "commit": "8a09d02305ead8bf501d8829ebdbe428b9eaded7",
+    "target": "/srv/workspaces/sample-space",
+    "template": "https://example.test/templates/sample-kit@v2"
+  },
+  "messages": [],
+  "protocol": 1,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "enabled": {
+        "default": true,
+        "title": "Enable the sample service?",
+        "type": "boolean",
+        "x-toha-type": "confirm"
+      },
+      "features": {
+        "default": [
+          "alpha",
+          "gamma"
+        ],
+        "items": {
+          "enum": [
+            "alpha",
+            "beta",
+            "gamma",
+            "delta"
+          ],
+          "type": "string"
+        },
+        "maxItems": 3,
+        "minItems": 1,
+        "title": "Features",
+        "type": [
+          "array",
+          "null"
+        ],
+        "uniqueItems": true,
+        "x-toha-type": "multiselect"
+      },
+      "labels": {
+        "default": [
+          "one",
+          "two"
+        ],
+        "items": {
+          "pattern": "^[a-z0-9-]+$",
+          "type": "string"
+        },
+        "maxItems": 3,
+        "minItems": 0,
+        "title": "Label",
+        "type": [
+          "array",
+          "null"
+        ],
+        "x-toha-type": "text"
+      },
+      "notes": {
+        "default": "First line\nSecond line",
+        "description": "Free text copied into the readme.",
+        "title": "Notes",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-toha-multiline": true,
+        "x-toha-type": "multiline"
+      },
+      "palette": {
+        "anyOf": [
+          {
+            "enum": [
+              "red",
+              "green",
+              "blue"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": "green",
+        "title": "Palette",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-toha-type": "select"
+      },
+      "region": {
+        "description": "Added by version 2 of the sample template.",
+        "enum": [
+          "north",
+          "south"
+        ],
+        "title": "Region",
+        "type": "string",
+        "x-toha-type": "select"
+      },
+      "remote": {
+        "default": "https://example.test/sample.git",
+        "examples": [
+          "https://example.test/sample.git"
+        ],
+        "title": "Remote repository",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-toha-type": "git"
+      },
+      "settings": {
+        "title": "Settings document",
+        "type": "object",
+        "x-toha-input": "settings.json",
+        "x-toha-schemas": [
+          "https://schemas.example.test/sample-settings/1"
+        ],
+        "x-toha-type": "document"
+      },
+      "size": {
+        "default": "small",
+        "enum": [
+          "small",
+          "medium",
+          "large",
+          "halt"
+        ],
+        "title": "Size",
+        "type": "string",
+        "x-toha-type": "select"
+      },
+      "title": {
+        "default": "Sample project",
+        "description": "Shown at the top of the generated readme.",
+        "examples": [
+          "Sample project"
+        ],
+        "maxLength": 40,
+        "minLength": 3,
+        "title": "Title",
+        "type": "string",
+        "x-toha-type": "text"
+      },
+      "verbose": {
+        "default": false,
+        "title": "Verbose logging?",
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "x-toha-type": "confirm"
+      }
+    },
+    "required": [
+      "title",
+      "region",
+      "enabled",
+      "size",
+      "settings"
+    ],
+    "type": "object"
+  },
+  "status": "questions"
+}

@@ -1,0 +1,63 @@
+# ---
+# relationships:
+#   references: [workspace-api, configuration, authentication, template-service-api]
+# ---
+# Workspace service checks. The repository taskfile includes these.
+version: "3"
+
+tasks:
+  build:
+    desc: Compile every workspace service package
+    cmds:
+      - go build ./...
+
+  format:
+    desc: Apply Go formatting
+    cmds:
+      - gofmt -w .
+
+  lint:
+    desc: Check formatting and vet the workspace service
+    cmds:
+      - test -z "$(gofmt -l .)"
+      - go vet ./...
+      - go vet -tags docker ./...
+      - go vet -tags openbao ./...
+      - go vet -tags pocketid ./...
+      - go vet -tags 'templateservice docker' ./...
+
+  test:
+    desc: Run the workspace service unit tests with the race detector
+    cmds:
+      - go test -race -count=1 ./...
+
+  test:docker:
+    desc: Run the Docker smoke and registry credential tests (pulls alpine:3.22 and busybox:1.37 when missing)
+    cmds:
+      - go test -tags docker -count=1 -v ./internal/devcontainer/
+
+  test:openbao:
+    desc: Read registry credentials from a disposable OpenBao dev server through a Wyrwood-contract socket (needs bao on PATH)
+    cmds:
+      - go test -tags openbao -count=1 -v ./internal/registrycreds/
+
+  test:pocketid:
+    desc: Sign a manager and a non-manager in through a disposable Pocket ID container (pulls the pinned Pocket ID image when missing)
+    cmds:
+      - go test -tags pocketid -count=1 -v -run TestSignInThroughPocketID ./cmd/menagerie/
+
+  test:templateservice:
+    desc: Run create and upgrade against the template service binary (builds it; needs git for the test's template repositories and SSH host)
+    vars:
+      TARGET: '{{.CARGO_TARGET_DIR | default (print .TASKFILE_DIR "/../template-service/target")}}'
+    cmds:
+      - cargo build --locked --release --manifest-path ../template-service/Cargo.toml --target-dir '{{.TARGET}}'
+      - MENAGERIE_TEMPLATE_SERVICE='{{.TARGET}}/release/menagerie-template-service' go test -tags templateservice -count=1 -v ./internal/workflows/
+
+  test:templateservice:docker:
+    desc: Also run the acceptance devcontainer on the Docker Engine named by DOCKER_HOST, which must see the test's temporary folder at the same path (pulls busybox:1.37 when missing)
+    vars:
+      TARGET: '{{.CARGO_TARGET_DIR | default (print .TASKFILE_DIR "/../template-service/target")}}'
+    cmds:
+      - cargo build --locked --release --manifest-path ../template-service/Cargo.toml --target-dir '{{.TARGET}}'
+      - MENAGERIE_TEMPLATE_SERVICE='{{.TARGET}}/release/menagerie-template-service' go test -tags 'templateservice docker' -count=1 -v ./internal/workflows/

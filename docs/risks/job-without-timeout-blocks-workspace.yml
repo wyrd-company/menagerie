@@ -1,0 +1,17 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: job-without-timeout-blocks-workspace
+title: A hung job blocks its workspace until Menagerie restarts
+description: >-
+  Jobs have no timeout and a workspace runs one job at a time. A build,
+  template fetch, hook or `initializeCommand` that never finishes keeps the
+  workspace busy. Restarting Menagerie drops in-memory jobs and frees the
+  workspace.
+categories:
+  - operational
+likelihood: 3
+impact: 2
+response-strategy: accept
+status: accepted

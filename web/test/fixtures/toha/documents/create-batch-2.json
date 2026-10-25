@@ -1,0 +1,28 @@
+{
+  "context": {
+    "commit": "101fb54d273904667a8fa9cc6f9fbc8a5f0f93e6",
+    "target": "/srv/workspaces/sample-space",
+    "template": "https://example.test/templates/sample-kit@v1"
+  },
+  "messages": [
+    "Sample kit for Sample project."
+  ],
+  "protocol": 1,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "slug": {
+        "default": "sample-project",
+        "pattern": "^[a-z0-9-]+$",
+        "title": "Folder name",
+        "type": "string",
+        "x-toha-type": "text"
+      }
+    },
+    "required": [
+      "slug"
+    ],
+    "type": "object"
+  },
+  "status": "questions"
+}

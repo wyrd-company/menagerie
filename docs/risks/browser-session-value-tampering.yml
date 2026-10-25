@@ -1,0 +1,19 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: browser-session-value-tampering
+title: A manager edits the interview session value held by the browser
+description: >-
+  The browser holds Toha's interview session value between requests. A
+  manager can change its context, documents or submissions before sending it
+  back. Mitigation: the template service checks the pinned template against
+  the approved template list on every request, so the session value cannot
+  select another template. Signing the session value removes the remaining
+  exposure.
+categories:
+  - security
+likelihood: 1
+impact: 2
+response-strategy: accept
+status: open
