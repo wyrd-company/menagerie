@@ -23,10 +23,11 @@ func repoFile(t *testing.T, rel string) string {
 
 // composeService is the part of deploy/compose.yml the deployment relies on.
 type composeService struct {
-	Ports       []string          `yaml:"ports"`
-	Environment map[string]string `yaml:"environment"`
-	Volumes     []string          `yaml:"volumes"`
-	Restart     string            `yaml:"restart"`
+	ContainerName string            `yaml:"container_name"`
+	Ports         []string          `yaml:"ports"`
+	Environment   map[string]string `yaml:"environment"`
+	Volumes       []string          `yaml:"volumes"`
+	Restart       string            `yaml:"restart"`
 }
 
 // interpolate applies Compose's ${NAME:-default} and ${NAME:?message}
@@ -78,8 +79,10 @@ func TestDeploymentExampleAgreesWithTheImage(t *testing.T) {
 	if src, ok := mounts[cfg.WorkspaceRoot]; !ok || src != cfg.WorkspaceRoot {
 		t.Errorf("workspace-root %s is mounted from %q, not from the same host path", cfg.WorkspaceRoot, src)
 	}
-	if _, ok := mounts[cfg.WyrwoodDirectory]; !ok {
-		t.Errorf("wyrwood-directory %s is not mounted", cfg.WyrwoodDirectory)
+	// Wyrwood names a container's consumer directory after the container
+	// under its consumer root, /run/wyrwood/containers by default.
+	if src, ok := mounts[cfg.WyrwoodDirectory]; !ok || src != "/run/wyrwood/containers/"+svc.ContainerName || svc.ContainerName == "" {
+		t.Errorf("wyrwood-directory %s is mounted from %q, not the default consumer directory of container %q", cfg.WyrwoodDirectory, src, svc.ContainerName)
 	}
 	if got, want := svc.Environment["SSH_AUTH_SOCK"], path.Join(cfg.WyrwoodDirectory, "ssh-agent.sock"); got != want {
 		t.Errorf("SSH_AUTH_SOCK %q, want %q", got, want)
