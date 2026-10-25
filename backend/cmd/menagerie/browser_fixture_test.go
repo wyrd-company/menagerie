@@ -43,6 +43,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -277,20 +278,43 @@ func controlServer(t *testing.T, f controlFixture) http.Handler {
 		body, err := os.ReadFile(target)
 		writeJSON(w, map[string]any{"exists": err == nil, "body": string(body)})
 	})
+	// Whether a folder exists directly under the workspace root.
+	mux.HandleFunc("GET /folder", func(w http.ResponseWriter, r *http.Request) {
+		info, err := os.Stat(filepath.Join(f.rootDir, filepath.Base(r.URL.Query().Get("name"))))
+		writeJSON(w, map[string]any{"exists": err == nil && info.IsDir()})
+	})
 	// A folder directly under the workspace root, with no container.
 	mux.HandleFunc("POST /folder", func(w http.ResponseWriter, r *http.Request) {
 		err := os.Mkdir(filepath.Join(f.rootDir, filepath.Base(r.URL.Query().Get("name"))), 0o755)
 		writeJSON(w, map[string]any{"ok": err == nil || errors.Is(err, os.ErrExist)})
 	})
 	// An unrelated container whose label points outside the workspace root.
+	// It fails unless the container runs, so a check of its absence from the
+	// list cannot pass because it was never there.
 	mux.HandleFunc("POST /outsider", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		c, err := f.docker.ContainerCreate(ctx, &container.Config{Image: "busybox:1.37", Cmd: []string{"sleep", "3600"},
-			Labels: map[string]string{"devcontainer.local_folder": "/elsewhere/sample-outsider", "menagerie-test": "outsider"}}, nil, nil, nil, "sample-outsider")
+		const outsiderImage = "busybox:1.37"
+		var err error
+		if _, inspectErr := f.docker.ImageInspect(ctx, outsiderImage); inspectErr != nil {
+			var rc io.ReadCloser
+			if rc, err = f.docker.ImagePull(ctx, outsiderImage, image.PullOptions{}); err == nil {
+				_, _ = io.Copy(io.Discard, rc)
+				rc.Close()
+			}
+		}
+		var c container.CreateResponse
+		if err == nil {
+			c, err = f.docker.ContainerCreate(ctx, &container.Config{Image: outsiderImage, Cmd: []string{"sleep", "3600"},
+				Labels: map[string]string{"devcontainer.local_folder": "/elsewhere/sample-outsider", "menagerie-test": "outsider"}}, nil, nil, nil, "sample-outsider")
+		}
 		if err == nil {
 			err = f.docker.ContainerStart(ctx, c.ID, container.StartOptions{})
 		}
-		writeJSON(w, map[string]any{"ok": err == nil, "error": fmt.Sprint(err)})
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "id": c.ID})
 	})
 	// Containers on the workspace Docker Engine with the discovery label.
 	mux.HandleFunc("GET /containers", func(w http.ResponseWriter, r *http.Request) {

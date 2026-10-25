@@ -91,6 +91,11 @@ test.describe("as a manager", () => {
   test("lists folders and never an unrelated container", async () => {
     await control(page.request, "POST", "/folder?name=sample-folder");
     await control(page.request, "POST", "/outsider");
+    const outsider = (await control(page.request, "GET", "/containers")) as {
+      state: string;
+      folder: string;
+    }[];
+    expect(outsider.find((c) => c.folder === "/elsewhere/sample-outsider")?.state).toBe("running");
     await page.getByRole("button", { name: "Refresh" }).click();
     await expect(entry(page, "sample-folder").locator(".stamp")).toHaveText("No container");
     await expect(page.getByRole("heading", { name: "sample-outsider" })).toHaveCount(0);
