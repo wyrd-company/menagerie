@@ -290,7 +290,7 @@ mkdir -p "$wfs"
 yq '.jobs.release.steps |= ([.[] | select(.uses == null or (.uses | test("^actions/checkout") | not))])' \
   "$repo/.github/workflows/release.yml" >"$wfs/release.yml"
 yq '.jobs.test.steps |= ([.[] | select(.run != "task tools:install:linters")])' "$repo/.github/workflows/ci.yml" >"$wfs/ci.yml"
-expect "the workflow check passes this repository's workflows" 0 'checked [0-9]+ task steps in 5 workflows' \
+expect "the workflow check passes this repository's workflows" 0 'checked [0-9]+ task steps in 6 workflows' \
   sh -c "cd '$repo' && node scripts/check-workflows.mjs"
 expect "the workflow check refuses a task before checkout" 1 'release step [0-9]+ runs task release:credentials before a step checks out' \
   sh -c "cd '$repo' && node scripts/check-workflows.mjs '$wfs/release.yml'"
