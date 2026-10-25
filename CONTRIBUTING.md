@@ -35,5 +35,8 @@ need Go, Rust, Node.js with pnpm, Task, Docker and the linters that
 
 ## Releases
 
-A maintainer releases by dispatching the release workflow for a commit on
-`main` that passed CI. Nobody tags or publishes by hand.
+A maintainer dispatches the release workflow's `prepare` step for a commit on
+`main` that passed CI. It opens a pull request holding only the release
+commit: the applied intents and the changelog. Merging that pull request
+approves the release; the `publish` step then tags the merged commit, and the
+tag delivers the image. Nobody tags or publishes by hand.

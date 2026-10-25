@@ -72,6 +72,7 @@ jobs:
           node-version-file: .node-version
       - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
       - run: task tools:install:browser
+      - run: task tools:install:intentional
       - run: task test
 
   build:
@@ -130,6 +131,7 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      - run: task test:scripts:docker
       - run: task test:docker
 
   openbao:

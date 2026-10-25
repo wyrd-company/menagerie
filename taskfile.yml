@@ -72,6 +72,7 @@ tasks:
       - task: template-service:test
       - task: web:test
       - task: web:test:browser
+      - task: test:scripts
 
   lint:
     desc: Static analysis of every package and of the repository's workflows, scripts, YAML and Markdown, non-mutating
@@ -112,9 +113,20 @@ tasks:
     cmds:
       - docker build -t '{{.IMAGE}}' .
 
+  test:scripts:
+    desc: Test the release and CI scripts against real Git and Intentional in scratch clones (needs intentional and jq)
+    cmds:
+      - scripts/scripts_test.sh
+
+  test:scripts:docker:
+    desc: Test that the disposable daemon's cleanup keeps foreign objects named like its own
+    cmds:
+      - scripts/isolated-docker_test.sh
+
   test:live:
     desc: Run every suite that needs Docker or OpenBao
     cmds:
+      - task: test:scripts:docker
       - task: test:docker
       - task: test:openbao
       - task: test:pocketid
@@ -210,7 +222,7 @@ tasks:
           done'
 
   release:rehearse:
-    desc: Rehearse the next release in a scratch clone of HEAD, establishing the baseline there when none exists
+    desc: Rehearse the next release (prepare, squash merge, publish) in a scratch clone of HEAD, then discard it
     cmds:
       - scripts/release.sh rehearse
 
@@ -224,15 +236,25 @@ tasks:
     cmds:
       - scripts/release-evidence.sh
 
-  release:cut:
-    desc: Apply the pending intents at RELEASE_SHA, commit and tag the release locally (release workflow only)
+  release:prepare:
+    desc: At RELEASE_SHA, apply the pending intents and commit them alone on release/<version> (release workflow only)
     cmds:
-      - scripts/release.sh cut
+      - scripts/release.sh prepare
 
-  release:push:
-    desc: Push the release commit to main, then its tags (release workflow only)
+  release:propose:
+    desc: Push release/<version> and open its pull request (release workflow only)
     cmds:
-      - scripts/release.sh push
+      - scripts/release.sh propose
+
+  release:publish:
+    desc: At the merged release commit RELEASE_SHA, prove it applies its parent's plan, then tag it (release workflow only)
+    cmds:
+      - scripts/release.sh publish
+
+  release:push-tags:
+    desc: Push the tags release:publish made (release workflow only)
+    cmds:
+      - scripts/release.sh push-tags
 
   release:tag:
     desc: Check that RELEASE_TAG is an Intentional release record to deliver (CD only)

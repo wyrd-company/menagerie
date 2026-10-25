@@ -2,15 +2,29 @@
 #   references: [taskfile]
 name: Release
 
-# The release act: a person dispatches it for one commit. It proves that the
-# commit is main's head and passed CI on push, then applies the pending
-# intents, commits the release, tags it and pushes both. It publishes
-# nothing; cd.yml delivers the image when the tag arrives.
+# A person dispatches each step for one commit on main.
+#
+#   prepare  at main's head: applies the pending intents and opens a pull
+#            request holding only that release commit. Merging it approves
+#            the release.
+#   publish  at the merged release commit: proves it is the apply of its
+#            parent's plan, then tags it (and, the first time, tags the
+#            parent as the 0.0.0 baseline). The tag starts cd.yml.
+#
+# Both steps first prove that the commit is main's head with a successful
+# push-event CI run. Neither pushes to main.
 on:
   workflow_dispatch:
     inputs:
+      action:
+        description: prepare opens the release pull request; publish tags the merged release commit
+        required: true
+        type: choice
+        options:
+          - prepare
+          - publish
       sha:
-        description: Full commit SHA to release; it must be main's head
+        description: Full commit SHA on main; it must be main's head
         required: true
         type: string
 
@@ -38,15 +52,16 @@ jobs:
         run: task release:evidence
 
   release:
-    name: Apply, commit, tag and push
+    name: ${{ inputs.action == 'prepare' && 'Open the release pull request' || 'Tag the merged release' }}
     needs: evidence
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
       - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
-      # The release app is the only actor the main branch ruleset lets push
-      # without a pull request, and its tag push starts cd.yml.
+      # The release app pushes the release branch, opens its pull request and
+      # pushes tags. Rulesets let only it create version tags; its pushes,
+      # unlike GITHUB_TOKEN's, start the workflows that check them.
       - env:
           RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
           RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -62,24 +77,36 @@ jobs:
           token: ${{ steps.token.outputs.token }}
           fetch-depth: 0
           fetch-tags: true
-          # release:push pushes with this token.
+          # The push steps push with this token.
           persist-credentials: true
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: 1.97.1
       - run: task tools:install:intentional
-      - env:
+      - if: inputs.action == 'prepare'
+        env:
           RELEASE_SHA: ${{ inputs.sha }}
           RELEASE_ACTOR_NAME: ${{ steps.token.outputs.app-slug }}[bot]
           RELEASE_ACTOR_EMAIL: ${{ steps.token.outputs.app-slug }}[bot]@users.noreply.github.com
           RELEASE_PLAN: ${{ runner.temp }}/release-plan.json
-        run: task release:cut
+        run: task release:prepare
+      - if: inputs.action == 'prepare'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          RELEASE_PLAN: ${{ runner.temp }}/release-plan.json
+        run: task release:propose
+      - if: inputs.action == 'publish'
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+          RELEASE_PLAN: ${{ runner.temp }}/release-plan.json
+        run: task release:publish
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-plan
+          name: release-plan-${{ inputs.action }}
           path: ${{ runner.temp }}/release-plan.json*
           if-no-files-found: error
           retention-days: 90
-      - env:
+      - if: inputs.action == 'publish'
+        env:
           RELEASE_PLAN: ${{ runner.temp }}/release-plan.json
-        run: task release:push
+        run: task release:push-tags

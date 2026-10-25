@@ -1,58 +1,107 @@
 #!/usr/bin/env bash
-# Prepare a Menagerie release with Intentional.
+# Prepare and publish a Menagerie release with Intentional.
 #
-#   release.sh rehearse   run the release steps in a scratch clone of HEAD and
-#                         discard it; nothing leaves the clone
-#   release.sh cut        in this checkout, at the release commit: plan, apply,
-#                         commit and tag; pushes nothing
-#   release.sh push       push the release commit to main, then its tags
+#   release.sh rehearse   prepare, squash-merge and publish in a scratch clone
+#                         of HEAD, then discard it; nothing leaves the clone
+#   release.sh prepare    at main's head: apply the pending intents and commit
+#                         them alone on release/<version>
+#   release.sh propose    push release/<version> and open its pull request
+#   release.sh publish    at the merged release commit: prove it is the apply
+#                         of its parent's plan, then tag it
+#   release.sh push-tags  push the tags publish made
 #
-# Intentional reads the version from tags. Before the first release there is
-# no tag, so the steps first establish the 0.0.0 baseline at the release
-# commit. rehearse does that only inside its clone; cut does it for real,
-# under the release workflow's evidence gate. Both run the same steps, so a
-# passing rehearsal is the first release's plan.
+# A release is reviewed as a pull request holding only the apply commit;
+# merging it approves the release. Tags are made only by publish, after the
+# merge. Intentional reads the version from tags, so before the first release
+# prepare plans against a 0.0.0 baseline it makes and deletes locally, and
+# publish makes that baseline for real at the release commit's parent.
 #
-# cut uses RELEASE_ACTOR_NAME and RELEASE_ACTOR_EMAIL for the release commit.
-# cut writes the plan to RELEASE_PLAN (default: release-plan.json beside the
-# checkout) and the tags it made to RELEASE_PLAN.tags, which push reads.
+# prepare and publish write the plan to RELEASE_PLAN (default:
+# release-plan.json beside the checkout). prepare commits as
+# RELEASE_ACTOR_NAME <RELEASE_ACTOR_EMAIL>. publish records the tags it made
+# in RELEASE_PLAN.tags for push-tags.
 set -euo pipefail
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+plan=${RELEASE_PLAN:-$repo/../release-plan.json}
+unit=menagerie
 
 usage() {
-  sed -n '2,9p' "$0" >&2
+  sed -n '2,13p' "$0" >&2
   exit 2
 }
 
-# release_steps <checkout> <plan>: baseline when absent, check, plan, apply,
-# commit and tag, in <checkout>.
-release_steps() {
-  local dir=$1 plan=$2 version tag
-  cd "$dir"
-  [ -z "$(git status --porcelain)" ] || { echo "the checkout has changes" >&2; return 1; }
+fail() {
+  echo "$1" >&2
+  exit 1
+}
+
+has_release_tags() { [ -n "$(git tag --list '[0-9]*.[0-9]*.[0-9]*')" ]; }
+
+clean() { [ -z "$(git status --porcelain)" ] || fail "the checkout at $(pwd) has changes"; }
+
+# plan_version <plan>: the unit's next version, which is also its tag name.
+plan_version() {
+  local version tag
+  version=$(jq -er ".release_units[] | select(.id == \"$unit\") | .new_version" "$1")
+  tag=$(jq -er ".tags[] | select(.release_unit == \"$unit\") | .name" "$1")
+  [ "$tag" = "$version" ] || fail "tag $tag does not name version $version"
+  echo "$version"
+}
+
+# prepare_steps: in the current checkout, at the commit to release from.
+prepare_steps() {
+  local base version baseline=
+  clean
+  base=$(git rev-parse HEAD)
+  if ! has_release_tags; then
+    # Only for planning: publish makes the real baseline after review.
+    intentional tag --baseline --version "$unit=0.0.0" >/dev/null
+    baseline=0.0.0
+  fi
+  intentional check
+  intentional plan >"$plan"
+  version=$(plan_version "$plan")
+  intentional apply
+  if [ -n "$baseline" ]; then git tag -d "$baseline" >/dev/null; fi
+  git switch -q -c "release/$version"
+  git add --all
+  git -c user.name="${RELEASE_ACTOR_NAME:?}" -c user.email="${RELEASE_ACTOR_EMAIL:?}" \
+    commit -q -m "chore(release): $version"
+  echo "prepared $version on release/$version: $(git rev-parse HEAD), parent $base"
+}
+
+# publish_steps: in the current checkout, at the merged release commit.
+publish_steps() {
+  local release parent version subject applied scratch
+  clean
+  release=$(git rev-parse HEAD)
+  parent=$(git rev-parse HEAD~1)
   : >"$plan.tags"
-  if [ -z "$(git tag --list '[0-9]*.[0-9]*.[0-9]*')" ]; then
-    echo "no release tag yet: establishing the 0.0.0 baseline at $(git rev-parse HEAD)"
-    intentional tag --baseline --version menagerie=0.0.0
+  git checkout -q --detach "$parent"
+  if ! has_release_tags; then
+    intentional tag --baseline --version "$unit=0.0.0" >/dev/null
     echo 0.0.0 >>"$plan.tags"
   fi
   intentional check
   intentional plan >"$plan"
-  version=$(jq -er '.release_units[] | select(.id == "menagerie") | .new_version' "$plan")
-  tag=$(jq -er '.tags[] | select(.release_unit == "menagerie") | .name' "$plan")
-  [ "$tag" = "$version" ] || { echo "tag $tag does not name version $version" >&2; return 1; }
-  intentional apply
-  git add --all
-  git -c user.name="$RELEASE_ACTOR_NAME" -c user.email="$RELEASE_ACTOR_EMAIL" \
-    commit -q -m "chore(release): $version"
+  version=$(plan_version "$plan")
+  # The merged commit must be exactly the apply of its parent's plan.
+  scratch=$(mktemp -d)
+  git worktree add -q --detach "$scratch/apply" "$parent"
+  (cd "$scratch/apply" && intentional apply >/dev/null && git add --all && git write-tree) >"$scratch/tree"
+  applied=$(cat "$scratch/tree")
+  git worktree remove --force "$scratch/apply"
+  rm -rf "$scratch"
+  git checkout -q --detach "$release"
+  [ "$applied" = "$(git rev-parse "HEAD^{tree}")" ] ||
+    fail "$release is not the apply of $parent's plan for $version"
+  subject=$(git log -1 --format=%s)
+  [ "$subject" = "chore(release): $version" ] || fail "$release's subject is '$subject', not 'chore(release): $version'"
   intentional tag --plan "$plan"
-  echo "$tag" >>"$plan.tags"
-  [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse HEAD)" ] || {
-    echo "tag $tag is not on the release commit" >&2
-    return 1
-  }
-  echo "release $version: commit $(git rev-parse HEAD), tags $(git tag --points-at HEAD | tr '\n' ' ')"
+  echo "$version" >>"$plan.tags"
+  [ "$(git rev-parse "$version^{commit}")" = "$release" ] || fail "tag $version is not on $release"
+  echo "published $version at $release; tags: $(tr '\n' ' ' <"$plan.tags")"
 }
 
 [ $# -eq 1 ] || usage
@@ -62,31 +111,50 @@ case "$1" in
     trap 'rm -rf "$scratch"' EXIT
     head=$(git -C "$repo" rev-parse HEAD)
     git clone -q --no-local "$repo" "$scratch/clone"
-    git -C "$scratch/clone" checkout -q --detach "$head"
-    echo "rehearsing the release of $head; tags made here stay in $scratch/clone"
-    RELEASE_ACTOR_NAME="Release rehearsal" RELEASE_ACTOR_EMAIL="rehearsal@example.invalid" \
-      release_steps "$scratch/clone" "$scratch/release-plan.json"
-    git -C "$scratch/clone" diff --stat HEAD~1 HEAD
+    cd "$scratch/clone"
+    git checkout -q --detach "$head"
+    export RELEASE_ACTOR_NAME="Release rehearsal" RELEASE_ACTOR_EMAIL="rehearsal@example.invalid"
+    plan=$scratch/release-plan.json
+    echo "rehearsing the release of $head in $scratch/clone"
+    prepare_steps
+    git diff --stat HEAD~1 HEAD
+    # Squash merge: one new commit on main with the pull request's tree and title.
+    merged=$(git -c user.name="$RELEASE_ACTOR_NAME" -c user.email="$RELEASE_ACTOR_EMAIL" \
+      commit-tree "HEAD^{tree}" -p "$head" -m "$(git log -1 --format=%s)")
+    git checkout -q --detach "$merged"
+    publish_steps
     ;;
-  cut)
-    : "${RELEASE_ACTOR_NAME:?}" "${RELEASE_ACTOR_EMAIL:?}"
-    if [ -n "${RELEASE_SHA:-}" ] && [ "$(git -C "$repo" rev-parse HEAD)" != "$RELEASE_SHA" ]; then
-      echo "the checkout is at $(git -C "$repo" rev-parse HEAD), not $RELEASE_SHA" >&2
-      exit 1
-    fi
-    release_steps "$repo" "${RELEASE_PLAN:-$repo/../release-plan.json}"
-    ;;
-  push)
+  prepare)
     cd "$repo"
-    plan=${RELEASE_PLAN:-$repo/../release-plan.json}
+    if [ -n "${RELEASE_SHA:-}" ] && [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+      fail "the checkout is at $(git rev-parse HEAD), not $RELEASE_SHA"
+    fi
+    prepare_steps
+    ;;
+  propose)
+    cd "$repo"
+    version=$(plan_version "$plan")
+    [ "$(git branch --show-current)" = "release/$version" ] || fail "not on release/$version"
+    git push origin "release/$version"
+    notes=$(jq -er ".release_units[] | select(.id == \"$unit\") | .release_notes" "$plan")
+    body=$(
+      printf 'This pull request holds only the release commit for %s: the applied intents and the changelog.\n\n' "$version"
+      printf 'Merging it approves the release. Then dispatch the Release workflow with action publish and the merged commit to tag it; the tag starts delivery.\n\n'
+      printf '%s\n' "$notes"
+    )
+    gh pr create --base main --head "release/$version" --title "chore(release): $version" --body "$body"
+    ;;
+  publish)
+    cd "$repo"
+    if [ -n "${RELEASE_SHA:-}" ] && [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+      fail "the checkout is at $(git rev-parse HEAD), not $RELEASE_SHA"
+    fi
+    publish_steps
+    ;;
+  push-tags)
+    cd "$repo"
     mapfile -t tags <"$plan.tags"
-    [ ${#tags[@]} -gt 0 ] || { echo "$plan.tags names no tags" >&2; exit 1; }
-    # The release commit lands first, so the tags' push starts delivery of a
-    # commit that main already holds. If main has moved on, this push is
-    # refused and nothing is published. If the tag push fails, recreate the
-    # tags at the release commit with `intentional tag --plan` and the
-    # release-plan artifact, then push them.
-    git push origin HEAD:refs/heads/main
+    [ ${#tags[@]} -gt 0 ] || fail "$plan.tags names no tags"
     git push origin "${tags[@]/#/refs/tags/}"
     ;;
   *) usage ;;
