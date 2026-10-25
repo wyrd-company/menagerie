@@ -279,7 +279,19 @@ templates:
 		if out, code := c.exec("65534:65534", "curl", "-sS", "--unix-socket", "/run/menagerie/template.sock", "http://template-service/"); code == 0 {
 			t.Errorf("an unprivileged user reached the template service: %q", out)
 		}
+		// Both services run as root.
+		for _, service := range []string{"template-service", "workspace-service"} {
+			if out := c.mustExec("sh", "-c", "stat -c %u /proc/$(/command/s6-svstat -o pid /run/service/"+service+")"); out != "0" {
+				t.Errorf("%s runs as uid %s", service, out)
+			}
+		}
+		// The health check passes, and fails when either service does not answer.
 		c.mustExec("menagerie-healthcheck")
+		for _, env := range []string{"MENAGERIE_TEMPLATE_SOCKET=/run/menagerie/absent.sock", "MENAGERIE_HEALTH_URL=http://127.0.0.1:1/healthz"} {
+			if out, code := c.exec("", "env", env, "menagerie-healthcheck"); code == 0 {
+				t.Errorf("the health check passed with %s: %q", env, out)
+			}
+		}
 		// Only the workspace service's port is declared, and the template
 		// service listens on no TCP socket.
 		info := c.inspect()
@@ -322,17 +334,25 @@ done`
 	})
 
 	// Either service stopping stops the container with its status, and the
-	// restart policy brings the whole of Menagerie back.
-	for i, service := range []string{"template-service", "workspace-service"} {
-		t.Run(service+" failure restarts the container", func(t *testing.T) {
+	// restart policy brings the whole of Menagerie back. Each failure exits
+	// with its own code, so a code left from the previous run cannot pass.
+	failures := []struct {
+		service, signal, code, reason string
+	}{
+		{"template-service", "KILL", "137", "signal 9"},
+		// Go ends on SIGQUIT with exit status 2.
+		{"workspace-service", "QUIT", "2", "exit status 2"},
+	}
+	for i, f := range failures {
+		t.Run(f.service+" failure restarts the container", func(t *testing.T) {
 			c.t = t
 			killed := time.Now()
-			c.mustExec("sh", "-c", "kill -KILL $(/command/s6-svstat -o pid /run/service/"+service+")")
-			if code := nextDie(t, died); code != "137" {
-				t.Errorf("the container stopped with %q, not 137", code)
+			c.mustExec("sh", "-c", "kill -"+f.signal+" $(/command/s6-svstat -o pid /run/service/"+f.service+")")
+			if code := nextDie(t, died); code != f.code {
+				t.Errorf("the container stopped with %q, not %s", code, f.code)
 			}
 			c.waitReady(i + 1)
-			if want := "menagerie: " + service + " stopped (signal 9); stopping the container"; !strings.Contains(c.logs(killed), want) {
+			if want := "menagerie: " + f.service + " stopped (" + f.reason + "); stopping the container"; !strings.Contains(c.logs(killed), want) {
 				t.Errorf("logs lack %q", want)
 			}
 			b := signInBrowser()
