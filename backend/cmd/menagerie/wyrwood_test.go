@@ -322,8 +322,11 @@ engine:
   socket: /var/run/docker.sock
   allow-recreate: false
 EOF`, w.sshAddr))
-	if out, code := w.agent.exec("", "wyrwood", "agent", "login", "ssh://"+w.sshAddr, "--accept-fingerprint", strings.TrimSpace(string(fingerprint)), "--output", "json"); code != 0 {
-		t.Logf("agent login exited %d: %s", code, out)
+	// The first login asks the controller for approval and reports pending.
+	out, code := w.agent.exec("", "wyrwood", "agent", "login", "ssh://"+w.sshAddr, "--accept-fingerprint", strings.TrimSpace(string(fingerprint)), "--output", "json")
+	var login struct{ Status string }
+	if err := json.Unmarshal([]byte(out), &login); err != nil || login.Status != "pending" {
+		t.Fatalf("agent login exited %d: %s", code, out)
 	}
 
 	// An operator signs in and approves the agent's key.
