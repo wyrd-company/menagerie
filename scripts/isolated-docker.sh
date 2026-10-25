@@ -21,6 +21,11 @@
 # that Docker Hub's anonymous pull limit does not end a run; images pinned by
 # digest are the same through a mirror.
 #
+# DIND_PUBLISH, when set, is a space-separated list of ports that up
+# publishes from the daemon's network namespace on the caller's 127.0.0.1,
+# each at the same number, so a browser here reaches a service that listens
+# there on every address.
+#
 # <state> is a folder that records the owned container and volume names.
 # down removes only objects that carry this run's label, and it is safe to
 # repeat. A caller that cleans up unconditionally passes the same [owner]
@@ -71,8 +76,13 @@ case "$cmd" in
     if [ $# -ge 1 ]; then echo "$1" >"$state/owner"; else rm -f "$state/owner"; fi
     labels=(--label menagerie-test=isolated-docker --label "menagerie-test-run=$run")
     docker volume create "${labels[@]}" "$run-work" >/dev/null
+    publish=()
+    for port in ${DIND_PUBLISH:-}; do
+      case "$port" in '' | *[!0-9]*) echo "DIND_PUBLISH holds $port, not a port" >&2; exit 2 ;; esac
+      publish+=(-p "127.0.0.1:$port:$port")
+    done
     docker run -d --privileged --name "$run-dind" "${labels[@]}" -e DOCKER_TLS_CERTDIR= \
-      -v "$run-work:$work" "$dind_image" \
+      "${publish[@]}" -v "$run-work:$work" "$dind_image" \
       dockerd --host tcp://127.0.0.1:2375 --host unix:///var/run/docker.sock \
       ${DIND_REGISTRY_MIRROR:+--registry-mirror "$DIND_REGISTRY_MIRROR"} >/dev/null
     for ((i = 0; i < ready_attempts; i++)); do
