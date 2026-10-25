@@ -242,7 +242,7 @@ tasks:
       - docs/demo/record.sh '{{.STATE}}'
 
   test:image:
-    desc: Build the image on a disposable Docker daemon; start, sign in to, fail and stop it; create and upgrade an operator-owned workspace through it
+    desc: Build the image on a disposable Docker daemon; start, sign in to, fail and stop it; create and upgrade an operator-owned workspace, and create, start and rebuild a feature-bearing one, through it
     vars:
       STATE: '{{.SCRATCH}}/image'
       OWNER:
@@ -254,7 +254,7 @@ tasks:
       - scripts/isolated-docker.sh build '{{.STATE}}' -t menagerie:test
       - >-
         scripts/isolated-docker.sh run '{{.STATE}}' -e MENAGERIE_IMAGE=menagerie:test
-        '{{.STATE}}/image.test' -test.run '^TestImage(OperatorWorkspace)?$' -test.v -test.count=1 -test.timeout 10m
+        '{{.STATE}}/image.test' -test.run '^TestImage(OperatorWorkspace|WorkspaceFeatures)?$' -test.v -test.count=1 -test.timeout 10m
 
   test:image:cross:
     desc: Cross-compile the image's binaries for linux/arm64 on a disposable Docker daemon and check that each is aarch64
