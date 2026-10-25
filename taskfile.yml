@@ -23,6 +23,9 @@
 # default ~/.cache/menagerie: a path the ambient daemon sees at the same
 # path, unlike a container-private /tmp. Test binaries run with a test-only
 # 10m bound; each live suite finished in under 1 minute on the shared host.
+# test:acceptance downloads the Wyrwood and OpenBao releases it runs, needs
+# the Playwright browser, and publishes ports 18640 to 18642 on 127.0.0.1
+# (MENAGERIE_ACCEPTANCE_*PORT to move them); it took about 6 minutes.
 version: "3"
 
 includes:
