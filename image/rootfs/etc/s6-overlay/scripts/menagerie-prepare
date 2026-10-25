@@ -47,12 +47,36 @@ fi
 
 # Menagerie's own folders: the template service's socket folder, open to
 # the services' user only, and Toha's data and the user's home in the data
-# volume. Only these folders are given to the user, never their contents.
+# volume. Everything is checked before anything changes. Each folder is
+# absent or a real folder, never a symbolic link, so no change reaches a
+# folder outside Menagerie's, such as a workspace. The data folders belong
+# to the services' user, or are a new, empty volume; their contents were
+# all written by that user. Only the folders themselves are then given to
+# the user, never their contents.
+for path in /run/menagerie "$data" "$data/toha" "$data/home"; do
+  if [ -L "$path" ]; then
+    fail "$path is a symbolic link; Menagerie's folders must be real folders"
+  fi
+  if [ -e "$path" ] && [ ! -d "$path" ]; then
+    fail "$path is not a folder"
+  fi
+done
+for path in "$data" "$data/toha" "$data/home"; do
+  [ -d "$path" ] || continue
+  owner=$(stat -c %u "$path")
+  if [ "$owner" != "$uid" ] && [ -n "$(ls -A "$path")" ]; then
+    fail "$path belongs to uid $owner and is not empty, but Menagerie runs as uid $uid, the owner of $root. Remove the data volume or give its contents to uid $uid."
+  fi
+done
+for path in "$data/toha" "$data/home"; do
+  [ -d "$path" ] || continue
+  # find does not follow symbolic links; a link is judged by its own owner.
+  other=$(find "$path" -mindepth 1 ! -uid "$uid" -print -quit)
+  [ -z "$other" ] || fail "$other in $data belongs to uid $(stat -c %u "$other"), but Menagerie runs as uid $uid, the owner of $root. Remove the data volume or give its contents to uid $uid."
+done
 install -d -m 0700 -o "$uid" -g "$gid" /run/menagerie
 install -d -m 0755 -o "$uid" -g "$gid" "$data" "$data/toha"
 install -d -m 0700 -o "$uid" -g "$gid" "$data/home"
-other=$(find "$data/toha" "$data/home" -mindepth 1 ! -uid "$uid" -print -quit)
-[ -z "$other" ] || fail "$other in $data belongs to uid $(stat -c %u "$other"), but Menagerie runs as uid $uid, the owner of $root. Remove the data volume or give its contents to uid $uid."
 
 /command/s6-applyuidgid -u "$uid" -g "$gid" -G "$groups" test -r "$config" ||
   fail "$config is not readable by uid $uid"

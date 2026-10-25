@@ -62,10 +62,11 @@ consumer directory. For a non-root owner:
   example the workspace root's group. Without one, Wyrwood's sockets are
   readable only by Wyrwood's own user.
 - `config.yml` must be readable by that user.
-- Toha's data and the user's home in `/var/lib/menagerie` must hold only
-  files this user wrote. If the owner of the workspace root changes, remove
-  the `menagerie-data` volume: Menagerie refuses to start on data another
-  uid wrote, and names the file.
+- `/var/lib/menagerie` must be a new, empty volume or one this user's
+  Menagerie wrote. Its `toha` and `home` folders must be real folders, not
+  symbolic links, holding only files this user wrote. Otherwise Menagerie
+  changes nothing, refuses to start and names the path. If the owner of
+  the workspace root changes, remove the `menagerie-data` volume.
 
 Template hooks and `initializeCommand` run inside this container as that
 user, with the image's tools: a POSIX shell, `git`, `ssh` and `curl`.

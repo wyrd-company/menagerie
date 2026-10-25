@@ -431,48 +431,123 @@ templates:
 		}
 	})
 
-	// Toha's data in /var/lib/menagerie belongs to the services' user. Data
-	// another uid wrote stops start-up with a message, instead of failing
-	// later inside Toha.
-	t.Run("data another uid wrote stops start-up", func(t *testing.T) {
-		data := filepath.Join(base, "data")
-		writeTo(t, data, "toha/cache/stale", "written by root\n")
-		other, err := p.docker.ContainerCreate(ctx,
-			&container.Config{Image: ref, Labels: map[string]string{"menagerie-test": "image"}},
-			&container.HostConfig{
-				NetworkMode: "host",
-				Binds: []string{
-					"/var/run/docker.sock:/var/run/docker.sock",
-					tmp + ":" + tmp,
-					filepath.Join(base, "config.yml") + ":/etc/menagerie/config.yml:ro",
-					data + ":/var/lib/menagerie",
-				},
-			}, nil, nil, "")
+	// Start-up checks /var/lib/menagerie before it changes anything: each of
+	// Menagerie's folders is a real folder, not a link that would carry a
+	// change into a workspace or another folder; the folders belong to the
+	// services' user unless they are a new, empty volume; and everything in
+	// Toha's data and the home was written by that user. A refusal stops
+	// start-up with a message and leaves every folder as it was.
+	elsewhere := filepath.Join(base, "elsewhere")
+	foreign := filepath.Join(base, "foreign")
+	for _, d := range []struct {
+		path     string
+		uid, gid int
+		mode     os.FileMode
+	}{{elsewhere, operatorUID, operatorGID, 0o750}, {foreign, 2000, 2000, 0o710}} {
+		if err := os.MkdirAll(d.path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeTo(t, d.path, "stale", "written by root\n")
+		if err := os.Chown(d.path, d.uid, d.gid); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(d.path, d.mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stamp := func(path string) string {
+		info, err := os.Lstat(path)
 		if err != nil {
+			return err.Error()
+		}
+		st := info.Sys().(*syscall.Stat_t)
+		return fmt.Sprintf("%d:%d %o", st.Uid, st.Gid, info.Mode().Perm())
+	}
+	operatorDir := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		o := &imageContainer{t: t, docker: p.docker, id: other.ID}
-		t.Cleanup(func() {
-			_ = p.docker.ContainerRemove(context.Background(), o.id, container.RemoveOptions{Force: true, RemoveVolumes: true})
+		if err := os.Chown(path, operatorUID, operatorGID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := func(t *testing.T, target, path string) {
+		t.Helper()
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, c := range []struct {
+		name  string
+		setup func(t *testing.T, data string)
+		want  string
+	}{
+		{"data another uid wrote stops start-up", func(t *testing.T, data string) {
+			operatorDir(t, data)
+			operatorDir(t, filepath.Join(data, "toha"))
+			writeTo(t, data, "toha/cache/stale", "written by root\n")
+		}, fmt.Sprintf("belongs to uid 0, but Menagerie runs as uid %d", operatorUID)},
+		{"a data folder another uid owns stops start-up", func(t *testing.T, data string) {
+			writeTo(t, data, "other", "not Menagerie's\n")
+		}, fmt.Sprintf("/var/lib/menagerie belongs to uid 0 and is not empty, but Menagerie runs as uid %d", operatorUID)},
+		{"a home linked to a workspace stops start-up", func(t *testing.T, data string) {
+			operatorDir(t, data)
+			link(t, elsewhere, filepath.Join(data, "home"))
+		}, "/var/lib/menagerie/home is a symbolic link"},
+		{"a Toha folder linked to another uid's folder stops start-up", func(t *testing.T, data string) {
+			operatorDir(t, data)
+			link(t, foreign, filepath.Join(data, "toha"))
+		}, "/var/lib/menagerie/toha is a symbolic link"},
+		{"a Toha file instead of a folder stops start-up", func(t *testing.T, data string) {
+			operatorDir(t, data)
+			writeTo(t, data, "toha", "a file\n")
+		}, "/var/lib/menagerie/toha is not a folder"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			data := filepath.Join(base, fmt.Sprintf("data-%d", i))
+			c.setup(t, data)
+			before := map[string]string{}
+			for _, p := range []string{data, filepath.Join(data, "toha"), filepath.Join(data, "home"), elsewhere, foreign, filepath.Join(foreign, "stale")} {
+				before[p] = stamp(p)
+			}
+			o := startWithData(t, p, ref, tmp, filepath.Join(base, "config.yml"), data)
+			if code := o.waitExit(); code == 0 {
+				t.Errorf("start-up exited 0")
+			}
+			if logs := o.logs(time.Time{}); !strings.Contains(logs, c.want) {
+				t.Errorf("logs lack %q:\n%s", c.want, logs)
+			}
+			for path, was := range before {
+				if now := stamp(path); now != was {
+					t.Errorf("start-up changed %s from %s to %s", path, was, now)
+				}
+			}
 		})
-		if err := p.docker.ContainerStart(ctx, o.id, container.StartOptions{}); err != nil {
+	}
+
+	t.Run("an empty new data volume is given to the owner", func(t *testing.T) {
+		data := filepath.Join(base, "data-new")
+		if err := os.MkdirAll(data, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; o.inspect().State.Running; i++ {
-			if i == imageReadyAttempts {
-				t.Fatal("the container kept running")
+		// It listens on the main container's port, so that one stops first.
+		if err := p.docker.ContainerStop(ctx, c.id, container.StopOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		o := startWithData(t, p, ref, tmp, filepath.Join(base, "config.yml"), data)
+		for i := 0; ; i++ {
+			if out, code := o.exec("", "env", fmt.Sprintf("MENAGERIE_HEALTH_URL=http://127.0.0.1:%d/healthz", port), "menagerie-healthcheck"); code == 0 {
+				break
+			} else if i == imageReadyAttempts || !o.inspect().State.Running {
+				t.Fatalf("not healthy: %q\n%s", out, o.logs(time.Time{}))
 			}
 			time.Sleep(imageReadyInterval)
 		}
-		if code := o.inspect().State.ExitCode; code == 0 {
-			t.Errorf("the container exited 0")
-		}
-		want := fmt.Sprintf("belongs to uid 0, but Menagerie runs as uid %d", operatorUID)
-		if logs := o.logs(time.Time{}); !strings.Contains(logs, want) {
-			t.Errorf("logs lack %q:\n%s", want, logs)
-		}
-		if _, err := os.Stat(filepath.Join(data, "toha", "cache", "stale")); err != nil {
-			t.Errorf("start-up touched the data: %v", err)
+		for _, sub := range []string{"", "toha", "home"} {
+			if got := stamp(filepath.Join(data, sub)); !strings.HasPrefix(got, fmt.Sprintf("%d:%d ", operatorUID, operatorGID)) {
+				t.Errorf("%s/%s is %s", data, sub, got)
+			}
 		}
 	})
 
@@ -487,35 +562,54 @@ templates:
 		if err := os.WriteFile(private, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		other, err := p.docker.ContainerCreate(ctx,
-			&container.Config{Image: ref, Labels: map[string]string{"menagerie-test": "image"}},
-			&container.HostConfig{
-				NetworkMode: "host",
-				Binds: []string{
-					"/var/run/docker.sock:/var/run/docker.sock",
-					tmp + ":" + tmp,
-					private + ":/etc/menagerie/config.yml:ro",
-				},
-			}, nil, nil, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		o := &imageContainer{t: t, docker: p.docker, id: other.ID}
-		t.Cleanup(func() {
-			_ = p.docker.ContainerRemove(context.Background(), o.id, container.RemoveOptions{Force: true, RemoveVolumes: true})
-		})
-		if err := p.docker.ContainerStart(ctx, o.id, container.StartOptions{}); err != nil {
-			t.Fatal(err)
-		}
-		for i := 0; o.inspect().State.Running; i++ {
-			if i == imageReadyAttempts {
-				t.Fatal("the container kept running")
-			}
-			time.Sleep(imageReadyInterval)
-		}
+		o := startWithData(t, p, ref, tmp, private, "")
+		o.waitExit()
 		want := fmt.Sprintf("/etc/menagerie/config.yml is not readable by uid %d", operatorUID)
 		if logs := o.logs(time.Time{}); o.inspect().State.ExitCode == 0 || !strings.Contains(logs, want) {
 			t.Errorf("exit %d, logs lack %q:\n%s", o.inspect().State.ExitCode, want, logs)
 		}
 	})
+}
+
+// startWithData starts the image once, with no restart policy, with the
+// given configuration and, unless data is empty, data mounted at
+// /var/lib/menagerie. It listens on the main container's port, so a caller
+// that lets it start its services stops the main container first.
+func startWithData(t *testing.T, p *pocketID, ref, tmp, config, data string) *imageContainer {
+	t.Helper()
+	ctx := context.Background()
+	binds := []string{
+		"/var/run/docker.sock:/var/run/docker.sock",
+		tmp + ":" + tmp,
+		config + ":/etc/menagerie/config.yml:ro",
+	}
+	if data != "" {
+		binds = append(binds, data+":/var/lib/menagerie")
+	}
+	created, err := p.docker.ContainerCreate(ctx,
+		&container.Config{Image: ref, Labels: map[string]string{"menagerie-test": "image"}},
+		&container.HostConfig{NetworkMode: "host", Binds: binds}, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := &imageContainer{t: t, docker: p.docker, id: created.ID}
+	t.Cleanup(func() {
+		_ = p.docker.ContainerRemove(context.Background(), o.id, container.RemoveOptions{Force: true, RemoveVolumes: true})
+	})
+	if err := p.docker.ContainerStart(ctx, o.id, container.StartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+// waitExit waits for the container to stop and returns its exit code.
+func (c *imageContainer) waitExit() int {
+	c.t.Helper()
+	for i := 0; c.inspect().State.Running; i++ {
+		if i == imageReadyAttempts {
+			c.t.Fatal("the container kept running")
+		}
+		time.Sleep(imageReadyInterval)
+	}
+	return c.inspect().State.ExitCode
 }
