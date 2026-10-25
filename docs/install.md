@@ -19,8 +19,9 @@ Before the container starts, you need:
 
 - an OpenID Connect provider with a public client for Menagerie and a group
   named `menagerie_managers`;
-- a Git repository that Menagerie may push workspace backups to, with a
-  deploy key that Wyrwood holds as an OpenBao Transit key;
+- a Git repository that Menagerie may push workspace backups to, and one SSH
+  identity for it that Wyrwood holds as an OpenBao Transit key (see
+  [One SSH identity](#one-ssh-identity));
 - a Wyrwood agent on the host, and a policy for Menagerie;
 - the workspace root: one folder on the host for every workspace.
 
@@ -45,31 +46,48 @@ Menagerie holds no key, token or password. Wyrwood gives the container a
 directory of sockets:
 
 - `ssh-agent.sock` signs Toha's private template fetches and Menagerie's
-  backup pushes with the deploy key;
+  backup pushes with Menagerie's SSH key;
 - `vault.sock` reads registry credentials from OpenBao with the binding's
   own token, when `registry-credentials` is configured.
 
-Write a Wyrwood policy for Menagerie. It offers the deploy key's Transit key,
-grants `read` on `<kv-mount>/data/<path>` for each configured registry
-secret, and mounts the consumer directory at `/run/wyrwood`:
+Write a Wyrwood policy for Menagerie. It offers exactly one Transit key,
+Menagerie's SSH key, grants `read` on `<kv-mount>/data/<path>` for each
+configured registry secret, and mounts the consumer directory at
+`/run/wyrwood`:
 
 ```yaml
 name: menagerie
 openbao:
   agent-token-renewal: true
   policy: |
-    path "transit/keys/menagerie-backups" { capabilities = ["read"] }
-    path "transit/sign/menagerie-backups" { capabilities = ["update"] }
+    path "transit/keys/menagerie-github" { capabilities = ["read"] }
+    path "transit/sign/menagerie-github" { capabilities = ["update"] }
     path "kv/data/menagerie/ghcr" { capabilities = ["read"] }
 ssh:
   transit-keys:
-    - menagerie-backups
+    - menagerie-github
 contract:
   mount-target: /run/wyrwood
 ```
 
-Add the Transit key's public key to the backup repository as a deploy key
-with write access, and to any private template repository as a read key.
+### One SSH identity
+
+Toha's template fetches and Menagerie's backup pushes use the same agent, so
+the agent must offer one key, and that key must reach every repository
+Menagerie uses over SSH. An SSH client offers its keys in turn, and the Git
+host signs it in with the first key it knows, whether or not that key can
+reach the repository. A second key in the agent does not select a second
+repository. GitHub accepts a deploy key on one repository only, and the same
+key cannot be registered twice.
+
+- **Every template is public** (`gh:` or `https://` addresses): only backups
+  use SSH. Add the Transit key's public key to the backup repository as a
+  deploy key with write access.
+- **Any template is private:** create a machine user, a GitHub account for
+  automation, and add the Transit key's public key as that account's SSH
+  key. Give the machine user write access to the backup repository and read
+  access to each private template repository. Do not also add the key as a
+  deploy key.
 
 Bind the container `menagerie` (the name `deploy/compose.yml` gives it) to
 the policy. Give the binding an **access group** that Menagerie's user has,

@@ -16,14 +16,14 @@ is stable; the message names what failed and what was left behind.
 
 | Kind | Meaning |
 | --- | --- |
-| `template-refused` | Toha refused the template, for example because the template could not be fetched (`template-resolve-failed`), with its own reason. Nothing was written. For a private template over SSH, check the Wyrwood binding, the deploy key and the known hosts. |
+| `template-refused` | Toha refused the template, for example because the template could not be fetched (`template-resolve-failed`), with its own reason. Nothing was written. For a private template over SSH, check the Wyrwood binding, that Menagerie's SSH key reaches the repository, and the known hosts. |
 | `template-service-unavailable` | The template service did not answer. Its own log is in the container's log. |
 | `workspace-exists` | Another job created the folder while this interview ran. Nothing was written. |
 | `generation-failed` | Toha or a template hook failed while writing a new workspace. The folder holds what was written. |
 | `not-applied` | Toha reported that it wrote nothing. The workspace is unchanged. |
 | `upgrade-failed` | Toha failed while applying an upgrade. Files written before the failure remain; the state before the upgrade is on the backup branch, and the message names its commit. Recovery is manual. |
 | `merge-conflicted` | The upgrade wrote conflict markers. Resolve them in the named files, then **Rebuild**. |
-| `backup-failed` | A commit or push of the workspace failed. The message says what was changed: before an upgrade, nothing; after it, the devcontainer was not rebuilt. Check the workspace repository, the deploy key and the Wyrwood binding. |
+| `backup-failed` | A commit or push of the workspace failed. The message says what was changed: before an upgrade, nothing; after it, the devcontainer was not rebuilt. Check the workspace repository, that Menagerie's SSH key may push to it, and the Wyrwood binding. |
 | `initialize-command-failed` | The devcontainer's `initializeCommand` failed. The container was not started. |
 | `registry-credentials-unavailable` | A registry credential could not be read. The pull or build did not start. See below. |
 | `operation-failed` | Any other failure of a container operation, such as a failed build or pull; the message holds the cause. |
