@@ -136,12 +136,15 @@ proposed-design:
     init, commit and force-push the workspace branch, and never fetches or
     pulls it. Template fetching belongs to Toha. Authentication uses the SSH
     agent at Wyrwood's
-    `ssh-agent.sock`, mounted from the host consumer directory. The agent's key
-    is an OpenBao Transit key added as a deploy key with write access on the
-    workspace repository. Toha fetches private templates over SSH through
-    the same agent; its git transport runs the image's ssh client with
-    `SSH_AUTH_SOCK` set to Wyrwood's socket. No key or token is stored in the
-    container.
+    `ssh-agent.sock`, mounted from the host consumer directory. The agent
+    offers one key, an OpenBao Transit key. When every approved template is
+    public, it is a deploy key with write access on the workspace
+    repository. When any template is private, it is the SSH key of a
+    machine user with write access on the workspace repository and read
+    access on the private template repositories. Toha fetches private
+    templates over SSH through the same agent; its git transport runs the
+    image's ssh client with `SSH_AUTH_SOCK` set to Wyrwood's socket. No key
+    or token is stored in the container.
   authentication: >-
     Every UI request requires an OIDC session. Access requires membership in
     the `menagerie_managers` group claim. Every authenticated user is a
@@ -155,7 +158,7 @@ proposed-design:
     the host, the host Docker socket and the Wyrwood consumer directory. It
     has a Docker restart policy, so it returns after a host restart. Its UI is
     not exposed to the public internet. Menagerie is bound to a Wyrwood policy
-    that grants only the deploy key and read access to the registry
+    that grants only that one Transit key and read access to the registry
     credential secrets.
   dependencies: >-
     Toha exposes template resolution, fetching and caching, and the upgrade
