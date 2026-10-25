@@ -48,9 +48,10 @@ type Host struct {
 	// HostKey is the server's public host key.
 	HostKey ssh.PublicKey
 
-	mu       sync.Mutex
-	commands []string
-	sessions sync.WaitGroup
+	mu         sync.Mutex
+	commands   []string
+	authorized map[string]bool
+	sessions   sync.WaitGroup
 }
 
 // New starts a Host for the test.
@@ -61,7 +62,7 @@ func New(t *testing.T) *Host {
 			t.Fatal("the SSH fixture's server needs git on PATH")
 		}
 	}
-	f := &Host{Dir: t.TempDir()}
+	f := &Host{Dir: t.TempDir(), authorized: map[string]bool{}}
 
 	_, hostPriv, _ := ed25519.GenerateKey(rand.Reader)
 	hostSigner, err := ssh.NewSignerFromKey(hostPriv)
@@ -72,11 +73,14 @@ func New(t *testing.T) *Host {
 
 	_, userPriv, _ := ed25519.GenerateKey(rand.Reader)
 	userSigner, _ := ssh.NewSignerFromKey(userPriv)
-	authorized := userSigner.PublicKey().Marshal()
+	f.Authorize(userSigner.PublicKey())
 
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			if meta.User() == "git" && string(key.Marshal()) == string(authorized) {
+			f.mu.Lock()
+			ok := f.authorized[string(key.Marshal())]
+			f.mu.Unlock()
+			if meta.User() == "git" && ok {
 				return nil, nil
 			}
 			return nil, errors.New("key not authorized")
@@ -105,6 +109,14 @@ func New(t *testing.T) *Host {
 	f.KnownHosts = filepath.Join(f.Dir, "known_hosts")
 	f.WriteKnownHosts(t, f.KnownHosts, f.HostKey)
 	return f
+}
+
+// Authorize lets key sign in as git, beside the host's own agent key: an
+// identity another agent holds, such as a Wyrwood Transit key.
+func (f *Host) Authorize(key ssh.PublicKey) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.authorized[string(key.Marshal())] = true
 }
 
 // ServeAgent serves keyring on a new Unix socket and returns its path.
