@@ -26,7 +26,7 @@ test("create and upgrade a workspace", async ({ page }) => {
   await pause(2000);
 
   await page.getByRole("link", { name: "Back to the workspace list" }).click();
-  await expect(entry(page, "sample-space").locator(".stamp")).toHaveText("Running");
+  await expect(entry(page, "sample-space").locator(".status")).toHaveText("Running");
   await pause(1500);
   await entry(page, "sample-space").getByRole("link", { name: "Upgrade" }).click();
   await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
@@ -40,7 +40,7 @@ test("create and upgrade a workspace", async ({ page }) => {
   await pause(2000);
 
   await page.getByRole("link", { name: "Back to the workspace list" }).click();
-  await expect(entry(page, "sample-space").locator(".stamp")).toHaveText("Running");
+  await expect(entry(page, "sample-space").locator(".status")).toHaveText("Running");
   await page.screenshot({ path: `${assets}/list.png`, animations: "disabled" });
   await pause(1500);
 });

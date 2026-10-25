@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ApiError, listJobs, listWorkspaces, startJob } from "../api/client.ts";
 import type { Job, Operation, Workspace } from "../api/types.ts";
 import { JobPanel } from "../jobs/JobPanel.tsx";
 import { own } from "../own.ts";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
-import { StateStamp } from "../ui/StateStamp.tsx";
+import { StatusBadge } from "../ui/StatusBadge.tsx";
 
 interface RowError {
   message: string;
@@ -88,10 +88,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
     <div className={`fleet${jobId ? " has-console" : ""}`}>
       <section className="register" aria-labelledby="register-title">
         <header className="screen-head">
-          <div>
-            <p className="eyebrow">Register of workspaces</p>
-            <h1 id="register-title">Workspaces</h1>
-          </div>
+          <h1 id="register-title">Workspaces</h1>
           <div className="screen-actions">
             <button type="button" className="ghost" onClick={reload} disabled={loading}>
               {loading ? "Refreshing…" : "Refresh"}
@@ -124,19 +121,12 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
 
         {workspaces && workspaces.length > 0 ? (
           <ol className="ledger" aria-label="Workspaces">
-            {workspaces.map((ws, index) => {
+            {workspaces.map((ws) => {
               const active = ws.activeJob;
               const busy = active !== null || own(pending, ws.name) !== undefined;
               const rowError = own(rowErrors, ws.name);
               return (
-                <li
-                  key={ws.name}
-                  className={`entry${busy ? " is-busy" : ""}`}
-                  style={{ "--i": index } as CSSProperties}
-                >
-                  <span className="entry-no mono" aria-hidden="true">
-                    {String(index + 1).padStart(3, "0")}
-                  </span>
+                <li key={ws.name} className={`entry${busy ? " is-busy" : ""}`}>
                   <div className="entry-name">
                     <h2 className="mono">{ws.name}</h2>
                     <p className="entry-container mono" title={ws.containerId ?? undefined}>
@@ -144,7 +134,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                     </p>
                   </div>
                   <div className="entry-state">
-                    <StateStamp state={ws.state} />
+                    <StatusBadge state={ws.state} />
                     {active ? (
                       <Link className="busy-link" href={paths.list(active.jobId)}>
                         {own(operationLabel, active.operation) ?? active.operation} · {active.state}
@@ -242,7 +232,7 @@ function RecentJobs({ jobs, openJobId }: { jobs: Job[]; openJobId: string | null
             <Link href={paths.list(job.jobId)}>
               <span className="mono">{job.workspace}</span> {job.operation}
             </Link>
-            <StateStamp state={job.state} />
+            <StatusBadge state={job.state} />
             <time className="mono" dateTime={job.createdAt}>
               {new Date(job.createdAt).toLocaleTimeString()}
             </time>

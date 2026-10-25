@@ -4,7 +4,7 @@ import type { Workspace } from "../api/types.ts";
 import { JobPanel } from "../jobs/JobPanel.tsx";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
-import { StateStamp } from "../ui/StateStamp.tsx";
+import { StatusBadge } from "../ui/StatusBadge.tsx";
 import { TemplatePicker } from "../ui/TemplatePicker.tsx";
 
 export function UpgradeWorkspace({
@@ -86,7 +86,7 @@ function StartUpgrade({ workspace }: { workspace: string }) {
   return (
     <form className="start-form" noValidate onSubmit={(e) => void submit(e)}>
       <div className="upgrade-current">
-        {current ? <StateStamp state={current.state} /> : <span className="muted">Reading…</span>}
+        {current ? <StatusBadge state={current.state} /> : <span className="muted">Reading…</span>}
         <p>
           Menagerie commits and backs up local changes to tracked files first. The interview then
           asks only the questions that the recorded answers in{" "}

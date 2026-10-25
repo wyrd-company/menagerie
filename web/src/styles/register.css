@@ -1,4 +1,4 @@
-/* ---- Workspace register ---- */
+/* ---- Workspace list ---- */
 .fleet {
   display: grid;
   gap: 2rem;
@@ -13,46 +13,33 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  border-top: 1px solid var(--rule-strong);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
 .entry {
   display: grid;
-  grid-template-columns: 4.2rem minmax(10rem, 1.3fr) minmax(9rem, 1fr) auto;
-  grid-template-areas: "no name state actions" "no error error error";
+  grid-template-columns: minmax(10rem, 1.3fr) minmax(8rem, 1fr) auto;
+  grid-template-areas: "name state actions" "error error error";
   align-items: center;
-  gap: 0.3rem 1.2rem;
-  padding: 1rem 0.6rem 1rem 0;
-  border-bottom: 1px solid var(--rule);
-  position: relative;
-  animation: entry-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-  animation-delay: calc(var(--i, 0) * 45ms);
+  gap: 0.3rem 1.25rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.entry:last-child {
+  border-bottom: 0;
 }
 
 .entry:hover {
-  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 45%) 20%, transparent);
+  background: var(--surface-2);
 }
 
 .entry.is-busy {
-  background: repeating-linear-gradient(-45deg, transparent 0 12px, rgb(31 92 82 / 5%) 12px 24px);
-}
-
-@keyframes entry-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-}
-
-.entry-no {
-  grid-area: no;
-  font-size: 1.7rem;
-  font-weight: 300;
-  color: transparent;
-  -webkit-text-stroke: 1px var(--rule-strong);
-  text-align: right;
-  align-self: start;
-  padding-top: 0.1rem;
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .entry-name {
@@ -62,15 +49,15 @@
 
 .entry-name h2 {
   font-family: var(--font-mono);
-  font-size: 1.05rem;
+  font-size: 0.95rem;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   overflow-wrap: anywhere;
 }
 
 .entry-container {
-  color: var(--ink-faint);
-  font-size: 0.76rem;
+  color: var(--text-faint);
+  font-size: 0.75rem;
   margin-top: 0.15rem;
 }
 
@@ -78,12 +65,12 @@
   grid-area: state;
   display: grid;
   justify-items: start;
-  gap: 0.35rem;
+  gap: 0.3rem;
 }
 
 .busy-link {
   font-family: var(--font-mono);
-  font-size: 0.76rem;
+  font-size: 0.75rem;
 }
 
 .entry-actions {
@@ -96,9 +83,9 @@
 
 .entry-actions button,
 .entry-actions .button {
-  min-height: 2.25rem;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.84rem;
+  min-height: 2rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.8rem;
 }
 
 .confirm {
@@ -108,28 +95,39 @@
 
 .entry-error {
   grid-area: error;
-  color: var(--vermilion);
-  font-size: 0.9rem;
+  color: var(--danger);
+  font-size: 0.875rem;
 }
 
 .empty {
-  border: 1px dashed var(--rule-strong);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
   padding: 2rem;
   display: grid;
   gap: 1rem;
   justify-items: start;
+  color: var(--text-muted);
 }
 
 .recent {
   margin-top: 2.5rem;
 }
 
+.recent .eyebrow {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.6rem;
+}
+
 .recent ol {
   list-style: none;
   padding: 0;
   margin: 0;
-  display: grid;
-  gap: 0.15rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 
 .recent li {
@@ -137,17 +135,21 @@
   grid-template-columns: 1fr auto auto;
   gap: 1rem;
   align-items: center;
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px dotted var(--rule);
-  font-size: 0.9rem;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+
+.recent li:last-child {
+  border-bottom: 0;
 }
 
 .recent li.is-open {
-  background: var(--verdigris-wash);
+  background: var(--accent-wash);
 }
 
 .recent time {
-  color: var(--ink-faint);
+  color: var(--text-faint);
   font-size: 0.75rem;
 }
 
@@ -176,13 +178,9 @@
 
 @media (max-width: 720px) {
   .entry {
-    grid-template-columns: 2.6rem 1fr;
-    grid-template-areas: "no name" "no state" "actions actions" "error error";
-    padding: 1rem 0;
-  }
-
-  .entry-no {
-    font-size: 1.2rem;
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "name state" "actions actions" "error error";
+    gap: 0.6rem 1rem;
   }
 
   .entry-actions {

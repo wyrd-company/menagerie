@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1254 1254">
+  <title>Menagerie</title>
+  <defs>
+    <path id="crate-shape" d="M218 700Q218 684 234 689L625 812L1024 689Q1040 684 1040 700L1040 984Q1040 996 1029 1000L634 1166Q625 1170 616 1166L229 996Q218 991 218 980Z"/>
+    <rect id="tower-shape" x="600" y="215" width="155" height="360" rx="18"/>
+    <rect id="block-shape" x="522" y="358" width="100" height="120" rx="14"/>
+    <rect id="back-box-shape" x="378" y="420" width="212" height="150" rx="18"/>
+    <g id="cartridge-shape" transform="rotate(-15 300 530)">
+      <rect x="232" y="392" width="136" height="80" rx="20"/>
+      <rect x="248" y="460" width="104" height="205" rx="14"/>
+    </g>
+    <g id="camera-shape">
+      <rect x="330" y="200" width="240" height="190" rx="70" transform="rotate(-20 450 295)"/>
+      <circle cx="362" cy="322" r="74"/>
+    </g>
+    <g id="wrench-shape" transform="translate(712 392) rotate(30)">
+      <path d="M-34-58L-20 0L20 0L34-58A70 70 0 1 1-34-58Z"/>
+      <rect x="-22" y="40" width="44" height="210" rx="16"/>
+    </g>
+    <rect id="tablet-shape" x="795" y="478" width="252" height="205" rx="22" transform="rotate(20 921 580)"/>
+    <g id="front-box-shape">
+      <rect x="385" y="580" width="330" height="225" rx="24"/>
+      <rect x="395" y="545" width="312" height="70" rx="22"/>
+    </g>
+    <rect id="side-box-shape" x="728" y="628" width="162" height="138" rx="20"/>
+  </defs>
+
+  <g id="antennas" fill="none" stroke-linecap="round">
+    <path d="M240 215L286 282M585 212L632 120" stroke="#ffffff" stroke-width="40"/>
+    <path d="M240 215L286 282M585 212L632 120" stroke="#01204a" stroke-width="16"/>
+  </g>
+
+  <g id="arm-base">
+    <rect x="890" y="372" width="130" height="110" rx="22" fill="#01204a" stroke="#ffffff" stroke-width="20" paint-order="stroke"/>
+  </g>
+
+  <g id="robot-arm" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M805 300L955 398M805 300L880 190L958 218M972 182L1040 228L1040 290M960 250L1000 280L1030 318" stroke="#ffffff" stroke-width="84"/>
+    <path id="arm-lower" d="M805 300L955 398" stroke="#01204a" stroke-width="72"/>
+    <path d="M805 300L955 398" stroke="#93a0b6" stroke-width="44"/>
+    <path id="arm-upper" d="M805 300L880 190L958 218" stroke="#01204a" stroke-width="44"/>
+    <path d="M818 280L880 192L950 216" stroke="#4a6283" stroke-width="16"/>
+    <path id="claw" d="M972 182L1040 228L1040 290M960 250L1000 280L1030 318" stroke="#01204a" stroke-width="28"/>
+    <g id="arm-joints" stroke="#01204a" stroke-width="12">
+      <circle cx="805" cy="300" r="36" fill="#f97314"/>
+      <circle cx="958" cy="218" r="26" fill="#f97314"/>
+      <circle cx="805" cy="300" r="12" fill="#01204a"/>
+      <circle cx="958" cy="218" r="8" fill="#01204a"/>
+    </g>
+  </g>
+
+  <g id="tower">
+    <use xlink:href="#tower-shape" fill="#ffffff" stroke="#ffffff" stroke-width="36"/>
+    <use xlink:href="#tower-shape" fill="#01204a"/>
+    <rect x="614" y="228" width="127" height="38" rx="10" fill="#1b3d69"/>
+    <rect x="626" y="282" width="14" height="70" rx="6" fill="#f97314"/>
+  </g>
+
+  <g id="camera-bot">
+    <use xlink:href="#camera-shape" fill="#ffffff" stroke="#ffffff" stroke-width="40"/>
+    <g transform="rotate(-20 450 295)" stroke="#01204a" stroke-width="14">
+      <rect id="camera-body" x="330" y="200" width="240" height="190" rx="70" fill="#d4dae3"/>
+      <path id="camera-shade" d="M340 305H560V320Q560 383 495 383H405Q340 383 340 320Z" fill="#93a0b6" stroke="none"/>
+      <rect id="camera-cap" x="515" y="213" width="58" height="164" rx="28" fill="#01204a"/>
+    </g>
+    <rect id="camera-light" x="532" y="250" width="16" height="32" rx="4" fill="#f97314" transform="rotate(-20 540 266)"/>
+    <g id="camera-lens">
+      <circle cx="362" cy="322" r="68" fill="#d4dae3" stroke="#01204a" stroke-width="14"/>
+      <circle cx="362" cy="322" r="44" fill="#01204a"/>
+      <circle cx="362" cy="322" r="26" fill="none" stroke="#23b1fc" stroke-width="10"/>
+    </g>
+  </g>
+
+  <g id="block">
+    <use xlink:href="#block-shape" fill="#01204a"/>
+  </g>
+
+  <g id="cartridge">
+    <use xlink:href="#cartridge-shape" fill="#ffffff" stroke="#ffffff" stroke-width="36"/>
+    <g transform="rotate(-15 300 530)" stroke="#01204a" stroke-width="14">
+      <rect id="cartridge-body" x="248" y="460" width="104" height="205" rx="14" fill="#fda233"/>
+      <rect x="312" y="470" width="33" height="188" fill="#f97314" stroke="none"/>
+      <rect x="270" y="490" width="10" height="150" rx="5" fill="#ffffff" stroke="none"/>
+      <rect id="cartridge-cap" x="232" y="392" width="136" height="80" rx="20" fill="#01204a"/>
+      <path d="M262 405V460M300 405V460M338 405V460" stroke="#4a6283" stroke-width="12"/>
+    </g>
+  </g>
+
+  <g id="back-box">
+    <use xlink:href="#back-box-shape" fill="#ffffff" stroke="#ffffff" stroke-width="36"/>
+    <use xlink:href="#back-box-shape" fill="#01204a"/>
+    <rect x="392" y="432" width="184" height="46" rx="10" fill="#93a0b6"/>
+  </g>
+
+  <g id="wrench">
+    <use xlink:href="#wrench-shape" fill="#ffffff" stroke="#ffffff" stroke-width="36"/>
+    <g transform="translate(712 392) rotate(30)" stroke="#01204a" stroke-width="14" stroke-linejoin="round">
+      <rect id="wrench-handle" x="-22" y="40" width="44" height="210" rx="16" fill="#f97314"/>
+      <rect x="-6" y="60" width="12" height="180" rx="6" fill="#01204a" stroke="none"/>
+      <path id="wrench-head" d="M-34-58L-20 0L20 0L34-58A70 70 0 1 1-34-58Z" fill="#4a6283"/>
+    </g>
+  </g>
+
+  <g id="tablet">
+    <use xlink:href="#tablet-shape" fill="#ffffff" stroke="#ffffff" stroke-width="36"/>
+    <g transform="rotate(20 921 580)">
+      <rect x="795" y="478" width="252" height="205" rx="22" fill="#93a0b6" stroke="#01204a" stroke-width="14"/>
+      <rect id="tablet-screen" x="808" y="491" width="208" height="179" rx="12" fill="#01204a"/>
+      <g id="code-lines" stroke-linecap="round" stroke-width="9">
+        <path d="M838 522H900M838 548H960M856 574H940M856 600H980" stroke="#2086ee"/>
+        <path d="M838 626H920" stroke="#23b1fc"/>
+      </g>
+    </g>
+  </g>
+
+  <g id="front-box">
+    <use xlink:href="#front-box-shape" fill="#ffffff" stroke="#ffffff" stroke-width="36"/>
+    <rect id="front-box-body" x="385" y="580" width="330" height="225" rx="24" fill="#d4dae3" stroke="#01204a" stroke-width="14"/>
+    <rect x="612" y="590" width="94" height="206" rx="14" fill="#93a0b6"/>
+    <rect id="front-box-lid" x="395" y="545" width="312" height="70" rx="22" fill="#93a0b6" stroke="#01204a" stroke-width="14"/>
+    <rect x="420" y="560" width="160" height="16" rx="8" fill="#d4dae3"/>
+    <rect id="front-box-panel" x="425" y="655" width="172" height="125" rx="12" fill="#01204a"/>
+    <rect id="front-box-strap" x="478" y="612" width="24" height="58" fill="#f97314"/>
+    <rect x="478" y="690" width="24" height="24" rx="4" fill="#f97314"/>
+  </g>
+
+  <g id="side-box">
+    <use xlink:href="#side-box-shape" fill="#ffffff" stroke="#ffffff" stroke-width="36"/>
+    <use xlink:href="#side-box-shape" fill="#d4dae3" stroke="#01204a" stroke-width="14"/>
+    <rect x="758" y="616" width="98" height="46" rx="14" fill="#01204a"/>
+    <rect x="790" y="640" width="22" height="12" rx="3" fill="#f97314"/>
+    <rect x="818" y="690" width="58" height="48" rx="10" fill="#01204a"/>
+    <rect x="834" y="703" width="26" height="22" rx="3" fill="#f97314"/>
+  </g>
+
+  <g id="crate">
+    <use xlink:href="#crate-shape" fill="#ffffff" stroke="#ffffff" stroke-width="36" stroke-linejoin="round"/>
+    <use xlink:href="#crate-shape" fill="#01204a"/>
+    <g id="crate-ribs" fill="#2086ee">
+      <polygon points="258,745 312,762 312,1009 258,987"/>
+      <polygon points="347,773 401,791 401,1047 347,1024"/>
+      <polygon points="437,802 492,820 492,1085 437,1062"/>
+      <polygon points="530,832 588,850 588,1125 530,1101"/>
+      <polygon points="662,848 716,832 716,1103 662,1125"/>
+      <polygon points="752,820 806,803 806,1066 752,1088"/>
+      <polygon points="842,792 896,775 896,1029 842,1051"/>
+      <polygon points="932,764 990,746 990,990 932,1014"/>
+    </g>
+  </g>
+</svg>

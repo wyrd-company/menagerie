@@ -18,9 +18,9 @@ test("lists every workspace folder with its container state", async ({ page }) =
   await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
   const rows = page.getByRole("list", { name: "Workspaces" }).getByRole("listitem");
   await expect(rows).toHaveCount(5);
-  await expect(entry(page, "sample-alpha").locator(".stamp")).toHaveText("Running");
-  await expect(entry(page, "sample-beta").locator(".stamp")).toHaveText("Stopped");
-  await expect(entry(page, "sample-gamma").locator(".stamp")).toHaveText("No container");
+  await expect(entry(page, "sample-alpha").locator(".status")).toHaveText("Running");
+  await expect(entry(page, "sample-beta").locator(".status")).toHaveText("Stopped");
+  await expect(entry(page, "sample-gamma").locator(".status")).toHaveText("No container");
   await expect(entry(page, "sample-gamma")).toContainText("no container");
   await expect(entry(page, "sample-alpha")).toContainText(/container [0-9a-f]{12}/);
   // Actions follow the container state.
@@ -47,7 +47,7 @@ test("starts a stopped workspace and streams its job to completion", async ({ pa
     /read-definition.*initialize-command.*up/s,
   );
   await expect(console.getByRole("log", { name: "Job log" })).toContainText("initialize: ok");
-  await expect(entry(page, "sample-beta").locator(".stamp")).toHaveText("Running");
+  await expect(entry(page, "sample-beta").locator(".status")).toHaveText("Running");
   await expect(page.getByRole("region", { name: "Jobs since Menagerie started" })).toContainText(
     "sample-beta start",
   );
@@ -103,7 +103,7 @@ test("allows one job per workspace while other workspaces stay usable", async ({
   await expect(page.getByRole("region", { name: "Job console" }).locator(".outcome")).toContainText(
     "Completed.",
   );
-  await expect(entry(page, "sample-alpha").locator(".stamp")).toHaveText("Stopped");
+  await expect(entry(page, "sample-alpha").locator(".status")).toHaveText("Stopped");
   await expect(slow.getByRole("button", { name: "Stop" })).toBeDisabled();
   await shot(page, "list-busy-workspace");
 
@@ -146,12 +146,12 @@ test("shows a failed job with its error and log", async ({ page }) => {
   await page.goto("/");
   await entry(page, "sample-broken").getByRole("button", { name: "Start" }).click();
   const console = page.getByRole("region", { name: "Job console" });
-  await expect(console.locator(".console-head .stamp")).toHaveText("Failed");
+  await expect(console.locator(".console-head .status")).toHaveText("Failed");
   await expect(console.locator(".outcome")).toContainText("Failed.");
   await expect(console.locator(".outcome")).toContainText("initialize-command-failed");
   await expect(console.locator(".outcome")).toContainText("initializeCommand exited with status 3");
   await expect(console.getByRole("log")).toContainText("initialize: missing sample marker");
-  await expect(entry(page, "sample-broken").locator(".stamp")).toHaveText("Stopped");
+  await expect(entry(page, "sample-broken").locator(".status")).toHaveText("Stopped");
   await shot(page, "list-job-failed");
 });
 

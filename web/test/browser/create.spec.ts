@@ -20,7 +20,7 @@ test("creates a workspace through a rejected batch, a second batch and the job",
   await beginCreate(page);
   await expect(page).toHaveURL(/\/create\?job=job-/);
   await expect(
-    page.getByRole("region", { name: "Create job" }).locator(".console-head .stamp"),
+    page.getByRole("region", { name: "Create job" }).locator(".console-head .status"),
   ).toHaveText("Awaiting answers");
   await shot(page, "create-batch-1");
 
@@ -152,7 +152,7 @@ test("shows a flow stop as an ended interview that wrote nothing", async ({ page
   await expect(notice).toContainText("halt-requested");
   await expect(notice).toContainText("Sample kit for Sample project.");
   const job = page.getByRole("region", { name: "Create job" });
-  await expect(job.locator(".console-head .stamp")).toHaveText("Ended");
+  await expect(job.locator(".console-head .status")).toHaveText("Ended");
   await expect(job.locator(".outcome")).toContainText("The interview ended. Nothing was written.");
   await expect(page.locator("form.interview")).toHaveCount(0);
   await shot(page, "create-ended");

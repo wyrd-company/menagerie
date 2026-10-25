@@ -3,6 +3,7 @@ import { paths, useRoute } from "./router.ts";
 import { CreateWorkspace } from "./screens/CreateWorkspace.tsx";
 import { UpgradeWorkspace } from "./screens/UpgradeWorkspace.tsx";
 import { WorkspaceList } from "./screens/WorkspaceList.tsx";
+import mark from "./brand/mark.svg";
 import { Link } from "./ui/Link.tsx";
 
 const titles = {
@@ -27,8 +28,8 @@ export function App() {
       </a>
       <header className="masthead">
         <Link href={paths.list()} className="wordmark" aria-label="Menagerie, workspace list">
+          <img className="wordmark-mark" src={mark} alt="" width="28" height="28" />
           <span className="wordmark-name">Menagerie</span>
-          <span className="wordmark-sub">workspace keeper</span>
         </Link>
         <nav aria-label="Main">
           <Link href={paths.list()} aria-current={route.screen === "list" ? "page" : undefined}>

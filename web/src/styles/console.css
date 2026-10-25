@@ -5,27 +5,13 @@
 }
 
 .console {
-  background: var(--night);
-  color: var(--tape-ink);
-  border-radius: 6px;
-  padding: 1.2rem 1.3rem 1.3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
+  padding: 1rem 1.1rem 1.1rem;
   display: grid;
-  gap: 1rem;
-  position: relative;
-  overflow: hidden;
-}
-
-.console::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(0deg, rgb(255 255 255 / 2.5%) 0 1px, transparent 1px 3px);
-}
-
-.console .eyebrow {
-  color: var(--tape-dim);
+  gap: 0.9rem;
 }
 
 .console-head {
@@ -36,35 +22,13 @@
 }
 
 .console-title {
-  font-size: 1.5rem;
-  color: #f6ecd2;
+  font-size: 1.15rem;
 }
 
 .console-title .mono {
-  font-size: 0.75em;
-  color: var(--phosphor);
-}
-
-.console .stamp {
-  background: rgb(0 0 0 / 30%);
-}
-
-.console .stamp-running {
-  --stamp: var(--phosphor);
-}
-
-.console .stamp-succeeded,
-.console .stamp-waiting-for-answers {
-  --stamp: #7fc4b2;
-}
-
-.console .stamp-failed {
-  --stamp: #f07b62;
-}
-
-.console .stamp-stopped,
-.console .stamp-ended {
-  --stamp: #a9b4bc;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--text-muted);
 }
 
 .phase-rail {
@@ -79,28 +43,31 @@
 }
 
 .phase-rail li {
-  padding: 0.25rem 0.6rem;
-  border: 1px solid #3a3328;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  color: var(--tape-dim);
+  color: var(--text-faint);
 }
 
 .phase-rail li.is-done::before {
   content: "✓ ";
-  color: #7fc4b2;
+  color: var(--ok);
 }
 
 .phase-rail li.is-current {
-  color: var(--night);
-  background: var(--phosphor);
-  border-color: var(--phosphor);
-  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-wash);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  font-weight: 600;
 }
 
+/* The log is a terminal in both color schemes. */
 .tape {
-  background: #0d0b08;
-  border: 1px solid #2c271f;
-  border-radius: 4px;
+  background: var(--term-bg);
+  color: var(--term-text);
+  border: 1px solid var(--term-border);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 
 .tape-head {
@@ -108,32 +75,29 @@
   justify-content: space-between;
   align-items: center;
   padding: 0.4rem 0.75rem;
-  border-bottom: 1px solid #2c271f;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--tape-dim);
+  background: var(--term-surface);
+  border-bottom: 1px solid var(--term-border);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--term-muted);
 }
 
 .follow {
   display: inline-flex;
   gap: 0.4rem;
   align-items: center;
-  text-transform: none;
-  letter-spacing: 0;
 }
 
 .tape-lines {
   list-style: none;
   margin: 0;
-  padding: 0.6rem 0;
+  padding: 0.5rem 0;
   max-height: 22rem;
   min-height: 7rem;
   overflow: auto;
   font-family: var(--font-mono);
-  font-size: 0.8rem;
-  line-height: 1.55;
+  font-size: 0.78rem;
+  line-height: 1.6;
 }
 
 .tape-lines li {
@@ -143,11 +107,11 @@
 }
 
 .tape-lines li:hover {
-  background: rgb(224 184 90 / 8%);
+  background: rgb(255 255 255 / 4%);
 }
 
 .tape-n {
-  color: #574e3f;
+  color: var(--term-faint);
   text-align: right;
   padding-right: 0.8rem;
   user-select: none;
@@ -159,39 +123,33 @@
 }
 
 .tape-empty {
-  color: var(--tape-dim);
+  color: var(--term-muted);
   padding-left: 1rem !important;
   display: block !important;
 }
 
 .outcome {
-  border-top: 1px dashed #3a3328;
+  border-top: 1px solid var(--border);
   padding-top: 0.9rem;
   display: grid;
   gap: 0.6rem;
 }
 
 .outcome-title {
-  font-family: var(--font-display);
-  font-size: 1.25rem;
-  font-style: italic;
+  font-weight: 600;
 }
 
 .outcome-succeeded .outcome-title {
-  color: #7fc4b2;
+  color: var(--ok);
 }
 
 .outcome-failed .outcome-title {
-  color: #f07b62;
+  color: var(--danger);
 }
 
 .outcome-error .mono {
-  color: #f07b62;
+  color: var(--danger);
   margin-right: 0.4rem;
-}
-
-.console .notice {
-  color: var(--ink);
 }
 
 .apply table.files {
@@ -202,19 +160,17 @@
 
 .files caption {
   text-align: left;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--tape-dim);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
   padding-bottom: 0.3rem;
 }
 
 .files th,
 .files td {
   text-align: left;
-  padding: 0.25rem 0.5rem 0.25rem 0;
-  border-bottom: 1px solid #2c271f;
+  padding: 0.3rem 0.5rem 0.3rem 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .hooks {
@@ -229,15 +185,17 @@
   font-family: var(--font-mono);
   font-size: 0.75rem;
   padding: 0.1rem 0.45rem;
-  border-radius: 2px;
+  border-radius: 4px;
 }
 
 .hook.ok {
-  background: #1f3a33;
+  color: var(--ok);
+  background: var(--ok-wash);
 }
 
 .hook.bad {
-  background: #4a1d14;
+  color: var(--danger);
+  background: var(--danger-wash);
 }
 
 @media (max-width: 720px) {
