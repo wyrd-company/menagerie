@@ -122,9 +122,6 @@ case "$1" in
     git clone -q --no-local "$repo" "$scratch/clone"
     cd "$scratch/clone"
     git checkout -q --detach "$head"
-    # Only HEAD matters here; a branch the clone guessed from it must not
-    # collide with the release branch prepare makes.
-    git for-each-ref --format='%(refname:short)' refs/heads | xargs -r git branch -q -D
     export RELEASE_ACTOR_NAME="Release rehearsal" RELEASE_ACTOR_EMAIL="rehearsal@example.invalid"
     plan=$scratch/release-plan.json
     released=$(release_commit_version)
