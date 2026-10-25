@@ -76,6 +76,13 @@ expect "the rehearsal leaves the merged release untagged" 0 '^$' git -C "$r" tag
 if [ -z "${SCRIPTS_TEST_NESTED:-}" ]; then
   expect "these script tests pass at a merged release commit" 0 'scripts: [0-9]+ passed, 0 failed' \
     env SCRIPTS_TEST_NESTED=1 "$r/scripts/scripts_test.sh"
+  # A rebase merge keeps the prepared commit, so a clone of it checks out
+  # release/<version> as a local branch.
+  merged=$(git -C "$r" rev-parse HEAD)
+  git -C "$r" checkout -q "release/0.1.0"
+  expect "these script tests pass on the release branch's own commit" 0 'scripts: [0-9]+ passed, 0 failed' \
+    env SCRIPTS_TEST_NESTED=1 "$r/scripts/scripts_test.sh"
+  git -C "$r" checkout -q --detach "$merged"
 fi
 expect "publish tags a reviewed release and its baseline" 0 'published 0\.1\.0 .* tags: 0\.0\.0 0\.1\.0' \
   env RELEASE_PLAN="$scratch/publish.json" "$r/scripts/release.sh" publish

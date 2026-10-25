@@ -475,4 +475,47 @@ templates:
 			t.Errorf("start-up touched the data: %v", err)
 		}
 	})
+
+	// A configuration the services' user cannot read stops start-up with a
+	// message, before either service starts.
+	t.Run("a configuration the owner cannot read stops start-up", func(t *testing.T) {
+		private := filepath.Join(base, "private-config.yml")
+		data, err := os.ReadFile(filepath.Join(base, "config.yml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(private, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		other, err := p.docker.ContainerCreate(ctx,
+			&container.Config{Image: ref, Labels: map[string]string{"menagerie-test": "image"}},
+			&container.HostConfig{
+				NetworkMode: "host",
+				Binds: []string{
+					"/var/run/docker.sock:/var/run/docker.sock",
+					tmp + ":" + tmp,
+					private + ":/etc/menagerie/config.yml:ro",
+				},
+			}, nil, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := &imageContainer{t: t, docker: p.docker, id: other.ID}
+		t.Cleanup(func() {
+			_ = p.docker.ContainerRemove(context.Background(), o.id, container.RemoveOptions{Force: true, RemoveVolumes: true})
+		})
+		if err := p.docker.ContainerStart(ctx, o.id, container.StartOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; o.inspect().State.Running; i++ {
+			if i == imageReadyAttempts {
+				t.Fatal("the container kept running")
+			}
+			time.Sleep(imageReadyInterval)
+		}
+		want := fmt.Sprintf("/etc/menagerie/config.yml is not readable by uid %d", operatorUID)
+		if logs := o.logs(time.Time{}); o.inspect().State.ExitCode == 0 || !strings.Contains(logs, want) {
+			t.Errorf("exit %d, logs lack %q:\n%s", o.inspect().State.ExitCode, want, logs)
+		}
+	})
 }
