@@ -3,13 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light" />
-    <!-- Inline: the workspace service serves only index.html and assets/. -->
-    <link
-      rel="icon"
-      type="image/svg+xml"
-      href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%231f4e45%22/%3E%3Cpath d=%22M7 24V9l9 9 9-9v15%22 fill=%22none%22 stroke=%22%23e9d8a6%22 stroke-width=%223%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E"
-    />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Vite hashes these into assets/, the only folder the workspace service serves. -->
+    <link rel="icon" type="image/svg+xml" href="/src/brand/mark.svg" />
+    <link rel="apple-touch-icon" href="/src/brand/apple-touch-icon.png" />
+    <meta name="theme-color" content="#f5f7fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content="Self-hosted devcontainer workspaces." />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Menagerie" />
+    <meta property="og:title" content="Menagerie" />
+    <meta property="og:description" content="Self-hosted devcontainer workspaces." />
+    <meta property="og:image" content="/src/brand/social-card.png" />
+    <meta name="twitter:card" content="summary_large_image" />
     <title>Menagerie</title>
   </head>
   <body>

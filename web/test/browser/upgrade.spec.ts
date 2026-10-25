@@ -17,7 +17,7 @@ test("renders the whole producer batch it receives and completes the upgrade job
   request,
 }) => {
   await page.goto("/workspaces/sample-alpha/upgrade");
-  await expect(page.locator(".upgrade-current .stamp")).toHaveText("Running");
+  await expect(page.locator(".upgrade-current .status")).toHaveText("Running");
   await shot(page, "upgrade-start");
   await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
   await page.getByRole("button", { name: "Begin upgrade" }).click();

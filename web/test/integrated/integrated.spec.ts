@@ -44,7 +44,7 @@ test.describe("as a manager", () => {
     }[];
     expect(outsider.find((c) => c.folder === "/elsewhere/sample-outsider")?.state).toBe("running");
     await page.getByRole("button", { name: "Refresh" }).click();
-    await expect(entry(page, "sample-folder").locator(".stamp")).toHaveText("No container");
+    await expect(entry(page, "sample-folder").locator(".status")).toHaveText("No container");
     await expect(page.getByRole("heading", { name: "sample-outsider" })).toHaveCount(0);
     await shot(page, "02-list-folder");
   });
@@ -83,21 +83,21 @@ test.describe("as a manager", () => {
     expect(marker).toMatchObject({ exists: true, body: "initialized\n" });
 
     await page.getByRole("link", { name: "Back to the workspace list" }).click();
-    await expect(entry(page, "sample-space").locator(".stamp")).toHaveText("Running");
+    await expect(entry(page, "sample-space").locator(".status")).toHaveText("Running");
   });
 
   test("stops, starts and rebuilds the workspace", async () => {
     const before = await containerFor(page.request, "sample-space");
     await entry(page, "sample-space").getByRole("button", { name: "Stop" }).click();
     await finished(page, /Stop sample-space/);
-    await expect(entry(page, "sample-space").locator(".stamp")).toHaveText("Stopped");
+    await expect(entry(page, "sample-space").locator(".status")).toHaveText("Stopped");
     await entry(page, "sample-space").getByRole("button", { name: "Start" }).click();
     await finished(page, /Start sample-space/);
-    await expect(entry(page, "sample-space").locator(".stamp")).toHaveText("Running");
+    await expect(entry(page, "sample-space").locator(".status")).toHaveText("Running");
     await entry(page, "sample-space").getByRole("button", { name: "Rebuild" }).click();
     await entry(page, "sample-space").getByRole("button", { name: "Confirm rebuild" }).click();
     await finished(page, /Rebuild sample-space/);
-    await expect(entry(page, "sample-space").locator(".stamp")).toHaveText("Running");
+    await expect(entry(page, "sample-space").locator(".status")).toHaveText("Running");
     const after = await containerFor(page.request, "sample-space");
     expect(after?.state).toBe("running");
     expect(after?.id).not.toBe(before?.id);

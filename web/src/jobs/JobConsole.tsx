@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApplyReply } from "../api/types.ts";
 import { own } from "../own.ts";
-import { StateStamp } from "../ui/StateStamp.tsx";
+import { StatusBadge } from "../ui/StatusBadge.tsx";
 import { isTerminal, type JobView } from "./jobView.ts";
 
 interface Props {
@@ -43,7 +43,7 @@ export function JobConsole({ view, onReconnect, heading }: Props) {
             {operation} <span className="mono">{job?.workspace ?? "…"}</span>
           </h2>
         </div>
-        <StateStamp state={view.state || "running"} />
+        <StatusBadge state={view.state || "running"} />
       </header>
 
       {phases.length > 0 ? (

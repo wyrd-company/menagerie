@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { BatchDocument, Submission } from "../api/types.ts";
 import { WorkspaceList } from "../screens/WorkspaceList.tsx";
-import { StateStamp } from "../ui/StateStamp.tsx";
+import { StatusBadge } from "../ui/StatusBadge.tsx";
 import { JobConsole } from "../jobs/JobConsole.tsx";
 import { initialJobView } from "../jobs/jobView.ts";
 import { buildSubmission, initialForm, serializeSubmission } from "./answers.ts";
@@ -93,7 +93,7 @@ describe.each(names)("a workspace or state named %s", (name) => {
   });
 
   it("shows an unknown state or operation verbatim", () => {
-    render(<StateStamp state={name} />);
+    render(<StatusBadge state={name} />);
     expect(screen.getByText(name)).toBeInTheDocument();
     const job = {
       jobId: "j",

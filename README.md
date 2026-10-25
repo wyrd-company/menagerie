@@ -1,3 +1,6 @@
+<!-- markdownlint-disable-next-line MD033 MD041 -->
+<img src="docs/assets/logo.svg" alt="" width="120" align="right" />
+
 # Menagerie
 
 [![CI](https://github.com/wyrd-company/menagerie/actions/workflows/ci.yml/badge.svg)](https://github.com/wyrd-company/menagerie/actions/workflows/ci.yml)
