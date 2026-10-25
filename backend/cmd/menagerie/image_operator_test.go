@@ -40,8 +40,12 @@ const (
 	operatorGID = 1000
 	// The devcontainer's user starts with another uid, so the remap to the
 	// operator is visible.
-	devcontainerUID  = 1001
-	devcontainerBase = "debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad"
+	devcontainerUID = 1001
+	// The devcontainer's base comes from MCR, which has no anonymous pull
+	// limit: devcontainer-builder reads its metadata from the registry on
+	// every build. Its vscode user, uid 1000, is removed so that the remap
+	// to the operator's uid has a free uid to take.
+	devcontainerBase = "mcr.microsoft.com/devcontainers/base:trixie@sha256:6ee2b4097c75d33e9a94d941577a3286e5d629434fba384688b06daeeaaeac99"
 	// The Wyrwood access group: not the operator's own group, so the agent
 	// is reachable only through the supplementary group start-up adds.
 	wyrwoodGID = 2001
@@ -52,12 +56,13 @@ const (
 )
 
 // operatorTemplate writes version 1 or 2 of the sample template with a
-// devcontainer built from a Debian image whose remote user is uid 1001.
+// devcontainer built from a Debian-based image whose remote user is uid
+// 1001.
 func operatorTemplate(t *testing.T, dir string, version int) {
 	t.Helper()
 	browserTemplate(t, dir, version)
 	writeTo(t, dir, "template/.gitignore", "/markers/\n/notes/\n")
-	writeTo(t, dir, "template/.devcontainer/Dockerfile", fmt.Sprintf("FROM %s\nRUN useradd --create-home --uid %d sample\n", devcontainerBase, devcontainerUID))
+	writeTo(t, dir, "template/.devcontainer/Dockerfile", fmt.Sprintf("FROM %s\nRUN userdel --remove vscode && useradd --create-home --uid %d sample\n", devcontainerBase, devcontainerUID))
 	writeTo(t, dir, "template/.devcontainer/devcontainer.json", `{
   "name": "sample",
   "build": { "dockerfile": "Dockerfile" },
