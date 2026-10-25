@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -222,9 +223,21 @@ func (f *Host) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 		_ = req.Reply(true, nil)
 		cmd := exec.Command("git", strings.TrimPrefix(program, "git-"), repo)
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = channel, channel, channel.Stderr()
+		cmd.Stdout, cmd.Stderr = channel, channel.Stderr()
+		// Git can exit before the client sends anything, for example for a
+		// missing repository. The copy into its stdin then stays blocked on
+		// the channel, so the session does not wait for it: Wait closes the
+		// pipe, and closing the channel ends the copy.
+		stdin, err := cmd.StdinPipe()
+		if err == nil {
+			err = cmd.Start()
+		}
+		if err == nil {
+			go func() { _, _ = io.Copy(stdin, channel); _ = stdin.Close() }()
+			err = cmd.Wait()
+		}
 		code := uint32(0)
-		if err := cmd.Run(); err != nil {
+		if err != nil {
 			code = 1
 			var exit *exec.ExitError
 			if errors.As(err, &exit) {

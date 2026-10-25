@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -70,6 +71,25 @@ func TestPushReplacesTheRemoteBranchAndFetchesNothing(t *testing.T) {
 	cfg, _ := repo.Config()
 	if len(cfg.Remotes) != 0 {
 		t.Fatalf("push wrote remotes %v", cfg.Remotes)
+	}
+}
+
+// TestPushToAMissingRepositoryFails shows a push the host cannot serve ends
+// with an error, as a Git host's exit does, rather than waiting.
+func TestPushToAMissingRepositoryFails(t *testing.T) {
+	f := backuptest.New(t)
+	folder := newWorkspace(t, "alpha")
+	out := generate(t, folder)
+	if _, err := CommitRoot(folder, "alpha", out, "Create workspace alpha", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	// Test-only bound: the refusal arrives in milliseconds, so a push still
+	// open after it is waiting on the host.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	remote := &Remote{URL: f.URL("missing.git"), Auth: AgentAuth(f.AgentPath, f.KnownHosts)}
+	if _, err := remote.Push(ctx, folder, "alpha", nil); err == nil || ctx.Err() != nil {
+		t.Fatalf("push to a missing repository: %v (context %v)", err, ctx.Err())
 	}
 }
 
