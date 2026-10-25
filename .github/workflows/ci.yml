@@ -73,6 +73,7 @@ jobs:
       - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
       - run: task tools:install:browser
       - run: task tools:install:intentional
+      - run: task tools:install:lefthook
       - run: task test
 
   build:

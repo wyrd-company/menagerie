@@ -124,7 +124,7 @@ tasks:
       - docker build -t '{{.IMAGE}}' .
 
   test:scripts:
-    desc: Test the release and CI scripts against real Git and Intentional in scratch clones (needs intentional and jq)
+    desc: Test the release, CI and hook scripts against real Git, Intentional and lefthook in scratch clones (needs intentional, jq, yq and lefthook)
     cmds:
       - scripts/scripts_test.sh
 
@@ -297,8 +297,7 @@ tasks:
       - task: tools:install:intentional
       - task: tools:install:openbao
       - task: tools:install:browser
-      # renovate: datasource=go depName=github.com/evilmartians/lefthook/v2
-      - go install github.com/evilmartians/lefthook/v2@v2.2.2
+      - task: tools:install:lefthook
       - lefthook install
 
   tools:install:linters:
@@ -313,6 +312,13 @@ tasks:
       - cargo install --locked ryl --version 0.21.0
       # renovate: datasource=crate depName=rumdl
       - cargo install --locked rumdl --version 0.3.0
+
+  tools:install:lefthook:
+    desc: Install lefthook, which the Git hooks and the hook test use
+    cmds:
+      # renovate: datasource=go depName=github.com/evilmartians/lefthook/v2
+      - go install github.com/evilmartians/lefthook/v2@v2.2.2
+      - '[ -z "${GITHUB_PATH:-}" ] || go env GOPATH | sed "s|$|/bin|" >> "$GITHUB_PATH"'
 
   tools:install:intentional:
     desc: Install Intentional
