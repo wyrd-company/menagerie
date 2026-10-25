@@ -72,6 +72,13 @@ type pocketID struct {
 
 func startPocketID(t *testing.T) *pocketID {
 	t.Helper()
+	return startPocketIDAt(t, "127.0.0.1", freePort(t))
+}
+
+// startPocketIDAt publishes Pocket ID on hostIP:port of the Docker Engine's
+// host. Its URL is http://localhost:port either way.
+func startPocketIDAt(t *testing.T, hostIP string, port int) *pocketID {
+	t.Helper()
 	ctx := context.Background()
 	docker, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
@@ -86,7 +93,6 @@ func startPocketID(t *testing.T) *pocketID {
 		_, _ = io.Copy(io.Discard, rc)
 		rc.Close()
 	}
-	port := freePort(t)
 	p := &pocketID{t: t, docker: docker, url: fmt.Sprintf("http://localhost:%d", port), apiKey: randomHex()}
 	created, err := docker.ContainerCreate(ctx,
 		&container.Config{
@@ -95,7 +101,7 @@ func startPocketID(t *testing.T) *pocketID {
 			ExposedPorts: nat.PortSet{"1411/tcp": {}},
 			Labels:       map[string]string{"menagerie-test": "pocketid"},
 		},
-		&container.HostConfig{PortBindings: nat.PortMap{"1411/tcp": {{HostIP: "127.0.0.1", HostPort: fmt.Sprint(port)}}}},
+		&container.HostConfig{PortBindings: nat.PortMap{"1411/tcp": {{HostIP: hostIP, HostPort: fmt.Sprint(port)}}}},
 		nil, nil, "")
 	if err != nil {
 		t.Fatal(err)

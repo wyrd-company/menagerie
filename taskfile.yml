@@ -41,6 +41,8 @@ vars:
   SCRATCH: '{{.MENAGERIE_SCRATCH | default (print .HOME "/.cache/menagerie")}}'
   IMAGE: '{{.MENAGERIE_IMAGE | default "menagerie:dev"}}'
   IMAGE_REPOSITORY: ghcr.io/wyrd-company/menagerie
+  # renovate: datasource=github-releases depName=openbao/openbao extractVersion=^v(?<version>.*)$
+  OPENBAO_VERSION: 2.7.1
   # The YAML this repository's tooling owns; package documents have their
   # own owners and checks.
   REPOSITORY_YAML: >-
@@ -202,6 +204,22 @@ tasks:
       - web/test/integrated/run.sh up '{{.STATE}}'
       - web/test/integrated/run.sh test '{{.STATE}}'
 
+  test:acceptance:
+    desc: Build the image on a disposable Docker daemon, bind it with a real Wyrwood agent, and drive the UI story, failures and restart through it
+    vars:
+      STATE:
+        sh: mkdir -p "{{.SCRATCH}}" && mktemp -d "{{.SCRATCH}}/acceptance.XXXXXX"
+    env:
+      # renovate: datasource=github-releases depName=wyrd-company/wyrwood
+      WYRWOOD_VERSION: 0.4.0
+      OPENBAO_VERSION: '{{.OPENBAO_VERSION}}'
+    cmds:
+      - defer: web/test/integrated/acceptance.sh down '{{.STATE}}'
+      - web/test/integrated/acceptance.sh up '{{.STATE}}'
+      - web/test/integrated/acceptance.sh suite '{{.STATE}}'
+      - web/test/integrated/acceptance.sh fixture '{{.STATE}}'
+      - web/test/integrated/acceptance.sh test '{{.STATE}}'
+
   test:image:
     desc: Build the image on a disposable Docker daemon; start, sign in to, fail and stop it; create and upgrade an operator-owned workspace through it
     vars:
@@ -329,9 +347,6 @@ tasks:
 
   tools:install:openbao:
     desc: Install OpenBao's bao, checked against its release checksums (Linux amd64)
-    vars:
-      # renovate: datasource=github-releases depName=openbao/openbao extractVersion=^v(?<version>.*)$
-      OPENBAO_VERSION: 2.7.1
     cmds:
       - |
         set -eu

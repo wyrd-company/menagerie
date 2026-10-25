@@ -11,8 +11,9 @@ const info = JSON.parse(readFileSync(infoPath, "utf8")) as { site: string };
 
 export default defineConfig({
   testDir: "test/integrated",
-  // run.test.ts in the same folder is a Vitest suite for run.sh.
-  testMatch: "**/*.spec.ts",
+  // run.test.ts in the same folder is a Vitest suite for run.sh, and
+  // acceptance.spec.ts needs the image run (playwright.acceptance.config.ts).
+  testMatch: "integrated.spec.ts",
   fullyParallel: false,
   workers: 1,
   reporter: [["list"]],

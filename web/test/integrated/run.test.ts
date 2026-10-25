@@ -1,8 +1,9 @@
 // @vitest-environment node
 //
-// run.sh down stops only the run whose state is in the scratch folder it is
-// given. These cases run the real script against two stand-in control
-// endpoints on different ports and record every request each receives.
+// run.sh down, and acceptance.sh down, stop only the run whose state is in
+// the scratch folder they are given. These cases run the real scripts
+// against two stand-in control endpoints on different ports and record
+// every request each receives.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -11,7 +12,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const script = new URL("./run.sh", import.meta.url).pathname;
+const scripts = {
+  "run.sh": new URL("./run.sh", import.meta.url).pathname,
+  "acceptance.sh": new URL("./acceptance.sh", import.meta.url).pathname,
+};
 
 interface Endpoint {
   url: string;
@@ -47,8 +51,12 @@ function scratch(info?: object): string {
   return dir;
 }
 
-/** Runs `run.sh down <dir>`; the environment names the other endpoint's ports. */
-function down(dir: string, overrides: Record<string, string | undefined> = {}) {
+/** Runs `<script> down <dir>`; the environment names the other endpoint's ports. */
+function down(
+  dir: string,
+  overrides: Record<string, string | undefined> = {},
+  script = scripts["run.sh"],
+) {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries({ ...process.env, ...overrides }))
     if (v !== undefined) env[k] = v;
@@ -65,7 +73,7 @@ afterEach(() => {
   for (const d of scratches.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-describe("run.sh down", () => {
+describe.each(Object.entries(scripts))("%s down", (_name, script) => {
   it("shuts down the saved control endpoint, not the one the environment names", async () => {
     const own = scratch();
     const sibling = await endpoint("/elsewhere/sibling/root/workspaces");
@@ -74,7 +82,14 @@ describe("run.sh down", () => {
       join(own, "info.json"),
       JSON.stringify({ control: mine.url, root: join(own, "root/workspaces") }),
     );
-    const result = await down(own, { MENAGERIE_BROWSER_CONTROL_PORT: String(sibling.port) });
+    const result = await down(
+      own,
+      {
+        MENAGERIE_BROWSER_CONTROL_PORT: String(sibling.port),
+        MENAGERIE_ACCEPTANCE_CONTROL_PORT: String(sibling.port),
+      },
+      script,
+    );
     expect(result.code).toBe(0);
     expect(mine.requests).toEqual(["GET /identity", "POST /shutdown"]);
     expect(sibling.requests).toEqual([]);
@@ -88,7 +103,7 @@ describe("run.sh down", () => {
       JSON.stringify({ control: mine.url, root: join(own, "root/workspaces") }),
     );
     const unset = { MENAGERIE_BROWSER_CONTROL_PORT: undefined, MENAGERIE_BROWSER_PORT: undefined };
-    expect((await down(own, unset)).code).toBe(0);
+    expect((await down(own, unset, script)).code).toBe(0);
     expect(mine.requests).toEqual(["GET /identity", "POST /shutdown"]);
   });
 
@@ -100,7 +115,7 @@ describe("run.sh down", () => {
       join(own, "info.json"),
       JSON.stringify({ control: sibling.url, root: join(own, "root/workspaces") }),
     );
-    const result = await down(own);
+    const result = await down(own, {}, script);
     expect(result.code).toBe(0);
     expect(result.stderr).toContain("does not serve this run");
     expect(sibling.requests).toEqual(["GET /identity"]);
@@ -108,11 +123,20 @@ describe("run.sh down", () => {
 
   it("sends nothing anywhere when no run state was saved", async () => {
     const sibling = await endpoint("/elsewhere/sibling/root/workspaces");
-    const result = await down(scratch(), { MENAGERIE_BROWSER_CONTROL_PORT: String(sibling.port) });
+    const result = await down(
+      scratch(),
+      {
+        MENAGERIE_BROWSER_CONTROL_PORT: String(sibling.port),
+        MENAGERIE_ACCEPTANCE_CONTROL_PORT: String(sibling.port),
+      },
+      script,
+    );
     expect(result.code).toBe(0);
     expect(sibling.requests).toEqual([]);
   });
+});
 
+describe("run.sh down", () => {
   it("stops with an error, without waiting, when its fixture was not shut down", async () => {
     const own = scratch({ control: "http://127.0.0.1:9", root: "/never/served" });
     const process_ = spawn("sleep", ["300"]);

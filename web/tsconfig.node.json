@@ -16,5 +16,11 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "playwright.integrated.config.ts", "test"]
+  "include": [
+    "vite.config.ts",
+    "playwright.config.ts",
+    "playwright.integrated.config.ts",
+    "playwright.acceptance.config.ts",
+    "test"
+  ]
 }

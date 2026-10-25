@@ -216,6 +216,9 @@ type controlFixture struct {
 	bare    string
 	docker  *dockerclient.Client
 	done    chan struct{}
+	// The image run's controls; the in-process run leaves them unset.
+	restart    func() error
+	releaseDir string
 }
 
 func controlServer(t *testing.T, f controlFixture) http.Handler {
@@ -329,6 +332,42 @@ func controlServer(t *testing.T, f controlFixture) http.Handler {
 		}
 		writeJSON(w, out)
 	})
+	// The workspace repository refuses pushes while it is broken.
+	mux.HandleFunc("POST /backup/break", func(w http.ResponseWriter, r *http.Request) {
+		if err := os.Rename(f.bare, f.bare+".broken"); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /backup/repair", func(w http.ResponseWriter, r *http.Request) {
+		if err := os.Rename(f.bare+".broken", f.bare); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+	// Restart the Menagerie container and wait until it answers again.
+	if f.restart != nil {
+		mux.HandleFunc("POST /restart", func(w http.ResponseWriter, r *http.Request) {
+			if err := f.restart(); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			writeJSON(w, map[string]bool{"ok": true})
+		})
+	}
+	// Let a template hook held on a release file finish.
+	if f.releaseDir != "" {
+		mux.HandleFunc("POST /release", func(w http.ResponseWriter, r *http.Request) {
+			path := filepath.Join(f.releaseDir, filepath.Base(r.URL.Query().Get("name")))
+			if err := os.WriteFile(path, []byte("released\n"), 0o644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			writeJSON(w, map[string]bool{"ok": true})
+		})
+	}
 	mux.HandleFunc("POST /shutdown", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]bool{"ok": true})
 		close(f.done)
