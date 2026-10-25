@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # A disposable, test-owned Docker daemon for Menagerie's live suites.
 #
-#   isolated-docker.sh up <state>                         start the daemon and the runner
+#   isolated-docker.sh up <state> [owner]                 start the daemon and the runner
 #   isolated-docker.sh build <state> [build args...]      docker build the repository on the daemon
 #   isolated-docker.sh shell <state> <script>             run a shell script in the runner
 #   isolated-docker.sh run <state> [-c FILE]... [-e NAME=VALUE]... <binary> [args...]
 #                                                         run a test binary in the runner
-#   isolated-docker.sh down <state>                       remove what up created
+#   isolated-docker.sh down <state> [owner]               remove what up created
 #
 # The daemon is a docker:dind container with its own data root, BuildKit
 # and network namespace; nothing here builds on or changes the ambient
@@ -19,7 +19,9 @@
 #
 # <state> is a folder that records the owned container and volume names.
 # down removes only objects that carry this run's label, and it is safe to
-# repeat. Anonymous pulls only: DOCKER_CONFIG is an empty file for every
+# repeat. A caller that cleans up unconditionally passes the same [owner]
+# token to up and down: down then acts only on the run that up started for
+# that token, so a refused up never removes another invocation's run. Anonymous pulls only: DOCKER_CONFIG is an empty file for every
 # docker command here.
 set -euo pipefail
 
@@ -62,6 +64,7 @@ case "$cmd" in
     fi
     run="menagerie-test-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
     echo "$run" >"$state/run"
+    if [ $# -ge 1 ]; then echo "$1" >"$state/owner"; else rm -f "$state/owner"; fi
     labels=(--label menagerie-test=isolated-docker --label "menagerie-test-run=$run")
     docker volume create "${labels[@]}" "$run-work" >/dev/null
     docker run -d --privileged --name "$run-dind" "${labels[@]}" -e DOCKER_TLS_CERTDIR= \
@@ -115,11 +118,15 @@ case "$cmd" in
   down)
     [ -s "$state/run" ] || exit 0
     run=$(cat "$state/run")
+    if [ $# -ge 1 ] && [ "$(cat "$state/owner" 2>/dev/null)" != "$1" ]; then
+      echo "$state holds run $run of another invocation; leaving it"
+      exit 0
+    fi
     for name in "$run-runner" "$run-dind"; do
       if owned container "$name"; then docker rm -fv "$name" >/dev/null; fi
     done
     if owned volume "$run-work"; then docker volume rm "$run-work" >/dev/null; fi
-    rm -f "$state/run"
+    rm -f "$state/run" "$state/owner"
     echo "removed run $run"
     ;;
   *) usage ;;

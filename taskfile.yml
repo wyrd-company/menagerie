@@ -140,9 +140,11 @@ tasks:
     desc: Run the devcontainer runtime's Docker suite on a disposable Docker daemon
     vars:
       STATE: '{{.SCRATCH}}/docker'
+      OWNER:
+        sh: od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'
     cmds:
-      - defer: scripts/isolated-docker.sh down '{{.STATE}}'
-      - scripts/isolated-docker.sh up '{{.STATE}}'
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
       - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/devcontainer.test' ./backend/internal/devcontainer/
       - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/devcontainer.test' -test.v -test.count=1 -test.timeout 10m
 
@@ -165,9 +167,11 @@ tasks:
     desc: Run create and upgrade with the acceptance devcontainer on a disposable Docker daemon
     vars:
       STATE: '{{.SCRATCH}}/templateservice'
+      OWNER:
+        sh: od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'
     cmds:
-      - defer: scripts/isolated-docker.sh down '{{.STATE}}'
-      - scripts/isolated-docker.sh up '{{.STATE}}'
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
       - cargo build --locked --release --manifest-path template-service/Cargo.toml --target-dir '{{.CARGO_TARGET}}'
       - CGO_ENABLED=0 go test -c -tags 'templateservice docker' -o '{{.STATE}}/workflows.test' ./backend/internal/workflows/
       - >-
@@ -191,9 +195,11 @@ tasks:
     desc: Build the image on a disposable Docker daemon, then start, sign in to, fail and stop it there
     vars:
       STATE: '{{.SCRATCH}}/image'
+      OWNER:
+        sh: od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'
     cmds:
-      - defer: scripts/isolated-docker.sh down '{{.STATE}}'
-      - scripts/isolated-docker.sh up '{{.STATE}}'
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
       - CGO_ENABLED=0 go test -c -tags 'pocketid image' -o '{{.STATE}}/image.test' ./backend/cmd/menagerie/
       - scripts/isolated-docker.sh build '{{.STATE}}' -t menagerie:test
       - >-
@@ -204,11 +210,13 @@ tasks:
     desc: Cross-compile both services for linux/arm64 on a disposable Docker daemon and check that each binary is aarch64
     vars:
       STATE: '{{.SCRATCH}}/image-cross'
+      OWNER:
+        sh: od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'
     cmds:
       # The arm64 image's final stage installs packages as arm64 and needs
       # emulation; CD builds it. This proves the cross-compiled binaries.
-      - defer: scripts/isolated-docker.sh down '{{.STATE}}'
-      - scripts/isolated-docker.sh up '{{.STATE}}'
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
       - >-
         scripts/isolated-docker.sh build '{{.STATE}}' --platform linux/arm64 --target binaries
         --output type=local,dest=/menagerie-work/arm64

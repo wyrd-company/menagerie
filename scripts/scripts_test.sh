@@ -144,6 +144,25 @@ printf 'Sample\n\nfix: not the first line\n' >"$scratch/message"
 expect "a message file with another first line fails" 1 'not a conventional commit subject: Sample' \
   sh "$repo/scripts/check-commit-subject.sh" "$scratch/message"
 
+# Every Task suite on the disposable daemon passes one per-invocation owner
+# token to up and to its deferred down, so a refused up cannot clean up
+# another invocation's run.
+wrappers=$(yq -r '.tasks | to_entries[] | select([.value.cmds[]? | select(type == "!!str" and test("isolated-docker.sh up"))] | length > 0) | .key' "$repo/taskfile.yml")
+expect "the disposable-daemon suites are found" 0 '^test:docker$' echo "$wrappers"
+# owner_wired <task>: OWNER comes from urandom, the first command is the
+# deferred down with it, and the first up passes it.
+owner_wired() {
+  local down up
+  down="scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'"
+  up="scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'"
+  TASK=$1 DOWN=$down UP=$up yq -e '.tasks[strenv(TASK)] | (
+    (.vars.OWNER.sh | test("urandom")) and (.cmds[0].defer == strenv(DOWN)) and
+    ([.cmds[] | select(type == "!!str" and test("isolated-docker.sh up"))][0] == strenv(UP)))' "$repo/taskfile.yml"
+}
+for name in $wrappers; do
+  expect "$name passes its owner token to up and to the deferred down" 0 '^true$' owner_wired "$name"
+done
+
 # Toolchain versions named in several places agree, so a bump moves them all.
 go_version=$(sed -n 's/^go //p' "$repo/go.mod")
 node_version=$(cat "$repo/.node-version")
