@@ -17,6 +17,10 @@
 # runner image carries glibc, libcurl and git for the template service
 # binary, Toha's file transport and the test Git hosts.
 #
+# DIND_REGISTRY_MIRROR, when set, is a Docker Hub mirror for the daemon, so
+# that Docker Hub's anonymous pull limit does not end a run; images pinned by
+# digest are the same through a mirror.
+#
 # <state> is a folder that records the owned container and volume names.
 # down removes only objects that carry this run's label, and it is safe to
 # repeat. A caller that cleans up unconditionally passes the same [owner]
@@ -69,7 +73,8 @@ case "$cmd" in
     docker volume create "${labels[@]}" "$run-work" >/dev/null
     docker run -d --privileged --name "$run-dind" "${labels[@]}" -e DOCKER_TLS_CERTDIR= \
       -v "$run-work:$work" "$dind_image" \
-      dockerd --host tcp://127.0.0.1:2375 --host unix:///var/run/docker.sock >/dev/null
+      dockerd --host tcp://127.0.0.1:2375 --host unix:///var/run/docker.sock \
+      ${DIND_REGISTRY_MIRROR:+--registry-mirror "$DIND_REGISTRY_MIRROR"} >/dev/null
     for ((i = 0; i < ready_attempts; i++)); do
       dind_exec version >/dev/null 2>&1 && break
       sleep 1
@@ -78,7 +83,7 @@ case "$cmd" in
       docker logs "$run-dind" 2>&1 | tail -20
       exit 1
     }
-    dind_exec info --format 'driver {{.Driver}} {{json .DriverStatus}}'
+    dind_exec info --format 'driver {{.Driver}} {{json .DriverStatus}} mirrors {{json .RegistryConfig.Mirrors}}'
     docker run -d --name "$run-runner" "${labels[@]}" --network "container:$run-dind" \
       -v "$run-work:$work" --entrypoint sleep "$runner_image" infinity >/dev/null
     docker exec "$run-runner" mkdir -p "$work/tmp" "$work/bin"
