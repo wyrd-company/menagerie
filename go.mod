@@ -10,7 +10,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/openbao/openbao/api/v2 v2.7.1
-	github.com/wyrd-company/devcontainer-builder v0.0.0-20261025064220-82b4923bdc61
+	github.com/wyrd-company/devcontainer-builder v0.2.0
 	golang.org/x/crypto v0.56.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sys v0.47.0
