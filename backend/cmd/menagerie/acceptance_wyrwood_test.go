@@ -372,6 +372,8 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 	t.Run("the agent renews the token while the controller is down", func(t *testing.T) {
 		c.t = t
 		w.stopController()
+		// Later subtests need the controller, whatever this one's outcome.
+		defer w.startController()
 		started := time.Now()
 		time.Sleep(tokenOutlived)
 		if out, code := vault("auth/token/lookup-self"); code != 0 || !strings.HasSuffix(out, "\n200") {
@@ -389,7 +391,6 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 		if got := backupCommits(); got != 2 {
 			t.Errorf("backup commits %d after the upgrade", got)
 		}
-		w.startController()
 	})
 
 	t.Run("an expired token is a failed job until the agent has a new one", func(t *testing.T) {
@@ -397,6 +398,7 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 		w.rebind(menagerieName, []string{"sample-menagerie-fixed"}, tokenTTL, tokenTTL, wyrwoodGID)
 		waitFor(t, "the fixed-lifetime token", func() bool { return w.token(menagerieName) == "valid" })
 		w.stopController()
+		defer w.startController()
 		waitFor(t, "the token to expire", func() bool {
 			out, _ := vault("auth/token/lookup-self")
 			return strings.Contains(out, `"no-token"`)

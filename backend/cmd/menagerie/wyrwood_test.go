@@ -92,6 +92,16 @@ func startProcess(t *testing.T, log string, name string, args ...string) *proces
 	return p
 }
 
+// running reports whether the process has not exited.
+func (p *process) running() bool {
+	select {
+	case <-p.exited:
+		return false
+	default:
+		return true
+	}
+}
+
 // stop ends the process and waits for it; it is safe to repeat.
 func (p *process) stop() {
 	select {
@@ -355,9 +365,13 @@ EOF`, w.sshAddr))
 	return w
 }
 
-// startController starts the controller and waits for it to answer.
+// startController starts the controller, unless it runs, and waits for it
+// to answer.
 func (w *wyrwoodSite) startController() {
 	w.t.Helper()
+	if w.controller != nil && w.controller.running() {
+		return
+	}
 	w.controller = startProcess(w.t, w.controllerLog, w.bin, w.controllerArgs...)
 	waitFor(w.t, "the controller", func() bool {
 		resp, err := http.Get(w.site + "/healthz")
