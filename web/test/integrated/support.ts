@@ -32,10 +32,13 @@ export async function control(
 export async function signIn(page: Page, user: string, target = "/") {
   const { url } = await control(page.request, "GET", `/signin-link?user=${user}`);
   await page.goto(url);
-  await page.waitForURL((u) => !u.pathname.startsWith("/lc/"));
+  // The link's page exchanges its code in the browser, then leaves /login/:
+  // only then does Pocket ID hold the session Menagerie's sign-in needs.
+  await page.waitForURL((u) => !u.pathname.startsWith("/lc/") && !u.pathname.startsWith("/login/"));
   await page.goto(info.site + target);
   if (new URL(page.url()).pathname === "/interaction") {
     await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL((u) => u.origin === new URL(info.site).origin);
   }
 }
 
