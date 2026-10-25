@@ -55,6 +55,9 @@ const required = [
   ["ghcr.io/wyrd-company/devcontainers/base", "scripts/isolated-docker.sh"],
   ["just-containers/s6-overlay", "Dockerfile"],
   ["openbao/openbao", "taskfile.yml"],
+  ["ghcr.io/wyrd-company/menagerie", "README.md"],
+  ["ghcr.io/wyrd-company/menagerie", "docs/docs.yml"],
+  ["ghcr.io/wyrd-company/menagerie", "deploy/compose.yml"],
 ];
 for (const [depName, file] of required) {
   if (!found.some((f) => f.depName === depName && f.file === file)) {
