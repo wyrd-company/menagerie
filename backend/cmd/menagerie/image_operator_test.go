@@ -42,8 +42,12 @@ const (
 	// operator is visible.
 	devcontainerUID  = 1001
 	devcontainerBase = "debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad"
+	// The Wyrwood access group: not the operator's own group, so the agent
+	// is reachable only through the supplementary group start-up adds.
+	wyrwoodGID = 2001
 	// Test-only bound, imageReadyInterval apart, on a create or upgrade job
-	// that builds the devcontainer image: about 1 minute on the shared host.
+	// that builds the devcontainer image. Each took under 4 s on the shared
+	// host with the Debian base already pulled; a first pull adds its time.
 	jobAttempts = 2400
 )
 
@@ -257,7 +261,7 @@ func TestImageOperatorWorkspace(t *testing.T) {
 	chownTree(t, rootDir)
 
 	// The workspace repository and the agent: the agent's folder and socket
-	// belong to the operator's group, as a Wyrwood access group grants.
+	// belong to an access group, as Wyrwood's do.
 	host := backuptest.New(t)
 	if _, err := git.PlainInit(filepath.Join(host.Dir, "backups.git"), true); err != nil {
 		t.Fatal(err)
@@ -268,7 +272,7 @@ func TestImageOperatorWorkspace(t *testing.T) {
 	}
 	agentDir := filepath.Dir(host.AgentPath)
 	for path, mode := range map[string]os.FileMode{agentDir: 0o750, host.AgentPath: 0o660} {
-		if err := os.Chown(path, 0, operatorGID); err != nil {
+		if err := os.Chown(path, 0, wyrwoodGID); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chmod(path, mode); err != nil {
@@ -355,9 +359,16 @@ templates:
 		if out := c.mustExec("getent", "passwd", fmt.Sprint(operatorUID)); !strings.Contains(out, ":/var/lib/menagerie/home:") {
 			t.Errorf("passwd entry %q", out)
 		}
-		want := fmt.Sprintf("menagerie: services run as menagerie (uid %d, gid %d, groups %d", operatorUID, operatorGID, operatorGID)
-		if logs := c.logs(time.Time{}); !strings.Contains(logs, want) {
-			t.Errorf("logs lack %q", want)
+		want := fmt.Sprintf("menagerie: services run as menagerie (uid %d, gid %d, groups %d,", operatorUID, operatorGID, operatorGID)
+		logs := c.logs(time.Time{})
+		if !strings.Contains(logs, want) || !strings.Contains(logs, fmt.Sprintf(",%d)", wyrwoodGID)) && !strings.Contains(logs, fmt.Sprintf(",%d,", wyrwoodGID)) {
+			t.Errorf("logs lack %q with group %d:\n%s", want, wyrwoodGID, logs)
+		}
+		for _, service := range []string{"template-service", "workspace-service"} {
+			out := c.mustExec("sh", "-c", "grep '^Groups:' /proc/$(/command/s6-svstat -o pid /run/service/"+service+")/status")
+			if !strings.Contains(" "+out+" ", fmt.Sprintf(" %d ", wyrwoodGID)) {
+				t.Errorf("%s groups %q lack the access group %d", service, out, wyrwoodGID)
+			}
 		}
 	})
 
