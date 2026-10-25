@@ -39,6 +39,7 @@ clone_at_head() {
   git clone -q --no-local "$repo" "$1"
   git -C "$1" checkout -q --detach "$(git -C "$repo" rev-parse HEAD)"
   git -C "$1" tag --list | xargs -r git -C "$1" tag -d >/dev/null
+  git -C "$1" for-each-ref --format='%(refname:short)' refs/heads | xargs -r git -C "$1" branch -q -D
   cp "$repo"/scripts/*.sh "$1/scripts/"
   git -C "$1" add scripts
   git -C "$1" ls-files -z '.intentional/intents/*.md' | xargs -r -0 git -C "$1" rm -q
