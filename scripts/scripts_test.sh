@@ -297,6 +297,27 @@ expect "the workflow check refuses a task before checkout" 1 'release step [0-9]
 expect "the workflow check refuses a job missing a tool its task needs" 1 'ci.yml test runs task test without an earlier task:tools:install:linters' \
   sh -c "cd '$repo' && node scripts/check-workflows.mjs '$wfs/ci.yml'"
 
+# check-docs.mjs refuses an image a published page shows but docs.yml does
+# not list, an asset outside docs/, and a docs folder with no published page.
+docs=$scratch/docs
+expect "the docs check passes this repository's docs" 0 'checked [0-9]+ pages and [0-9]+ assets' \
+  sh -c "cd '$repo' && node scripts/check-docs.mjs"
+cp -r "$repo/docs" "$docs-unlisted"
+yq -i 'del(.assets[] | select(. == "assets/list.png"))' "$docs-unlisted/docs.yml"
+expect "the docs check refuses an unlisted image" 1 'overview.md shows assets/list.png, which docs.yml does not list' \
+  sh -c "cd '$repo' && node scripts/check-docs.mjs '$docs-unlisted'"
+cp -r "$repo/docs" "$docs-outside"
+echo "a file beside the docs folder" >"$scratch/outside.md"
+yq -i '.assets += ["../outside.md"]' "$docs-outside/docs.yml"
+expect "the docs check refuses an asset outside docs" 1 'asset ../outside.md is outside' \
+  sh -c "cd '$repo' && node scripts/check-docs.mjs '$docs-outside'"
+mkdir -p "$docs-unpublished"
+cp "$repo/docs/docs.yml" "$docs-unpublished/"
+cp -r "$repo/docs/assets" "$docs-unpublished/"
+printf -- '---\ntitle: Draft\n---\n\nNot published.\n' >"$docs-unpublished/draft.md"
+expect "the docs check refuses a folder with no published page" 1 'no page in .* is marked docs: true' \
+  sh -c "cd '$repo' && node scripts/check-docs.mjs '$docs-unpublished'"
+
 # Toolchain versions named in several places agree, so a bump moves them all.
 go_version=$(sed -n 's/^go //p' "$repo/go.mod")
 node_version=$(cat "$repo/.node-version")
