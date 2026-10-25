@@ -76,6 +76,8 @@ jobs:
       - run: task tools:install:browser
       - run: task tools:install:intentional
       - run: task tools:install:lefthook
+      # The hook test lints the files it stages, Markdown included.
+      - run: task tools:install:linters
       - run: task test
 
   build:

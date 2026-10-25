@@ -58,6 +58,11 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The requested commit first: every later step runs a repository task.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
       - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
       # The release app pushes the release branch, opens its pull request and
       # pushes tags. Rulesets let only it create version tags; its pushes,
@@ -71,13 +76,14 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      # The same commit again, with history, tags and the app's token for the
+      # push steps.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.sha }}
           token: ${{ steps.token.outputs.token }}
           fetch-depth: 0
           fetch-tags: true
-          # The push steps push with this token.
           persist-credentials: true
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:

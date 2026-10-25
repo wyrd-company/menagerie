@@ -29,6 +29,12 @@ expect() {
   fi
 }
 
+# The tools these cases run; a missing one fails here by name, not later
+# inside a hook.
+for tool in git intentional jq yq node task lefthook gofmt rustfmt rumdl; do
+  command -v "$tool" >/dev/null || { echo "FAIL $tool is not installed; scripts_test.sh needs it"; exit 1; }
+done
+
 git_test() { git -c user.name="Example User" -c user.email=user@example.invalid "$@"; }
 
 # clone_at_head <dir>: a clone of HEAD carrying the working tree's scripts,
@@ -217,7 +223,12 @@ hook_case() { # hook_case <dir>: prints the outcome lines the expectations read
   printf '\nfn   sample_unstaged() {}\n' >>"$d/template-service/src/lib.rs"
   printf '\nfn   sample_unstaged_child() {}\n' >>"$d/template-service/src/config.rs"
   cp "$d/template-service/src/config.rs" "$scratch/child.before"
-  (cd "$d" && lefthook run pre-commit --no-auto-install >"$scratch/hook.log" 2>&1) && echo "hook=passed" || echo "hook=failed"
+  if (cd "$d" && lefthook run pre-commit --no-auto-install >"$scratch/hook.log" 2>&1); then
+    echo "hook=passed"
+  else
+    echo "hook=failed"
+    sed "s/^/hook: /" "$scratch/hook.log"
+  fi
   cmp -s "$scratch/child.before" "$d/template-service/src/config.rs" && echo "rust-child=unchanged" || echo "rust-child=changed"
   git -C "$d" diff --cached --quiet -- template-service/src/config.rs && echo "rust-child-index=unchanged" || echo "rust-child-index=changed"
   git -C "$d" show :template-service/src/lib.rs | grep -qx 'fn sample_staged() {}' && echo "rust-staged=formatted" || echo "rust-staged=unformatted"
@@ -248,6 +259,43 @@ expect "the hook does not stage the Rust parent's unstaged hunk" 0 '^rust-unstag
 printf 'fn   sample_lint() {}\n' >>"$h/template-service/src/numbers.rs"
 expect "lint:staged refuses an unformatted Rust file" 1 'not rustfmt-formatted: template-service/src/numbers.rs' "$h/scripts/staged.sh" lint template-service/src/numbers.rs
 expect "lint:staged passes a formatted Rust file" 0 '^$' "$h/scripts/staged.sh" lint template-service/src/create.rs
+
+# The release job on a clean runner: its workspace starts empty, so every
+# step up to the first repository task runs here in an empty folder, with
+# actions/checkout as a clone of HEAD and fixture credential values.
+release_job_until_first_task() {
+  local wf=$repo/.github/workflows/release.yml ws n i uses run
+  ws=$(mktemp -d "$scratch/runner.XXXXXX")
+  n=$(yq '.jobs.release.steps | length' "$wf")
+  for ((i = 0; i < n; i++)); do
+    uses=$(yq ".jobs.release.steps[$i].uses // \"\"" "$wf")
+    run=$(yq ".jobs.release.steps[$i].run // \"\"" "$wf")
+    case "$uses" in
+      actions/checkout@*) [ -e "$ws/.git" ] || git clone -q --no-local "$repo" "$ws" ;;
+    esac
+    if [ -n "$run" ]; then
+      (cd "$ws" && RELEASE_APP_ID=sample-app-id RELEASE_APP_PRIVATE_KEY=sample-private-key sh -c "$run")
+      return
+    fi
+  done
+  echo "no run step"
+  return 1
+}
+expect "the release job's first task finds the repository on a clean runner" 0 'release:credentials' release_job_until_first_task
+
+# check-workflows.mjs refuses a job that runs a task before its checkout,
+# and a job that lacks a tool its task needs.
+wfs=$scratch/workflows
+mkdir -p "$wfs"
+yq '.jobs.release.steps |= ([.[] | select(.uses == null or (.uses | test("^actions/checkout") | not))])' \
+  "$repo/.github/workflows/release.yml" >"$wfs/release.yml"
+yq '.jobs.test.steps |= ([.[] | select(.run != "task tools:install:linters")])' "$repo/.github/workflows/ci.yml" >"$wfs/ci.yml"
+expect "the workflow check passes this repository's workflows" 0 'checked [0-9]+ task steps in 5 workflows' \
+  sh -c "cd '$repo' && node scripts/check-workflows.mjs"
+expect "the workflow check refuses a task before checkout" 1 'release step [0-9]+ runs task release:credentials before a step checks out' \
+  sh -c "cd '$repo' && node scripts/check-workflows.mjs '$wfs/release.yml'"
+expect "the workflow check refuses a job missing a tool its task needs" 1 'ci.yml test runs task test without an earlier task:tools:install:linters' \
+  sh -c "cd '$repo' && node scripts/check-workflows.mjs '$wfs/ci.yml'"
 
 # Toolchain versions named in several places agree, so a bump moves them all.
 go_version=$(sed -n 's/^go //p' "$repo/go.mod")

@@ -87,6 +87,7 @@ tasks:
       - ryl check --config-file .ryl.yml {{.REPOSITORY_YAML}}
       - rumdl check .
       - node scripts/check-renovate-pins.mjs > /dev/null
+      - node scripts/check-workflows.mjs
 
   format:staged:
     desc: Format only the named files (the pre-commit hook passes the staged ones)
