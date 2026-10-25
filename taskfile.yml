@@ -148,6 +148,7 @@ tasks:
       - task: test:integrated
       - task: test:image
       - task: test:image:cross
+      - task: test:acceptance
 
   test:docker:
     desc: Run the devcontainer runtime's Docker suite on a disposable Docker daemon

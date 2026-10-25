@@ -53,6 +53,7 @@ const needs = {
   "test:templateservice:docker": [go, rust],
   "test:integrated": [go, rust, pnpm, node, task("tools:install:browser")],
   "test:image": [go],
+  "test:acceptance": [go, pnpm, node, task("tools:install:browser")],
   "test:image:cross": [],
 };
 
