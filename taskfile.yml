@@ -279,40 +279,15 @@ tasks:
             echo "$binary: aarch64"
           done'
 
+  release:
+    desc: On main, apply the pending intents, commit them as chore(release) <version> and tag it; then push with git push --atomic --follow-tags origin main
+    cmds:
+      - scripts/release.sh release
+
   release:rehearse:
-    desc: Rehearse the next release (prepare, squash merge, publish) in a scratch clone of HEAD, then discard it
+    desc: Rehearse the next release in a scratch clone of HEAD and check that CD would deliver its tag, then discard it
     cmds:
       - scripts/release.sh rehearse
-
-  release:credentials:
-    desc: Fail unless the release app's id and private key are configured (release workflow only)
-    cmds:
-      - sh scripts/require-env.sh RELEASE_APP_ID RELEASE_APP_PRIVATE_KEY
-
-  release:evidence:
-    desc: Prove RELEASE_SHA is main's head with a successful push-event CI run (CI only)
-    cmds:
-      - scripts/release-evidence.sh
-
-  release:prepare:
-    desc: At RELEASE_SHA, apply the pending intents and commit them alone on release/<version> (release workflow only)
-    cmds:
-      - scripts/release.sh prepare
-
-  release:propose:
-    desc: Push release/<version> and open its pull request (release workflow only)
-    cmds:
-      - scripts/release.sh propose
-
-  release:publish:
-    desc: At the merged release commit RELEASE_SHA, prove it applies its parent's plan, then tag it (release workflow only)
-    cmds:
-      - scripts/release.sh publish
-
-  release:push-tags:
-    desc: Push the tags release:publish made (release workflow only)
-    cmds:
-      - scripts/release.sh push-tags
 
   release:tag:
     desc: Check that RELEASE_TAG is an Intentional release record to deliver (CD only)

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the release and CI scripts. Each case runs the real script: the
 # release cases in scratch clones of HEAD with the working tree's scripts
-# committed into them, the evidence cases with a stub gh on PATH. Nothing
-# leaves the scratch folder.
+# committed into them. Nothing leaves the scratch folder.
 set -uo pipefail
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -55,71 +54,51 @@ clone_at_head() {
   git_test -C "$1" commit -q -m "test: scripts and a fixture intent"
 }
 
-export RELEASE_ACTOR_NAME="Release test" RELEASE_ACTOR_EMAIL=release@example.invalid
+# The release commit takes the checkout's Git identity; a runner has none.
+export GIT_AUTHOR_NAME="Example User" GIT_AUTHOR_EMAIL=user@example.invalid
+export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
-# A prepared release, squash-merged onto its base.
+# A first release from main.
 r=$scratch/release
 clone_at_head "$r"
 base=$(git -C "$r" rev-parse HEAD)
-expect "prepare commits the release alone on its branch" 0 'prepared 0\.1\.0 on release/0\.1\.0' \
-  env RELEASE_PLAN="$scratch/prepare.json" RELEASE_SHA="$base" "$r/scripts/release.sh" prepare
-expect "prepare leaves no tag" 0 '^$' git -C "$r" tag --list
+expect "the rehearsal releases and checks CD's view of the tag" 0 'tag 0\.1\.0 is a release of commit' "$r/scripts/release.sh" rehearse
+expect "the rehearsal leaves its clone's source untagged" 0 '^$' git -C "$r" tag --list
+expect "release refuses a checkout off main" 1 'release from main, not' "$r/scripts/release.sh" release
+git -C "$r" switch -q -c main
+echo "a local edit" >>"$r/README.md"
+expect "release refuses a checkout with changes" 1 'has changes' "$r/scripts/release.sh" release
+git -C "$r" checkout -q -- README.md
+expect "release on main tags the release and its baseline" 0 'released 0\.1\.0 at [0-9a-f]{40}; tags: 0\.0\.0 0\.1\.0$' \
+  bash -o pipefail -c "RELEASE_PLAN='$scratch/first.json' '$r/scripts/release.sh' release 2>&1 | tee '$scratch/release.log'"
+expect "release names the push that delivers it" 0 '^push it: git push --atomic --follow-tags origin main$' cat "$scratch/release.log"
+release=$(git -C "$r" rev-parse HEAD)
 expect "the release commit writes the changelog and deletes the fixture intent, nothing else" 0 '^D:\.intentional/intents/[a-z0-9-]+\.md A:CHANGELOG\.md $' \
   sh -c "git -C '$r' diff --name-status HEAD~1 HEAD | sort -k2 | awk '{ printf \"%s:%s \", \$1, \$2 }'; echo"
-expect "prepare refuses another commit than RELEASE_SHA" 1 'not 0{40}' \
-  env RELEASE_PLAN="$scratch/other.json" RELEASE_SHA=0000000000000000000000000000000000000000 "$r/scripts/release.sh" prepare
-release_tree=$(git -C "$r" rev-parse 'HEAD^{tree}')
-merge() { # merge <tree> <subject>: a squash commit on base, checked out
-  git -C "$r" checkout -q --detach "$(git_test -C "$r" commit-tree "$1" -p "$base" -m "$2")"
-  git -C "$r" tag --list '[0-9]*' | xargs -r git -C "$r" tag -d >/dev/null
-}
-
-merge "$release_tree" "chore(release): 0.1.0"
-# CI runs on the merged release commit before publish tags it.
-expect "the rehearsal at a merged release commit rehearses publish" 0 'merged release commit for 0\.1\.0' "$r/scripts/release.sh" rehearse
-expect "the rehearsal at a merged release commit publishes in its clone only" 0 'published 0\.1\.0 .* tags: 0\.0\.0 0\.1\.0' "$r/scripts/release.sh" rehearse
-expect "the rehearsal leaves the merged release untagged" 0 '^$' git -C "$r" tag --list
+expect "the release commit's subject names its version" 0 '^chore\(release\): 0\.1\.0$' git -C "$r" log -1 --format=%s
+expect "the release tag is on the release commit" 0 "^$release$" git -C "$r" rev-parse '0.1.0^{commit}'
+expect "the baseline is on the release commit's parent" 0 "^$base$" git -C "$r" rev-parse '0.0.0^{commit}'
+cd_check() { (cd "$r" && GITHUB_OUTPUT="$scratch/cd-output" RELEASE_TAG=$1 "$r/scripts/release-tag.sh" && cat "$scratch/cd-output"); }
+: >"$scratch/cd-output"
+expect "CD delivers the release tag" 0 '^release=true$' cd_check 0.1.0
+: >"$scratch/cd-output"
+expect "CD delivers nothing for the baseline tag" 0 '^release=false$' cd_check 0.0.0
+expect "the rehearsal after the release finds nothing to release" 0 'nothing to release' "$r/scripts/release.sh" rehearse
+expect "release refuses when no intent is pending" 1 'no pending intents' \
+  env RELEASE_PLAN="$scratch/none.json" "$r/scripts/release.sh" release
 if [ -z "${SCRIPTS_TEST_NESTED:-}" ]; then
-  expect "these script tests pass at a merged release commit" 0 'scripts: [0-9]+ passed, 0 failed' \
+  expect "these script tests pass at a release commit" 0 'scripts: [0-9]+ passed, 0 failed' \
     env SCRIPTS_TEST_NESTED=1 "$r/scripts/scripts_test.sh"
-  # A rebase merge keeps the prepared commit, so a clone of it checks out
-  # release/<version> as a local branch.
-  merged=$(git -C "$r" rev-parse HEAD)
-  git -C "$r" checkout -q "release/0.1.0"
-  expect "these script tests pass on the release branch's own commit" 0 'scripts: [0-9]+ passed, 0 failed' \
-    env SCRIPTS_TEST_NESTED=1 "$r/scripts/scripts_test.sh"
-  git -C "$r" checkout -q --detach "$merged"
 fi
-expect "publish tags a reviewed release and its baseline" 0 'published 0\.1\.0 .* tags: 0\.0\.0 0\.1\.0' \
-  env RELEASE_PLAN="$scratch/publish.json" "$r/scripts/release.sh" publish
-expect "publish puts the baseline on the release commit's parent" 0 "^$base$" git -C "$r" rev-parse '0.0.0^{commit}'
-published=$(git -C "$r" rev-parse HEAD)
-expect "the rehearsal after publish finds nothing to release" 0 'nothing to release' "$r/scripts/release.sh" rehearse
-expect "prepare refuses when no intent is pending" 1 'no pending intents' \
-  env RELEASE_PLAN="$scratch/none.json" "$r/scripts/release.sh" prepare
 git_test -C "$r" commit -q --allow-empty -m "test: an ordinary commit after the release"
 expect "the rehearsal at a later commit without intents finds nothing to release" 0 'nothing to release' "$r/scripts/release.sh" rehearse
-git -C "$r" checkout -q --detach "$published"
 
-# A merged release that someone edited after review.
-git -C "$r" checkout -q --detach "$(git -C "$r" rev-parse HEAD)"
-echo "edited after review" >>"$r/CHANGELOG.md"
-git -C "$r" add CHANGELOG.md
-edited_tree=$(git -C "$r" write-tree)
-git -C "$r" checkout -q -- . 2>/dev/null
-git -C "$r" reset -q --hard
-merge "$edited_tree" "chore(release): 0.1.0"
-expect "publish refuses a release commit that is not the plan's apply" 1 'is not the apply of' \
-  env RELEASE_PLAN="$scratch/edited.json" "$r/scripts/release.sh" publish
-expect "a refused publish makes no release tag" 0 '^$' sh -c "git -C '$r' tag --list 0.1.0"
-
-merge "$release_tree" "chore: an ordinary title"
-expect "publish refuses a release commit with another subject" 1 "not 'chore\(release\): 0\.1\.0'" \
-  env RELEASE_PLAN="$scratch/subject.json" "$r/scripts/release.sh" publish
-
-merge "$(git -C "$r" rev-parse "$base^{tree}")" "chore(release): 0.1.0"
-expect "publish refuses a commit that applies nothing" 1 'is not the apply of' \
-  env RELEASE_PLAN="$scratch/nothing.json" "$r/scripts/release.sh" publish
+# A second release has no new baseline.
+(cd "$r" && intentional add --release-unit menagerie:minor --message "A second fixture change." >/dev/null)
+git -C "$r" add .intentional/intents
+git_test -C "$r" commit -q -m "test: a second fixture intent"
+expect "a second release tags only its own version" 0 'released 0\.2\.0 at [0-9a-f]{40}; tags: 0\.2\.0$' \
+  env RELEASE_PLAN="$scratch/second.json" "$r/scripts/release.sh" release
 
 # release-tag.sh: which tags cd.yml delivers.
 t=$scratch/tags
@@ -141,32 +120,6 @@ expect "a tag Intentional did not write is refused" 1 'not an Intentional releas
 expect "a record of another version is refused" 1 'records another version' tag_check 0.3.0
 expect "a v-prefixed tag is refused" 1 'not a bare X\.Y\.Z' tag_check v0.5.0
 expect "a lightweight tag is refused" 1 'not an annotated tag' tag_check 0.6.0
-
-# release-evidence.sh with a stub gh that answers from files.
-mkdir -p "$scratch/bin"
-cat >"$scratch/bin/gh" <<'STUB'
-#!/usr/bin/env sh
-case "$2" in
-  */commits/main) cat "$STUB_DIR/main" ;;
-  */runs\?*) cat "$STUB_DIR/runs" ;;
-  *) echo "unexpected gh $*" >&2; exit 1 ;;
-esac
-STUB
-chmod +x "$scratch/bin/gh"
-sha=1111111111111111111111111111111111111111
-evidence() {
-  PATH="$scratch/bin:$PATH" STUB_DIR=$scratch GITHUB_REPOSITORY=example-org/example RELEASE_SHA=$1 \
-    "$repo/scripts/release-evidence.sh"
-}
-echo "$sha" >"$scratch/main"
-echo "123 456" >"$scratch/runs"
-expect "main's head with a successful push run passes" 0 'successful push CI runs: 123 456' evidence "$sha"
-expect "an abbreviated SHA is refused" 1 'not a full lower-case commit SHA' evidence 1111111
-echo 2222222222222222222222222222222222222222 >"$scratch/main"
-expect "a commit that is not main's head is refused" 1 "is not main's head" evidence "$sha"
-echo "$sha" >"$scratch/main"
-: >"$scratch/runs"
-expect "a commit without a successful push run is refused" 1 'no successful push-event CI run' evidence "$sha"
 
 # require-env.sh and check-commit-subject.sh.
 expect "set variables pass" 0 '^$' env SAMPLE_ONE=1 SAMPLE_TWO=2 sh "$repo/scripts/require-env.sh" SAMPLE_ONE SAMPLE_TWO
@@ -260,40 +213,17 @@ printf 'fn   sample_lint() {}\n' >>"$h/template-service/src/numbers.rs"
 expect "lint:staged refuses an unformatted Rust file" 1 'not rustfmt-formatted: template-service/src/numbers.rs' "$h/scripts/staged.sh" lint template-service/src/numbers.rs
 expect "lint:staged passes a formatted Rust file" 0 '^$' "$h/scripts/staged.sh" lint template-service/src/create.rs
 
-# The release job on a clean runner: its workspace starts empty, so every
-# step up to the first repository task runs here in an empty folder, with
-# actions/checkout as a clone of HEAD and fixture credential values.
-release_job_until_first_task() {
-  local wf=$repo/.github/workflows/release.yml ws n i uses run
-  ws=$(mktemp -d "$scratch/runner.XXXXXX")
-  n=$(yq '.jobs.release.steps | length' "$wf")
-  for ((i = 0; i < n; i++)); do
-    uses=$(yq ".jobs.release.steps[$i].uses // \"\"" "$wf")
-    run=$(yq ".jobs.release.steps[$i].run // \"\"" "$wf")
-    case "$uses" in
-      actions/checkout@*) [ -e "$ws/.git" ] || git clone -q --no-local "$repo" "$ws" ;;
-    esac
-    if [ -n "$run" ]; then
-      (cd "$ws" && RELEASE_APP_ID=sample-app-id RELEASE_APP_PRIVATE_KEY=sample-private-key sh -c "$run")
-      return
-    fi
-  done
-  echo "no run step"
-  return 1
-}
-expect "the release job's first task finds the repository on a clean runner" 0 'release:credentials' release_job_until_first_task
-
 # check-workflows.mjs refuses a job that runs a task before its checkout,
 # and a job that lacks a tool its task needs.
 wfs=$scratch/workflows
 mkdir -p "$wfs"
-yq '.jobs.release.steps |= ([.[] | select(.uses == null or (.uses | test("^actions/checkout") | not))])' \
-  "$repo/.github/workflows/release.yml" >"$wfs/release.yml"
+yq '.jobs.tag.steps |= ([.[] | select(.uses == null or (.uses | test("^actions/checkout") | not))])' \
+  "$repo/.github/workflows/cd.yml" >"$wfs/cd.yml"
 yq '.jobs.test.steps |= ([.[] | select(.run != "task tools:install:linters")])' "$repo/.github/workflows/ci.yml" >"$wfs/ci.yml"
-expect "the workflow check passes this repository's workflows" 0 'checked [0-9]+ task steps in 6 workflows' \
+expect "the workflow check passes this repository's workflows" 0 'checked [0-9]+ task steps in 5 workflows' \
   sh -c "cd '$repo' && node scripts/check-workflows.mjs"
-expect "the workflow check refuses a task before checkout" 1 'release step [0-9]+ runs task release:credentials before a step checks out' \
-  sh -c "cd '$repo' && node scripts/check-workflows.mjs '$wfs/release.yml'"
+expect "the workflow check refuses a task before checkout" 1 'tag step [0-9]+ runs task release:tag before a step checks out' \
+  sh -c "cd '$repo' && node scripts/check-workflows.mjs '$wfs/cd.yml'"
 expect "the workflow check refuses a job missing a tool its task needs" 1 'ci.yml test runs task test without an earlier task:tools:install:linters' \
   sh -c "cd '$repo' && node scripts/check-workflows.mjs '$wfs/ci.yml'"
 

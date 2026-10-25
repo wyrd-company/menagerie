@@ -35,8 +35,18 @@ need Go, Rust, Node.js with pnpm, Task, Docker and the linters that
 
 ## Releases
 
-A maintainer dispatches the release workflow's `prepare` step for a commit on
-`main` that passed CI. It opens a pull request holding only the release
-commit: the applied intents and the changelog. Merging that pull request
-approves the release; the `publish` step then tags the merged commit, and the
-tag delivers the image. Nobody tags or publishes by hand.
+Intentional versions Menagerie and writes `CHANGELOG.md`; tags are bare
+versions such as `0.1.0`. To release, on an up-to-date `main`:
+
+```sh
+task release
+git push --atomic --follow-tags origin main
+```
+
+`task release` applies the pending intents, commits them as
+`chore(release): <version>` and tags that commit with Intentional's release
+record. The first release also tags its parent as the `0.0.0` baseline. The
+tag push starts the CD workflow, which delivers only Intentional release
+records: it pushes `ghcr.io/wyrd-company/menagerie:<version>` for linux/amd64
+and linux/arm64. `task release:rehearse` runs the same steps in a scratch
+clone and changes nothing.
