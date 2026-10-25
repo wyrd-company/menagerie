@@ -273,8 +273,8 @@ github.com/tonistiigi/vt100 v0.0.0-20240514184818-90bafcd6abab h1:H6aJ0yKQ0gF49Q
 github.com/tonistiigi/vt100 v0.0.0-20240514184818-90bafcd6abab/go.mod h1:ulncasL3N9uLrVann0m+CDlJKWsIAP34MPcOJF6VRvc=
 github.com/vbatts/tar-split v0.11.5 h1:3bHCTIheBm1qFTcgh9oPu+nNBtX+XJIupG/vacinCts=
 github.com/vbatts/tar-split v0.11.5/go.mod h1:yZbwRsSeGjusneWgA781EKej9HF8vme8okylkAeNKLk=
-github.com/wyrd-company/devcontainer-builder v0.0.0-20261024131825-0aa6b18bdd7b h1:SmV+PI/Ty5QUJvKsXdaVRpeOtxSunFaNyWmjYZ58P4w=
-github.com/wyrd-company/devcontainer-builder v0.0.0-20261024131825-0aa6b18bdd7b/go.mod h1:+1mIiwzCnlAK1NpySwJpr87cwwT0AaxW1qPfuUKG6Gg=
+github.com/wyrd-company/devcontainer-builder v0.0.0-20261025064220-82b4923bdc61 h1:4kOCs5VT1Hb/xvKTlKkOB3ZUPbXzpEXhEBhsG75zV+c=
+github.com/wyrd-company/devcontainer-builder v0.0.0-20261025064220-82b4923bdc61/go.mod h1:+1mIiwzCnlAK1NpySwJpr87cwwT0AaxW1qPfuUKG6Gg=
 github.com/xanzy/ssh-agent v0.3.3 h1:+/15pJfg/RsTxqYcX6fHqOXZwwMP+2VyYWJeWM2qQFM=
 github.com/xanzy/ssh-agent v0.3.3/go.mod h1:6dzNDKs0J9rVPHPhaGCukekBHKqfl+L3KghI1Bc68Uw=
 github.com/xhit/go-str2duration/v2 v2.1.0 h1:lxklc02Drh6ynqX+DdPyp5pCKLUQpRT8bp8Ydu2Bstc=
