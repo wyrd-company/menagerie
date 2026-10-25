@@ -57,8 +57,9 @@ RUN set -eu; \
     echo "$target" > /rust-target
 WORKDIR /src/template-service
 COPY template-service/ ./
+# Only the registry is cached: a cached target folder could keep a binary
+# built against other system libraries.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/template-service/target \
     set -eu; \
     target=$(cat /rust-target); \
     cargo build --locked --release --target "$target"; \
