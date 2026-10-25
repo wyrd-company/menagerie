@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -95,7 +96,7 @@ func TestDeploymentExampleAgreesWithTheImage(t *testing.T) {
 
 	// One port: the workspace service's listener, exposed by the image and
 	// asked by its health check. The template service's socket folder is the
-	// one the image's prepare script makes private to the services' user.
+	// one the image's start-up helper makes private to the services' user.
 	port := strings.TrimPrefix(cfg.Listen, ":")
 	if cfg.Listen != DefaultListen || len(svc.Ports) != 1 || !strings.HasSuffix(svc.Ports[0], ":"+port) {
 		t.Errorf("listen %q, compose ports %v", cfg.Listen, svc.Ports)
@@ -106,7 +107,11 @@ func TestDeploymentExampleAgreesWithTheImage(t *testing.T) {
 	if !strings.Contains(repoFile(t, "image/rootfs/usr/local/bin/menagerie-healthcheck"), "http://127.0.0.1:"+port+"/healthz") {
 		t.Errorf("the health check does not ask port %s", port)
 	}
-	if !strings.Contains(repoFile(t, "image/rootfs/etc/s6-overlay/scripts/menagerie-prepare"), `install -d -m 0700 -o "$uid" -g "$gid" `+path.Dir(cfg.TemplateService.Socket)+"\n") {
-		t.Errorf("the prepare script does not make %s private", path.Dir(cfg.TemplateService.Socket))
+	dir := path.Dir(cfg.TemplateService.Socket)
+	if want := fmt.Sprintf("{parent: %q, name: %q, mode: 0o700}", path.Dir(dir), path.Base(dir)); !strings.Contains(repoFile(t, "backend/cmd/menagerie-folders/main.go"), want) {
+		t.Errorf("menagerie-folders does not make %s private: no %s", dir, want)
+	}
+	if !strings.Contains(repoFile(t, "image/rootfs/etc/s6-overlay/scripts/menagerie-prepare"), "/usr/local/bin/menagerie-folders -uid") {
+		t.Error("the prepare script does not run menagerie-folders")
 	}
 }

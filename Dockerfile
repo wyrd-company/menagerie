@@ -18,7 +18,8 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY web/ ./
 RUN pnpm build && test -f dist/index.html
 
-# The workspace service, a static binary.
+# The workspace service, and the start-up helper that prepares its folders,
+# static binaries.
 FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS workspace-service
 ARG TARGETOS
 ARG TARGETARCH
@@ -29,7 +30,7 @@ COPY backend ./backend
 COPY web/embed.go ./web/
 COPY --from=web /src/web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags='-s -w' -o /out/menagerie ./backend/cmd/menagerie
+    go build -trimpath -ldflags='-s -w' -o /out/ ./backend/cmd/menagerie ./backend/cmd/menagerie-folders
 
 # The template service. curl-sys finds no system libcurl here, so it builds
 # curl with rustls into the binary; the binary needs only the C runtime.
@@ -75,10 +76,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     done; \
     echo "template service links: $needed"
 
-# Both service binaries alone, for checking a cross-compiled target without
+# The binaries alone, for checking a cross-compiled target without
 # emulation: docker build --target binaries --output type=local,dest=out .
 FROM scratch AS binaries
-COPY --from=workspace-service /out/menagerie /
+COPY --from=workspace-service /out/menagerie /out/menagerie-folders /
 COPY --from=template-service /out/menagerie-template-service /
 
 # s6-overlay, downloaded and checked against its release checksums.
@@ -117,7 +118,7 @@ RUN set -eu; \
     rm -rf /var/lib/apt/lists/*
 COPY --from=s6-overlay /s6-overlay/ /
 COPY image/rootfs/ /
-COPY --from=workspace-service /out/menagerie /usr/local/bin/menagerie
+COPY --from=workspace-service /out/menagerie /out/menagerie-folders /usr/local/bin/
 COPY --from=template-service /out/menagerie-template-service /usr/local/bin/menagerie-template-service
 # A service that cannot start stops the container. Services report no
 # readiness, so s6 starts them in order and never waits on a deadline.

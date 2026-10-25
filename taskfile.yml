@@ -218,7 +218,7 @@ tasks:
         '{{.STATE}}/image.test' -test.run '^TestImage(OperatorWorkspace)?$' -test.v -test.count=1 -test.timeout 10m
 
   test:image:cross:
-    desc: Cross-compile both services for linux/arm64 on a disposable Docker daemon and check that each binary is aarch64
+    desc: Cross-compile the image's binaries for linux/arm64 on a disposable Docker daemon and check that each is aarch64
     vars:
       STATE: '{{.SCRATCH}}/image-cross'
       OWNER:
@@ -234,7 +234,7 @@ tasks:
       - |
         scripts/isolated-docker.sh shell '{{.STATE}}' '
           set -e
-          for binary in /menagerie-work/arm64/menagerie /menagerie-work/arm64/menagerie-template-service; do
+          for binary in /menagerie-work/arm64/menagerie /menagerie-work/arm64/menagerie-folders /menagerie-work/arm64/menagerie-template-service; do
             machine=$(od -An -t u2 -j 18 -N 2 "$binary" | tr -d " ")
             [ "$machine" = 183 ] || { echo "$binary has ELF machine $machine, not aarch64 (183)"; exit 1; }
             echo "$binary: aarch64"

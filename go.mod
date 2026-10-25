@@ -13,6 +13,7 @@ require (
 	github.com/wyrd-company/devcontainer-builder v0.0.0-20261024131825-0aa6b18bdd7b
 	golang.org/x/crypto v0.56.0
 	golang.org/x/oauth2 v0.37.0
+	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -106,7 +107,6 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.4 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80 // indirect

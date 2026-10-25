@@ -496,6 +496,14 @@ templates:
 		{"a data folder another uid owns stops start-up", func(t *testing.T, data string) {
 			writeTo(t, data, "other", "not Menagerie's\n")
 		}, fmt.Sprintf("/var/lib/menagerie belongs to uid 0 and is not empty, but Menagerie runs as uid %d", operatorUID)},
+		{"an empty data folder another uid owns stops start-up", func(t *testing.T, data string) {
+			if err := os.MkdirAll(data, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chown(data, 2000, 2000); err != nil {
+				t.Fatal(err)
+			}
+		}, fmt.Sprintf("/var/lib/menagerie belongs to uid 2000, but Menagerie runs as uid %d", operatorUID)},
 		{"a home linked to a workspace stops start-up", func(t *testing.T, data string) {
 			operatorDir(t, data)
 			link(t, elsewhere, filepath.Join(data, "home"))
