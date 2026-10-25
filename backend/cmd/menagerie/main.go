@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -38,11 +39,37 @@ import (
 
 func main() {
 	configPath := flag.String("config", config.DefaultPath, "configuration file")
+	printRoot := flag.Bool("print-workspace-root", false, "print the configured workspace root and exit")
+	printWyrwood := flag.Bool("print-wyrwood-directory", false, "print the configured Wyrwood consumer directory and exit")
 	flag.Parse()
+	if *printRoot || *printWyrwood {
+		if err := printPaths(os.Stdout, *configPath, *printRoot, *printWyrwood); err != nil {
+			fmt.Fprintln(os.Stderr, "menagerie:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(*configPath); err != nil {
 		fmt.Fprintln(os.Stderr, "menagerie:", err)
 		os.Exit(1)
 	}
+}
+
+// printPaths writes the configured paths the image's start-up needs, one
+// per line, from a configuration that loads and validates. It starts no
+// service and opens no connection.
+func printPaths(w io.Writer, configPath string, root, wyrwood bool) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if root {
+		fmt.Fprintln(w, filepath.Clean(cfg.WorkspaceRoot))
+	}
+	if wyrwood {
+		fmt.Fprintln(w, filepath.Clean(cfg.WyrwoodDirectory))
+	}
+	return nil
 }
 
 func run(configPath string) error {
