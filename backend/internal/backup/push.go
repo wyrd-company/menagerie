@@ -16,6 +16,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -72,9 +73,39 @@ func (r *Remote) Push(ctx context.Context, folder, workspace string, progress io
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("push %s: %w", branch.Short(), err)
+		return false, fmt.Errorf("push %s: %w", branch.Short(), transportFailure(ctx, r.URL, err))
 	}
 	return true, nil
+}
+
+// Tokens supplies tokens for HTTPS repository URLs.
+type Tokens interface {
+	// Serves reports whether url is a URL the source has tokens for.
+	Serves(url string) bool
+	// Token returns the token of url and the user name that goes with it.
+	// Its error names no token and no URL.
+	Token(ctx context.Context, url string) (username, token string, err error)
+}
+
+// TokenAuth authenticates pushes and fetches to a URL tokens serves with
+// HTTP basic authentication, the token as the password; every other URL
+// gets the credentials of otherwise. A token is only ever sent to a URL
+// tokens serves, and go-git drops it on a redirect that leaves the URL's
+// origin or downgrades to http.
+func TokenAuth(tokens Tokens, otherwise Auth) Auth {
+	return func(ctx context.Context, url string) (transport.AuthMethod, func(), error) {
+		if !tokens.Serves(url) {
+			if otherwise == nil {
+				return nil, func() {}, nil
+			}
+			return otherwise(ctx, url)
+		}
+		username, token, err := tokens.Token(ctx, url)
+		if err != nil {
+			return nil, nil, fmt.Errorf("workspace repository credentials: %w", err)
+		}
+		return &githttp.BasicAuth{Username: username, Password: token}, func() {}, nil
+	}
 }
 
 // AgentAuth authenticates SSH pushes with the SSH agent listening on

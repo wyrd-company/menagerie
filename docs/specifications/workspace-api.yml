@@ -198,12 +198,15 @@ description: >-
   the apply starts fails the job with nothing written, while a file written
   after that check and before the commit is committed with the output.
   Pushes use
-  go-git with the SSH agent at `ssh-agent.sock` in the Wyrwood directory
-  and the default known hosts files for host-key verification; they
-  replace the remote branch named after the workspace, write no remote to
-  the workspace's Git configuration and fetch nothing. A failed commit or
-  push fails as `backup-failed` and the container is not started or
-  rebuilt.
+  go-git, to an SSH remote with the SSH agent at `ssh-agent.sock` in the
+  Wyrwood directory and the default known hosts files for host-key
+  verification, and to an `https` repository on the configured GitHub
+  App's server with a contents write installation token for that
+  repository; they replace the remote branch named after the workspace,
+  write no remote to the workspace's Git configuration and fetch nothing.
+  A failed commit or push fails as `backup-failed` and the container is
+  not started or rebuilt; a push to an `https` remote names a fixed
+  reason, never the URL, a token or the server's answer.
 
 
   Apply branch. An `apply-branch` job brings a branch of the workspace
@@ -484,7 +487,8 @@ validation-criteria: >-
   with a held template service and a real local workspace repository,
   covering waiting, single answers, flow ends, failures and slot release;
   `go test ./backend/internal/backup/` pushes through an isolated SSH server
-  and agent; `go test -tags templateservice ./backend/internal/workflows/`
+  and agent, and pushes and fetches through an isolated HTTPS Git host
+  with a token, whose every failure names neither the URL nor the token; `go test -tags templateservice ./backend/internal/workflows/`
   runs create and upgrade against the real template service, with an
   upgrade whose hook changes a tracked file's content that only Toha's
   merge brings into the workspace folder. `go test

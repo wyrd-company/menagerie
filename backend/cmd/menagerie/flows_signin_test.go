@@ -73,7 +73,7 @@ func TestSignedInManagersAnswerInterviewsOfAnySize(t *testing.T) {
 		OIDC:            config.OIDC{Issuer: issuer.URL(), ClientID: clientID, RedirectURL: srv.URL + auth.CallbackPath},
 	}
 	// The composition run serves.
-	h, err = newHandler(cfg, root, devcontainer.New(nil, devcontainer.Options{}), manager, nil, nil)
+	h, err = newHandler(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), manager, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

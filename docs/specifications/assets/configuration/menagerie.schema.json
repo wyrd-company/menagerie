@@ -305,6 +305,45 @@
           "description": "Shortest time between two accepted commits of a workspace through its socket; 0 for none."
         }
       }
+    },
+    "github-app": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GitHub App whose installation tokens authenticate backups and template fetches to https repository URLs on its server: /{owner}/{repo} or /{owner}/{repo}.git, with no user information, query or fragment. Its private key is an RSA Transit key in OpenBao, used through the Wyrwood vault socket. Other URLs keep their own authentication. Absent, no token is minted.",
+      "required": [
+        "app-id",
+        "transit-key"
+      ],
+      "properties": {
+        "app-id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The App's id, the issuer of its JWTs."
+        },
+        "transit-key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+          "maxLength": 128,
+          "description": "Name of the Transit key, at the mount transit, that holds the App's private key."
+        },
+        "installations": {
+          "type": "object",
+          "description": "The App's installation id by account name, compared in lower case. A repository whose owner is not listed has its installation looked up.",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$",
+            "maxLength": 100
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "server": {
+          "type": "string",
+          "default": "https://github.com",
+          "description": "The GitHub server's https origin, with no user information, path, query or fragment. The API is https://api.github.com for https://github.com, else {server}/api/v3."
+        }
+      }
     }
   },
   "$defs": {

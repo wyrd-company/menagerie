@@ -187,12 +187,12 @@ templates:
 	manager := jobs.NewManager(ctx, jobs.Options{})
 	var opts devcontainer.Options
 	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
-	_, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks)
+	_, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(stopHooks)
-	handler, err := newHandler(cfg, root, devcontainer.New(docker, opts), manager, parts.hooks, parts.images)
+	handler, err := newHandler(cfg, root, backupRemote(cfg, nil), devcontainer.New(docker, opts), manager, parts.hooks, parts.images)
 	if err != nil {
 		t.Fatal(err)
 	}

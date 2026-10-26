@@ -187,6 +187,24 @@ description: >-
   in Menagerie's own image.
 
 
+  Credentials. The hook runner socket also serves `POST
+  /v1/credentials/github`, the GitHub App credentials of a template fetch
+  over `https`. The request is `{"url"}`, the repository's `https` URL
+  without user information; an unknown member, a second value or a body
+  over 8 KiB is refused. For a URL on the configured GitHub App's server
+  whose path is exactly `/{owner}/{repo}` or `/{owner}/{repo}.git`, with no
+  query or fragment, the answer is 200
+  `{"username":"x-access-token","password"}`, where `password` is an
+  installation token with contents read on that one repository. Every
+  other answer is `{"reason"}`, a fixed sentence: 404 when no `github-app`
+  is configured or the URL is any other, and this service then fetches as
+  Toha does by default; 502 when the token could not be minted, the reason
+  naming the cause without a token, URL or GitHub answer; 400 for a body
+  that is not a credential request; 405 for a method other than POST. The
+  answer carries `Cache-Control: no-store`. This service keeps the token
+  in memory for the one fetch and never writes it to disk.
+
+
   Apply replies. Generate and apply answer 200 with `{"outcome","files",
   "recordPath","messages","hooks","conflicts"}`. `outcome` is `written`,
   `conflicted`, `already-current`, `needs-trust` or `planned`; only

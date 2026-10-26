@@ -86,7 +86,7 @@ func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, pr
 	case errors.Is(err, git.NoMatchingRefSpecError{}), errors.Is(err, transport.ErrEmptyRemoteRepository):
 		return plumbing.ZeroHash, fmt.Errorf("%w: %s", ErrBranchNotFound, branch)
 	case err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate):
-		return plumbing.ZeroHash, fmt.Errorf("fetch %s: %w", branch, err)
+		return plumbing.ZeroHash, fmt.Errorf("fetch %s: %w", branch, transportFailure(ctx, r.URL, err))
 	}
 	ref, err := repo.Reference(FetchedRef, false)
 	if err != nil {
