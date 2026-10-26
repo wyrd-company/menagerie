@@ -6,14 +6,18 @@ slug: menagerie-has-host-root
 title: Menagerie has root on the host
 description: >-
   Menagerie mounts the rootful Docker socket, so whoever controls Menagerie
-  controls the host. This includes a manager, an attacker who gets past
-  sign-in, and any template hook or `initializeCommand`, which run inside
-  the Menagerie container. This is the same access a manager has when
-  running devcontainer-builder on the host. Mitigation: only members of the
+  controls the host. This includes a manager and an attacker who gets past
+  sign-in. This is the same access a manager has when running
+  devcontainer-builder on the host. Mitigation: only members of the
   `menagerie_managers` group reach the UI; the UI is not exposed to the
   public internet; only templates on the approved template list are used;
-  Menagerie stores no keys or tokens. A body-inspecting Docker proxy and
-  hooks in throwaway containers reduce this exposure.
+  Menagerie stores no keys or tokens; template hooks and `initializeCommand`
+  run in throwaway containers that mount only their workspace folder, so
+  they reach neither the Docker socket nor the Wyrwood sockets nor
+  Menagerie's environment. They still reach the network, and a hook can
+  still change its workspace's definition, which its devcontainer then
+  gets as asked. A body-inspecting Docker proxy reduces this exposure
+  further.
 categories:
   - security
 likelihood: 2

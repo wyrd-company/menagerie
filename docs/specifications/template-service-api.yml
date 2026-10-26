@@ -10,8 +10,10 @@ description: >-
   client, with JSON over HTTP/1.1 on the Unix socket named by
   `template-service.socket` in the Menagerie configuration. It reads that
   file (`-config`, default `/etc/menagerie/config.yml`) only for
-  `workspace-root`, `templates` and `template-service.socket`, with the
-  workspace service's rules for them, and ignores its other members. Toha's
+  `workspace-root`, `templates`, `template-service.socket` and
+  `template-service.hook-runner-socket`, with the workspace service's rules
+  for them, and ignores its other members. The service starts no process:
+  the workspace service runs every template hook. Toha's
   configuration, registry, cache and state live under the folder named by
   `-data`, default `/var/lib/menagerie/toha`, with the session key
   `session-key`: 32 random bytes, readable only by the service, written on
@@ -26,7 +28,8 @@ description: >-
   upgrade, both with `{"workspace","target","templateId"}`.
   `/v1/interviews/answers` and `/v1/upgrades/answers` add `"session"` and
   `"submission"`. `/v1/workspaces/generate` and `/v1/upgrades/apply` add
-  `"session"`. Other members are refused. `workspace` is the folder name,
+  `"session"` and an optional `"hookToken"`, the workspace service's grant
+  for that request's hooks. Other members are refused. `workspace` is the folder name,
   `target` is that folder under the workspace root, and `templateId` is an
   approved template's `id`; for an upgrade it names the template version to
   upgrade to. Another path answers 404 `not-found`, another method 405
@@ -104,8 +107,7 @@ description: >-
   file is asked as a JSON object. `/v1/workspaces/generate` applies a
   completed session into the folder the workspace service created and
   initialized: it must exist, hold only `.git`, and be a Git repository.
-  Template hooks run with Toha's process hook runner inside Menagerie, in
-  their target-relative working directory. Generation succeeds only when
+  Generation succeeds only when
   Toha wrote the applied record `.toha.json`; files written without it are
   the error `record-not-written`. A hook failure leaves the files written
   before it and no applied record, so the folder is no longer new and a
@@ -121,6 +123,43 @@ description: >-
   the whole session. `/v1/upgrades/apply` merges a completed session.
 
 
+  Hooks. Generate and apply hand each of the template's hooks to the
+  workspace service's hook runner: JSON over HTTP/1.1, `POST /v1/hooks/run`
+  on the Unix socket named by `template-service.hook-runner-socket`,
+  default `/run/menagerie/hook-runner.sock`, which the workspace service
+  listens on, open to the services' user only. The request is
+  `{"token","target","program","cwd","templateRoot","capture"}`: `token`
+  is the request's `hookToken`; `target` is the workspace folder as
+  configured, the workspace root joined with `workspace`; `program` is
+  `{"run": [argv]}` or `{"script": {"path","args"}}`, a file of the
+  template; `cwd` is the hook's target-relative working directory or
+  `null`; `templateRoot` is the template's folder in Toha's cache; and
+  `capture` is `{"stdout","stderr"}`, the streams the hook declares. The
+  workspace service runs the hook in a throwaway container in its working
+  directory under the workspace folder, the program as given, with an
+  empty environment; a script's template folder is copied into the
+  container at its own path first. A run hook answers 200 with
+  `{"exitCode","success","stdout","stderr"}`, where a captured stream holds
+  its raw bytes in base64 and an uncaptured one is `null` and went to the
+  job console. Any other answer is `{"error":{"kind","message"}}` with
+  one of the hook runner's kinds: `malformed-request` and `invalid-hook`,
+  status 400, for a request that is not a hook, a working directory
+  outside the folder, or a script outside its template;
+  `hook-token-refused`, status 403, for an unknown or revoked token or a
+  `target` that is not the token's job's folder; `hook-cancelled`, status
+  409, when the job was cancelled, its container then killed and removed;
+  `runner-image-unavailable`, status 503, when no runner image could be
+  found or pulled; `hook-container-failed`, status 500, when the Engine
+  failed. The
+  workspace service revokes the token when the generate or apply request
+  returns. A generate or apply without `hookToken`, or whose hook the
+  runner refuses, fails that hook: the reply is `hook-io-failed`, and its
+  message names the runner's kind and message. No reply, error or log line
+  carries a captured stream. Toha's `requires` check resolves programs on
+  this service's own `PATH`, which agrees with a hook's only when it runs
+  in Menagerie's own image.
+
+
   Apply replies. Generate and apply answer 200 with `{"outcome","files",
   "recordPath","messages","hooks","conflicts"}`. `outcome` is `written`,
   `conflicted`, `already-current`, `needs-trust` or `planned`; only
@@ -128,7 +167,8 @@ description: >-
   `recordPath`. `conflicted` is a written merge whose `conflicts` lists the
   paths written with conflict markers. `files` lists `{path, action}`;
   `hooks` lists `{id, exitCode, success}` for each hook that ran. Hook output
-  is not returned.
+  is not returned: the workspace service's job console shows what a hook
+  does not capture.
 
 
   Errors. A refusal answers `{"error":{"kind","message"}}`, adding `paths`
@@ -179,7 +219,11 @@ validation-criteria: >-
   `cargo test --locked` in `template-service/` runs the service against
   Toha's library on a Unix socket: `tests/create.rs` covers create, rejected
   answers, generation into an initialized repository, revision pinning and
-  flow ends; `tests/hooks.rs` covers hook folders, hook and I/O failures;
+  flow ends; `tests/hooks.rs` covers hook folders, hook and I/O failures,
+  and hooks without a granted token, against a hook runner that runs each
+  hook as a local process; the unit tests in `src/hooks.rs` cover the hook
+  runner request, captured streams, exit codes, refusals and malformed
+  replies, none of which puts a stream in an error;
   `tests/numbers.rs` covers number values through the session and the
   applied record; `tests/revisions.rs` covers admitted revisions for
   fixed and moving addresses, installed branches and tags;

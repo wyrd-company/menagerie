@@ -16,8 +16,8 @@ it defines.
 
 - **Create.** A manager picks an approved template, names the workspace and
   answers the template's interview. Toha writes the folder, the template's
-  hooks run, and [devcontainer-builder](https://wyrd.foo/docs/dcb) starts the
-  devcontainer.
+  hooks run in throwaway containers that see only that folder, and
+  [devcontainer-builder](https://wyrd.foo/docs/dcb) starts the devcontainer.
 - **See the fleet.** The list shows every folder in the workspace root and
   the state of its container. Containers that belong to no workspace do not
   appear.

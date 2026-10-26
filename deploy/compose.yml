@@ -23,7 +23,9 @@ services:
       # container, so the devcontainers' bind mounts resolve on the host.
       # Its owner is the user both services run as.
       - ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}:${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}
-      # The host Docker daemon. Only the workspace service uses it.
+      # The host Docker daemon. Only the workspace service uses it, for
+      # devcontainers and for the throwaway containers that run template
+      # hooks and initializeCommand with only the workspace folder mounted.
       - /var/run/docker.sock:/var/run/docker.sock
       # The Wyrwood consumer directory: ssh-agent.sock and vault.sock. The
       # agent creates it when it binds the container, under its consumer

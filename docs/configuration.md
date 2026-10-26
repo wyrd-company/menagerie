@@ -30,6 +30,7 @@ templates:
   - id: sample-workspace-2
     name: Sample workspace 2.0
     address: gh:example-org/workspace-templates@2.0.0#sample-workspace
+    runner-image: ghcr.io/example-org/sample-workspace-runner:2.0.0
 
 registry-credentials:
   kv-mount: kv
@@ -82,10 +83,35 @@ dashes), a display `name`, and a Toha `address`:
 
 `#<path>` names the template's folder in the repository and is optional.
 
+An entry's optional `runner-image` is the image its hooks run in; see
+[Runner images](#runner-images).
+
 Pin each entry to a tag. To move workspaces to a new template version, add
 an entry for that version; **Upgrade** then asks only the questions the new
 version adds and keeps the answers and local edits the workspace has. The
 list can be empty.
+
+## Runner images
+
+Template hooks and `initializeCommand` run in throwaway containers, one per
+command. A container mounts only the workspace folder, at its own path, and
+runs as the owner of the workspace root on Docker's default bridge network.
+It cannot reach the Docker socket, the Wyrwood sockets or Menagerie's
+environment, and it is removed when its command ends.
+
+- A template's hooks run in its `runner-image`, else the top-level
+  `runner-image`.
+- `initializeCommand` runs in the top-level `runner-image`.
+- Without either, both run in Menagerie's own image, which has `sh`, `git`,
+  `ssh` and `curl`.
+
+The image needs the programs the hooks run; a hook runs its program as
+given, found on the image's own `PATH`. Toha checks a template's
+`requires` against Menagerie's own image, so a template with its own
+runner image should list only programs both images have. Menagerie pulls
+a missing image, with `registry-credentials` when they name its registry.
+A hook gets no environment variables beyond its image's own, and no SSH
+agent: a hook that fetches a private repository cannot authenticate.
 
 ## Identity provider
 
@@ -138,8 +164,9 @@ digits and underscores, not starting with a digit, and each name once.
   `localEnv NAME is not in local-env; it resolves to its default value`.
 - Compose interpolation of `${VAR}` in a workspace's Compose files sees only
   the listed variables.
-- `initializeCommand` runs with only the listed variables and `PATH`. `PATH`
-  is readable through `${localEnv:PATH}` only when it is listed.
+- `initializeCommand` gets only the listed variables, beside its runner
+  image's own environment; its `PATH` is the image's. `PATH` is readable
+  through `${localEnv:PATH}` only when it is listed.
 - `build.args` reach the build as written: devcontainer-builder does not
   substitute variables in them yet.
 
@@ -156,7 +183,8 @@ once the cancelled work has stopped.
   `read-definition`, `initialize-command`, `build`, `remove-container`,
   `up`, `stop`, `interview`, `initialize-repository`, `generate`, `apply`,
   `commit`, `backup-local-changes` or `backup`. Template hooks run inside
-  `generate` and `apply`.
+  `generate` and `apply`; a hook still running when its job is cancelled
+  has its container killed and removed before the job ends.
 
 A duration is whole hours, minutes and seconds, such as `2h`, `45m` or
 `1h30m`. A key without a value, such as `rebuild:` or `default: ""`, is an

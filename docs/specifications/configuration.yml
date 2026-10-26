@@ -12,13 +12,28 @@ description: >-
 
   It names the workspace root, the workspace repository, the Wyrwood
   consumer directory, the approved template list, the OIDC issuer and client,
-  the HTTP listen address and the template service socket. `workspace-root`
+  the HTTP listen address, the template service socket and the hook runner
+  socket. `workspace-root`
   and `wyrwood-directory` are absolute paths; the workspace root is used as
   written (cleaned, not symlink-resolved) because container labels carry
   the path the host daemon sees, and it is never `/`. Each template has a
   unique `id` of lower-case letters and digits separated by single dashes, a
-  display `name` and a Toha `address`; the list can be empty. Defaults:
-  listen `:8080`, template service socket `/run/menagerie/template.sock`.
+  display `name`, a Toha `address` and an optional `runner-image`; the list
+  can be empty. Defaults: listen `:8080`, template service socket
+  `/run/menagerie/template.sock`, hook runner socket
+  `template-service.hook-runner-socket` `/run/menagerie/hook-runner.sock`,
+  an absolute path other than the template service socket, on which the
+  workspace service runs the template service's hooks.
+
+
+  Optional `runner-image`, at the top level and on a template, is a Docker
+  image reference such as `alpine:3.22`. Template hooks and
+  `initializeCommand` run in throwaway containers of a runner image: a
+  template's hooks in its own `runner-image`, else the top-level one;
+  `initializeCommand` in the top-level one. Absent, both use Menagerie's
+  own image, which the workspace service finds by inspecting its own
+  container. A missing image is pulled with `registry-credentials`. The
+  template service ignores `runner-image`.
 
 
   `oidc` names the identity provider and Menagerie's public client, which
