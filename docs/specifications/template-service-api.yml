@@ -144,7 +144,7 @@ description: >-
   job console. Any other answer is `{"error":{"kind","message"}}` with
   one of the hook runner's kinds: `malformed-request` and `invalid-hook`,
   status 400, for a request that is not a hook, a working directory
-  outside the folder, or a script outside its template;
+  outside the folder or missing, or a script outside its template;
   `hook-token-refused`, status 403, for an unknown or revoked token or a
   `target` that is not the token's job's folder; `hook-cancelled`, status
   409, when the job was cancelled, its container then killed and removed;
