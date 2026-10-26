@@ -23,6 +23,11 @@ services:
       # container, so the devcontainers' bind mounts resolve on the host.
       # Its owner is the user both services run as.
       - ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}:${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}
+      # The workspace socket folder at the same path on the host and in the
+      # container, like the workspace root, so each devcontainer's mount of
+      # its own socket folder resolves on the host. Create it before the
+      # first start, owned by the workspace root's owner.
+      - ${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}:${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}
       # The host Docker daemon. Only the workspace service uses it, for
       # devcontainers and for the throwaway containers that run template
       # hooks and initializeCommand with only the workspace folder mounted.

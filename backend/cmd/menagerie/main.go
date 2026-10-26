@@ -30,6 +30,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"github.com/wyrd-company/menagerie/backend/internal/commits"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
@@ -38,6 +39,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workflows"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
+	"github.com/wyrd-company/menagerie/backend/internal/workspacesocket"
 	"github.com/wyrd-company/menagerie/web"
 )
 
@@ -98,13 +100,6 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
-	runtime := devcontainer.New(docker, opts)
-	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks)
-	if err != nil {
-		return err
-	}
-	defer stopHooks()
 	jobOpts, webhook, err := jobOptions(cfg)
 	if err != nil {
 		return err
@@ -114,6 +109,31 @@ func run(configPath string) error {
 		defer webhook.Close()
 	}
 	manager := jobs.NewManager(ctx, jobOpts)
+	commitJobs := commits.New(commits.Options{Root: root, Remote: backupRemote(cfg), Jobs: manager})
+	client, err := clientPath()
+	if err != nil {
+		return err
+	}
+	sockets, err := workspaceSockets(ctx, cfg, root, commitJobs, client, &opts)
+	if err != nil {
+		return err
+	}
+	if sockets != nil {
+		defer sockets.Close()
+	}
+	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
+	runtime := devcontainer.New(docker, opts)
+	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks)
+	if err != nil {
+		return err
+	}
+	defer stopHooks()
+	if a := cfg.AutoCommit; a != nil {
+		ticker := time.NewTicker(a.Every.Value())
+		defer ticker.Stop()
+		go commitJobs.Schedule(ctx, ticker.C, nil)
+		log.Printf("menagerie: committing workspaces with changes every %s", a.Every.Value())
+	}
 	handler, err := newHandler(cfg, root, runtime, manager, parts.hooks, parts.images)
 	if err != nil {
 		return err
@@ -141,6 +161,58 @@ func run(configPath string) error {
 		return err
 	}
 	return nil
+}
+
+// workspaceSockets opens the socket folder, when one is configured, with
+// the client at the path client, gives the devcontainer runtime its mount,
+// and creates the socket of every workspace under root. A workspace whose
+// socket fails is logged; it gets its socket, or fails, at its next start
+// or rebuild.
+func workspaceSockets(ctx context.Context, cfg *config.Config, root *workspace.Root, starter workspacesocket.Starter, client string, opts *devcontainer.Options) (*workspacesocket.Sockets, error) {
+	c := cfg.WorkspaceSocket
+	if c == nil {
+		return nil, nil
+	}
+	sockets, err := workspacesocket.Open(workspacesocket.Options{
+		Folder:        c.Folder,
+		WorkspaceRoot: root.Path(),
+		MinInterval:   c.MinIntervalValue(),
+		Client:        client,
+		Commits:       starter,
+		Context:       ctx,
+	})
+	if err != nil {
+		return nil, err
+	}
+	opts.WorkspaceSocket = func(folder string) (string, error) {
+		name := filepath.Base(folder)
+		if own, err := root.FolderPath(name); err != nil || own != folder {
+			return "", errors.New("workspace socket: the workspace's folder is not a folder of the workspace root")
+		}
+		return sockets.Ensure(name)
+	}
+	names, err := root.Names()
+	if err != nil {
+		sockets.Close()
+		return nil, err
+	}
+	for _, name := range names {
+		if _, err := sockets.Ensure(name); err != nil {
+			log.Printf("menagerie: %v", err)
+		}
+	}
+	log.Print("menagerie: workspace sockets are open")
+	return sockets, nil
+}
+
+// clientPath is the workspace-commit client beside this executable, as
+// the image installs it.
+func clientPath() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", errors.New("workspace socket client: the menagerie executable's path is unknown")
+	}
+	return filepath.Join(filepath.Dir(self), workspacesocket.ClientName), nil
 }
 
 // containers are the parts that run template hooks and initializeCommand
@@ -209,7 +281,7 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 }
 
 // newServer composes the workspace API: the container operations, create
-// and upgrade with their interviews, and the web UI embedded at build time.
+// and upgrade with their interviews, commit, and the web UI embedded at build time.
 // Template hooks run through hooks in the template's runner image; nil
 // hooks refuse every hook.
 func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) *api.Server {
@@ -236,6 +308,7 @@ func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.R
 	for name, op := range flows.Operations() {
 		operations[name] = op
 	}
+	operations[api.OperationCommit] = commits.New(commits.Options{Root: root, Remote: backupRemote(cfg), Jobs: manager}).Operation()
 	return api.New(api.Options{
 		Root:       root,
 		Status:     runtime,

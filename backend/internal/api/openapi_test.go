@@ -72,9 +72,10 @@ func TestOpenAPIEnumsAgreeWithCode(t *testing.T) {
 	for name := range ContainerOperations(nil, &fakeRuntime{}) {
 		ops = append(ops, name)
 	}
-	// The workflows package registers the interview operations under these
-	// names; its own test checks that it serves exactly them.
-	ops = append(ops, OperationCreate, OperationUpgrade)
+	// The workflows package registers the interview operations, and the
+	// commits package the commit operation, under these names; their own
+	// tests check that they serve them.
+	ops = append(ops, OperationCreate, OperationUpgrade, OperationCommit)
 	if a, b := joinSorted(schemas["JobRequest"].Properties["operation"].Enum), joinSorted(ops); a != b {
 		t.Errorf("operations documented %q served %q", a, b)
 	}

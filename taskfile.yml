@@ -64,12 +64,12 @@ tasks:
     silent: true
 
   build:
-    desc: Build the UI, then the workspace service that embeds it, then the template service, into bin/
+    desc: Build the UI, then the workspace service that embeds it and its workspace-commit client, then the template service, into bin/
     cmds:
       # The workspace service embeds web/dist, so the UI builds first.
       - task: web:build
       - mkdir -p bin
-      - CGO_ENABLED=0 go build -trimpath -o bin/menagerie ./backend/cmd/menagerie
+      - CGO_ENABLED=0 go build -trimpath -o bin/ ./backend/cmd/menagerie ./backend/cmd/workspace-commit
       - cargo build --locked --release --manifest-path template-service/Cargo.toml --target-dir '{{.CARGO_TARGET}}'
       - cp '{{.CARGO_TARGET}}/release/menagerie-template-service' bin/menagerie-template-service
 
@@ -158,7 +158,7 @@ tasks:
       - task: test:acceptance
 
   test:docker:
-    desc: Run the devcontainer runtime's and the throwaway containers' Docker suites on a disposable Docker daemon
+    desc: Run the devcontainer runtime's, the workspace socket's and the throwaway containers' Docker suites on a disposable Docker daemon
     vars:
       STATE: '{{.SCRATCH}}/docker'
       OWNER:
@@ -168,7 +168,12 @@ tasks:
       - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
       - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/devcontainer.test' ./backend/internal/devcontainer/
       - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/throwaway.test' ./backend/internal/throwaway/
-      - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/devcontainer.test' -test.v -test.count=1 -test.timeout 10m
+      # The workspace socket tests run the client inside their devcontainers.
+      - CGO_ENABLED=0 go build -trimpath -o '{{.STATE}}/workspace-commit' ./backend/cmd/workspace-commit
+      - >-
+        scripts/isolated-docker.sh run '{{.STATE}}' -c '{{.STATE}}/workspace-commit'
+        -e MENAGERIE_TEST_WORKSPACE_COMMIT=/menagerie-work/bin/workspace-commit
+        '{{.STATE}}/devcontainer.test' -test.v -test.count=1 -test.timeout 10m
       - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/throwaway.test' -test.v -test.count=1 -test.timeout 10m
 
   test:openbao:
@@ -275,7 +280,7 @@ tasks:
       - |
         scripts/isolated-docker.sh shell '{{.STATE}}' '
           set -e
-          for binary in /menagerie-work/arm64/menagerie /menagerie-work/arm64/menagerie-folders /menagerie-work/arm64/menagerie-template-service; do
+          for binary in /menagerie-work/arm64/menagerie /menagerie-work/arm64/menagerie-folders /menagerie-work/arm64/workspace-commit /menagerie-work/arm64/menagerie-template-service; do
             machine=$(od -An -t u2 -j 18 -N 2 "$binary" | tr -d " ")
             [ "$machine" = 183 ] || { echo "$binary has ELF machine $machine, not aarch64 (183)"; exit 1; }
             echo "$binary: aarch64"

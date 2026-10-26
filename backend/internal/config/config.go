@@ -77,6 +77,43 @@ type Config struct {
 	// initializeCommand and the hooks of templates without their own
 	// runner image. Absent, Menagerie's own image.
 	RunnerImage string `yaml:"runner-image"`
+	// AutoCommit commits and backs up every idle workspace that has
+	// changes, on a schedule. Absent, no commit is scheduled.
+	AutoCommit *AutoCommit `yaml:"auto-commit"`
+	// WorkspaceSocket gives each workspace's devcontainer a socket that
+	// commits and backs up its own workspace. Absent, no socket.
+	WorkspaceSocket *WorkspaceSocket `yaml:"workspace-socket"`
+}
+
+// AutoCommit is the schedule of automatic commits.
+type AutoCommit struct {
+	// Every is the time between two sweeps of the workspace root; the
+	// first is one interval after start-up.
+	Every Duration `yaml:"every"`
+}
+
+// DefaultMinInterval is the workspace socket's minimum interval when none
+// is given.
+const DefaultMinInterval = time.Minute
+
+// WorkspaceSocket configures the per-workspace sockets.
+type WorkspaceSocket struct {
+	// Folder holds one folder per workspace with its socket and client. It
+	// has the same path in the container and on the host, and belongs to
+	// the services' user.
+	Folder string `yaml:"folder"`
+	// MinInterval is the shortest time between two accepted commits of a
+	// workspace through its socket: a duration, or 0 for none. Absent,
+	// DefaultMinInterval.
+	MinInterval Duration `yaml:"min-interval"`
+}
+
+// MinIntervalValue is the minimum interval, with its default.
+func (w *WorkspaceSocket) MinIntervalValue() time.Duration {
+	if w.MinInterval == "" {
+		return DefaultMinInterval
+	}
+	return w.MinInterval.Value()
 }
 
 // Duration is a positive time span of whole hours, minutes and seconds,
@@ -125,11 +162,12 @@ type OperationLimits struct {
 	Rebuild Duration `yaml:"rebuild"`
 	Create  Duration `yaml:"create"`
 	Upgrade Duration `yaml:"upgrade"`
+	Commit  Duration `yaml:"commit"`
 }
 
 // ByName maps each operation name to its limit, empty included.
 func (o OperationLimits) ByName() map[string]Duration {
-	return map[string]Duration{"start": o.Start, "stop": o.Stop, "rebuild": o.Rebuild, "create": o.Create, "upgrade": o.Upgrade}
+	return map[string]Duration{"start": o.Start, "stop": o.Stop, "rebuild": o.Rebuild, "create": o.Create, "upgrade": o.Upgrade, "commit": o.Commit}
 }
 
 // Alerts names the webhook that receives job alerts.
@@ -267,6 +305,12 @@ type durationNodes struct {
 	Alerts *struct {
 		LongRunning yaml.Node `yaml:"long-running"`
 	} `yaml:"alerts"`
+	AutoCommit *struct {
+		Every yaml.Node `yaml:"every"`
+	} `yaml:"auto-commit"`
+	WorkspaceSocket *struct {
+		MinInterval yaml.Node `yaml:"min-interval"`
+	} `yaml:"workspace-socket"`
 }
 
 // givenEmpty reports the duration fields given with no value, such as
@@ -302,6 +346,12 @@ func givenEmpty(data []byte) []error {
 	}
 	if a := doc.Alerts; a != nil {
 		check("alerts.long-running", &a.LongRunning)
+	}
+	if a := doc.AutoCommit; a != nil {
+		check("auto-commit.every", &a.Every)
+	}
+	if w := doc.WorkspaceSocket; w != nil {
+		check("workspace-socket.min-interval", &w.MinInterval)
 	}
 	return errs
 }
@@ -418,6 +468,16 @@ func (c *Config) validate() error {
 	if c.Alerts != nil {
 		errs = append(errs, c.Alerts.validate()...)
 	}
+	if c.AutoCommit != nil {
+		if c.AutoCommit.Every == "" {
+			errs = append(errs, errors.New("auto-commit.every is required"))
+		} else if err := c.AutoCommit.Every.validate("auto-commit.every"); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.WorkspaceSocket != nil {
+		errs = append(errs, c.WorkspaceSocket.validate(c)...)
+	}
 	names := map[string]int{}
 	for i, name := range c.LocalEnv {
 		if !envNamePattern.MatchString(name) {
@@ -453,6 +513,35 @@ func (l *JobLimits) validate() []error {
 		}
 		if err := l.Phases[name].validate("job-limits.phases." + name); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+func (w *WorkspaceSocket) validate(c *Config) []error {
+	var errs []error
+	switch folder := w.Folder; {
+	case folder == "":
+		errs = append(errs, errors.New("workspace-socket.folder is required"))
+	case !filepath.IsAbs(folder) || filepath.Clean(folder) != folder || folder == "/":
+		errs = append(errs, errors.New("workspace-socket.folder must be an absolute clean folder other than /"))
+	case strings.Contains(folder, ","):
+		// A Compose mount is comma-separated fields.
+		errs = append(errs, errors.New("workspace-socket.folder must not hold a comma"))
+	default:
+		for _, other := range []struct{ field, path string }{
+			{"workspace-root", c.WorkspaceRoot},
+			{"wyrwood-directory", c.WyrwoodDirectory},
+			{"template-service.candidate-folder", c.TemplateService.CandidateFolder},
+		} {
+			if filepath.IsAbs(other.path) && (within(other.path, folder) || within(folder, other.path)) {
+				errs = append(errs, fmt.Errorf("workspace-socket.folder must be neither inside %s nor contain it", other.field))
+			}
+		}
+	}
+	if w.MinInterval != "0" {
+		if err := w.MinInterval.validate("workspace-socket.min-interval"); err != nil {
+			errs = append(errs, fmt.Errorf("%w, or 0 for none", err))
 		}
 	}
 	return errs

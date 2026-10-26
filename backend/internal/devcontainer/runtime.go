@@ -18,9 +18,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 
+	"github.com/docker/docker/api/types/mount"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/wyrd-company/devcontainer-builder/pkg/builder"
 	"github.com/wyrd-company/devcontainer-builder/pkg/buildkit"
@@ -43,6 +45,16 @@ const (
 	StateRunning     = "running"
 	StateStopped     = "stopped"
 	StateNoContainer = "no-container"
+)
+
+// The workspace socket in a workspace's container: the socket folder's
+// folder of the workspace is mounted read-only at WorkspaceSocketTarget,
+// and WorkspaceSocketEnv names the socket in it.
+const (
+	WorkspaceSocketTarget = "/run/menagerie"
+	WorkspaceSocketName   = "workspace.sock"
+	WorkspaceSocketEnv    = "MENAGERIE_WORKSPACE_SOCKET"
+	WorkspaceSocketPath   = WorkspaceSocketTarget + "/" + WorkspaceSocketName
 )
 
 // Status is a workspace's container state.
@@ -82,6 +94,13 @@ type Options struct {
 	Containers throwaway.Containers
 	// RunnerImage returns the image initializeCommand runs in.
 	RunnerImage func(ctx context.Context) (string, error)
+	// WorkspaceSocket returns the host folder that holds the workspace's
+	// socket, creating the socket when it is missing. The folder is
+	// mounted read-only at WorkspaceSocketTarget on each rebuild and on
+	// each start that creates the container or reuses one that has the
+	// mount; a start that reuses a container without it leaves the
+	// container as it is. Nil mounts nothing.
+	WorkspaceSocket func(folder string) (string, error)
 }
 
 // Runtime operates workspace devcontainers on one Docker Engine.
@@ -144,6 +163,10 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 		fmt.Fprintf(p.Log(""), "localEnv %s is not in local-env; it resolves to its default value\n", name)
 	}
 	env := local.values
+	socket, err := r.workspaceSocket(dc, folder, p)
+	if err != nil {
+		return err
+	}
 	if err := r.initialize(ctx, dc, folder, local.process, env, p); err != nil {
 		return err
 	}
@@ -153,7 +176,17 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
-	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx)}
+	held := false
+	if socket != "" && !replace {
+		if socket, err = r.keepContainer(ctx, folder, socket, p); err != nil {
+			return err
+		}
+		held = socket == ""
+	}
+	if socket != "" {
+		nameSocket(dc)
+	}
+	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx), socket: socket, socketHeld: held}
 	switch dc.Mode() {
 	case spec.ModeSingle:
 		err = r.upSingle(ctx, op, replace)
@@ -179,6 +212,85 @@ type operation struct {
 	p      Progress
 	lock   *features.LockfileState
 	auth   RegistryAuth
+	// socket is the host folder mounted at WorkspaceSocketTarget; empty
+	// mounts none.
+	socket string
+	// socketHeld is set when a start leaves the socket out to keep a
+	// container created without it.
+	socketHeld bool
+}
+
+// workspaceSocket ensures the workspace's socket and returns the folder to
+// mount, or "" for none. Compose reads a mount as comma-separated fields
+// with surrounding spaces trimmed, so a folder it would misread is not
+// mounted.
+func (r *Runtime) workspaceSocket(dc *spec.DevContainer, folder string, p Progress) (string, error) {
+	if r.opts.WorkspaceSocket == nil {
+		return "", nil
+	}
+	source, err := r.opts.WorkspaceSocket(folder)
+	if err != nil {
+		return "", err
+	}
+	if dc.Mode() == spec.ModeCompose && (strings.Contains(source, ",") || strings.TrimSpace(source) != source) {
+		fmt.Fprintln(p.Log(""), "the workspace socket is not mounted: Compose cannot mount a folder whose name holds a comma or ends in a space")
+		return "", nil
+	}
+	return source, nil
+}
+
+// Notes for the job console about a start that leaves out the workspace
+// socket: noteSocketAtRebuild before Up, when the container exists without
+// it; noteCreatedWithoutSocket after Up, when Up created or recreated the
+// container anyway, for a change of the definition.
+const (
+	noteSocketAtRebuild      = "the workspace socket attaches at the next rebuild: this container was created without it, and adding it would recreate the container"
+	noteCreatedWithoutSocket = "this start created the container again, without the workspace socket; the socket attaches at the next rebuild"
+)
+
+// keepContainer returns the socket folder to mount on a start, or "" when
+// the workspace's container exists without the socket mount. Adding a
+// mount or a variable changes the configuration devcontainer-builder
+// compares, so Compose would recreate the primary; the start keeps the
+// container, and the socket attaches at the next rebuild. A container
+// that has the mount keeps getting it, so its configuration is unchanged.
+//
+// devcontainer-builder exposes no way to learn before Up whether Up will
+// recreate the container, so a start whose definition changed in another
+// way still recreates it, without the socket; noteCreatedWithoutSocket
+// tells the console so.
+func (r *Runtime) keepContainer(ctx context.Context, folder, socket string, p Progress) (string, error) {
+	found, err := hostdocker.New(r.client, hostdocker.Options{}).Inspect(ctx, folder)
+	if errors.Is(err, hostdocker.ErrContainerNotFound) {
+		return socket, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	info, err := r.client.ContainerInspect(ctx, found.ID)
+	if err != nil {
+		return "", fmt.Errorf("inspect container %s: %w", shortID(found.ID), err)
+	}
+	for _, m := range info.Mounts {
+		if m.Destination == WorkspaceSocketTarget {
+			return socket, nil
+		}
+	}
+	fmt.Fprintln(p.Log(""), noteSocketAtRebuild)
+	return "", nil
+}
+
+// nameSocket names the socket in the container's environment unless the
+// definition sets that name itself. Only the definition in memory
+// changes, not the file.
+func nameSocket(dc *spec.DevContainer) {
+	if _, set := dc.ContainerEnv[WorkspaceSocketEnv]; set {
+		return
+	}
+	if dc.ContainerEnv == nil {
+		dc.ContainerEnv = map[string]any{}
+	}
+	dc.ContainerEnv[WorkspaceSocketEnv] = WorkspaceSocketPath
 }
 
 // featureLockfile reads the definition's feature lockfile snapshot, as
@@ -263,7 +375,15 @@ func (r *Runtime) upSingle(ctx context.Context, op *operation, replace bool) err
 	if built != nil {
 		req.Features = built.Features
 	}
+	if op.socket != "" {
+		req.Mounts = append(req.Mounts, mount.Mount{Type: mount.TypeBind, Source: op.socket, Target: WorkspaceSocketTarget, ReadOnly: true})
+	}
 	res, err := r.dockerHost(p, op.auth).Up(ctx, req)
+	// Up can create the container and then fail, in a lifecycle command
+	// for example; its result still says so.
+	if res != nil {
+		op.noteCreated(res.CreatedThisCall)
+	}
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
 	}
@@ -295,12 +415,28 @@ func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) er
 	if primary.BuildResult != nil {
 		req.Features = primary.BuildResult.Features
 	}
+	if op.socket != "" {
+		req.Mounts = append(req.Mounts, "type=bind,source="+op.socket+",target="+WorkspaceSocketTarget+",readonly")
+	}
 	res, err := r.composeHost(p, op.auth).Up(ctx, req)
+	// Up can recreate the primary and then fail, in a lifecycle command
+	// for example; its result still says so.
+	if res != nil {
+		op.noteCreated(slices.Contains(res.CreatedThisCall, dc.Service) || slices.Contains(res.RecreatedThisCall, dc.Service))
+	}
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
 	}
 	fmt.Fprintf(p.Log(""), "compose project %s up (primary %s, created %v, recreated %v)\n", res.ProjectName, shortID(res.PrimaryContainerID), res.CreatedThisCall, res.RecreatedThisCall)
 	return nil
+}
+
+// noteCreated tells the console when Up created or recreated the
+// container on a start that left the socket out.
+func (op *operation) noteCreated(created bool) {
+	if created && op.socketHeld {
+		fmt.Fprintln(op.p.Log(""), noteCreatedWithoutSocket)
+	}
 }
 
 // Stop stops the workspace's container. The mode comes from the existing

@@ -17,6 +17,7 @@ const operationVerb: Record<string, string> = {
   start: "Start",
   stop: "Stop",
   rebuild: "Rebuild",
+  commit: "Commit",
 };
 
 /** Live phases, log lines and the outcome of one job. */

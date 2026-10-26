@@ -79,6 +79,11 @@ func TestDeploymentExampleAgreesWithTheImage(t *testing.T) {
 	if src, ok := mounts[cfg.WorkspaceRoot]; !ok || src != cfg.WorkspaceRoot {
 		t.Errorf("workspace-root %s is mounted from %q, not from the same host path", cfg.WorkspaceRoot, src)
 	}
+	if cfg.WorkspaceSocket == nil {
+		t.Error("the example has no workspace-socket")
+	} else if src, ok := mounts[cfg.WorkspaceSocket.Folder]; !ok || src != cfg.WorkspaceSocket.Folder {
+		t.Errorf("workspace-socket.folder %s is mounted from %q, not from the same host path", cfg.WorkspaceSocket.Folder, src)
+	}
 	// Wyrwood names a container's consumer directory after the container
 	// under its consumer root, /run/wyrwood/containers by default.
 	if src, ok := mounts[cfg.WyrwoodDirectory]; !ok || src != "/run/wyrwood/containers/"+svc.ContainerName || svc.ContainerName == "" {

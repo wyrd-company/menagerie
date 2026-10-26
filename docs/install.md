@@ -105,6 +105,7 @@ edit both files.
 | Mount or setting | Why |
 | --- | --- |
 | The workspace root at the same path on the host and in the container | Devcontainers bind-mount their workspace folder. The host daemon resolves that path, so it must be the host path. Set `MENAGERIE_WORKSPACE_ROOT` and `workspace-root` to the same value. |
+| The workspace socket folder at the same path on the host and in the container | Each devcontainer mounts its own socket folder from it, so it must be the host path. Set `MENAGERIE_WORKSPACE_SOCKETS` and `workspace-socket.folder` to the same value; leave both out to run without [workspace sockets](configuration.md#workspace-sockets). |
 | `/var/run/docker.sock` | The workspace service drives the host Docker daemon: devcontainers, and the throwaway containers that run template hooks and `initializeCommand`. |
 | The Wyrwood consumer directory at `/run/wyrwood` | `ssh-agent.sock` and `vault.sock`. `wyrwood-directory` names the mount target. |
 | `SSH_AUTH_SOCK=/run/wyrwood/ssh-agent.sock` | Toha's Git transport runs the image's `ssh` client with this agent. |
@@ -112,6 +113,14 @@ edit both files.
 | A volume at `/var/lib/menagerie` | Toha's template cache, the template service's session key, the services' home and the folder Toha builds an upgrade's candidate in. Without it they are lost when the container is recreated. |
 | `restart: unless-stopped` | Docker starts Menagerie after a host restart, and restarts it after either service stops. |
 | Port `8080` | The web UI and workspace API. Publish it on a private address only. |
+
+Create the socket folder before the first start, owned by the workspace
+root's owner; Docker would create a missing one owned by root, and
+Menagerie then refuses to start:
+
+```sh
+sudo install -d -m 0700 -o "$(stat -c %u /srv/menagerie/workspaces)" -g "$(stat -c %g /srv/menagerie/workspaces)" /srv/menagerie/sockets
+```
 
 ```sh
 cp -r deploy ~/menagerie && cd ~/menagerie
@@ -211,3 +220,8 @@ network. Keep these limits in place:
   to be told.
 - A backup is a force-push of the workspace's own branch. Commits pushed to
   that branch from elsewhere are lost at the next backup.
+- With [workspace sockets](configuration.md#workspace-sockets), anything in
+  a devcontainer can commit and back up its own workspace, and nothing
+  more: the socket names no other workspace and its replies carry no
+  message. Keep `min-interval` above `0` so a loop cannot fill the backup
+  branch.
