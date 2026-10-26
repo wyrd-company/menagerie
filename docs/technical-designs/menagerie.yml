@@ -417,7 +417,8 @@ proposed-design:
     before a hop is sent, so the workspace service installs a transport
     whose check refuses every redirect of a transfer with credentials and
     leaves others to go-git's own policy. The remote's text reaches the job
-    console line by line with the URL and the token redacted. The
+    console line by line with the URL and the token, raw and in every
+    base64 form of its basic-authentication pair, redacted. The
     template service asks for a template's token on the hook runner socket
     (see credential-route). Every failure is a fixed reason, with at most a
     status code: no error carries a token, a JWT, a signature, a URL, a

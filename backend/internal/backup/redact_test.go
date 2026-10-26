@@ -10,6 +10,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 )
 
@@ -176,4 +179,86 @@ func TestTheRemotesTextNamesNeitherTheTokenNorTheURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("fetch", fetched.String())
+}
+
+// TestATransferRedactsEveryBase64FormOfItsCredentials: the remote can
+// write user:token in base64 or base64url, padded or not. "x-access-token:"
+// is 15 bytes, so a '?' third in the token ends a 3-byte group and encodes
+// as '/' in base64 and '_' in base64url; one or two more bytes give two
+// or one padding characters.
+func TestATransferRedactsEveryBase64FormOfItsCredentials(t *testing.T) {
+	for padding, token := range map[int]string{2: "ab?c", 1: "ab?cd"} {
+		pair := []byte("x-access-token:" + token)
+		forms := map[string]string{
+			"padded":       base64.StdEncoding.EncodeToString(pair),
+			"unpadded":     base64.RawStdEncoding.EncodeToString(pair),
+			"url padded":   base64.URLEncoding.EncodeToString(pair),
+			"url unpadded": base64.RawURLEncoding.EncodeToString(pair),
+		}
+		if !strings.HasSuffix(forms["padded"], strings.Repeat("=", padding)) || forms["padded"] == forms["url padded"] {
+			t.Fatalf("token %q does not exercise padding %d and both alphabets", token, padding)
+		}
+		for name, form := range forms {
+			var out bytes.Buffer
+			auth := func(context.Context, string) (transport.AuthMethod, func(), error) {
+				return &githttp.BasicAuth{Username: "x-access-token", Password: token}, func() {}, nil
+			}
+			s, err := (&Remote{URL: "https://git.example.invalid/o/r.git", Auth: auth}).open(context.Background(), &out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = s.progress.Write([]byte("auth " + form + "\n"))
+			s.close()
+			if out.String() != "auth [redacted]\n" {
+				t.Errorf("padding %d, %s: %q", padding, name, out.String())
+			}
+		}
+	}
+}
+
+// TestTheRedactorReplacesAValueThatContainsAnotherWhole: the longest
+// match wins at each position, in any order the values come in.
+func TestTheRedactorReplacesAValueThatContainsAnotherWhole(t *testing.T) {
+	const url = "https://git.example.invalid/o/r.git"
+	for _, values := range [][]string{{url, url + "-suffix"}, {url + "-suffix", url}} {
+		var out bytes.Buffer
+		r := newRedactor(&out, values...)
+		_, _ = r.Write([]byte(url + " " + url + "-suffix\n"))
+		_ = r.Close()
+		if out.String() != "[redacted] [redacted]\n" {
+			t.Errorf("values %q: %q", values, out.String())
+		}
+	}
+}
+
+// TestTheRedactorNeverReadsItsReplacementAgain: a value that occurs in
+// the replacement text stays out of it, in a line and in a long line
+// written in parts.
+func TestTheRedactorNeverReadsItsReplacementAgain(t *testing.T) {
+	var out bytes.Buffer
+	r := newRedactor(&out, sampleToken, "dact")
+	_, _ = r.Write([]byte(sampleToken + " dact\n"))
+	long := strings.Repeat("x", maxLine)
+	_, _ = r.Write([]byte(long + sampleToken + "zz"))
+	_ = r.Close()
+	if want := "[redacted] [redacted]\n" + long + "[redacted]zz"; out.String() != want {
+		t.Fatalf("%q", out.String()[max(0, out.Len()-60):])
+	}
+}
+
+// TestTheRedactorHoldsBackForItsLongestValue: past the bound, a longer
+// value whose start has arrived waits for its end, whatever the order of
+// the values.
+func TestTheRedactorHoldsBackForItsLongestValue(t *testing.T) {
+	long := strings.Repeat("x", maxLine)
+	for _, values := range [][]string{{sampleToken, "dact"}, {"dact", sampleToken}} {
+		var out bytes.Buffer
+		r := newRedactor(&out, values...)
+		_, _ = r.Write([]byte(long + sampleToken[:10]))
+		_, _ = r.Write([]byte(sampleToken[10:] + "zz"))
+		_ = r.Close()
+		if out.String() != long+"[redacted]zz" {
+			t.Errorf("values %q: token kept %t", values, strings.Contains(out.String(), sampleToken))
+		}
+	}
 }

@@ -2,6 +2,8 @@ package gitclient
 
 import (
 	"context"
+	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -60,5 +62,50 @@ func TestInstallCoversHTTPAndHTTPS(t *testing.T) {
 	Install(&http.Client{})
 	if client.Protocols["http"] != client.Protocols["https"] {
 		t.Fatal("Install left one scheme on another transport")
+	}
+}
+
+// TestTheInstalledTransportTakesEndpointOptions: sessions with a CA
+// bundle, with TLS verification off and through a proxy reach the server,
+// as with go-git's own default client. Each server answers 404, so
+// transport.ErrRepositoryNotFound means the request arrived.
+func TestTheInstalledTransportTakesEndpointOptions(t *testing.T) {
+	tlsServer := httptest.NewTLSServer(http.NotFoundHandler())
+	defer tlsServer.Close()
+	bundle := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsServer.Certificate().Raw})
+	var proxied atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer proxy.Close()
+	cases := map[string]func(ep *transport.Endpoint){
+		"CA bundle":    func(ep *transport.Endpoint) { ep.CaBundle = bundle },
+		"insecure TLS": func(ep *transport.Endpoint) { ep.InsecureSkipTLS = true },
+		"proxy": func(ep *transport.Endpoint) {
+			ep.Protocol, ep.Host, ep.Port = "http", "repository.example.invalid", 80
+			ep.Proxy = transport.ProxyOptions{URL: proxy.URL}
+		},
+	}
+	for name, set := range cases {
+		ep, err := transport.NewEndpoint(tlsServer.URL + "/repo.git")
+		if err != nil {
+			t.Fatal(err)
+		}
+		set(ep)
+		c, err := client.NewClient(ep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.NewUploadPackSession(ep, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, err := s.AdvertisedReferencesContext(context.Background()); !errors.Is(err, transport.ErrRepositoryNotFound) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if proxied.Load() == 0 {
+		t.Error("the proxy was not used")
 	}
 }

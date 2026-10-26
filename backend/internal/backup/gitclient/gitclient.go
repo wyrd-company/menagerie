@@ -49,6 +49,11 @@ func Transport(c *http.Client) transport.Transport {
 	if c != nil {
 		cl = *c
 	}
+	// go-git clones this *http.Transport for an endpoint's TLS and proxy
+	// options, so it must be set, as go-git's own default client sets it.
+	if cl.Transport == nil {
+		cl.Transport = http.DefaultTransport
+	}
 	cl.CheckRedirect = refuseMarked
 	return githttp.NewClient(&cl)
 }

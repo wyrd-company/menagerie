@@ -185,7 +185,7 @@ func (r *Remote) open(ctx context.Context, progress io.Writer) (*transfer, error
 		t.ctx = gitclient.WithoutRedirects(ctx)
 	}
 	if basic, ok := t.auth.(*githttp.BasicAuth); ok {
-		values = append(values, basic.Password, base64.StdEncoding.EncodeToString([]byte(basic.Username+":"+basic.Password)))
+		values = append(values, basicForms(basic.Username, basic.Password)...)
 	}
 	t.progress = newRedactor(progress, values...)
 	return t, nil
@@ -195,4 +195,18 @@ func (r *Remote) open(ctx context.Context, progress io.Writer) (*transfer, error
 func (t *transfer) close() {
 	_ = t.progress.Close()
 	t.release()
+}
+
+// basicForms are the forms a remote can write HTTP basic credentials in:
+// the password, and user:password in base64 and base64url, padded and
+// unpadded.
+func basicForms(username, password string) []string {
+	pair := []byte(username + ":" + password)
+	return []string{
+		password,
+		base64.StdEncoding.EncodeToString(pair),
+		base64.RawStdEncoding.EncodeToString(pair),
+		base64.URLEncoding.EncodeToString(pair),
+		base64.RawURLEncoding.EncodeToString(pair),
+	}
 }
