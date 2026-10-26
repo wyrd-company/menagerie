@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -33,6 +34,23 @@ type engine struct {
 	// onCreate answers a create; register adds the container and returns
 	// its id. Nil registers it and replies with its id.
 	onCreate func(w http.ResponseWriter, r *http.Request, register func() string)
+	// fail maps a stage to the message the Engine fails it with: inspect,
+	// pull, pull-stream, create, copy, attach, start, wait, wait-result,
+	// list or remove.
+	fail map[string]string
+}
+
+// failing answers the request with the stage's failure, if it has one.
+func (e *engine) failing(w http.ResponseWriter, stage string, status int) bool {
+	message, ok := e.fail[stage]
+	if !ok {
+		return false
+	}
+	body, _ := json.Marshal(map[string]string{"message": message})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+	return true
 }
 
 var apiVersion = regexp.MustCompile(`^/v[0-9.]+`)
@@ -56,6 +74,9 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := apiVersion.ReplaceAllString(r.URL.Path, "")
 	switch {
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/images/"):
+		if e.failing(w, "inspect", http.StatusInternalServerError) {
+			return
+		}
 		e.mu.Lock()
 		pulled := e.pulled
 		e.mu.Unlock()
@@ -65,11 +86,22 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(`{"Id":"sha256:sample"}`))
 	case r.Method == http.MethodPost && path == "/images/create":
+		if e.failing(w, "pull", http.StatusInternalServerError) {
+			return
+		}
+		if message, ok := e.fail["pull-stream"]; ok {
+			body, _ := json.Marshal(map[string]any{"error": message, "errorDetail": map[string]string{"message": message}})
+			_, _ = w.Write(append(body, '\n'))
+			return
+		}
 		e.mu.Lock()
 		e.pulled = true
 		e.mu.Unlock()
 		_, _ = w.Write([]byte(`{"status":"pulled"}` + "\n"))
 	case r.Method == http.MethodPost && path == "/containers/create":
+		if e.failing(w, "create", http.StatusBadRequest) {
+			return
+		}
 		var req container.CreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"message":"bad create"}`, http.StatusBadRequest)
@@ -91,6 +123,9 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = fmt.Fprintf(w, `{"Id":%q}`, register())
 	case r.Method == http.MethodGet && path == "/containers/json":
+		if e.failing(w, "list", http.StatusInternalServerError) {
+			return
+		}
 		args, err := filters.FromJSON(r.URL.Query().Get("filters"))
 		if err != nil {
 			http.Error(w, `{"message":"bad filters"}`, http.StatusBadRequest)
@@ -105,7 +140,42 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		e.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(list)
+	case r.Method == http.MethodPut && strings.HasSuffix(path, "/archive"):
+		if e.failing(w, "copy", http.StatusInternalServerError) {
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/attach"):
+		if e.failing(w, "attach", http.StatusInternalServerError) {
+			return
+		}
+		// The command writes nothing: the raw stream ends at once.
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		_, _ = buf.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+		_ = buf.Flush()
+		_ = conn.Close()
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/wait"):
+		if e.failing(w, "wait", http.StatusInternalServerError) {
+			return
+		}
+		if message, ok := e.fail["wait-result"]; ok {
+			_ = json.NewEncoder(w).Encode(map[string]any{"StatusCode": 1, "Error": map[string]string{"Message": message}})
+			return
+		}
+		_, _ = w.Write([]byte(`{"StatusCode":0}`))
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/start"):
+		if e.failing(w, "start", http.StatusBadRequest) {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/containers/"):
+		if e.failing(w, "remove", http.StatusInternalServerError) {
+			return
+		}
 		id := strings.TrimPrefix(path, "/containers/")
 		e.mu.Lock()
 		_, ok := e.live[id]

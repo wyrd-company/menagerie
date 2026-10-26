@@ -151,3 +151,29 @@ func TestAHungHookEndsWithItsTimedOutJob(t *testing.T) {
 		t.Fatal("the folder changed after the job ended")
 	}
 }
+
+// TestACapturedValueStaysOutOfAFailedJobInAThrowawayContainer runs the
+// leak templates' hooks in throwaway containers: each job fails with its
+// template service kind, and neither its error nor its events carry the
+// captured value. The linked working directory exists for this process
+// but not in the container.
+func TestACapturedValueStaysOutOfAFailedJobInAThrowawayContainer(t *testing.T) {
+	client, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pull(t, client, hookImage)
+	a := newAcceptWith(t, &fakeRuntime{}, acceptOptions{containers: testContainers(t, client), image: hookImage})
+	for name, kind := range leakKinds {
+		t.Run(name, func(t *testing.T) {
+			job, _ := a.drive(t, "create", name, name, map[string]any{"label": "x"})
+			evidence(t, job)
+			noCapturedValue(t, job, kind)
+		})
+	}
+	t.Run("leaks", func(t *testing.T) {
+		job, _ := a.drive(t, "create", "leaky", "leaks", map[string]any{"label": "x"})
+		evidence(t, job)
+		noCapturedValue(t, job, "(hook-failed)")
+	})
+}

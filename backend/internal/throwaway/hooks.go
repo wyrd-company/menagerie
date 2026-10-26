@@ -215,14 +215,67 @@ type hookReply struct {
 	Stderr   *[]byte `json:"stderr"`
 }
 
+// hookError is a refused hook. Its message is a fixed sentence: never a
+// path, an argument, a captured stream or an error's own text.
 type hookError struct {
 	status  int
 	kind    string
 	message string
 }
 
-func refuse(status int, kind, format string, args ...any) *hookError {
-	return &hookError{status: status, kind: kind, message: fmt.Sprintf(format, args...)}
+func refuse(status int, kind, message string) *hookError {
+	return &hookError{status: status, kind: kind, message: message}
+}
+
+// describe is the text of a failed run that may leave this package: a
+// *RunError's, which is fixed per stage, else a fixed sentence per kind. A
+// Containers other than *Docker can fail with any text.
+func describe(err error) string {
+	var runErr *RunError
+	var imageErr *ImageError
+	switch {
+	case errors.As(err, &imageErr):
+		return "no runner image is available for the hook"
+	case errors.As(err, &runErr):
+		return runErr.Error()
+	}
+	return "the hook's throwaway container failed"
+}
+
+// errHookDir refuses a working directory that is not a folder inside the
+// workspace folder.
+var errHookDir = refuse(http.StatusBadRequest, KindInvalidHook, "the hook's working directory is not a folder in the workspace folder")
+
+// workingDir is the hook's working directory: cwd resolved inside folder
+// with symbolic links followed, named under folder as the container mounts
+// it. A cwd that is missing, not a folder, or resolves outside folder is
+// refused before any container exists.
+func workingDir(folder string, cwd *string) (string, *hookError) {
+	rel := ""
+	if cwd != nil {
+		rel = *cwd
+	}
+	if rel != "" && !filepath.IsLocal(rel) {
+		return "", refuse(http.StatusBadRequest, KindInvalidHook, "the hook's working directory must be a relative path inside the workspace folder")
+	}
+	root, err := filepath.EvalSymlinks(folder)
+	if err != nil {
+		return "", errHookDir
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(root, rel))
+	if err != nil {
+		return "", errHookDir
+	}
+	inside, err := filepath.Rel(root, resolved)
+	if err != nil || (inside != "." && !filepath.IsLocal(inside)) {
+		return "", errHookDir
+	}
+	// The Engine would create a missing working directory as root; a
+	// hook's working directory must exist, as it must for a process.
+	if info, err := os.Stat(resolved); err != nil || !info.IsDir() {
+		return "", errHookDir
+	}
+	return filepath.Join(folder, inside), nil
 }
 
 // ServeHTTP runs one hook. No reply, error or log line carries a captured
@@ -266,17 +319,9 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 	if herr != nil {
 		return nil, herr
 	}
-	dir := g.job.Folder
-	if req.Cwd != nil && *req.Cwd != "" {
-		if !filepath.IsLocal(*req.Cwd) {
-			return nil, refuse(http.StatusBadRequest, KindInvalidHook, "the hook's working directory must be a relative path inside the workspace folder")
-		}
-		dir = filepath.Join(dir, *req.Cwd)
-	}
-	// The Engine would create a missing working directory as root; a
-	// hook's working directory must exist, as it must for a process.
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return nil, refuse(http.StatusBadRequest, KindInvalidHook, "the hook's working directory is not a folder in the workspace folder")
+	dir, herr := workingDir(g.job.Folder, req.Cwd)
+	if herr != nil {
+		return nil, herr
 	}
 	// The hook stops when the template service hangs up or the grant is
 	// revoked, which the job's cancellation does.
@@ -293,7 +338,7 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 			return nil, refuse(http.StatusConflict, KindHookCancelled, "the job was cancelled; the hook did not run")
 		}
 		g.recordImageFailure(err)
-		return nil, refuse(http.StatusServiceUnavailable, KindRunnerUnavailable, "%v", err)
+		return nil, refuse(http.StatusServiceUnavailable, KindRunnerUnavailable, describe(err))
 	}
 	console := g.job.Log("hook: ")
 	var stdout, stderr bytes.Buffer
@@ -313,9 +358,9 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 			return nil, refuse(http.StatusConflict, KindHookCancelled, "the job was cancelled; the hook's container was removed")
 		case errors.As(err, &imageErr):
 			g.recordImageFailure(err)
-			return nil, refuse(http.StatusServiceUnavailable, KindRunnerUnavailable, "%v", err)
+			return nil, refuse(http.StatusServiceUnavailable, KindRunnerUnavailable, describe(err))
 		}
-		return nil, refuse(http.StatusInternalServerError, KindHookContainer, "the hook's container failed: %v", err)
+		return nil, refuse(http.StatusInternalServerError, KindHookContainer, describe(err))
 	}
 	reply := &hookReply{ExitCode: code, Success: code == 0}
 	// A captured stream is never nil, so an empty one is "" and not null.

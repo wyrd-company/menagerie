@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -138,6 +139,9 @@ type ImageError struct {
 	Err   error
 }
 
+// Error names the image and why it is unavailable. Err is a *RunError, a
+// registry credential error or a reason Menagerie chose, never the
+// Engine's own message.
 func (e *ImageError) Error() string {
 	if e.Image == "" {
 		return "runner image unavailable: " + e.Err.Error()
@@ -146,7 +150,91 @@ func (e *ImageError) Error() string {
 }
 func (e *ImageError) Unwrap() error { return e.Err }
 
-// Run runs c in a new container and removes it.
+// Stage is one step of a throwaway container's life.
+type Stage string
+
+// Stages of a throwaway container.
+const (
+	StageInspect Stage = "inspect"
+	StagePull    Stage = "pull"
+	StageCreate  Stage = "create"
+	StageCopy    Stage = "copy"
+	StageAttach  Stage = "attach"
+	StageStart   Stage = "start"
+	StageWait    Stage = "wait"
+	StageRemove  Stage = "remove"
+	StageList    Stage = "list"
+)
+
+var stageText = map[Stage]string{
+	StageInspect: "the runner image could not be inspected",
+	StagePull:    "the runner image could not be pulled",
+	StageCreate:  "the throwaway container could not be created",
+	StageCopy:    "the template could not be copied into the throwaway container",
+	StageAttach:  "the throwaway container's output could not be attached",
+	StageStart:   "the throwaway container could not start",
+	StageWait:    "the throwaway container's exit could not be read",
+	StageRemove:  "the throwaway container could not be removed; Menagerie removes it when it next starts",
+	StageList:    "the throwaway containers could not be listed",
+}
+
+// RunError is a failed stage of a throwaway container. Its text is fixed
+// per stage and the Engine error's class: the Engine's own message can
+// name the command, its working directory or its output, so it never
+// leaves this package.
+type RunError struct {
+	Stage Stage
+	// Class is the Engine error's class, such as not-found or
+	// invalid-argument.
+	Class string
+	// Container is the short id of the container, when one exists.
+	Container string
+}
+
+func (e *RunError) Error() string {
+	if e.Container != "" {
+		return fmt.Sprintf("%s (container %s, %s)", stageText[e.Stage], e.Container, e.Class)
+	}
+	return fmt.Sprintf("%s (%s)", stageText[e.Stage], e.Class)
+}
+
+// failed is the RunError of stage for err, which it reads only for its
+// class.
+func failed(stage Stage, err error, id string) *RunError {
+	return &RunError{Stage: stage, Class: class(err), Container: shortID(id)}
+}
+
+// class names the Engine error class of err.
+func class(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled) || cerrdefs.IsCanceled(err):
+		return "cancelled"
+	case errors.Is(err, context.DeadlineExceeded) || cerrdefs.IsDeadlineExceeded(err):
+		return "deadline-exceeded"
+	case cerrdefs.IsNotFound(err):
+		return "not-found"
+	case cerrdefs.IsInvalidArgument(err):
+		return "invalid-argument"
+	case cerrdefs.IsConflict(err):
+		return "conflict"
+	case cerrdefs.IsUnauthorized(err):
+		return "unauthorized"
+	case cerrdefs.IsPermissionDenied(err):
+		return "permission-denied"
+	case cerrdefs.IsUnavailable(err):
+		return "unavailable"
+	case cerrdefs.IsNotImplemented(err):
+		return "not-implemented"
+	case cerrdefs.IsInternal(err):
+		return "internal"
+	case dockerclient.IsErrConnectionFailed(err):
+		return "connection-failed"
+	}
+	return "unknown"
+}
+
+// Run runs c in a new container and removes it. Every error it returns is
+// a *RunError, an *ImageError, or a fixed sentence.
 func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	if len(c.Argv) == 0 || c.Argv[0] == "" {
 		return -1, errors.New("the command is empty")
@@ -157,7 +245,7 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	}
 	id, err := randomID()
 	if err != nil {
-		return -1, err
+		return -1, errors.New("no random container id could be drawn")
 	}
 	labels := map[string]string{}
 	for k, v := range d.opts.Labels {
@@ -191,7 +279,7 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	cancelCreate()
 	if err != nil {
 		// Without a reply the Engine may still have created it.
-		return -1, errors.Join(fmt.Errorf("create the container: %w", err), d.removeLabelled(ctx, id))
+		return -1, errors.Join(failed(StageCreate, err, ""), d.removeLabelled(ctx, id))
 	}
 	defer func() {
 		if rerr := d.remove(ctx, created.ID); rerr != nil {
@@ -205,7 +293,7 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	}
 	attached, err := d.client.ContainerAttach(ctx, created.ID, container.AttachOptions{Stream: true, Stdout: true, Stderr: true})
 	if err != nil {
-		return -1, fmt.Errorf("attach to the container: %w", err)
+		return -1, failed(StageAttach, err, created.ID)
 	}
 	copied := make(chan struct{})
 	go func() {
@@ -219,7 +307,7 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	}()
 	waited, waitErr := d.client.ContainerWait(ctx, created.ID, container.WaitConditionNextExit)
 	if err := d.client.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
-		return -1, fmt.Errorf("start the container: %w", err)
+		return -1, failed(StageStart, err, created.ID)
 	}
 	select {
 	case res := <-waited:
@@ -227,14 +315,14 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 		// has exited.
 		<-copied
 		if res.Error != nil {
-			return -1, fmt.Errorf("wait for the container: %s", res.Error.Message)
+			return -1, &RunError{Stage: StageWait, Class: "unknown", Container: shortID(created.ID)}
 		}
 		return int(res.StatusCode), nil
 	case err := <-waitErr:
 		if ctx.Err() != nil {
 			return -1, fmt.Errorf("cancelled: %w", context.Cause(ctx))
 		}
-		return -1, fmt.Errorf("wait for the container: %w", err)
+		return -1, failed(StageWait, err, created.ID)
 	case <-ctx.Done():
 		return -1, fmt.Errorf("cancelled: %w", context.Cause(ctx))
 	}
@@ -247,7 +335,7 @@ func (d *Docker) remove(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
 	if err := d.client.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !dockerclient.IsErrNotFound(err) {
-		return fmt.Errorf("remove container %s: %w; Menagerie removes it when it next starts", shortID(id), err)
+		return failed(StageRemove, err, id)
 	}
 	return nil
 }
@@ -259,7 +347,7 @@ func (d *Docker) removeLabelled(ctx context.Context, id string) error {
 	defer cancel()
 	list, err := d.client.ContainerList(listCtx, container.ListOptions{All: true, Filters: filters.NewArgs(filters.Arg("label", LabelID+"="+id))})
 	if err != nil {
-		return fmt.Errorf("look for the container whose creation failed: %w; Menagerie removes it when it next starts", err)
+		return failed(StageList, err, "")
 	}
 	var errs []error
 	for _, c := range list {
@@ -277,7 +365,7 @@ func (d *Docker) ensureImage(ctx context.Context, ref string, log io.Writer) err
 	if _, err := d.client.ImageInspect(ctx, ref); err == nil {
 		return nil
 	} else if !dockerclient.IsErrNotFound(err) {
-		return fmt.Errorf("inspect: %w", err)
+		return failed(StageInspect, err, "")
 	}
 	var encoded string
 	if d.opts.Credentials != nil {
@@ -291,11 +379,11 @@ func (d *Docker) ensureImage(ctx context.Context, ref string, log io.Writer) err
 	fmt.Fprintf(log, "pulling runner image %s\n", ref)
 	rc, err := d.client.ImagePull(ctx, ref, image.PullOptions{RegistryAuth: encoded})
 	if err != nil {
-		return fmt.Errorf("pull: %w", err)
+		return failed(StagePull, err, "")
 	}
 	defer rc.Close()
 	if err := jsonmessage.DisplayJSONMessagesStream(rc, io.Discard, 0, false, nil); err != nil {
-		return fmt.Errorf("pull: %w", err)
+		return failed(StagePull, err, "")
 	}
 	return nil
 }
@@ -310,7 +398,7 @@ func (d *Docker) copyFolder(ctx context.Context, id, folder string) error {
 	go func() { pw.CloseWithError(writeTar(pw, folder, uid, gid)) }()
 	defer pr.Close()
 	if err := d.client.CopyToContainer(ctx, id, "/", pr, container.CopyToContainerOptions{CopyUIDGID: true}); err != nil {
-		return fmt.Errorf("copy the template into the container: %w", err)
+		return failed(StageCopy, err, id)
 	}
 	return nil
 }
@@ -383,13 +471,13 @@ func (d *Docker) RemoveLeftovers(ctx context.Context) (int, error) {
 		filters.Arg("label", LabelRoot+"="+d.opts.Root),
 	)})
 	if err != nil {
-		return 0, fmt.Errorf("list throwaway containers: %w", err)
+		return 0, failed(StageList, err, "")
 	}
 	removed := 0
 	var errs []error
 	for _, c := range list {
 		if err := d.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !dockerclient.IsErrNotFound(err) {
-			errs = append(errs, fmt.Errorf("remove container %s: %w", shortID(c.ID), err))
+			errs = append(errs, failed(StageRemove, err, c.ID))
 			continue
 		}
 		removed++

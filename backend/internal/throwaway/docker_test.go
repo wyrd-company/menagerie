@@ -373,3 +373,36 @@ func TestLeftoversOfThisRootAreRemoved(t *testing.T) {
 		t.Fatalf("left %v; ours %s theirs %s unlabelled %s", left, ours, theirs, unlabelled)
 	}
 }
+
+// TestNoCapturedValueLeavesARealRun runs hooks that carry a captured value
+// as their program or their linked working directory on the Engine. The
+// Engine's start failure names the program; neither the refusal nor the
+// console carries it, and no container remains.
+func TestNoCapturedValueLeavesARealRun(t *testing.T) {
+	const captured = "captured-sample-value"
+	h := newHarness(t)
+	folder := h.folder("alpha")
+	if err := os.Symlink(t.TempDir(), filepath.Join(folder, captured)); err != nil {
+		t.Fatal(err)
+	}
+	runner, g, out := h.grant(context.Background(), folder)
+	missing := post(t, runner, hook(g, folder, map[string]any{"run": []string{"/" + captured}}, true))
+	linked := hook(g, folder, map[string]any{"run": []string{"true"}}, false)
+	linked["cwd"] = captured
+	outside := post(t, runner, linked)
+	for _, r := range []struct {
+		reply hookReply
+		kind  string
+	}{{missing, throwaway.KindHookContainer}, {outside, throwaway.KindInvalidHook}} {
+		if r.reply.Error == nil || r.reply.Error.Kind != r.kind || strings.Contains(r.reply.Error.Message, captured) {
+			t.Errorf("reply %d %+v, want %s without the captured value", r.reply.status, r.reply.Error, r.kind)
+		}
+	}
+	if strings.Contains(out.String(), captured) {
+		t.Errorf("console %q", out.String())
+	}
+	g.Revoke()
+	if left := h.containers(filters.Arg("label", "menagerie.test.run="+h.runID)); len(left) != 0 {
+		t.Fatalf("%d hook containers remain", len(left))
+	}
+}
