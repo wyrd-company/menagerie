@@ -103,7 +103,7 @@ func run(configPath string) error {
 		return err
 	}
 	if webhook != nil {
-		// Alerts in flight get their delivery time limit, no more.
+		// Queued alerts get the delivery time limit, no more.
 		defer webhook.Close()
 	}
 	manager := jobs.NewManager(ctx, jobOpts)

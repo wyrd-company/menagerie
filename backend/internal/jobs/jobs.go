@@ -344,7 +344,7 @@ func (j *Job) setState(state State, phase string, enter bool) {
 		j.mu.Unlock()
 		return
 	}
-	alert := j.settleLocked(now)
+	j.settleLocked(now)
 	j.clock.pause(now)
 	if enter {
 		j.clock.phase = 0
@@ -356,7 +356,6 @@ func (j *Job) setState(state State, phase string, enter bool) {
 	j.scheduleLocked(now)
 	j.appendStateLocked()
 	j.mu.Unlock()
-	j.manager.alertLongRunning(alert)
 }
 
 func (j *Job) appendStateLocked() {
@@ -380,7 +379,7 @@ func (j *Job) finish(runErr error) {
 		m.mu.Unlock()
 		return
 	}
-	longRunning := j.settleLocked(now)
+	j.settleLocked(now)
 	state, jobErr := j.outcomeLocked(runErr)
 	j.stopTimerLocked()
 	j.deadline, j.limit = nil, nil
@@ -393,13 +392,11 @@ func (j *Job) finish(runErr error) {
 	}
 	j.state, j.err, j.finished = state, jobErr, &now
 	j.appendLocked(EventResult, raw)
-	snap := j.snapshotLocked()
+	if state == Failed && m.opts.Alerts != nil {
+		m.opts.Alerts.JobFailed(j.snapshotLocked())
+	}
 	j.mu.Unlock()
 	m.mu.Unlock()
-	m.alertLongRunning(longRunning)
-	if state == Failed && m.opts.Alerts != nil {
-		m.opts.Alerts.JobFailed(snap)
-	}
 }
 
 // marshalCompact encodes v without HTML escaping, so opaque payloads keep

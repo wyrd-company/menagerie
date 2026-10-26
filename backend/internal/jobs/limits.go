@@ -71,7 +71,9 @@ const KindTimedOut = "timed-out"
 var ErrTimedOut = errors.New("job time limit passed")
 
 // Alerts receives the jobs worth telling someone about. Its methods are
-// called on job goroutines and timers and must return promptly.
+// called with the job's lock held, so that a job's alerts arrive in the
+// order of the changes that raised them: they must not block and must not
+// call the Manager or the Job.
 type Alerts interface {
 	// JobFailed is called once for a job that ends failed.
 	JobFailed(Snapshot)
@@ -196,10 +198,9 @@ func (j *Job) tick() {
 		j.mu.Unlock()
 		return
 	}
-	alert := j.settleLocked(now)
+	j.settleLocked(now)
 	j.scheduleLocked(now)
 	j.mu.Unlock()
-	j.manager.alertLongRunning(alert)
 }
 
 // countingLocked reports whether the job's limits still count: it is
@@ -210,32 +211,24 @@ func (j *Job) countingLocked() bool {
 }
 
 // settleLocked brings the clock up to now and settles what has passed by
-// then, whether or not its timer has run: a passed limit times the job
-// out, and a passed long-running threshold returns the snapshot to alert
-// with, outside the lock. It runs before every change that ends the
-// running stretch, its phase or the job, so that a late timer loses
-// nothing.
-func (j *Job) settleLocked(now time.Time) *Snapshot {
+// then, whether or not its timer has run: a passed long-running threshold
+// is alerted, and a passed limit times the job out. It runs before every
+// change that ends the running stretch, its phase or the job, so that a
+// late timer loses nothing.
+func (j *Job) settleLocked(now time.Time) {
 	if !j.countingLocked() {
-		return nil
+		return
 	}
 	j.clock.pause(now)
 	j.clock.resume(now)
-	var alert *Snapshot
 	if lr := j.manager.opts.LongRunning; lr > 0 && !j.clock.longRunning && j.clock.total >= lr {
 		j.clock.longRunning = true
-		snap := j.snapshotLocked()
-		alert = &snap
+		if a := j.manager.opts.Alerts; a != nil {
+			a.JobLongRunning(j.snapshotLocked())
+		}
 	}
 	if first, ok := j.firstDueLocked(); ok && first.remaining <= 0 {
 		j.timeOutLocked(first)
-	}
-	return alert
-}
-
-func (m *Manager) alertLongRunning(s *Snapshot) {
-	if s != nil && m.opts.Alerts != nil {
-		m.opts.Alerts.JobLongRunning(*s)
 	}
 }
 

@@ -5,9 +5,11 @@
 // ---
 
 // Package alerts tells a webhook about failed and long-running jobs. Each
-// alert is one JSON POST, made in the background with one attempt and a
-// time limit, so an alert never delays or fails a job. The webhook URL can
-// carry a credential: it is never written to a log or an error.
+// alert is one JSON POST with one attempt and a time limit. Alerts wait in
+// one queue and are posted one at a time, in the order they were sent, by
+// a background sender, so an alert never delays or fails a job and a
+// job's warning reaches the webhook before its failure. The webhook URL
+// can carry a credential: it is never written to a log or an error.
 package alerts
 
 import (
@@ -25,8 +27,12 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 )
 
-// Timeout bounds each delivery, and so how long Close waits.
+// Timeout bounds each delivery, and how long Close waits.
 const Timeout = 10 * time.Second
+
+// QueueSize is how many alerts can wait for delivery. An alert sent while
+// the queue is full is dropped, with a log line.
+const QueueSize = 64
 
 // Alert events.
 const (
@@ -60,7 +66,8 @@ type Options struct {
 	Timeout time.Duration
 }
 
-// Webhook delivers alerts. It satisfies jobs.Alerts.
+// Webhook delivers alerts. It satisfies jobs.Alerts: its methods only
+// queue the alert, so they never block.
 type Webhook struct {
 	url     string
 	origin  string
@@ -68,9 +75,22 @@ type Webhook struct {
 	timeout time.Duration
 	client  *http.Client
 
-	mu      sync.Mutex
-	closed  bool
-	pending sync.WaitGroup
+	queue chan queued
+	// stop ends the delivery in progress and drops the rest when Close
+	// has waited its time limit.
+	stop    context.Context
+	cancel  context.CancelFunc
+	drained chan struct{}
+
+	mu     sync.Mutex
+	closed bool
+}
+
+// queued is one alert waiting for delivery.
+type queued struct {
+	event string
+	jobID string
+	body  []byte
 }
 
 // ValidURL accepts an http or https URL with a host. Its error never
@@ -102,6 +122,10 @@ func New(opts Options) (*Webhook, error) {
 		Transport:     refuseRedirects{next: http.DefaultTransport},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect },
 	}
+	w.queue = make(chan queued, QueueSize)
+	w.stop, w.cancel = context.WithCancel(context.Background())
+	w.drained = make(chan struct{})
+	go w.run()
 	return w, nil
 }
 
@@ -111,13 +135,38 @@ func (w *Webhook) JobFailed(s jobs.Snapshot) { w.send(EventJobFailed, s) }
 // JobLongRunning sends a job-long-running alert.
 func (w *Webhook) JobLongRunning(s jobs.Snapshot) { w.send(EventJobLongRunning, s) }
 
-// Close stops new deliveries and waits for those in flight, each of which
-// ends within the delivery time limit.
+// Close stops new alerts and waits, up to the delivery time limit, for the
+// queued ones to be delivered. Those still queued then are dropped.
 func (w *Webhook) Close() {
 	w.mu.Lock()
-	w.closed = true
+	if !w.closed {
+		w.closed = true
+		close(w.queue)
+	}
 	w.mu.Unlock()
-	w.pending.Wait()
+	limit := time.NewTimer(w.timeout)
+	defer limit.Stop()
+	select {
+	case <-w.drained:
+	case <-limit.C:
+		w.cancel()
+		<-w.drained
+	}
+}
+
+// run delivers the queued alerts one at a time, in order.
+func (w *Webhook) run() {
+	defer close(w.drained)
+	defer w.cancel()
+	for a := range w.queue {
+		err := errors.New("shutting down")
+		if w.stop.Err() == nil {
+			err = w.deliver(a.body)
+		}
+		if err != nil {
+			w.logf("menagerie: %s alert for job %s not delivered: %v", a.event, a.jobID, err)
+		}
+	}
 }
 
 func (w *Webhook) send(event string, s jobs.Snapshot) {
@@ -140,13 +189,11 @@ func (w *Webhook) send(event string, s jobs.Snapshot) {
 	if w.closed {
 		return
 	}
-	w.pending.Add(1)
-	go func() {
-		defer w.pending.Done()
-		if err := w.deliver(body); err != nil {
-			w.logf("menagerie: %s alert for job %s not delivered: %v", event, s.JobID, err)
-		}
-	}()
+	select {
+	case w.queue <- queued{event: event, jobID: s.JobID, body: body}:
+	default:
+		w.logf("menagerie: %s alert for job %s dropped: %d alerts already wait", event, s.JobID, QueueSize)
+	}
 }
 
 // errRedirect ends a delivery that the webhook answered with a redirect.
@@ -169,7 +216,7 @@ func (t refuseRedirects) RoundTrip(req *http.Request) (*http.Response, error) {
 // net/http error text can carry the webhook URL, or a Location built from
 // it, so it is never passed on.
 func (w *Webhook) deliver(body []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), w.timeout)
+	ctx, cancel := context.WithTimeout(w.stop, w.timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.url, bytes.NewReader(body))
 	if err != nil {

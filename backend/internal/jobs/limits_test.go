@@ -508,6 +508,57 @@ func TestAPassedThresholdIsAlertedAtTheEnd(t *testing.T) {
 	}
 }
 
+// lockCheckedAlerts records whether the job's lock was held at each alert.
+type lockCheckedAlerts struct {
+	recordedAlerts
+	job      *Job
+	unlocked []string
+}
+
+func (a *lockCheckedAlerts) check(event string) {
+	if a.job.mu.TryLock() {
+		a.job.mu.Unlock()
+		a.unlocked = append(a.unlocked, event)
+	}
+}
+
+func (a *lockCheckedAlerts) JobFailed(s Snapshot) {
+	a.check("job-failed")
+	a.recordedAlerts.JobFailed(s)
+}
+
+func (a *lockCheckedAlerts) JobLongRunning(s Snapshot) {
+	a.check("job-long-running")
+	a.recordedAlerts.JobLongRunning(s)
+}
+
+// TestAlertsAreRaisedUnderTheJobLock raises a warning from the threshold's
+// timer and a failure from the end. Each is raised under the lock that
+// orders the job's changes, so no failure can be raised between a timer's
+// claim of the warning and its raising, and the warning comes first.
+func TestAlertsAreRaisedUnderTheJobLock(t *testing.T) {
+	clock := newFakeClock()
+	alerts := &lockCheckedAlerts{}
+	m := NewManager(context.Background(), Options{LongRunning: time.Minute, Alerts: alerts, Now: clock.Now, AfterFunc: clock.AfterFunc})
+	fail := make(chan struct{})
+	job, _ := m.Start("alpha", "start", func(_ context.Context, r *Run) error {
+		r.Phase("build")
+		<-fail
+		return errors.New("boom")
+	})
+	alerts.job = job
+	waitPhase(t, job, "build")
+	clock.Advance(time.Minute)
+	close(fail)
+	awaitEnd(t, job)
+	if got := alerts.events(); !slices.Equal(got, []string{"job-long-running", "job-failed"}) {
+		t.Fatalf("alerts %q", got)
+	}
+	if len(alerts.unlocked) != 0 {
+		t.Fatalf("raised without the job lock: %q", alerts.unlocked)
+	}
+}
+
 func TestTimedOutRunnerHoldsTheSlotUntilItReturns(t *testing.T) {
 	clock := newFakeClock()
 	m, _ := limitedManager(context.Background(), clock, Options{Limits: Limits{Default: time.Minute}})

@@ -163,6 +163,103 @@ func TestDeliveryFailuresAreLoggedWithoutTheURL(t *testing.T) {
 	}
 }
 
+// TestAlertsArriveInTheOrderSent sends a warning and a failure for each of
+// many jobs and checks that the webhook receives every one in that order.
+func TestAlertsArriveInTheOrderSent(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var p Payload
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		mu.Lock()
+		got = append(got, p.Event+" "+p.JobID)
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	logs := &logLines{}
+	w := newWebhook(t, srv.URL, logs, 0)
+	var want []string
+	for i := range QueueSize / 2 {
+		s := jobs.Snapshot{JobID: fmt.Sprintf("j%d", i), Workspace: "alpha", Operation: "start", State: jobs.Running}
+		w.JobLongRunning(s)
+		s.State = jobs.Failed
+		w.JobFailed(s)
+		want = append(want, EventJobLongRunning+" "+s.JobID, EventJobFailed+" "+s.JobID)
+	}
+	w.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("received\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if lines := logs.all(); len(lines) != 0 {
+		t.Fatalf("log %q", lines)
+	}
+}
+
+// TestAFullQueueDropsTheAlert holds the first delivery, fills the queue
+// behind it and sends one more, which is dropped with a log line.
+func TestAFullQueueDropsTheAlert(t *testing.T) {
+	arrived := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var received int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		mu.Lock()
+		received++
+		mu.Unlock()
+		select {
+		case arrived <- struct{}{}:
+			<-release
+		default:
+		}
+	}))
+	defer srv.Close()
+	logs := &logLines{}
+	w := newWebhook(t, srv.URL+"/"+secret, logs, 0)
+	w.JobFailed(failedSnapshot())
+	<-arrived
+	for range QueueSize + 1 {
+		w.JobFailed(failedSnapshot())
+	}
+	lines := logs.all()
+	want := fmt.Sprintf("menagerie: job-failed alert for job j1 dropped: %d alerts already wait", QueueSize)
+	if len(lines) != 1 || lines[0] != want {
+		t.Fatalf("log %q", lines)
+	}
+	close(release)
+	w.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if received != QueueSize+1 {
+		t.Fatalf("received %d, want %d", received, QueueSize+1)
+	}
+}
+
+// TestCloseWaitsOneTimeLimit queues alerts behind a webhook that never
+// answers. Close returns after one delivery time limit, not one per alert,
+// and logs every alert it did not deliver.
+func TestCloseWaitsOneTimeLimit(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	defer srv.Close()
+	defer close(release)
+	logs := &logLines{}
+	const limit = 500 * time.Millisecond
+	w := newWebhook(t, srv.URL, logs, limit)
+	for range 5 {
+		w.JobFailed(failedSnapshot())
+	}
+	start := time.Now()
+	w.Close()
+	if took := time.Since(start); took > limit+time.Second {
+		t.Fatalf("Close took %v", took)
+	}
+	if lines := logs.all(); len(lines) != 5 {
+		t.Fatalf("log %q", lines)
+	}
+}
+
 func TestCloseEndsDelivery(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("alert sent after Close")
