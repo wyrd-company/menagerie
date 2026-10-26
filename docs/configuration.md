@@ -160,7 +160,8 @@ once the cancelled work has stopped.
 
 A duration is whole hours, minutes and seconds, such as `2h`, `45m` or
 `1h30m`. A key without a value, such as `rebuild:` or `default: ""`, is an
-error; leave the key out for no limit. Limits count only the time
+error, also when an alias or a merge key gives it; leave the key out for
+no limit. Limits count only the time
 Menagerie works: while a job waits for answers to an interview, no limit
 counts and the interview has no expiry.
 The job console shows the limit that ends first and the time left.
@@ -191,11 +192,16 @@ at the origin of `oidc.redirect-url`. The body suits a generic webhook such
 as ntfy, Slack through a relay, or Dagu.
 
 Menagerie makes one attempt per alert with a 10 second limit and does not
-follow redirects. An alert never delays or fails a job. A failed delivery
-writes one line to the container's log that names only what failed:
-`timeout`, `transport error`, `redirect refused` or `status 503`, for
-example. The webhook URL can carry a token,
-so Menagerie never writes it to a log, an event or an error.
+follow redirects. Alerts are posted one at a time in the order they were
+raised, so a job's `job-long-running` alert arrives before its
+`job-failed` alert. An alert never delays or fails a job: up to 64 alerts
+wait for delivery, and an alert raised while 64 wait is dropped with a log
+line. At shutdown Menagerie waits at most 10 seconds for waiting alerts. A
+failed delivery writes one line to the container's log that names only
+what failed: `timeout`, `transport error`, `redirect refused` or
+`status 503`, for example. The webhook URL can carry a token,
+so Menagerie never writes it to a log, an event or an error, a
+configuration error included.
 
 ## Listen address and template service
 
