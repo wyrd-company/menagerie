@@ -44,11 +44,13 @@ Private templates are fetched in one of two ways:
   no user name, so a user name in a template address does not opt out of
   the App. If the route answers 404, the fetch keeps Toha's default
   behaviour. If the route cannot mint a token, the fetch fails with the
-  route's reason. The token stays in memory for the fetch. Every reply
-  passes one boundary in `src/server.rs` that removes each written form of
-  the credentials the request's resolver handed out, so a remote that
-  echoes one into an error cannot return it. When the workspace service's
-  request ends early, the resolver's credential request ends with it.
+  route's reason. The token stays in memory for the fetch. When a request
+  fails after the resolver handed out a token, the reply carries a fixed
+  sentence for its error kind and no text from Toha, gix or the Git host,
+  which could echo the token in forms no redaction can list. Every reply
+  also passes one boundary in `src/server.rs` that removes each written
+  form of the handed-out tokens. When the workspace service's request ends
+  early, the resolver's credential request ends with it.
 
 The image builds curl with rustls. Toha's transport then trusts only the
 certificates in `SSL_CERT_FILE` or `SSL_CERT_DIR` when either is set, and

@@ -429,10 +429,13 @@ proposed-design:
     on the hook runner socket (see credential-route) and answers that one
     challenge with it. It asks by the URL without user information, so a
     template address with a user name still uses the App; a backup URL with
-    one gets no token. The resolver keeps what it handed out, and every
-    reply of the template service passes one boundary that removes each
-    written form of it, raw, base64 or base64url, escaped or as a byte
-    list, so a remote cannot echo it back through Toha's errors. The
+    one gets no token. The resolver keeps what it handed out. A request
+    that fails after it handed out a token replies with a fixed sentence
+    for its error kind and no text from Toha, gix or the remote, which can
+    echo the token in forms no redaction can list. As a second defence,
+    every reply passes one boundary that removes each written form of the
+    token, raw, base64 or base64url, escaped or as a byte list, overlapping
+    matches included. The
     resolver's credential request races the template service request's
     caller: when the job is cancelled or reaches its limit, the request
     loses its connection and the fetch fails with a fixed reason. Every

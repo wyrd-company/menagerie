@@ -128,23 +128,26 @@ where
     // `_alive` lives as long as this future: when the caller goes away the
     // future is dropped, which ends the resolver's credential requests.
     let (_alive, ended) = crate::credentials::lifetime();
+    let kept = handed.clone();
     let result = tokio::task::spawn_blocking(move || {
         let resolver =
-            crate::credentials::resolver(&service.settings.hook_runner_socket, handed, ended);
+            crate::credentials::resolver(&service.settings.hook_runner_socket, kept, ended);
         toha::source::with_credential_resolver(resolver, || operation(&service, request))
     })
     .await;
-    match result {
-        Ok(Ok(reply)) => match serde_json::to_vec(&reply) {
-            Ok(bytes) => (StatusCode::OK, bytes),
-            Err(e) => refused(&ServiceError::internal(format!(
-                "reply does not serialize: {e}"
-            ))),
-        },
-        Ok(Err(refusal)) => refused(&refusal),
-        Err(join) => refused(&ServiceError::internal(format!(
+    let reply = match result {
+        Ok(Ok(reply)) => serde_json::to_vec(&reply)
+            .map_err(|e| ServiceError::internal(format!("reply does not serialize: {e}"))),
+        Ok(Err(refusal)) => Err(refusal),
+        Err(join) => Err(ServiceError::internal(format!(
             "request worker failed: {join}"
         ))),
+    };
+    match reply {
+        Ok(bytes) => (StatusCode::OK, bytes),
+        // A failure after the resolver handed out a credential carries no
+        // text from Toha, gix or the remote.
+        Err(error) => refused(&handed.withhold(error)),
     }
 }
 

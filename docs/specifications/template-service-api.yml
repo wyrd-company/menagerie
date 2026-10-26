@@ -227,14 +227,35 @@ description: >-
   that reason where the flow reports Toha's message.
 
 
-  The request's resolver keeps every credential it handed out. Every reply
-  of a route, refusals and internal errors included, passes one boundary
-  that replaces each written form of those credentials with `<redacted>`:
-  the password; the `username:password` pair and the password in base64
-  and base64url, padded and unpadded; and each of those Rust-escaped,
-  JSON-escaped and as a decimal byte list. A remote that echoes the
-  credential into Toha's error therefore cannot return it. The service
-  writes no log line for a request.
+  The request's resolver keeps every credential it handed out. When a
+  request fails after the resolver handed out at least one credential, its
+  refusal carries no text from Toha, gix or the remote, which can hold the
+  credential in forms no redaction can list: the `message` is a fixed
+  sentence for the `kind`, and `warnings` are dropped. `paths`,
+  `locations` and `questions` stay. The sentences:
+  `template-resolve-failed`, "the template could not be fetched; the Git
+  host refused or failed the request"; `template-not-found`, "the template
+  was not found on the Git host"; `template-stale-revision`, "the
+  template's approved revision is stale"; `template-ambiguous`, "the
+  template's name is ambiguous"; `template-refresh-failed`, "the
+  template's catalog entry could not be updated from the Git host";
+  `template-cache-conflict`, "Toha's cache entry for the template does not
+  hold the recorded commit from its source"; `update-refused`, "the upgrade
+  could not read the template from the Git host"; `merge-base-failed`, "the
+  workspace's recorded template revision could not be fetched from the Git
+  host"; `merge-failed`, "the upgrade could not be merged"; `apply-failed`,
+  "the template could not be applied; the workspace repository or its
+  remote could not be read"; any other kind, "the template operation failed
+  after GitHub App credentials were supplied". A request that handed out no
+  credential keeps its full message, the route's reason or this service's
+  own credential reason included. As a second defence, every reply of a
+  route, successes included, passes one boundary that replaces each
+  written form of the handed-out credentials with `<redacted>`: the
+  password; the `username:password` pair and the password in base64 and
+  base64url, padded and unpadded; and each of those Rust-escaped,
+  JSON-escaped and as a decimal byte list. Matches may overlap; every byte
+  a match covers is removed, and each run of covered bytes becomes one
+  `<redacted>`. The service writes no log line for a request.
 
 
   When the workspace service's request ends before its reply, because the
@@ -324,8 +345,9 @@ validation-criteria: >-
   route's token through create and generate, also from an address with a
   user name, leaves the challenge to Toha on a 404, fails with the route's
   reason on a 502, runs two creates at once that each fetch with their own
-  repository's token, finds no written form of a credential a remote
-  echoes in the reply, and ends the credential request and its worker of
+  repository's token, replies with only the fixed sentence when a remote
+  echoes the credential, also as overlapping copies, keeps Toha's message
+  when no credential was handed out, and ends the credential request and its worker of
   each caller that goes away, without leaving a thread; `go test -tags
   templateservice ./backend/internal/workflows/` ends the credential
   request of a create whose job reaches its time limit;

@@ -9,13 +9,16 @@
 //! The token reaches Toha's `Credential`, whose `Debug` output hides it, and
 //! the operation's `Handed` record. No error or refusal built here carries
 //! it, a reply's text, a URL or an operating system message. A remote can
-//! still echo the credential into a Toha error, so `server` removes every
-//! written form of what `Handed` holds from each reply before it leaves the
-//! service.
+//! still echo the credential into a Toha error, in forms no redaction can
+//! list. So once a credential was handed out, `server` replies to a failure
+//! with a fixed sentence for its kind (`Handed::withhold`), and removes
+//! every written form of what `Handed` holds from each reply before it
+//! leaves the service (`Handed::scrub`).
 //!
 //! An operation's `Ended` signal fires when its caller goes away: the job
 //! was cancelled or reached its limit. A credential request races it, and
 //! loses its connection when it fires.
+use crate::error::ServiceError;
 use crate::hooks;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -74,18 +77,78 @@ impl Handed {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// `error` as a reply may carry it. Once the resolver handed out a
+    /// credential, Toha's, gix's and the remote's text can hold it in forms
+    /// no redaction can list, so none of it passes: the message is the
+    /// fixed sentence for the error's kind, and Toha's warnings are
+    /// dropped. The paths, locations and questions name the workspace and
+    /// the request, and stay. Without a handed-out credential `error` is
+    /// unchanged, the resolver's own refusal included.
+    pub fn withhold(&self, mut error: ServiceError) -> ServiceError {
+        if self.lock().is_empty() {
+            return error;
+        }
+        error.message = withheld(error.kind).to_owned();
+        error.warnings.clear();
+        error
+    }
+
     /// `bytes` with every written form of each handed-out credential
-    /// replaced by `REDACTED`.
-    pub fn scrub(&self, mut bytes: Vec<u8>) -> Vec<u8> {
+    /// replaced by `REDACTED`. Matches may overlap: every byte any match
+    /// covers is removed, and each run of covered bytes becomes one
+    /// `REDACTED`.
+    pub fn scrub(&self, bytes: Vec<u8>) -> Vec<u8> {
         let forms: Vec<String> = self
             .lock()
             .iter()
             .flat_map(|(username, password)| written_forms(username, password))
             .collect();
+        let mut covered = vec![false; bytes.len()];
         for form in &forms {
-            bytes = replace(&bytes, form.as_bytes(), REDACTED.as_bytes());
+            let form = form.as_bytes();
+            for (at, window) in bytes.windows(form.len()).enumerate() {
+                if window == form {
+                    covered[at..at + form.len()].fill(true);
+                }
+            }
         }
-        bytes
+        let mut out = Vec::with_capacity(bytes.len());
+        for (at, byte) in bytes.iter().enumerate() {
+            match (covered[at], at > 0 && covered[at - 1]) {
+                (false, _) => out.push(*byte),
+                (true, false) => out.extend_from_slice(REDACTED.as_bytes()),
+                (true, true) => {}
+            }
+        }
+        out
+    }
+}
+
+/// The message of a refusal with `kind` after the resolver handed out a
+/// credential: what failed, in words this service chose.
+pub fn withheld(kind: &str) -> &'static str {
+    match kind {
+        "template-resolve-failed" => {
+            "the template could not be fetched; the Git host refused or failed the request"
+        }
+        "template-not-found" => "the template was not found on the Git host",
+        "template-stale-revision" => "the template's approved revision is stale",
+        "template-ambiguous" => "the template's name is ambiguous",
+        "template-refresh-failed" => {
+            "the template's catalog entry could not be updated from the Git host"
+        }
+        "template-cache-conflict" => {
+            "Toha's cache entry for the template does not hold the recorded commit from its source"
+        }
+        "update-refused" => "the upgrade could not read the template from the Git host",
+        "merge-base-failed" => {
+            "the workspace's recorded template revision could not be fetched from the Git host"
+        }
+        "merge-failed" => "the upgrade could not be merged",
+        "apply-failed" => {
+            "the template could not be applied; the workspace repository or its remote could not be read"
+        }
+        _ => "the template operation failed after GitHub App credentials were supplied",
     }
 }
 
@@ -129,19 +192,6 @@ pub fn written_forms(username: &str, password: &str) -> Vec<String> {
     }
     forms.retain(|form| !form.is_empty());
     forms
-}
-
-/// `haystack` with every `needle` replaced by `with`.
-fn replace(haystack: &[u8], needle: &[u8], with: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(haystack.len());
-    let mut rest = haystack;
-    while let Some(at) = rest.windows(needle.len()).position(|w| w == needle) {
-        out.extend_from_slice(&rest[..at]);
-        out.extend_from_slice(with);
-        rest = &rest[at + needle.len()..];
-    }
-    out.extend_from_slice(rest);
-    out
 }
 
 /// Fires when the operation's caller went away. `lifetime` makes one with
@@ -201,10 +251,10 @@ fn refused(reason: &str) -> String {
 
 impl CredentialResolver for RouteResolver {
     fn resolve(&self, request: &CredentialRequest) -> Result<Option<Credential>, String> {
-        match url(&request.scheme, &request.host, request.port, &request.path) {
-            Some(url) => ask(&self.socket, &url, &self.ended, &self.handed),
-            None => Ok(None),
-        }
+        let Some(url) = url(&request.scheme, &request.host, request.port, &request.path) else {
+            return Ok(None);
+        };
+        ask(&self.socket, &url, &self.ended, &self.handed)
     }
 }
 
@@ -576,6 +626,100 @@ mod tests {
                 String::from_utf8(handed.scrub(format!("[{form}]").into_bytes())).unwrap();
             assert_eq!(scrubbed, format!("[{REDACTED}]"), "{form}");
         }
+    }
+
+    /// Overlapping matches, as `T + T[1:]` makes for a token that starts and
+    /// ends with the same byte, go whole: every covered byte is removed.
+    #[test]
+    fn overlapping_matches_are_scrubbed_whole() {
+        let handed = Handed::default();
+        handed.keep("user", "gaag");
+        let scrub = |text: &str| String::from_utf8(handed.scrub(text.as_bytes().to_vec())).unwrap();
+        assert_eq!(scrub("[gaagaag]"), format!("[{REDACTED}]"));
+        assert_eq!(scrub("[gaaggaag]"), format!("[{REDACTED}]"));
+        assert_eq!(scrub("[gaag gaag]"), format!("[{REDACTED} {REDACTED}]"));
+        // The byte-list form of the token, overlapping with itself.
+        assert_eq!(
+            scrub("[103, 97, 97, 103, 97, 97, 103]"),
+            format!("[{REDACTED}]")
+        );
+        assert_eq!(scrub("gaa"), "gaa");
+    }
+
+    /// Every kind a fetch can fail with has its own fixed sentence, and any
+    /// other kind the general one.
+    const WITHHELD: [(&str, &str); 11] = [
+        (
+            "template-resolve-failed",
+            "the template could not be fetched; the Git host refused or failed the request",
+        ),
+        (
+            "template-not-found",
+            "the template was not found on the Git host",
+        ),
+        (
+            "template-stale-revision",
+            "the template's approved revision is stale",
+        ),
+        ("template-ambiguous", "the template's name is ambiguous"),
+        (
+            "template-refresh-failed",
+            "the template's catalog entry could not be updated from the Git host",
+        ),
+        (
+            "template-cache-conflict",
+            "Toha's cache entry for the template does not hold the recorded commit from its source",
+        ),
+        (
+            "update-refused",
+            "the upgrade could not read the template from the Git host",
+        ),
+        (
+            "merge-base-failed",
+            "the workspace's recorded template revision could not be fetched from the Git host",
+        ),
+        ("merge-failed", "the upgrade could not be merged"),
+        (
+            "apply-failed",
+            "the template could not be applied; the workspace repository or its remote could not be read",
+        ),
+        (
+            "internal-error",
+            "the template operation failed after GitHub App credentials were supplied",
+        ),
+    ];
+
+    fn failure(kind: &'static str) -> ServiceError {
+        let mut error = ServiceError::refused(kind, format!("remote said {TOKEN}"));
+        error.paths = vec!["out.txt".into()];
+        error.warnings = vec![format!("warning {TOKEN}")];
+        error
+    }
+
+    #[test]
+    fn a_failure_after_a_handed_out_credential_has_its_kinds_fixed_sentence() {
+        let handed = Handed::default();
+        handed.keep("x-access-token", TOKEN);
+        for (kind, sentence) in WITHHELD {
+            let error = handed.withhold(failure(kind));
+            assert_eq!(
+                (error.kind, error.message.as_str()),
+                (kind, sentence),
+                "{kind}"
+            );
+            assert!(error.warnings.is_empty(), "{kind}");
+            assert_eq!(error.paths, ["out.txt"], "{kind}");
+        }
+    }
+
+    /// Without a handed-out credential, a failure keeps its text.
+    #[test]
+    fn a_failure_without_a_handed_out_credential_is_unchanged() {
+        let handed = Handed::default();
+        assert_eq!(
+            handed.withhold(failure("template-resolve-failed")),
+            failure("template-resolve-failed")
+        );
     }
 
     #[test]

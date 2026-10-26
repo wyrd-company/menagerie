@@ -84,6 +84,14 @@ the App's JWT, a URL and GitHub's or OpenBao's response text never appear.
 | the token could not be minted | A template fetch: the workspace service's log. |
 | the operation ended before credentials arrived | A template fetch: the job was cancelled or reached its time limit while its token was minted. |
 
+A template operation that fails after the template service received a
+GitHub App token shows only a fixed sentence for its error kind, such as
+`the template could not be fetched; the Git host refused or failed the
+request`. The Git host's answer is not shown or recorded anywhere,
+because it can hold the token. Check the template's address and ref, the
+App's installation and Contents permission on the template repository,
+and the Git host's status.
+
 A push or fetch over `https` names a fixed reason too:
 
 | Reason | What to check |

@@ -81,10 +81,10 @@ struct HostState {
     challenged: Vec<String>,
     /// Whether a held challenge gave up waiting for the others.
     gave_up: bool,
-    /// Whether an admitted advertisement request is answered with its own
-    /// `Authorization` header as the service name, as a misbehaving host
-    /// does.
-    echo: bool,
+    /// When set, an admitted advertisement request is answered with this
+    /// service name, built from the request's `Authorization` header and
+    /// its token, as a misbehaving host does.
+    echo: Option<fn(&str, &str) -> String>,
 }
 
 /// A smart HTTP Git host over TLS on loopback.
@@ -178,8 +178,8 @@ impl GitHost {
         *self.rendezvous.lock().unwrap() = repositories;
     }
 
-    fn echo(&self) {
-        self.state.0.lock().unwrap().echo = true;
+    fn echo(&self, service: fn(&str, &str) -> String) {
+        self.state.0.lock().unwrap().echo = Some(service);
     }
 
     fn gave_up(&self) -> bool {
@@ -279,9 +279,9 @@ fn serve(
         respond(out, "403 Forbidden", &[], b"");
         return;
     }
-    if host.echo && path.ends_with("/info/refs") {
+    if let Some(service) = host.echo.filter(|_| path.ends_with("/info/refs")) {
         drop(host);
-        let line = format!("# service={}\n", headers["authorization"]);
+        let line = format!("# service={}\n", service(&headers["authorization"], &token));
         let body = format!("{:04x}{line}0000", line.len() + 4);
         respond(
             out,
@@ -420,6 +420,8 @@ fn http_backend(
 /// Tokens the route grants; no reply may hold one.
 const TOKEN_A: &str = "ghs_sample0token0a";
 const TOKEN_B: &str = "ghs_sample0token0b";
+/// A token that starts and ends with `g`.
+const TOKEN_G: &str = "ghs_sample0overlap0token0g";
 
 /// The route's answer for the GitHub App: a token for each URL in `grants`.
 fn grants(grants: Vec<(String, &'static str)>) -> impl Fn(&str) -> (u16, Value) + Send + Sync {
@@ -437,7 +439,7 @@ fn grants(grants: Vec<(String, &'static str)>) -> impl Fn(&str) -> (u16, Value) 
 
 fn token_free(reply: &Reply) {
     let body = String::from_utf8_lossy(&reply.body);
-    for token in [TOKEN_A, TOKEN_B] {
+    for token in [TOKEN_A, TOKEN_B, TOKEN_G] {
         assert!(!body.contains(token), "{body}");
     }
 }
@@ -535,6 +537,9 @@ fn a_url_the_route_does_not_serve_gets_no_credential() {
             [host.url("example-org/kit-a.git")]
         );
         assert!(host.seen().iter().all(|s| s.user.is_none()));
+        // No credential was handed out, so the reply keeps Toha's text.
+        let message = start.json["error"]["message"].as_str().unwrap();
+        assert!(message.starts_with("git fetch failed: "), "{message}");
         service.stop().await;
     });
 }
@@ -612,38 +617,90 @@ fn concurrent_operations_each_fetch_with_their_own_token() {
     });
 }
 
-/// Every written form of a granted credential, however a remote echoes it
-/// into Toha's error, is removed from the reply.
+/// The reply to a fetch that failed after the route handed out a token:
+/// the fixed sentence for its kind, and nothing of the remote's answer.
+const WITHHELD: &str = r#"{"error":{"kind":"template-resolve-failed","message":"the template could not be fetched; the Git host refused or failed the request"}}"#;
+
+/// A failed fetch with a host that echoes its credential back, as `echo`
+/// builds the echo, replies with `WITHHELD` exactly.
+async fn echoed(token: &'static str, echo: fn(&str, &str) -> String) {
+    let host = GitHost::start();
+    let world = world(&host);
+    host.admit(token, "example-org/kit-a.git");
+    host.echo(echo);
+    world
+        .hooks
+        .answer_credentials(grants(vec![(host.url("example-org/kit-a.git"), token)]));
+    let service = Running::start(&world).await;
+    let start = service
+        .post("/v1/interviews", &world.select("alpha", "private-a"))
+        .await;
+    assert_eq!(start.status, 422);
+    assert_eq!(String::from_utf8_lossy(&start.body), WITHHELD);
+    // The host saw the credential, so the echo is the one it sent.
+    assert!(
+        host.seen()
+            .iter()
+            .any(|s| s.user == Some(("x-access-token".to_owned(), token.to_owned())))
+    );
+    service.stop().await;
+}
+
+/// A host that echoes the `Authorization` header gets a fixed reply.
 #[test]
 fn a_credential_a_remote_echoes_never_reaches_the_reply() {
-    use base64::Engine;
+    run(echoed(TOKEN_A, |authorization, _| authorization.to_owned()));
+}
+
+/// A token that starts and ends with the same byte, echoed as itself and
+/// its overlapping rest, `T + T[1:]`: Toha redacts the first copy, which
+/// leaves the rest, so no redaction recovers it. The reply is fixed.
+#[test]
+fn an_overlapping_echo_of_the_token_never_reaches_the_reply() {
+    assert!(TOKEN_G.starts_with('g') && TOKEN_G.ends_with('g'));
+    run(echoed(TOKEN_G, |_, token| {
+        format!("{token}{}", &token[1..])
+    }));
+}
+
+/// A success reply can carry the host's content: a host that saw the token
+/// serves a template whose question prompt holds it. The reply boundary
+/// removes it.
+#[test]
+fn a_token_in_served_template_content_is_scrubbed_from_a_success_reply() {
     run(async {
         let host = GitHost::start();
-        let world = world(&host);
-        host.admit(TOKEN_A, "example-org/kit-a.git");
-        host.echo();
+        let repo = host.url("example-org/echo.git");
+        let world = World::with_templates(&[("echo", &format!("{repo}@v1"))]);
+        let source = world.root.join("templates/echo");
+        write(
+            &source,
+            "template.yml",
+            format!(
+                "name: echo\ninterview:\n  - {{id: label, type: text, prompt: 'Label {TOKEN_A} [{}]', required: true}}\n",
+                {
+                    let listed: Vec<String> = TOKEN_A.bytes().map(|b| b.to_string()).collect();
+                    listed.join(", ")
+                }
+            ),
+        );
+        write(&source, "template/out.txt", "label: {{ label }}\n");
+        git(&source, &["init", "-q", "-b", "main"]);
+        commit_all(&source, "echo");
+        git(&source, &["tag", "v1"]);
+        host.publish("example-org/echo.git", &source);
+        host.admit(TOKEN_A, "example-org/echo.git");
         world
             .hooks
-            .answer_credentials(grants(vec![(host.url("example-org/kit-a.git"), TOKEN_A)]));
+            .answer_credentials(grants(vec![(repo, TOKEN_A)]));
         let service = Running::start(&world).await;
         let start = service
-            .post("/v1/interviews", &world.select("alpha", "private-a"))
+            .post("/v1/interviews", &world.select("alpha", "echo"))
             .await;
-        assert_eq!(start.status, 422, "{}", start.json);
-        let body = String::from_utf8_lossy(&start.body).into_owned();
-        assert!(body.contains("<redacted>"), "{body}");
-        let pair =
-            base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{TOKEN_A}"));
-        let listed: Vec<String> = pair.bytes().map(|b| b.to_string()).collect();
-        for leaked in [TOKEN_A.to_owned(), pair.clone(), listed.join(", ")] {
-            assert!(!body.contains(&leaked), "{body}");
-        }
-        // The host saw the credential, so the echo is the one it sent.
-        assert!(
-            host.seen()
-                .iter()
-                .any(|s| s.user == Some(("x-access-token".to_owned(), TOKEN_A.to_owned())))
-        );
+        assert_eq!(start.status, 200, "{}", start.json);
+        let body = String::from_utf8_lossy(&start.body);
+        assert!(body.contains("Label <redacted> [<redacted>]"), "{body}");
+        token_free(&start);
         service.stop().await;
     });
 }
