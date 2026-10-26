@@ -120,12 +120,46 @@ impl From<toha::ApplyError> for ServiceError {
             E::Symlink(path) => {
                 Self::conflict("target-symlink", message).with_paths(vec![path.to_string()])
             }
-            E::Hook { .. } | E::HookOutput { .. } => Self::refused("hook-failed", message),
-            E::HookIo { .. } => Self::new(500, "hook-io-failed", message),
+            E::Hook {
+                index,
+                hook,
+                outcome,
+            } => Self::refused("hook-failed", hook_failure(index, &hook, &outcome)),
+            E::HookOutput { .. } => Self::refused("hook-failed", message),
+            E::HookIo {
+                index,
+                hook,
+                source,
+            } => Self::new(
+                500,
+                "hook-io-failed",
+                format!("{} could not run: {source}", hook_name(index, &hook)),
+            ),
             E::Io { .. } => Self::new(500, "io-failed", message),
             E::Record(_) => Self::new(500, "record-failed", message),
             _ => Self::refused("apply-failed", message),
         }
+    }
+}
+
+/// A hook named by its position and its template id. Toha's own message
+/// prints the planned hook, whose rendered arguments can carry an earlier
+/// hook's captured output, so the service never uses it.
+fn hook_name(index: usize, hook: &toha::plan::PlannedHook) -> String {
+    match &hook.id {
+        Some(id) => format!("hook {index} `{id}`"),
+        None => format!("hook {index}"),
+    }
+}
+
+fn hook_failure(
+    index: usize,
+    hook: &toha::plan::PlannedHook,
+    outcome: &toha::hook::HookOutcome,
+) -> String {
+    match outcome.code {
+        Some(code) => format!("{} failed with exit code {code}", hook_name(index, hook)),
+        None => format!("{} failed without an exit code", hook_name(index, hook)),
     }
 }
 
@@ -224,5 +258,60 @@ impl From<toha::protocol::AnswersDocumentError> for ServiceError {
             _ => "malformed-submission",
         };
         Self::bad_request(kind, error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use toha::hook::{HookError, HookOutcome};
+    use toha::plan::{PlannedHook, PlannedProgram, TargetPath};
+
+    const SECRET: &str = "captured-secret";
+
+    /// A hook whose rendered argument and working directory carry an
+    /// earlier hook's captured output.
+    fn rendered_hook() -> PlannedHook {
+        PlannedHook {
+            program: PlannedProgram::Run(vec!["sh".into(), "-c".into(), format!("use {SECRET}")]),
+            cwd: Some(TargetPath::parse(&format!("dir/{SECRET}")).unwrap()),
+            template_root: "/var/lib/sample/cache/t".into(),
+            id: Some(toha::template::Id::parse("step").unwrap()),
+            capture: Default::default(),
+            allow_failure: false,
+            parse_json: false,
+            status_id: None,
+        }
+    }
+
+    #[test]
+    fn a_failed_hook_names_its_position_and_id_but_never_its_arguments() {
+        let failed = ServiceError::from(toha::ApplyError::Hook {
+            index: 1,
+            hook: rendered_hook(),
+            outcome: HookOutcome {
+                success: false,
+                code: Some(3),
+                stdout: None,
+                stderr: None,
+            },
+        });
+        assert_eq!(
+            (failed.kind, failed.message.as_str()),
+            ("hook-failed", "hook 1 `step` failed with exit code 3")
+        );
+        let io = ServiceError::from(toha::ApplyError::HookIo {
+            index: 0,
+            hook: rendered_hook(),
+            source: HookError::EmptyCommand,
+        });
+        assert_eq!(io.kind, "hook-io-failed");
+        assert_eq!(
+            io.message,
+            "hook 0 `step` could not run: empty hook command"
+        );
+        for error in [failed, io] {
+            assert!(!String::from_utf8(error.body()).unwrap().contains(SECRET));
+        }
     }
 }

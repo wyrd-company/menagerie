@@ -81,6 +81,11 @@ func sampleTemplate(t *testing.T, dir string, version int) {
 	writeFile(t, dir, "template/.devcontainer/devcontainer.json", definition)
 }
 
+// capturedSecret is what the leaks template's first hook captures and its
+// second hook takes as an argument before it fails. The template holds it
+// only in lower case.
+const capturedSecret = "CAPTURED-SAMPLE-VALUE"
+
 // accept is a workspace root served by the real template service and the
 // workflows composed as the workspace service composes them.
 type accept struct {
@@ -149,6 +154,7 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	for name, template := range map[string]string{
 		"broken": "name: broken\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - run: [sh, -c, 'exit 3']\n",
 		"hangs":  "name: hangs\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - run: [sh, -c, 'while :; do date >> ticks.txt; sleep 0.1; done']\n",
+		"leaks":  "name: leaks\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - id: token\n    run: [sh, -c, 'echo " + strings.ToLower(capturedSecret) + " | tr a-z A-Z']\n    capture: [stdout]\n  - run: [sh, -c, 'exit 4', '{{ token.stdout }}']\n",
 		"flows":  "name: flows\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\n  - flow: stop\n    when: label == 'stop'\n  - {id: second, type: text, prompt: Second, required: true}\n",
 	} {
 		dir := filepath.Join(base, "templates", name)
@@ -185,8 +191,9 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	t2 := filepath.Join(base, "templates")
 	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s, hook-runner-socket: %s}\ntemplates:\n"+
 		"  - {id: sample-v1, name: Sample, address: 'file://%s@v1'}\n  - {id: sample-v2, name: Sample, address: 'file://%s@v2'}\n"+
-		"  - {id: broken, name: Broken, address: 'file://%s/broken'}\n  - {id: flows, name: Flows, address: 'file://%s/flows'}\n  - {id: hangs, name: Hangs, address: 'file://%s/hangs'}\n",
-		a.root, a.host.URL("backups.git"), socket, hookSocket, a.repo, a.repo, t2, t2, t2)
+		"  - {id: broken, name: Broken, address: 'file://%s/broken'}\n  - {id: flows, name: Flows, address: 'file://%s/flows'}\n  - {id: hangs, name: Hangs, address: 'file://%s/hangs'}\n"+
+		"  - {id: leaks, name: Leaks, address: 'file://%s/leaks'}\n",
+		a.root, a.host.URL("backups.git"), socket, hookSocket, a.repo, a.repo, t2, t2, t2, t2)
 	writeFile(t, base, "config.yml", config)
 	startService(t, bin, filepath.Join(base, "config.yml"), filepath.Join(base, "data"), socket)
 
@@ -199,7 +206,7 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	flows := New(Options{
 		Root:      root,
 		Templates: templates.New(socket),
-		Approved:  map[string]bool{"sample-v1": true, "sample-v2": true, "broken": true, "flows": true, "hangs": true},
+		Approved:  map[string]bool{"sample-v1": true, "sample-v2": true, "broken": true, "flows": true, "hangs": true, "leaks": true},
 		Remote:    &backup.Remote{URL: a.host.URL("backups.git"), Auth: backup.AgentAuth(a.host.AgentPath)},
 		Runtime:   runtime,
 		Hooks:     hooks,
@@ -468,6 +475,26 @@ func TestTemplateServiceFailuresAreVisibleJobs(t *testing.T) {
 		}
 		if status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"beta","templateId":"broken"}`); status != 409 || !strings.Contains(body, KindWorkspaceExists) {
 			t.Fatalf("second create %d %s", status, body)
+		}
+	})
+
+	t.Run("a failed hook's arguments stay out of the job", func(t *testing.T) {
+		job, _ := a.drive(t, "create", "leaky", "leaks", map[string]any{"label": "x"})
+		evidence(t, job)
+		snap := job.Snapshot()
+		// The job's error and every event, its log included, leave out the
+		// value the failed hook took as an argument.
+		all, _, _ := job.EventsAfter(0)
+		for _, e := range all {
+			if strings.Contains(string(e.Data), capturedSecret) {
+				t.Fatalf("event %d %s carries the captured value", e.ID, e.Type)
+			}
+		}
+		if snap.Error == nil || strings.Contains(snap.Error.Message, capturedSecret) {
+			t.Fatalf("job error %+v", snap.Error)
+		}
+		if snap.State != jobs.Failed || snap.Error.Kind != KindGenerationFailed || !strings.Contains(snap.Error.Message, "(hook-failed): hook 1 failed with exit code 4;") {
+			t.Fatalf("%+v %+v", snap, snap.Error)
 		}
 	})
 
