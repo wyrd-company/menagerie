@@ -210,7 +210,12 @@ description: >-
   request, can ask the route. This service asks only when an `https`
   remote asks for credentials, once for each challenge, with the URL
   `https://host[:port]/path`. The default port 443 is left out, and the path
-  is percent-encoded outside the unreserved characters and `/`. A 200 is the
+  is percent-encoded outside the unreserved characters and `/`. The URL
+  never carries user information, so a template address with a user name
+  is asked for as the same repository without it: a user name does not opt
+  out of the App, and the fetch sends the route's credential instead of
+  it. The route's own rule, which refuses a URL with user information,
+  applies to its direct callers. A 200 is the
   fetch's credential. A 404 leaves the challenge to Toha's default
   behaviour. A 502 fails the fetch with the prefix
   `GitHub App credentials are unavailable: ` and the route's reason, when
@@ -219,8 +224,26 @@ description: >-
   status, a malformed answer or an unreachable socket fails the fetch with
   a fixed reason of this service, after the same prefix. A failed fetch is
   a template refusal such as `template-resolve-failed`, whose message is
-  that reason where the flow reports Toha's message. No reply, error or log
-  line carries the token.
+  that reason where the flow reports Toha's message.
+
+
+  The request's resolver keeps every credential it handed out. Every reply
+  of a route, refusals and internal errors included, passes one boundary
+  that replaces each written form of those credentials with `<redacted>`:
+  the password; the `username:password` pair and the password in base64
+  and base64url, padded and unpadded; and each of those Rust-escaped,
+  JSON-escaped and as a decimal byte list. A remote that echoes the
+  credential into Toha's error therefore cannot return it. The service
+  writes no log line for a request.
+
+
+  When the workspace service's request ends before its reply, because the
+  job was cancelled or reached its time limit, the request's credential
+  requests end with it: one in flight loses its connection, and the fetch
+  fails with `GitHub App credentials are unavailable: the operation ended
+  before credentials arrived`; no later one is sent. Toha's own network
+  reads and local work for that request are not interrupted and run until
+  they return.
 
 
   Apply replies. Generate and apply answer 200 with `{"outcome","files",
@@ -298,9 +321,14 @@ validation-criteria: >-
   `src/credentials.rs` cover the credential request's URL and every answer
   of the route, and find a granted token in no refusal or `Debug` output;
   `tests/credentials.rs` fetches a private template over TLS with the
-  route's token through create and generate, leaves the challenge to Toha
-  on a 404, fails with the route's reason on a 502, and runs two creates at
-  once that each fetch with their own repository's token;
+  route's token through create and generate, also from an address with a
+  user name, leaves the challenge to Toha on a 404, fails with the route's
+  reason on a 502, runs two creates at once that each fetch with their own
+  repository's token, finds no written form of a credential a remote
+  echoes in the reply, and ends the credential request and its worker of
+  each caller that goes away, without leaving a thread; `go test -tags
+  templateservice ./backend/internal/workflows/` ends the credential
+  request of a create whose job reaches its time limit;
   `tests/numbers.rs` covers number values through the session and the
   applied record; `tests/revisions.rs` covers admitted revisions for
   fixed and moving addresses, installed branches and tags;

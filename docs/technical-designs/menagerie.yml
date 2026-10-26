@@ -399,9 +399,10 @@ proposed-design:
     no machine user; SSH stays for other hosts.
   github-app: >-
     With `github-app` configured, an `https` URL on the App's server whose
-    path is `/{owner}/{repo}` or `/{owner}/{repo}.git`, with no user
-    information, query or fragment, uses a GitHub App installation token
-    instead. The workspace service is the only minter. It signs the App's
+    path is `/{owner}/{repo}` or `/{owner}/{repo}.git`, with no query or
+    fragment, uses a GitHub App installation token instead: a backup URL
+    only without user information, a template address with or without a
+    user name. The workspace service is the only minter. It signs the App's
     RS256 JWT, issued 60 seconds in the past and expiring 9 minutes after
     now, with the App's private key, an RSA key in OpenBao's Transit engine,
     through Wyrwood's `vault.sock` with no token of its own. It takes the
@@ -426,7 +427,16 @@ proposed-design:
     inside one Toha credential resolver scope. When an `https` remote of a
     fetch asks for credentials, the resolver asks for the template's token
     on the hook runner socket (see credential-route) and answers that one
-    challenge with it. Every failure is a fixed reason, with at most a
+    challenge with it. It asks by the URL without user information, so a
+    template address with a user name still uses the App; a backup URL with
+    one gets no token. The resolver keeps what it handed out, and every
+    reply of the template service passes one boundary that removes each
+    written form of it, raw, base64 or base64url, escaped or as a byte
+    list, so a remote cannot echo it back through Toha's errors. The
+    resolver's credential request races the template service request's
+    caller: when the job is cancelled or reaches its limit, the request
+    loses its connection and the fetch fails with a fixed reason. Every
+    failure is a fixed reason, with at most a
     status code: no error carries a token, a JWT, a signature, a URL, a
     response body or a transport error's text. A push or fetch to a remote
     that is not SSH or a local path, a URL go-git cannot read included,

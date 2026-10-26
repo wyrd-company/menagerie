@@ -174,14 +174,17 @@ of the reasons in [Troubleshooting](troubleshooting.md#registry-credentials).
 ## GitHub App
 
 With `github-app`, Menagerie authenticates to GitHub with a GitHub App's
-installation tokens. A token is used only for an `https` URL on the App's
-server whose path is `/<owner>/<repository>` or `/<owner>/<repository>.git`,
-with no user information, query or fragment:
+installation tokens, for repositories on the App's server whose path is
+`/<owner>/<repository>` or `/<owner>/<repository>.git`:
 
-- backups to such a `workspace-repository`, with `contents: write` on that
-  repository;
-- template fetches over `https` from such a repository, with
-  `contents: read` on it.
+- Backups, with `contents: write` on the repository, when
+  `workspace-repository` is such an `https` URL with no user information,
+  query or fragment. A `workspace-repository` with a user name gets no
+  token and no other credential.
+- Template fetches, with `contents: read` on the repository, from every
+  `https` address of such a repository. A user name in the address does
+  not opt out: the template service asks for the token by the address
+  without it, and the fetch sends the token in its place.
 
 Every other URL keeps its own authentication: SSH URLs use the Wyrwood
 agent, and Menagerie gives other `https` URLs no credential. Both can be

@@ -82,6 +82,7 @@ the App's JWT, a URL and GitHub's or OpenBao's response text never appear.
 | the workspace service's credential route answered with an unexpected status | A template fetch: the template service and the workspace service come from the same image. |
 | the workspace service's credential route gave a malformed answer | As for an unexpected status. |
 | the token could not be minted | A template fetch: the workspace service's log. |
+| the operation ended before credentials arrived | A template fetch: the job was cancelled or reached its time limit while its token was minted. |
 
 A push or fetch over `https` names a fixed reason too:
 

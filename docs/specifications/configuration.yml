@@ -161,8 +161,10 @@ description: >-
   Optional `github-app` names a GitHub App whose installation tokens
   authenticate backups and template fetches to `https` repository URLs on
   its server: a URL whose path is exactly `/{owner}/{repo}` or
-  `/{owner}/{repo}.git`, with no user information, query or fragment.
-  Other URLs keep their own authentication, so SSH and the App can both be
+  `/{owner}/{repo}.git`, with no query or fragment. A backup URL must also
+  have no user information; one with a user name gets no token. A template
+  address may have a user name: the template service asks for the token by
+  the address without it, so a user name does not opt out. Other URLs keep their own authentication, so SSH and the App can both be
   in use. `app-id`, a positive integer, and `transit-key`, the name of the
   RSA Transit key at the mount `transit` that holds the App's private key
   (letters, digits, `_`, `.` and `-`, starting with a letter or digit, at
