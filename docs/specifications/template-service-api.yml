@@ -135,26 +135,32 @@ description: >-
   template; `cwd` is the hook's target-relative working directory or
   `null`; `templateRoot` is the template's folder in Toha's cache; and
   `capture` is `{"stdout","stderr"}`, the streams the hook declares. The
-  workspace service runs the hook in a throwaway container in its working
-  directory under the workspace folder, the program as given, with an
+  workspace service resolves the working directory under the workspace
+  folder with symbolic links followed and runs the hook in a throwaway
+  container in the folder it resolves to, the program as given, with an
   empty environment; a script's template folder is copied into the
   container at its own path first. A run hook answers 200 with
   `{"exitCode","success","stdout","stderr"}`, where a captured stream holds
   its raw bytes in base64 and an uncaptured one is `null` and went to the
   job console. Any other answer is `{"error":{"kind","message"}}` with
   one of the hook runner's kinds: `malformed-request` and `invalid-hook`,
-  status 400, for a request that is not a hook, a working directory
-  outside the folder or missing, or a script outside its template;
+  status 400, for a request that is not a hook, a working directory that
+  is missing, not a folder, or outside the folder once its symbolic links
+  are followed, or a script outside its template;
   `hook-token-refused`, status 403, for an unknown or revoked token or a
   `target` that is not the token's job's folder; `hook-cancelled`, status
   409, when the job was cancelled, its container then killed and removed;
   `runner-image-unavailable`, status 503, when no runner image could be
   found or pulled; `hook-container-failed`, status 500, when the Engine
-  failed. The
+  failed. A refusal's message is a fixed sentence: a failed container is
+  named by its stage (pull, create, copy, attach, start, wait, remove) and
+  the Engine error's class, never by the Engine's message, which can name
+  the program or its working directory. The
   workspace service revokes the token when the generate or apply request
   returns. A generate or apply without `hookToken`, or whose hook the
   runner refuses, fails that hook: the reply is `hook-io-failed`, and its
-  message names the runner's kind and message. A hook that runs and fails
+  message names the hook and a reason this service chose for the runner's
+  kind, never the runner's message. A hook that runs and fails
   is `hook-failed`, named by its position, its `id` when it has one and its
   exit code, never by its program, arguments or working directory, which
   can hold an earlier hook's captured output; `hook-io-failed` names the
@@ -177,7 +183,12 @@ description: >-
 
   Errors. A refusal answers `{"error":{"kind","message"}}`, adding `paths`
   for refused files, `locations` and `questions` for refused request values,
-  and `warnings`. Request and session: `malformed-request` (400),
+  and `warnings`. Generate and apply build every refusal Toha causes from a
+  message this service chose for the error's variant: no message, path or
+  warning carries a value Toha rendered, since a hook's captured output can
+  reach any value rendered after that hook ran. Their `paths` stay only on
+  `target-conflict` and `target-drift`, which are found from the plan
+  before any hook runs. Request and session: `malformed-request` (400),
   `malformed-session` (400), `session-tampered` (400),
   `malformed-submission` (400),
   `submission-template-mismatch` (400), `number-not-representable` (400),
@@ -227,7 +238,10 @@ validation-criteria: >-
   and hooks without a granted token, against a hook runner that runs each
   hook as a local process; the unit tests in `src/hooks.rs` cover the hook
   runner request, captured streams, exit codes, refusals and malformed
-  replies, none of which puts a stream in an error;
+  replies, none of which puts a stream or a reply's text in an error; the
+  unit tests in `src/error.rs` drive a captured value through every apply
+  error that can carry one, alone and wrapped as generate and apply
+  return it, and find it in no refusal;
   `tests/numbers.rs` covers number values through the session and the
   applied record; `tests/revisions.rs` covers admitted revisions for
   fixed and moving addresses, installed branches and tags;

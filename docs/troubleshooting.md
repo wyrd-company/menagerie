@@ -27,7 +27,7 @@ is stable; the message names what failed and what was left behind.
 | `timed-out` | The job passed a configured [time limit](configuration.md#job-time-limits); the message names the phase and the limit. A hook still running was stopped and its container removed before the job ended. A create keeps its folder, as every failed create does. A build or up can leave a half-created container: **Start** reuses it and **Rebuild** removes it. |
 | `initialize-command-failed` | The devcontainer's `initializeCommand` failed. The container was not started. |
 | `registry-credentials-unavailable` | A registry credential could not be read. The pull or build did not start. See below. |
-| `runner-image-unavailable` | No image could be found or pulled for the throwaway container of a template hook or `initializeCommand`. Without `runner-image`, Menagerie could not find its own container; set [`runner-image`](configuration.md#runner-images). With it, the message names the image and why its pull failed. |
+| `runner-image-unavailable` | No image could be found or pulled for the throwaway container of a template hook or `initializeCommand`. Without `runner-image`, Menagerie could not find its own container; set [`runner-image`](configuration.md#runner-images). With it, the message names the image, the stage that failed (inspect or pull) and the class of the Engine's error, such as `not-found` or `unauthorized`. |
 | `operation-failed` | Any other failure of a container operation, such as a failed build or pull; the message holds the cause. |
 | `internal-error` | A defect in Menagerie. Report it with the container's log. |
 

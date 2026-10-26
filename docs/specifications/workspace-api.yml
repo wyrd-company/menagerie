@@ -285,9 +285,12 @@ validation-criteria: >-
   and agent; `go test -tags templateservice ./backend/internal/workflows/`
   runs create and upgrade against the real template service. `go test
   ./backend/internal/throwaway/` covers the hook runner: token refusal and
-  revocation, folder and working directory checks, captured streams that
-  never reach the console, exit codes, cancellation that waits for the
-  container's removal, and runner image choice. `go test -tags docker
+  revocation, folder and working directory checks, linked working
+  directories, captured streams that never reach the console, exit codes,
+  cancellation that waits for the container's removal, runner image
+  choice, and a captured value carried through every failure, the fake
+  Engine's failure at each container stage included, that reaches no
+  refusal and no console line. `go test -tags docker
   ./backend/internal/devcontainer/ ./backend/internal/throwaway/` runs
   start, stop, rebuild, failing `initializeCommand`, Compose resource
   preservation, the `local-env` allowlist and the workspace list against a
@@ -295,8 +298,14 @@ validation-criteria: >-
   that look for the Docker socket, the SSH agent and Menagerie's
   environment find none, while they still write into the workspace folder;
   that a script hook runs from its copied template; that a revoked hook
-  leaves no container and stops writing; and that start-up removes only
-  its own root's leftovers. `go test -tags 'templateservice docker'
-  ./backend/internal/workflows/` runs a hook that never ends under a short
-  `generate` limit: the job ends timed-out with no hook container left and
-  no write to the folder after it.
+  leaves no container and stops writing; that the Engine's failure to start
+  a hook named by a captured value, and a working directory linked out of
+  the folder, reach no refusal or console line; and that start-up removes
+  only its own root's leftovers. `go test -tags templateservice
+  ./backend/internal/workflows/` also drives a captured value into an
+  invalid, missing and linked later working directory and a failing hook's
+  arguments, and finds it in no job error or event. `go test -tags
+  'templateservice docker' ./backend/internal/workflows/` runs those
+  templates in throwaway containers, and a hook that never ends under a
+  short `generate` limit: the job ends timed-out with no hook container
+  left and no write to the folder after it.

@@ -169,10 +169,17 @@ proposed-design:
     and maps to the job's context, workspace folder, runner image and
     console; an unknown or revoked token is refused. The hook runs in a
     throwaway container with an empty environment, in its target-relative
-    working directory. A script hook's template folder is copied into the
+    working directory, resolved with symbolic links followed; one that is
+    missing or resolves outside the workspace folder is refused before any
+    container exists. A script hook's template folder is copied into the
     container at its own path before it starts. Streams the hook captures
     return to Toha and never reach a log or an error; the others go to the
-    job console. When the job is cancelled or its request ends, the token is
+    job console. A captured value can reach any value Toha renders after
+    the hook ran, so no error carries a rendered value: the template
+    service builds every generate and apply refusal from a fixed message
+    per error variant, and the workspace service reports a failed throwaway
+    container by its stage and the Engine error's class, never by the
+    Engine's message. When the job is cancelled or its request ends, the token is
     revoked and the hook's container killed and removed before the job ends,
     so no hook writes to the folder afterwards. Toha's `requires` check
     resolves programs on the template service's `PATH`, which agrees with a
