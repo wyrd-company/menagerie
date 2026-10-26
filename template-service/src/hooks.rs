@@ -365,11 +365,12 @@ mod tests {
             error.to_string(),
             "the workspace service refused the hook (hook-token-refused): the hook token is unknown or revoked"
         );
-        let runner = Scripted::start(502, json!(["no envelope"]));
+        let runner = Scripted::start(502, json!(["secret reply body"]));
         let error = runner
             .run(&run_hook(Captured::default()), Some("token-1"))
             .unwrap_err();
         assert!(error.to_string().contains("answered 502"), "{error}");
+        assert!(!error.to_string().contains("secret"), "{error}");
     }
 
     /// A reply that does not match the hook's capture, or is not a reply,
