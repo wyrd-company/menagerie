@@ -253,8 +253,12 @@ no job in progress gets a commit job: every change is committed, as
 `chore(menagerie): automatic commit`, and the workspace's branch is backed
 up. A workspace with a job in progress is skipped until the next check.
 Files the workspace's ignore rules exclude, and repositories cloned inside
-it, are not committed. Without `auto-commit` nothing is committed on a
-schedule.
+it, are not committed. The ignore rules are the workspace's `.gitignore`
+files, its `.git/info/exclude`, and the file its repository's own
+`core.excludesFile` names when that file is inside the workspace folder;
+an exclude file elsewhere is skipped, with a note in the job's console.
+Menagerie's own Git configuration does not apply. Without `auto-commit`
+nothing is committed on a schedule.
 
 ## Workspace sockets
 
@@ -276,9 +280,16 @@ The socket only knows its own workspace, and needs no token.
   that comes sooner is refused with the time to wait, so a loop in a
   devcontainer cannot fill its backup branch.
 
-A devcontainer gets the socket when its container is created: a workspace
-that already had a container gets it at its next rebuild. A Compose
-workspace gets the socket on its primary service only.
+A devcontainer gets the socket when its container is created or rebuilt.
+A start keeps a container that was created without the socket as it is,
+so it is not recreated, and the job's console notes that the socket
+attaches at the next rebuild. A Compose workspace gets the socket on its
+primary service only.
+
+Each workspace's socket takes at most 32 connections at once, and all
+sockets together 256. A request has 10 seconds for its header and 10 for
+its body, and an idle connection is closed after 60 seconds; the wait for
+the commit job is bounded only by the `commit` [job time limit](#job-time-limits).
 
 ## Listen address and template service
 

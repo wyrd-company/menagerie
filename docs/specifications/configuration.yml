@@ -146,7 +146,11 @@ description: >-
   sets its mode to 0700 and refuses to start otherwise. `min-interval` is
   the shortest time between two accepted commits of a workspace through
   its socket: a duration, or `0` for none; absent, `1m`. Neither field's
-  value appears in a configuration error.
+  value appears in a configuration error, and the start-up checks of the
+  socket folder name the field and the rule, never the path or an
+  operating system error's text. No decoding error names an anchor: an
+  unknown alias or an anchor that holds its own alias is reported with a
+  fixed text.
 validation-criteria: >-
   `go test ./backend/internal/config/` parses a valid document, applies the
   defaults, rejects each invalid field, and checks that the schema's keys

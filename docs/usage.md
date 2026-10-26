@@ -107,11 +107,13 @@ with its whole log. The exit status says what happened:
 | 0 | Committed (or nothing to commit) and backed up. |
 | 1 | The job failed, as `commit-failed` or `backup-failed` for example. The job's console has the detail. |
 | 2 | Usage error, or a message that is blank, longer than 4096 bytes, or holds a NUL. |
-| 3 | The workspace has a job in progress, or committed less than the minimum interval ago. It prints when to retry. |
+| 3 | The workspace has a job in progress, committed less than the minimum interval ago, or Menagerie is shutting down. It prints when to retry. |
 | 4 | The socket cannot be reached: the container was created before Menagerie had workspace sockets, or Menagerie is not running. |
 
-A container gets the socket when it is created, so a workspace that was
-running before sockets were configured needs one **Rebuild**. A restart of
+A container gets the socket when it is created or rebuilt, so a workspace
+whose container was created before sockets were configured needs one
+**Rebuild**; a **Start** keeps that container as it is, and its console
+says the socket attaches at the next rebuild. A restart of
 Menagerie does not: the socket comes back in the same mounted folder.
 `MENAGERIE_WORKSPACE_SOCKET` names the socket inside the devcontainer.
 

@@ -205,9 +205,18 @@ description: >-
 
   Commit. A `commit` job stages every change of the workspace, as `git
   add --all` would: untracked, modified and deleted files, and what is
-  already staged. Untracked paths the ignore rules exclude and files inside
-  a nested Git repository stay unstaged. In the `commit` phase it commits
-  on the workspace branch, as Menagerie, when anything changed; in the
+  already staged. A file that replaces a tracked folder, or a folder that
+  replaces a tracked file, takes the old entries out of the index, in this
+  commit and in the commits after generation and upgrades. Untracked paths
+  the ignore rules exclude and files inside a nested Git repository stay
+  unstaged. The ignore rules are the workspace's `.gitignore` files, its
+  `.git/info/exclude` and the file its repository's own
+  `core.excludesFile` names; Menagerie's own Git configuration is never
+  read. An exclude file that does not resolve, through symbolic links, to
+  a regular file inside the workspace folder is skipped, and the job
+  console notes it without its path. In the `commit` phase it commits on
+  the workspace branch, as Menagerie, when the staged index differs from
+  the branch's commit; in the
   `backup` phase it force-pushes the branch, also when nothing changed. A
   commit that fails, for example on a workspace whose HEAD is not on its
   branch, fails as `commit-failed` with nothing pushed; a failed push fails
@@ -217,7 +226,8 @@ description: >-
   first one interval after start-up, and starts a commit with the message
   `chore(menagerie): automatic commit` on each workspace that has no
   unfinished job and a change the job would commit; a busy workspace is
-  skipped, never queued. The `commit` operation's time limit applies to
+  skipped, never queued. The check stages in memory and writes nothing,
+  so it finds a change exactly when the job would commit. The `commit` operation's time limit applies to
   every commit job.
 
 
@@ -226,8 +236,11 @@ description: >-
   `MENAGERIE_WORKSPACE_SOCKET` unless the definition sets that name, and
   the client `/run/menagerie/bin/workspace-commit`. The folder
   `/run/menagerie` is the workspace's folder in the socket folder, mounted
-  read-only on each start and rebuild of a single container or a Compose
-  primary; an existing container gets it at its next rebuild. A Compose
+  read-only on each rebuild of a single container or a Compose primary,
+  and on each start that creates the container or reuses one that has the
+  mount. A start that reuses a container created without the mount leaves
+  out the mount and the variable, so the container is not recreated, and
+  the job log notes that the socket attaches at the next rebuild. A Compose
   workspace whose socket folder path holds a comma or ends in a space gets
   no mount, and the job log says so. The socket serves the one workspace
   it was created for and speaks HTTP/1.1 JSON, defined by
@@ -238,7 +251,15 @@ description: >-
   job to end and answers 200 `{"jobId","state","commit","changed",
   "pushed","error"}`: `commit` is the branch's commit after the commit
   phase, null when that phase failed, and `error` is null or `{"kind"}`. A
-  client that disconnects does not cancel the job. Refusals answer
+  client that disconnects does not cancel the job. When Menagerie shuts
+  down while a request waits, it answers 503 `{"error":{"kind":
+  "shutting-down","jobId"}}`, with `jobId` when the request had started a
+  job, and a request that arrives during shutdown gets the same without
+  `jobId`. Each workspace's socket has at most 32 connections at once and
+  the process 256; a connection over either is closed when accepted. The
+  request header and the body each have 10 seconds, and an idle
+  connection is closed after 60; the wait for the job has none, as the
+  `commit` operation's time limit governs it. Refusals answer
   `{"error":{"kind"}}`: 400 `invalid-message` or `invalid-request`; 409
   `workspace-busy` with `activeJobId`; 429 `rate-limited` with
   `retryAfterSeconds` and `Retry-After` when the workspace's last accepted
@@ -251,8 +272,8 @@ description: >-
   `workspace-commit [-m] <message>` prints the job id, the commit and
   whether the backup pushed, and exits 0 when the job succeeded, 1 when it
   failed (with its kind), 2 on a usage error or an invalid message, 3 when
-  the workspace is busy or rate limited (with when to retry) and 4 when
-  the socket cannot be reached.
+  the workspace is busy, rate limited (with when to retry) or Menagerie
+  is shutting down, and 4 when the socket cannot be reached.
 
 
   `GET /api/jobs/{id}/events` streams the job's events as Server-Sent Events.
@@ -380,11 +401,19 @@ validation-criteria: >-
   ./backend/cmd/workspace-commit/` covers the commit job's phases and
   kinds, the sweep's idle and change checks, the socket's binding to its
   workspace, message and request checks, the minimum interval, the busy
-  refusal, a client that leaves, stale and linked socket files, and a
-  reply for every refusal and failure that carries only kinds, ids,
-  hashes, numbers and booleans. `go test -tags docker
+  refusal, a client that leaves, the connection bounds, the header, body
+  and idle deadlines, a job wait longer than all of them, the
+  shutting-down answer, stale and linked socket files, start-up errors
+  without a path, and a reply for every refusal and failure that carries
+  only kinds, ids, hashes, numbers and booleans. `go test
+  ./backend/internal/backup/` covers a file and a folder that replace each
+  other, the workspace's exclude files inside and outside the workspace,
+  and that the change check agrees with the commit over a table of
+  workspace states. `go test -tags docker
   ./backend/internal/devcontainer/` also has a devcontainer commit a file
   through `workspace-commit` and its read-only mounted socket, before and
   after the socket is re-created and after a rebuild, a Compose primary do
   the same, a sweep commit a workspace left dirty, each onto the backup
-  branch, and an `initializeCommand` find no socket.
+  branch, an `initializeCommand` find no socket, and a start keep a
+  single container and a Compose primary created without the socket, with
+  the same container id, until a rebuild gives it the socket.

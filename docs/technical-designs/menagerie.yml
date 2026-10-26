@@ -124,9 +124,19 @@ proposed-design:
   commit-operation: >-
     The commit operation is a job of two phases. Its `commit` phase stages
     every change of the workspace, as `git add --all` would: untracked,
-    modified and deleted files, and what is already staged. Untracked paths
-    the workspace's ignore rules exclude and anything inside a nested Git
-    repository stay unstaged. When anything changed, it commits on the
+    modified and deleted files, and what is already staged. A file that
+    replaces a tracked folder, or a folder that replaces a tracked file,
+    takes the old entries out of the index. Untracked paths the workspace's
+    ignore rules exclude and anything inside a nested Git repository stay
+    unstaged. The ignore rules are the workspace's own: its `.gitignore`
+    files, `.git/info/exclude` and the file its repository's
+    `core.excludesFile` names. Menagerie reads only the repository's own
+    `.git/config`, never its own Git configuration, and the repository's
+    configuration is written from inside the devcontainer, so an exclude
+    file is used only when it resolves, through symbolic links, to a
+    regular file inside the workspace folder; otherwise the job console
+    gets a fixed note, without the path, and the file is skipped. When the
+    staged index differs from the branch's commit, it commits on the
     workspace branch as Menagerie. Its `backup` phase force-pushes the
     branch as every backup does, also when nothing changed, so a backup
     that failed before is pushed again. A failed phase fails the job as
@@ -139,7 +149,9 @@ proposed-design:
     commit job, with the message `chore(menagerie): automatic commit`, on
     each workspace that has no unfinished job and has a change the job
     would commit. A busy workspace is skipped until the next sweep, never
-    queued. Checking for changes changes nothing. A workspace whose changes
+    queued. The check stages the workspace's changes in memory and compares
+    the result with the branch's commit, so it finds a change exactly when
+    the job would commit one, and it writes nothing. A workspace whose changes
     cannot be read is logged by its name with a fixed text.
   workspace-socket: >-
     With `workspace-socket`, each workspace has a Unix socket that its
@@ -149,12 +161,16 @@ proposed-design:
     the services' user and has mode 0700. It holds a folder per workspace,
     mode 0755, with `workspace.sock`, mode 0666, and
     `bin/workspace-commit`, the static client copied from Menagerie's
-    image. Each start and rebuild, of a single container or a Compose
-    primary, bind-mounts the workspace's folder read-only at
+    image. Each rebuild, and each start that creates the container or
+    reuses one that already has the mount, of a single container or a
+    Compose primary, bind-mounts the workspace's folder read-only at
     `/run/menagerie`, and sets `MENAGERIE_WORKSPACE_SOCKET` to the socket
     unless the definition sets that name itself; the definition on disk
-    does not change. A container gets the mount when it is created, so an
-    existing container gets it at its next rebuild. The folder is mounted,
+    does not change. A start that reuses a container created without the
+    mount leaves out the mount and the variable, because adding them
+    changes the configuration devcontainer-builder compares and Compose
+    would recreate the primary; the job console notes that the socket
+    attaches at the next rebuild. The folder is mounted,
     not the socket, so a socket that a restarted Menagerie re-creates is
     reached through the same mount. The workspace service creates a
     listener for every workspace at start-up, and before each start or
@@ -168,12 +184,21 @@ proposed-design:
     /v1/commits` with a commit message, which starts a commit job on the
     bound workspace, waits for it to end and returns the job's id, end
     state, commit, whether it changed and was pushed, and the error kind.
-    A client that goes away does not cancel the job. A second commit of a
+    A client that goes away does not cancel the job. When Menagerie shuts
+    down, a request waiting for its job is answered 503 `shutting-down`
+    with the job's id, and the client exits as for a retry. Each
+    workspace's socket takes at most 32 connections at once and the
+    process 256; a connection over either bound is closed as soon as it is
+    accepted. A request's header and its body each have 10 seconds and an
+    idle connection 60; the wait for the job has no deadline, since the
+    commit operation's time limit governs the job. A second commit of a
     workspace within the minimum interval of its last accepted one is
     refused with the time left, so a loop in a container cannot fill its
     backup branch. Every reply carries kinds, ids, hashes, numbers and
     booleans only, never a message, so no error, path or remote address
-    reaches the container; the job console has the detail. A commit
+    reaches the container; the job console has the detail. Start-up checks
+    of the socket folder and the client name the entry and the rule, never
+    a path or an operating system error's text. A commit
     records what the container could already write: no path is refused.
     Throwaway containers never get the socket folder.
   docker-access: >-
