@@ -30,7 +30,27 @@ release-units:
     - adapter: go
       file: go.mod
       mode: none
+    # The wyrd.foo product page shows the installed version.
+    - adapter: yaml
+      file: docs/user/docs.yml
+      pointer: /products/menagerie/version
+      mode: committed
     tags:
       primary:
         role: primary
         template: '{version}'
+  # The public docs release on their own, so the docs footer can say which docs
+  # describe which Menagerie version. Docs units are tag-only.
+  menagerie-docs:
+    path: docs/user
+    depends-on:
+    - menagerie
+    projections:
+    - adapter: yaml
+      file: docs.yml
+      pointer: /products/menagerie/docs-version
+      mode: committed
+    tags:
+      primary:
+        role: primary
+        template: '{id}@{version}'
