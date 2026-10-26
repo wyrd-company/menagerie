@@ -81,6 +81,10 @@ struct HostState {
     challenged: Vec<String>,
     /// Whether a held challenge gave up waiting for the others.
     gave_up: bool,
+    /// Whether an admitted advertisement request is answered with its own
+    /// `Authorization` header as the service name, as a misbehaving host
+    /// does.
+    echo: bool,
 }
 
 /// A smart HTTP Git host over TLS on loopback.
@@ -174,6 +178,10 @@ impl GitHost {
         *self.rendezvous.lock().unwrap() = repositories;
     }
 
+    fn echo(&self) {
+        self.state.0.lock().unwrap().echo = true;
+    }
+
     fn gave_up(&self) -> bool {
         self.state.0.lock().unwrap().gave_up
     }
@@ -239,7 +247,11 @@ fn serve(
         user: user.clone(),
     });
     let out = reader.get_mut();
-    let Some((name, token)) = user else {
+    // Credentials the host did not issue are challenged, as GitHub does; a
+    // token issued for another repository is refused.
+    let user =
+        user.filter(|(name, token)| name == "x-access-token" && host.tokens.contains_key(token));
+    let Some((_, token)) = user else {
         if !host.challenged.contains(&repo) {
             host.challenged.push(repo);
             arrived.notify_all();
@@ -262,9 +274,24 @@ fn serve(
         );
         return;
     };
-    if name != "x-access-token" || host.tokens.get(&token) != Some(&repo) {
+    if host.tokens.get(&token) != Some(&repo) {
         drop(host);
         respond(out, "403 Forbidden", &[], b"");
+        return;
+    }
+    if host.echo && path.ends_with("/info/refs") {
+        drop(host);
+        let line = format!("# service={}\n", headers["authorization"]);
+        let body = format!("{:04x}{line}0000", line.len() + 4);
+        respond(
+            out,
+            "200 OK",
+            &[(
+                "Content-Type",
+                "application/x-git-upload-pack-advertisement",
+            )],
+            body.as_bytes(),
+        );
         return;
     }
     drop(host);
@@ -581,6 +608,150 @@ fn concurrent_operations_each_fetch_with_their_own_token() {
                 "{seen:?}"
             );
         }
+        service.stop().await;
+    });
+}
+
+/// Every written form of a granted credential, however a remote echoes it
+/// into Toha's error, is removed from the reply.
+#[test]
+fn a_credential_a_remote_echoes_never_reaches_the_reply() {
+    use base64::Engine;
+    run(async {
+        let host = GitHost::start();
+        let world = world(&host);
+        host.admit(TOKEN_A, "example-org/kit-a.git");
+        host.echo();
+        world
+            .hooks
+            .answer_credentials(grants(vec![(host.url("example-org/kit-a.git"), TOKEN_A)]));
+        let service = Running::start(&world).await;
+        let start = service
+            .post("/v1/interviews", &world.select("alpha", "private-a"))
+            .await;
+        assert_eq!(start.status, 422, "{}", start.json);
+        let body = String::from_utf8_lossy(&start.body).into_owned();
+        assert!(body.contains("<redacted>"), "{body}");
+        let pair =
+            base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{TOKEN_A}"));
+        let listed: Vec<String> = pair.bytes().map(|b| b.to_string()).collect();
+        for leaked in [TOKEN_A.to_owned(), pair.clone(), listed.join(", ")] {
+            assert!(!body.contains(&leaked), "{body}");
+        }
+        // The host saw the credential, so the echo is the one it sent.
+        assert!(
+            host.seen()
+                .iter()
+                .any(|s| s.user == Some(("x-access-token".to_owned(), TOKEN_A.to_owned())))
+        );
+        service.stop().await;
+    });
+}
+
+/// A user name in a template address does not opt out of the App: the
+/// route is asked for the address without it, and the fetch uses the token.
+#[test]
+fn a_template_address_with_a_user_name_fetches_with_the_app_token() {
+    run(async {
+        let host = GitHost::start();
+        let repo = host.url("example-org/kit-a.git");
+        let address = format!(
+            "{}@v1",
+            repo.replacen("https://", "https://sample-user@", 1)
+        );
+        let world = World::with_templates(&[("named-user", &address)]);
+        host.publish("example-org/kit-a.git", &world.sample);
+        host.admit(TOKEN_A, "example-org/kit-a.git");
+        world
+            .hooks
+            .answer_credentials(grants(vec![(repo.clone(), TOKEN_A)]));
+        let service = Running::start(&world).await;
+        let start = service
+            .post("/v1/interviews", &world.select("alpha", "named-user"))
+            .await;
+        assert_eq!(start.status, 200, "{}", start.json);
+        token_free(&start);
+        let urls = world.hooks.credential_urls();
+        assert!(
+            !urls.is_empty() && urls.iter().all(|u| *u == repo),
+            "{urls:?}"
+        );
+        assert!(
+            host.seen()
+                .iter()
+                .any(|s| s.user == Some(("x-access-token".to_owned(), TOKEN_A.to_owned())))
+        );
+        service.stop().await;
+    });
+}
+
+/// The threads of this process.
+fn threads() -> usize {
+    std::fs::read_dir("/proc/self/task").unwrap().count()
+}
+
+/// Wait up to ten seconds for `ok`.
+async fn eventually(ok: impl Fn() -> bool) -> bool {
+    for _ in 0..1000 {
+        if ok() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    ok()
+}
+
+/// A caller that goes away while the credential route holds its request,
+/// as a cancelled job or one at its limit does, ends the request: the
+/// route's connection closes, the worker returns, and repeats add no
+/// thread.
+#[test]
+fn a_caller_going_away_ends_its_credential_request_and_worker() {
+    run(async {
+        let host = GitHost::start();
+        let world = world(&host);
+        world.hooks.hold_credentials(true);
+        let service = Running::start(&world).await;
+        let mut settled = None;
+        for n in 1..=5 {
+            let socket = service.socket.clone();
+            let selector = world.select(&format!("w{n}"), "private-a");
+            let caller = tokio::spawn(async move {
+                post_bytes(
+                    &socket,
+                    "/v1/interviews",
+                    body_of("/v1/interviews", &selector),
+                )
+                .await
+            });
+            assert!(
+                eventually(|| world.hooks.held() == n).await,
+                "request {n} did not reach the credential route"
+            );
+            caller.abort();
+            assert!(
+                eventually(|| world.hooks.released() == n).await,
+                "the credential request of caller {n} stayed open"
+            );
+            match settled {
+                // The first repeat starts the blocking pool's worker.
+                None => settled = Some(threads()),
+                Some(limit) => assert!(
+                    eventually(|| threads() <= limit).await,
+                    "caller {n} left a thread: {} > {limit}",
+                    threads()
+                ),
+            }
+        }
+        // The service still answers, so no worker holds it.
+        world.hooks.hold_credentials(false);
+        world
+            .hooks
+            .answer_credentials(|_| (404, json!({"reason": "no GitHub App is configured"})));
+        let start = service
+            .post("/v1/interviews", &world.select("after", "private-a"))
+            .await;
+        assert_eq!(start.kind(), "template-resolve-failed", "{}", start.json);
         service.stop().await;
     });
 }

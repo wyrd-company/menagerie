@@ -40,10 +40,15 @@ Private templates are fetched in one of two ways:
   Toha work inside one Toha credential resolver scope (`src/credentials.rs`).
   When an `https` remote asks for credentials, the resolver posts the URL to
   the credential route on the workspace service's hook runner socket. The
-  route answers with a read token for that one repository. If the route
-  answers 404, the fetch keeps Toha's default behaviour. If the route cannot
-  mint a token, the fetch fails with the route's reason. The token stays in
-  memory for the fetch, and no error or log line carries it.
+  route answers with a read token for that one repository. The URL carries
+  no user name, so a user name in a template address does not opt out of
+  the App. If the route answers 404, the fetch keeps Toha's default
+  behaviour. If the route cannot mint a token, the fetch fails with the
+  route's reason. The token stays in memory for the fetch. Every reply
+  passes one boundary in `src/server.rs` that removes each written form of
+  the credentials the request's resolver handed out, so a remote that
+  echoes one into an error cannot return it. When the workspace service's
+  request ends early, the resolver's credential request ends with it.
 
 The image builds curl with rustls. Toha's transport then trusts only the
 certificates in `SSL_CERT_FILE` or `SSL_CERT_DIR` when either is set, and

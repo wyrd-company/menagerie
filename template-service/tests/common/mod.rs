@@ -395,6 +395,7 @@ pub struct HookHost {
     pub calls: Arc<std::sync::Mutex<Vec<Value>>>,
     credential_urls: Arc<std::sync::Mutex<Vec<String>>>,
     credential_answer: Arc<std::sync::Mutex<CredentialAnswer>>,
+    hold: Arc<Hold>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -412,6 +413,8 @@ impl HookHost {
             Arc::new(|_: &str| (404, json!({"reason": "no GitHub App is configured"})));
         let credential_answer = Arc::new(std::sync::Mutex::new(no_app));
         let (urls, answer) = (credential_urls.clone(), credential_answer.clone());
+        let hold = Arc::new(Hold::default());
+        let holding = hold.clone();
         let thread = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -441,7 +444,11 @@ impl HookHost {
                             urls.lock().unwrap().push(url.clone());
                             let respond = answer.lock().unwrap().clone();
                             let (status, reply) = respond(&url);
+                            let holding = holding.clone();
                             async move {
+                                if holding.on.load(std::sync::atomic::Ordering::SeqCst) {
+                                    holding.wait().await;
+                                }
                                 (
                                     axum::http::StatusCode::from_u16(status).unwrap(),
                                     [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -464,6 +471,7 @@ impl HookHost {
             calls,
             credential_urls,
             credential_answer,
+            hold,
             stop: Some(stop),
             thread: Some(thread),
         }
@@ -481,14 +489,62 @@ impl HookHost {
         *self.credential_answer.lock().unwrap() = Arc::new(answer);
     }
 
+    /// Whether every credential request from now on is held until its
+    /// caller closes the connection.
+    pub fn hold_credentials(&self, on: bool) {
+        self.hold.on.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many credential requests were held.
+    pub fn held(&self) -> usize {
+        self.hold.held.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// How many held credential requests ended because their caller closed
+    /// the connection.
+    pub fn released(&self) -> usize {
+        self.hold.released.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// The URL of every credential request, in order.
     pub fn credential_urls(&self) -> Vec<String> {
         self.credential_urls.lock().unwrap().clone()
     }
 }
 
+/// Held credential requests: each waits until its connection closes, or
+/// until the host stops.
+#[derive(Default)]
+pub struct Hold {
+    on: std::sync::atomic::AtomicBool,
+    held: std::sync::atomic::AtomicUsize,
+    released: std::sync::atomic::AtomicUsize,
+    stopping: tokio::sync::Notify,
+}
+
+impl Hold {
+    async fn wait(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        /// Counts the request released when the server drops it, which it
+        /// does when the caller closes the connection.
+        struct Released<'a>(&'a Hold);
+        impl Drop for Released<'_> {
+            fn drop(&mut self) {
+                self.0.released.fetch_add(1, SeqCst);
+            }
+        }
+        let stopping = self.stopping.notified();
+        self.held.fetch_add(1, SeqCst);
+        let released = Released(self);
+        stopping.await;
+        // Stopping the host is not a caller closing the connection.
+        std::mem::forget(released);
+    }
+}
+
 impl Drop for HookHost {
     fn drop(&mut self) {
+        self.hold.stopping.notify_waiters();
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
