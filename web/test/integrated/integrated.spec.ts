@@ -138,18 +138,27 @@ test.describe("as a manager", () => {
     };
     const jobId = jobs.jobs[0]!.jobId;
     await page.goto("/");
+    const link = page
+      .getByRole("region", { name: "Jobs since Menagerie started" })
+      .locator(`a[href="/?job=${encodeURIComponent(jobId)}"]`);
+    // The list's reads finish with the session, or they meet the 401 before the stream does.
+    await expect(link).toBeVisible();
     await page.context().clearCookies({ domain: "localhost", name: undefined });
     const events = page.waitForResponse((r) => r.url().includes(`/api/jobs/${jobId}/events`));
+    // The job's summary read meets the 401 too and redirects; held until the stream
+    // answers, that redirect cannot cancel the stream's request.
+    const summary = (u: URL) => u.pathname === `/api/jobs/${jobId}`;
+    await page.route(summary, async (route) => {
+      await events;
+      await route.continue();
+    });
     // An in-app navigation: no page request, so the API and the stream meet the missing session.
-    await page
-      .getByRole("region", { name: "Jobs since Menagerie started" })
-      .getByRole("link")
-      .first()
-      .click();
+    await link.click();
     expect((await events).status()).toBe(401);
-    await page.waitForURL(
-      (u) => u.pathname === "/auth/login" || u.origin === new URL(info.pocket).origin,
-    );
+    // Each 401 starts a redirect and a later one aborts an earlier one's navigation, which
+    // fails waitForURL and toHaveURL; polling the URL sees only the navigation that commits.
+    await expect.poll(() => new URL(page.url()).origin).toBe(new URL(info.pocket).origin);
+    await page.unroute(summary);
     await signIn(page, "sample-manager");
   });
 
