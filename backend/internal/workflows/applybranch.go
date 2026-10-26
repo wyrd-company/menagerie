@@ -72,6 +72,10 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	if errors.Is(err, backup.ErrBranchNotFound) {
 		return &jobs.Failure{Kind: KindBranchNotFound, Err: fmt.Errorf("the workspace repository has no branch %s; nothing was changed", a.branch)}
 	}
+	var shallow *backup.NotApplicableError
+	if errors.As(err, &shallow) {
+		return &jobs.Failure{Kind: KindNotApplicable, Err: fmt.Errorf("branch %s cannot be applied: %s; nothing was changed", a.branch, shallow.Reason)}
+	}
 	if err != nil {
 		return &jobs.Failure{Kind: KindFetchFailed, Err: fmt.Errorf("fetching branch %s from the workspace repository failed; nothing was changed", a.branch)}
 	}
@@ -117,6 +121,14 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	}
 	if applied.Outcome == backup.AlreadyApplied {
 		fmt.Fprintf(run.Log(""), "branch %s at %s is already applied; nothing changed and the devcontainer was not rebuilt\n", a.branch, fetched)
+		// The workspace's own branch then contains the remote's commit, so
+		// the push only moves the remote forward.
+		if a.branch == a.name {
+			run.Phase("backup")
+			if err := push(ctx, a.w.opts.Remote, a.folder, a.name, run); err != nil {
+				return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("branch %s is already applied, but the backup of the workspace failed", a.branch)}
+			}
+		}
 		return nil
 	}
 	fmt.Fprintf(run.Log(""), "applied branch %s (%s): the workspace branch moved from %s to %s\n", a.branch, applied.Outcome, applied.Before, applied.Hash)

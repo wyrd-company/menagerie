@@ -116,19 +116,27 @@ proposed-design:
     named branch is the workspace's own: that push would replace the
     commits about to be applied, so it waits for the push after the apply,
     and a refused apply leaves the workspace repository as it was. A
-    branch already in
-    the workspace branch's history changes nothing more. A branch that
+    shallow workspace repository, or fetched history that lacks a commit or
+    tree, refuses the apply. A branch already in the workspace branch's
+    history changes nothing more, except that the workspace's own branch is
+    then backed up. A branch that
     extends the workspace branch fast-forwards it. Otherwise the two merge
     file by file over their single merge base: a path changed on one side
     only takes that side, and a path both sides changed differently, no
     merge base, several, or a file where the result has a folder refuse the
     apply with nothing changed. go-git has no merge, and this merge never
     writes conflict markers. Before writing, the apply refuses a change
-    that has an invalid path, a `.git` component or a submodule, or that
-    would write over an untracked or ignored file, folder or link, inside a
-    nested repository, or over a file changed since the local backup. It
-    writes only the changed paths, without following links, records the
-    index, moves the branch last, backs it up and rebuilds the devcontainer.
+    that has a path Menagerie does not write (the one check staging uses,
+    go-git's own included) or a submodule, or that would write over an
+    untracked or ignored file, folder or link, or inside a nested
+    repository. The devcontainer keeps running, so the apply changes the
+    folder through descriptors that never follow a symbolic link in any
+    component, moves the files it replaces or removes to temporary names in
+    their folders, and checks them there; a file changed since the local
+    backup moves everything back and refuses the apply with the change
+    kept. It then writes only the changed paths, each to a free name,
+    removes the moved files, records the index, moves the branch last,
+    backs it up and rebuilds the devcontainer.
     The applied record is a file like any other. Only the API and the UI
     start it, never the workspace socket.
   container-operations: >-
@@ -154,8 +162,9 @@ proposed-design:
     modified and deleted files, and what is already staged. A file that
     replaces a tracked folder, or a folder that replaces a tracked file,
     takes the old entries out of the index. Untracked paths the workspace's
-    ignore rules exclude and anything inside a nested Git repository stay
-    unstaged. The ignore rules are the workspace's own: its `.gitignore`
+    ignore rules exclude, anything inside a nested Git repository, and
+    paths go-git could not read back from the index, such as a tab or a
+    newline in a name, stay unstaged, so later backups keep working. The ignore rules are the workspace's own: its `.gitignore`
     files, `.git/info/exclude` and the file its repository's
     `core.excludesFile` names. Menagerie reads only the repository's own
     `.git/config`, never its own Git configuration, and the repository's

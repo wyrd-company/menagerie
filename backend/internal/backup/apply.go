@@ -7,6 +7,8 @@
 package backup
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -141,17 +143,17 @@ func Apply(folder, workspace, branch string, log io.Writer) (Applied, error) {
 		return out, nil
 	}
 
-	headFiles, err := commitFiles(head)
+	headFiles, err := commitFiles(repo.Storer, head)
 	if err != nil {
 		return Applied{}, err
 	}
-	theirFiles, err := commitFiles(theirs)
+	theirFiles, err := commitFiles(repo.Storer, theirs)
 	if err != nil {
-		return Applied{}, err
+		return Applied{}, missingHistory(err)
 	}
 	forward, err := head.IsAncestor(theirs)
 	if err != nil {
-		return Applied{}, err
+		return Applied{}, missingHistory(err)
 	}
 	var result map[string]entry
 	if forward {
@@ -169,7 +171,7 @@ func Apply(folder, workspace, branch string, log io.Writer) (Applied, error) {
 		default:
 			return Applied{}, &NotApplicableError{Reason: fmt.Sprintf("%s and the workspace branch have %d merge bases", branch, len(bases))}
 		}
-		baseFiles, err := commitFiles(bases[0])
+		baseFiles, err := commitFiles(repo.Storer, bases[0])
 		if err != nil {
 			return Applied{}, err
 		}
@@ -181,12 +183,13 @@ func Apply(folder, workspace, branch string, log io.Writer) (Applied, error) {
 		out.Outcome = Merged
 		fmt.Fprintf(log, "merging %s at %s into the workspace branch at %s over their merge base %s\n", branch, theirs.Hash, head.Hash, bases[0].Hash)
 	}
-	if clashes := fileFolderClashes(result); len(clashes) > 0 {
-		return Applied{}, &NotApplicableError{Reason: "the result has a file where it also has a folder of the same name", Paths: clashes}
-	}
+	// Paths are checked before the clash check walks their folders.
 	out.Paths = changedPaths(headFiles, result)
 	if err := checkChange(out.Paths, headFiles, result); err != nil {
 		return Applied{}, err
+	}
+	if clashes := fileFolderClashes(result); len(clashes) > 0 {
+		return Applied{}, &NotApplicableError{Reason: "the result has a file where it also has a folder of the same name", Paths: clashes}
 	}
 	if out.Outcome == Merged {
 		out.Hash, err = mergeCommit(repo.Storer, result, head.Hash, theirs.Hash, fmt.Sprintf("Apply %s to workspace %s", branch, workspace))
@@ -204,7 +207,16 @@ func Apply(folder, workspace, branch string, log io.Writer) (Applied, error) {
 		return Applied{}, err
 	}
 	beforeWrite()
-	if err := writeFolder(root, repo.Storer, out.Paths, headFiles, result, log); err != nil {
+	w, err := openWorkspaceFolder(folder)
+	if err != nil {
+		return Applied{}, err
+	}
+	defer w.Close()
+	moved, err := moveAside(w, out.Paths, headFiles)
+	if err != nil {
+		return Applied{}, err
+	}
+	if err := writeFolder(w, repo.Storer, moved, out.Paths, result, log); err != nil {
 		return Applied{}, &ApplyError{Err: err}
 	}
 	if err := recordIndex(repo, root, out.Paths, result); err != nil {
@@ -216,34 +228,48 @@ func Apply(folder, workspace, branch string, log io.Writer) (Applied, error) {
 	return out, nil
 }
 
-// beforeWrite runs between the folder check and the first write, in
-// tests.
+// beforeWrite runs between the folder check and the first change to the
+// folder, in tests.
 var beforeWrite = func() {}
+
+// afterMoveAside runs between moving H files aside and checking them, in
+// tests.
+var afterMoveAside = func() {}
+
+// missingHistory refuses an apply whose fetched history lacks a commit or
+// tree, as in a shallow repository.
+func missingHistory(err error) error {
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		return &NotApplicableError{Reason: "the workspace repository lacks part of the history the apply needs"}
+	}
+	return err
+}
 
 // commitFiles returns the files of a commit's tree by path. Names are
 // read as the tree holds them; checkChange refuses an invalid one before
-// it is written.
-func commitFiles(c *object.Commit) (map[string]entry, error) {
-	tree, err := c.Tree()
-	if err != nil {
-		return nil, err
-	}
+// it is written. A tree that is missing is an error, never an empty
+// folder.
+func commitFiles(s storer.EncodedObjectStorer, c *object.Commit) (map[string]entry, error) {
 	files := map[string]entry{}
-	walker := object.NewTreeWalker(tree, true, nil)
-	walker.SkipPathValidation()
-	defer walker.Close()
-	for {
-		name, e, err := walker.Next()
-		if errors.Is(err, io.EOF) {
-			return files, nil
-		}
+	var walk func(prefix string, hash plumbing.Hash) error
+	walk = func(prefix string, hash plumbing.Hash) error {
+		tree, err := object.GetTree(s, hash)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if e.Mode != filemode.Dir {
+		for _, e := range tree.Entries {
+			name := prefix + e.Name
+			if e.Mode == filemode.Dir {
+				if err := walk(name+"/", e.Hash); err != nil {
+					return err
+				}
+				continue
+			}
 			files[name] = entry{e.Mode, e.Hash}
 		}
+		return nil
 	}
+	return files, walk("", c.TreeHash)
 }
 
 // mergeFiles merges the files of head and theirs over base, path by path.
@@ -284,7 +310,7 @@ func fileFolderClashes(files map[string]entry) []string {
 	var clashes []string
 	seen := map[string]bool{}
 	for p := range files {
-		for dir := path.Dir(p); dir != "."; dir = path.Dir(dir) {
+		for dir := path.Dir(p); dir != "." && dir != "/"; dir = path.Dir(dir) {
 			if _, ok := files[dir]; ok && !seen[dir] {
 				seen[dir] = true
 				clashes = append(clashes, dir)
@@ -395,19 +421,19 @@ func writeTree(s storer.EncodedObjectStorer, files map[string]entry) (plumbing.H
 	return write(root)
 }
 
-// checkFolder refuses, with *NotApplicableError, a folder where writing
-// paths could lose something H does not hold: a path whose file no longer
-// matches its H entry, a nested Git repository above a path, or an
-// untracked or ignored file, folder or symbolic link where the result
-// writes. A folder in the way is allowed only when it holds nothing but H
-// files the change removes.
+// checkFolder refuses, with *NotApplicableError, a folder where the change
+// could write over something H does not hold: a nested Git repository
+// above a path, or an untracked or ignored file, folder or symbolic link
+// where the result adds a path. A folder in the way is allowed only when
+// it holds nothing but H files the change removes. Paths H has are
+// checked by moveAside, once they are out of the devcontainer's way.
 func checkFolder(root *os.Root, paths []string, head, result map[string]entry) error {
 	changed := map[string]bool{}
 	for _, p := range paths {
 		changed[p] = true
 	}
 	removed := func(p string) bool { return changed[p] && head[p].present() && !result[p].present() }
-	var mismatched, nested, occupied []string
+	var nested, occupied []string
 	for _, p := range paths {
 		if dir, kind := above(root, p, removed); kind != "" {
 			if kind == "nested" {
@@ -417,30 +443,21 @@ func checkFolder(root *os.Root, paths []string, head, result map[string]entry) e
 			}
 			continue
 		}
+		if head[p].present() {
+			continue
+		}
 		info, err := root.Lstat(p)
-		h := head[p]
 		switch {
 		// Below an H file the change removes, nothing exists yet.
 		case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
-			if h.present() {
-				mismatched = append(mismatched, p)
-			}
-		case err != nil:
-			mismatched = append(mismatched, p)
-		case info.IsDir():
-			if h.present() {
-				mismatched = append(mismatched, p)
-			} else if kind := folderInTheWay(root, p, removed); kind == "nested" {
+		case err == nil && info.IsDir():
+			if kind := folderInTheWay(root, p, removed); kind == "nested" {
 				nested = append(nested, p)
 			} else if kind != "" {
 				occupied = append(occupied, p)
 			}
-		case !h.present():
-			occupied = append(occupied, p)
 		default:
-			if !matches(root, p, info, h) {
-				mismatched = append(mismatched, p)
-			}
+			occupied = append(occupied, p)
 		}
 	}
 	switch {
@@ -448,8 +465,6 @@ func checkFolder(root *os.Root, paths []string, head, result map[string]entry) e
 		return &NotApplicableError{Reason: "the change writes inside nested Git repositories", Paths: unique(nested)}
 	case len(occupied) > 0:
 		return &NotApplicableError{Reason: "untracked or ignored files or folders are in the way of the change", Paths: unique(occupied)}
-	case len(mismatched) > 0:
-		return &NotApplicableError{Reason: "these files changed in the workspace after its local changes were backed up", Paths: mismatched}
 	}
 	return nil
 }
@@ -506,17 +521,6 @@ func folderInTheWay(root *os.Root, p string, removed func(string) bool) (kind st
 	return kind
 }
 
-// matches reports whether the file at p, a regular file or symbolic link
-// whose information is info, has H's mode and blob.
-func matches(root *os.Root, p string, info os.FileInfo, h entry) bool {
-	mode, err := filemode.NewFromOSFileMode(info.Mode())
-	if err != nil || mode != h.mode {
-		return false
-	}
-	hash, err := blob(root, p, info, nil)
-	return err == nil && hash == h.hash
-}
-
 func unique(paths []string) []string {
 	sort.Strings(paths)
 	out := paths[:0]
@@ -528,26 +532,82 @@ func unique(paths []string) []string {
 	return out
 }
 
-// writeFolder removes the H files of paths the result changes or drops,
-// deepest first, then writes the result's files of paths. A folder left
-// empty by a removal is removed, as Git does.
-func writeFolder(root *os.Root, objects storer.EncodedObjectStorer, paths []string, head, result map[string]entry, log io.Writer) error {
-	for i := len(paths) - 1; i >= 0; i-- {
-		p := paths[i]
+// changedReason refuses an H file that no longer matches H.
+const changedReason = "these files changed in the workspace after its local changes were backed up"
+
+// movedAside is an H file moved to a temporary name in its own folder.
+type movedAside struct{ path, temp string }
+
+// moveAside moves every H file the change replaces or removes to a
+// temporary name in its folder, out of the devcontainer's way, then checks
+// that each still has H's mode and blob. When one does not, or is gone, it
+// moves them all back and refuses with *NotApplicableError, so nothing
+// changed.
+func moveAside(w *workspaceFolder, paths []string, head map[string]entry) ([]movedAside, error) {
+	random := make([]byte, 6)
+	if _, err := rand.Read(random); err != nil {
+		return nil, err
+	}
+	prefix := ".menagerie-apply-" + hex.EncodeToString(random) + "-"
+	var moved []movedAside
+	var mismatched []string
+	for i, p := range paths {
 		if !head[p].present() {
 			continue
 		}
-		if err := root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("remove %s: %w", p, err)
+		temp := fmt.Sprintf("%s%d", prefix, i)
+		err := w.rename(p, path.Base(p), temp)
+		switch {
+		case err == nil:
+			moved = append(moved, movedAside{p, temp})
+		// Gone, or below a folder that became a file or a link.
+		case errors.Is(err, syscall.ENOENT), errors.Is(err, syscall.ENOTDIR), errors.Is(err, syscall.ELOOP):
+			mismatched = append(mismatched, p)
+		default:
+			return nil, moveBack(w, moved, fmt.Errorf("move %s aside: %w", p, err))
 		}
-		if !result[p].present() {
-			fmt.Fprintf(log, "removed: %s\n", p)
+	}
+	afterMoveAside()
+	for _, m := range moved {
+		if same, err := w.matches(m.path, m.temp, head[m.path]); err != nil || !same {
+			mismatched = append(mismatched, m.path)
 		}
-		for dir := path.Dir(p); dir != "."; dir = path.Dir(dir) {
-			if root.Remove(dir) != nil {
-				break
-			}
+	}
+	if len(mismatched) > 0 {
+		return nil, moveBack(w, moved, &NotApplicableError{Reason: changedReason, Paths: unique(mismatched)})
+	}
+	return moved, nil
+}
+
+// moveBack gives the moved files their names back and returns cause. A
+// file it cannot move back makes cause an *ApplyError naming it.
+func moveBack(w *workspaceFolder, moved []movedAside, cause error) error {
+	var stuck []string
+	for _, m := range moved {
+		if err := w.rename(m.path, m.temp, path.Base(m.path)); err != nil {
+			stuck = append(stuck, fmt.Sprintf("%s (left at %s)", m.path, path.Join(path.Dir(m.path), m.temp)))
 		}
+	}
+	if len(stuck) > 0 {
+		return &ApplyError{Err: fmt.Errorf("%v; these files could not be moved back: %s", cause, strings.Join(stuck, ", "))}
+	}
+	return cause
+}
+
+// writeFolder writes the result's files of paths, each to a name nothing
+// holds, then removes the moved-aside H files. A folder in the way, which
+// holds only moved-aside files and folders, is removed first; a folder
+// left empty by a removal is removed, as Git does.
+func writeFolder(w *workspaceFolder, objects storer.EncodedObjectStorer, moved []movedAside, paths []string, result map[string]entry, log io.Writer) error {
+	temps := map[string]bool{}
+	for _, m := range moved {
+		temps[path.Join(path.Dir(m.path), m.temp)] = true
+	}
+	gone := map[string]bool{}
+	drop := func(dir, name string) bool {
+		key := path.Join(dir, name)
+		gone[key] = temps[key]
+		return temps[key]
 	}
 	for _, p := range paths {
 		e := result[p]
@@ -555,46 +615,42 @@ func writeFolder(root *os.Root, objects storer.EncodedObjectStorer, paths []stri
 			continue
 		}
 		if dir := path.Dir(p); dir != "." {
-			if err := root.MkdirAll(dir, 0o755); err != nil {
+			if err := w.mkdirAll(dir); err != nil {
 				return fmt.Errorf("write %s: %w", p, err)
 			}
 		}
-		// A folder in the way held only removed files and folders.
-		if info, err := root.Lstat(p); err == nil && info.IsDir() {
-			if err := removeEmptyFolders(root, p); err != nil {
+		if w.isFolder(p) {
+			if err := w.removeFolder(p, drop); err != nil {
 				return fmt.Errorf("write %s: %w", p, err)
 			}
 		}
-		if err := writeEntry(root, objects, p, e); err != nil {
+		if err := writeEntry(w, objects, p, e); err != nil {
 			return fmt.Errorf("write %s: %w", p, err)
 		}
 		fmt.Fprintf(log, "wrote: %s\n", p)
 	}
+	for i := len(moved) - 1; i >= 0; i-- {
+		m := moved[i]
+		if !gone[path.Join(path.Dir(m.path), m.temp)] {
+			if err := w.unlink(m.path, m.temp); err != nil {
+				return fmt.Errorf("remove %s: %w", m.path, err)
+			}
+		}
+		if result[m.path].present() {
+			continue
+		}
+		fmt.Fprintf(log, "removed: %s\n", m.path)
+		for dir := path.Dir(m.path); dir != "."; dir = path.Dir(dir) {
+			if w.rmdir(dir) != nil {
+				break
+			}
+		}
+	}
 	return nil
 }
 
-// removeEmptyFolders removes the folder p and the folders below it. It
-// fails on anything else below p.
-func removeEmptyFolders(root *os.Root, p string) error {
-	entries, err := fs.ReadDir(root.FS(), p)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			return fmt.Errorf("%s is not empty", p)
-		}
-		if err := removeEmptyFolders(root, p+"/"+e.Name()); err != nil {
-			return err
-		}
-	}
-	return root.Remove(p)
-}
-
-// writeEntry creates p, which must not exist, with e's blob: a symbolic
-// link for a link entry, otherwise a regular file that is executable for
-// an executable entry. The process umask applies, as it does for Git.
-func writeEntry(root *os.Root, objects storer.EncodedObjectStorer, p string, e entry) error {
+// writeEntry creates p, which must not exist, with e's blob.
+func writeEntry(w *workspaceFolder, objects storer.EncodedObjectStorer, p string, e entry) error {
 	obj, err := objects.EncodedObject(plumbing.BlobObject, e.hash)
 	if err != nil {
 		return err
@@ -604,27 +660,7 @@ func writeEntry(root *os.Root, objects storer.EncodedObjectStorer, p string, e e
 		return err
 	}
 	defer r.Close()
-	if e.mode == filemode.Symlink {
-		target, err := io.ReadAll(r)
-		if err != nil {
-			return err
-		}
-		return root.Symlink(string(target), p)
-	}
-	perm := os.FileMode(0o644)
-	if e.mode == filemode.Executable {
-		perm = 0o755
-	}
-	// O_EXCL also refuses a symbolic link put at p since the check.
-	f, err := root.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
+	return w.create(p, e.mode, r)
 }
 
 // recordIndex makes the index record result for paths: each path's entry

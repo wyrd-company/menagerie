@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -90,7 +92,7 @@ func (f *applyFixture) remoteCommit(t *testing.T, branch string, edits map[strin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if files, err = commitFiles(c); err != nil {
+		if files, err = commitFiles(f.bare.Storer, c); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -593,14 +595,20 @@ func TestSubmodulesAndInvalidPathsAreNotApplicable(t *testing.T) {
 		t.Fatal(na.Reason)
 	}
 
-	for _, bad := range []string{"sub/.git/config", "x/.GIT/hooks/pre-commit"} {
-		g := newApplyFixture(t)
-		g.remoteCommit(t, "review/two", map[string]*file{bad: regular("x\n")}, g.head(t))
-		before := g.state(t)
-		_, err := g.apply(t, "review/two")
-		if na := refused(t, err, before, g.state(t), bad); !strings.Contains(na.Reason, "not valid") {
-			t.Fatal(na.Reason)
-		}
+	// result.txt/./y also clashes with the file result.txt: the path is
+	// refused as invalid before the clash check reads its folders.
+	// go-git's own server refuses to send some of these trees, so the
+	// commit is written straight into the workspace repository.
+	for _, bad := range []string{"sub/.git/config", "x/.GIT/hooks/pre-commit", "git~1/config", "x/GIT~1/y", "tab\there.txt", "new\nline.txt", "x\\..\\y", "result.txt/./y"} {
+		t.Run(bad, func(t *testing.T) {
+			g := newApplyFixture(t)
+			g.fetchedWith(t, map[string]*file{bad: regular("x\n")})
+			before := g.state(t)
+			_, err := Apply(g.folder, "alpha", "review/two", &g.log)
+			if na := refused(t, err, before, g.state(t), bad); !strings.Contains(na.Reason, "not valid") {
+				t.Fatal(na.Reason)
+			}
+		})
 	}
 }
 
@@ -680,5 +688,292 @@ func TestTheBranchMovesOnlyFromTheCommitTheApplyRead(t *testing.T) {
 	var failed *ApplyError
 	if !errors.As(err, &failed) || f.head(t) != moved {
 		t.Fatalf("got %v, branch at %s, want %s", err, f.head(t), moved)
+	}
+}
+
+// tempFiles returns the moved-aside files left in the folder.
+func tempFiles(t *testing.T, folder string) []string {
+	t.Helper()
+	var left []string
+	_ = filepath.WalkDir(folder, func(p string, d fs.DirEntry, err error) error {
+		if d != nil && strings.HasPrefix(d.Name(), ".menagerie-apply-") {
+			left = append(left, p)
+		}
+		return nil
+	})
+	return left
+}
+
+func TestAnEditAfterTheFolderCheckIsKeptAndRefuses(t *testing.T) {
+	f := newApplyFixture(t)
+	f.remoteCommit(t, "review/one", map[string]*file{
+		"result.txt":   regular("label: reviewed\n"),
+		"sub/kept.txt": nil,
+	}, f.head(t))
+	head := f.head(t)
+	beforeWrite = func() { write(t, f.folder, "sub/kept.txt", "edited during the apply\n") }
+	t.Cleanup(func() { beforeWrite = func() {} })
+	_, err := f.apply(t, "review/one")
+	var na *NotApplicableError
+	if !errors.As(err, &na) || !reflect.DeepEqual(na.Paths, []string{"sub/kept.txt"}) || na.Reason != changedReason {
+		t.Fatalf("got %v", err)
+	}
+	// Every moved file is back under its name, the edit included.
+	if f.read(t, "sub/kept.txt") != "edited during the apply\n" || f.read(t, "result.txt") != "label: first\n" {
+		t.Fatal("the folder lost a file")
+	}
+	if left := tempFiles(t, f.folder); len(left) != 0 || f.head(t) != head {
+		t.Fatalf("left %v, branch %s", left, f.head(t))
+	}
+}
+
+func TestAFolderSwappedForALinkIsNeverFollowed(t *testing.T) {
+	f := newApplyFixture(t)
+	f.remoteCommit(t, "review/one", map[string]*file{"sub/kept.txt": regular("changed\n")}, f.head(t))
+	beforeWrite = func() {
+		write(t, f.folder, "decoy.local/kept.txt", "kept\n")
+		if err := os.Rename(filepath.Join(f.folder, "sub"), filepath.Join(f.folder, "sub.local")); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink("decoy.local", filepath.Join(f.folder, "sub")); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforeWrite = func() {} })
+	_, err := f.apply(t, "review/one")
+	var na *NotApplicableError
+	if !errors.As(err, &na) || !reflect.DeepEqual(na.Paths, []string{"sub/kept.txt"}) {
+		t.Fatalf("got %v", err)
+	}
+	if f.read(t, "decoy.local/kept.txt") != "kept\n" || len(tempFiles(t, f.folder)) != 0 {
+		t.Fatal("the apply changed the folder behind the link")
+	}
+}
+
+func TestAFolderMadeALinkBeforeAWriteIsNeverFollowed(t *testing.T) {
+	f := newApplyFixture(t)
+	f.remoteCommit(t, "review/one", map[string]*file{"newdir/sub/x.txt": regular("x\n")}, f.head(t))
+	head := f.head(t)
+	beforeWrite = func() {
+		if err := os.Mkdir(filepath.Join(f.folder, "decoy.local"), 0o755); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink("decoy.local", filepath.Join(f.folder, "newdir")); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforeWrite = func() {} })
+	_, err := f.apply(t, "review/one")
+	var failed *ApplyError
+	if !errors.As(err, &failed) || f.head(t) != head {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(f.folder, "decoy.local", "sub")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("the apply created a folder through the link")
+	}
+}
+
+func TestAShallowRepositoryIsNotApplicable(t *testing.T) {
+	f := newApplyFixture(t)
+	write(t, f.folder, ".git/shallow", f.head(t).String()+"\n")
+	_, err := f.remote.Fetch(context.Background(), f.folder, "alpha", "alpha", nil)
+	var na *NotApplicableError
+	if !errors.As(err, &na) || !strings.Contains(na.Reason, "shallow") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// fetched points the fetched ref at a commit written to the workspace
+// repository by hand, with tree and parents.
+func (f *applyFixture) fetched(t *testing.T, tree plumbing.Hash, parents ...plumbing.Hash) {
+	t.Helper()
+	repo, err := git.PlainOpen(f.folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := object.Signature{Name: "Contributor", Email: "contributor@example.invalid"}
+	c := &object.Commit{Author: sig, Committer: sig, Message: "partial", TreeHash: tree, ParentHashes: parents}
+	obj := repo.Storer.NewEncodedObject()
+	if err := c.Encode(obj); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := repo.Storer.SetEncodedObject(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(FetchedRef, hash)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fetchedWith points the fetched ref at a child of the workspace branch,
+// written to the workspace repository by hand, whose tree is the branch's
+// with edits.
+func (f *applyFixture) fetchedWith(t *testing.T, edits map[string]*file) {
+	t.Helper()
+	repo, err := git.PlainOpen(f.folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := repo.CommitObject(f.head(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := commitFiles(repo.Storer, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, e := range edits {
+		obj := repo.Storer.NewEncodedObject()
+		obj.SetType(plumbing.BlobObject)
+		w, _ := obj.Writer()
+		_, _ = w.Write([]byte(e.body))
+		_ = w.Close()
+		hash, err := repo.Storer.SetEncodedObject(obj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[p] = entry{e.mode, hash}
+	}
+	tree, err := writeTree(repo.Storer, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.fetched(t, tree, head.Hash)
+}
+
+func TestMissingHistoryIsNotApplicable(t *testing.T) {
+	missing := plumbing.NewHash("0123456789abcdef0123456789abcdef01234567")
+	t.Run("a missing parent", func(t *testing.T) {
+		f := newApplyFixture(t)
+		head, _ := git.PlainOpen(f.folder)
+		c, _ := head.CommitObject(f.head(t))
+		f.fetched(t, c.TreeHash, missing)
+		before := f.state(t)
+		_, err := Apply(f.folder, "alpha", "partial", &f.log)
+		if na := refused(t, err, before, f.state(t)); !strings.Contains(na.Reason, "lacks part of the history") {
+			t.Fatal(na.Reason)
+		}
+	})
+	t.Run("a missing folder", func(t *testing.T) {
+		f := newApplyFixture(t)
+		repo, _ := git.PlainOpen(f.folder)
+		c, _ := repo.CommitObject(f.head(t))
+		tree, _ := c.Tree()
+		// The head's tree, with sub's tree object missing.
+		entries := append([]object.TreeEntry(nil), tree.Entries...)
+		for i := range entries {
+			if entries[i].Name == "sub" {
+				entries[i].Hash = missing
+			}
+		}
+		obj := repo.Storer.NewEncodedObject()
+		if err := (&object.Tree{Entries: entries}).Encode(obj); err != nil {
+			t.Fatal(err)
+		}
+		partial, _ := repo.Storer.SetEncodedObject(obj)
+		f.fetched(t, partial, f.head(t))
+		before := f.state(t)
+		_, err := Apply(f.folder, "alpha", "partial", &f.log)
+		if na := refused(t, err, before, f.state(t)); !strings.Contains(na.Reason, "lacks part of the history") {
+			t.Fatal(na.Reason)
+		}
+	})
+}
+
+func TestAnAbsoluteTreePathIsNotApplicable(t *testing.T) {
+	f := newApplyFixture(t)
+	repo, _ := git.PlainOpen(f.folder)
+	c, _ := repo.CommitObject(f.head(t))
+	tree, _ := c.Tree()
+	// An entry named /absolute at the root reads as an absolute path.
+	entries := append([]object.TreeEntry(nil), tree.Entries...)
+	entries = append(entries, object.TreeEntry{Name: "/absolute", Mode: filemode.Regular, Hash: tree.Entries[0].Hash})
+	sort.Sort(object.TreeEntrySorter(entries))
+	obj := repo.Storer.NewEncodedObject()
+	if err := (&object.Tree{Entries: entries}).Encode(obj); err != nil {
+		t.Fatal(err)
+	}
+	absolute, _ := repo.Storer.SetEncodedObject(obj)
+	f.fetched(t, absolute, f.head(t))
+	before := f.state(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := Apply(f.folder, "alpha", "review/one", &f.log)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if na := refused(t, err, before, f.state(t), "/absolute"); !strings.Contains(na.Reason, "not valid") {
+			t.Fatal(na.Reason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the apply did not end")
+	}
+}
+
+func TestTheClashCheckEndsOnAnAbsolutePath(t *testing.T) {
+	done := make(chan []string, 1)
+	go func() {
+		done <- fileFolderClashes(map[string]entry{"/absolute": {filemode.Regular, plumbing.ZeroHash}})
+	}()
+	select {
+	case clashes := <-done:
+		if len(clashes) != 0 {
+			t.Fatalf("clashes %v", clashes)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the clash check did not end")
+	}
+}
+
+func TestAMoveBackNeverReplacesAFileCreatedMeanwhile(t *testing.T) {
+	f := newApplyFixture(t)
+	f.remoteCommit(t, "review/one", map[string]*file{
+		"result.txt":   regular("label: reviewed\n"),
+		"sub/kept.txt": regular("changed\n"),
+	}, f.head(t))
+	beforeWrite = func() { write(t, f.folder, "sub/kept.txt", "edited during the apply\n") }
+	afterMoveAside = func() { write(t, f.folder, "result.txt", "created meanwhile\n") }
+	t.Cleanup(func() { beforeWrite, afterMoveAside = func() {}, func() {} })
+	_, err := f.apply(t, "review/one")
+	var failed *ApplyError
+	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "could not be moved back: result.txt (left at .menagerie-apply-") {
+		t.Fatalf("got %v", err)
+	}
+	if f.read(t, "result.txt") != "created meanwhile\n" || f.read(t, "sub/kept.txt") != "edited during the apply\n" {
+		t.Fatal("a move back replaced a file")
+	}
+}
+
+func TestALinkOfTheBranchIsReplacedAndALinkRetargetedRefuses(t *testing.T) {
+	f := newApplyFixture(t)
+	first := f.remoteCommit(t, "alpha", map[string]*file{"docs/link": symlink("../result.txt")}, f.head(t))
+	if _, err := f.apply(t, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	f.push(t)
+	second := f.remoteCommit(t, "alpha", map[string]*file{"docs/link": symlink("../hook-marker.txt")}, first)
+	if got, err := f.apply(t, "alpha"); err != nil || got.Hash != second {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if target, _ := os.Readlink(filepath.Join(f.folder, "docs", "link")); target != "../hook-marker.txt" {
+		t.Fatalf("link to %q", target)
+	}
+	f.clean(t)
+
+	f.remoteCommit(t, "alpha", map[string]*file{"docs/link": symlink("../.gitignore")}, second)
+	beforeWrite = func() {
+		_ = os.Remove(filepath.Join(f.folder, "docs", "link"))
+		_ = os.Symlink("../result.txt", filepath.Join(f.folder, "docs", "link"))
+	}
+	t.Cleanup(func() { beforeWrite = func() {} })
+	_, err := f.apply(t, "alpha")
+	var na *NotApplicableError
+	if !errors.As(err, &na) || !reflect.DeepEqual(na.Paths, []string{"docs/link"}) {
+		t.Fatalf("got %v", err)
+	}
+	if target, _ := os.Readlink(filepath.Join(f.folder, "docs", "link")); target != "../result.txt" {
+		t.Fatalf("link to %q", target)
 	}
 }

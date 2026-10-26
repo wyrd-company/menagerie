@@ -220,8 +220,9 @@ description: >-
   `refs/menagerie/apply`. It fetches no tags and changes no other ref, and
   deletes `refs/menagerie/apply` when the job ends, whatever the outcome.
   A branch the workspace repository does not have fails as
-  `branch-not-found`, and any other fetch failure as `fetch-failed`, both
-  with nothing changed. In `backup-local-changes` the service commits every
+  `branch-not-found`, a shallow workspace repository, which lacks the
+  history an apply walks, as `not-applicable` before it fetches, and any
+  other fetch failure as `fetch-failed`, all with nothing changed. In `backup-local-changes` the service commits every
   change as a `commit` job does, with the message `Back up local changes
   before applying <branch>`, and in `backup` force-pushes the branch; a
   failure of either fails as `backup-failed` with nothing applied. When
@@ -231,7 +232,9 @@ description: >-
 
   In `apply`, H is the workspace branch's commit and T the fetched one.
   When T is H or an ancestor of H the job succeeds as already applied,
-  with no commit and no rebuild. When H is an ancestor of T the branch
+  with no commit and no rebuild; for the workspace's own branch it then
+  force-pushes the branch in `backup`, which only moves the workspace
+  repository's branch forward. When H is an ancestor of T the branch
   fast-forwards to T. Otherwise H and T merge file by file over their
   merge base B, which must be exactly one commit: a path whose mode and
   content are equal in H and T keeps them, one unchanged in H since B
@@ -240,21 +243,35 @@ description: >-
   the message `Apply <branch> to workspace <workspace>`. No merge base,
   several merge bases, a conflict, or a file where the result also has a
   folder of that name fail as `not-applicable`. So do, before anything is
-  written: a path the change writes or removes that is not valid in a Git
-  tree or has a `.git` component; a submodule entry in the change; an
-  untracked or ignored file, folder or symbolic link, or a nested Git
-  repository, where the change writes; and a file of H that no longer
-  matches H when the apply checks the folder, as the devcontainer keeps
-  running. The console has one `not applicable: <path>` line per path and
+  written: fetched history that lacks a commit or tree the apply reads; a
+  path the change writes or removes that is not valid in a Git tree,
+  checked before any folder of the result is read: an empty component, so
+  an absolute path, a `.` or `..` component, a backslash, a control
+  character such as a tab or a newline, or `.git` in any spelling NTFS or
+  HFS+ reads as `.git`, `git~1` included; a submodule entry in the
+  change; an untracked or ignored file, folder or symbolic link, or a
+  nested Git repository, where the change writes; and a file of H that no
+  longer matches H, as the devcontainer keeps running. The console has one `not applicable: <path>` line per path and
   the message names the reason and the paths; nothing is applied.
 
-  The service then writes only the paths that differ between H and the
-  result, without following symbolic links, writing symbolic links as
-  links and keeping the executable mode, and removes the folders the
-  change empties. It records the result in the index and moves the branch
+  The service changes the folder through descriptors: each folder is
+  opened beneath the workspace with no symbolic link in any component, and
+  each file is renamed, created or removed relative to its folder, so a
+  folder swapped for a link is refused, never followed. It first moves
+  every file of H the change replaces or removes to a temporary name,
+  `.menagerie-apply-<random>-<n>`, in its own folder, and checks that each
+  still has H's mode and content, a link's target included. When one does
+  not, or is gone, it moves them all back, never over a file created
+  meanwhile, and refuses as `not-applicable`, so a change the devcontainer
+  made is kept. It then writes only the paths that differ between H and
+  the result, each to a name nothing holds, writing symbolic links as
+  links and keeping the executable mode, removes the moved-aside files and
+  the folders the change empties. It records the result in the index and moves the branch
   last, only from H. A failure while writing fails as `apply-failed`: the
   files written before it remain, the branch stays at H, which is backed
-  up unless `branch` is the workspace's own, and recovery is manual. A changed branch is then force-pushed in
+  up unless `branch` is the workspace's own, and recovery is manual; a
+  file that could not be moved back is named with its temporary name. A
+  changed branch is then force-pushed in
   `backup`, where a failure fails as `backup-failed` without a rebuild,
   and the devcontainer is rebuilt as after an upgrade, a failure failing
   with the container operations' kinds. The applied record `.toha.json`
@@ -268,8 +285,10 @@ description: >-
   already staged. A file that replaces a tracked folder, or a folder that
   replaces a tracked file, takes the old entries out of the index, in this
   commit and in the commits after generation and upgrades. Untracked paths
-  the ignore rules exclude and files inside a nested Git repository stay
-  unstaged. The ignore rules are the workspace's `.gitignore` files, its
+  the ignore rules exclude, files inside a nested Git repository, and
+  paths go-git could not read back from the index, such as a name with a
+  tab or a newline or a `git~1` folder, stay unstaged; the job console
+  notes each of the last kind. The ignore rules are the workspace's `.gitignore` files, its
   `.git/info/exclude` and the file its repository's own
   `core.excludesFile` names; Menagerie's own Git configuration is never
   read. An exclude file that does not resolve, through symbolic links, to
@@ -482,7 +501,12 @@ validation-criteria: >-
   nested repository, a submodule, invalid paths, files changed after the
   local backup, a missing branch, the private ref's removal, a write
   failure and a branch moved meanwhile, each refusal leaving the branch,
-  index and folder as they were. `go test ./backend/internal/workflows/`
+  index and folder as they were. Races run at a hook before the folder
+  changes: an edit is kept and refuses the apply, a folder swapped for a
+  link is never followed, a move back never replaces a file created
+  meanwhile; a shallow repository, missing history and paths such as
+  `git~1`, a tab, a newline or an absolute one refuse; and a workspace
+  with such a name still commits its other changes. `go test ./backend/internal/workflows/`
   runs `apply-branch` through the API: a commit pushed on top of the
   workspace's branch is applied, rebuilt and kept by the next backup; a
   local change is backed up and merged; a refused apply of the workspace's

@@ -170,12 +170,37 @@ func TestApplyBranchBacksUpEveryLocalChangeAndMerges(t *testing.T) {
 func TestApplyingAnAppliedBranchChangesNothing(t *testing.T) {
 	w := newWorld(t)
 	w.createWorkspace(t, "alpha")
+	w.contribute(t, "alpha", "review/one", map[string]string{"x.txt": "x\n"})
+	job, snap := w.applyBranch(t, "alpha", "review/one")
+	if snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+	}
+	job, snap = w.applyBranch(t, "alpha", "review/one")
+	if snap.State != jobs.Succeeded || !strings.Contains(logText(job), "is already applied") {
+		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+	}
+	if want := []string{"fetch", "backup-local-changes", "backup", "apply"}; !reflect.DeepEqual(phases(job), want) {
+		t.Fatalf("phases %v", phases(job))
+	}
+	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "rebuild alpha"}) {
+		t.Fatalf("runtime %v", got)
+	}
+	w.fetchedRefGone(t, "alpha")
+}
+
+func TestAnAppliedOwnBranchStillBacksUpLocalChanges(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	writeFile(t, filepath.Join(w.root, "alpha"), "notes.txt", "local\n")
 	job, snap := w.applyBranch(t, "alpha", "alpha")
 	if snap.State != jobs.Succeeded || !strings.Contains(logText(job), "is already applied") {
 		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 	}
-	if want := []string{"fetch", "backup-local-changes", "apply"}; !reflect.DeepEqual(phases(job), want) {
+	if want := []string{"fetch", "backup-local-changes", "apply", "backup"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v", phases(job))
+	}
+	if history := w.remoteHistory(t, "alpha"); len(history) != 2 || fileAt(t, history[0], "notes.txt") != "local\n" {
+		t.Fatal("the local change was not backed up")
 	}
 	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha"}) {
 		t.Fatalf("runtime %v", got)
@@ -250,6 +275,26 @@ func TestAMissingBranchChangesNothing(t *testing.T) {
 		t.Fatal("a missing branch committed the local change")
 	}
 	w.fetchedRefGone(t, "alpha")
+}
+
+func TestAShallowWorkspaceRepositoryChangesNothing(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	folder := filepath.Join(w.root, "alpha")
+	repo, _ := git.PlainOpen(folder)
+	head, _ := repo.Reference(plumbing.NewBranchReferenceName("alpha"), false)
+	writeFile(t, folder, ".git/shallow", head.Hash().String()+"\n")
+	writeFile(t, folder, "notes.txt", "local\n")
+	job, snap := w.applyBranch(t, "alpha", "alpha")
+	if snap.State != jobs.Failed || snap.Error.Kind != KindNotApplicable || !strings.Contains(snap.Error.Message, "shallow") {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if want := []string{"fetch"}; !reflect.DeepEqual(phases(job), want) {
+		t.Fatalf("phases %v", phases(job))
+	}
+	if len(w.remoteHistory(t, "alpha")) != 1 {
+		t.Fatal("a shallow repository committed or pushed")
+	}
 }
 
 func TestARefusedApplyListsThePathsAndKeepsTheLocalBackup(t *testing.T) {

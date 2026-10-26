@@ -46,7 +46,9 @@ func ApplyBranch(name string) (plumbing.ReferenceName, error) {
 // its commit. It fetches only that branch, no tag, through an
 // in-memory remote that is never written to the workspace repository's
 // configuration, and changes no other ref. A branch the workspace
-// repository does not have is ErrBranchNotFound.
+// repository does not have is ErrBranchNotFound. A shallow workspace
+// repository, which lacks the history an apply walks, is refused with
+// *NotApplicableError before anything is fetched.
 func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, progress io.Writer) (plumbing.Hash, error) {
 	name, err := ApplyBranch(branch)
 	if err != nil {
@@ -55,6 +57,13 @@ func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, pr
 	repo, _, err := open(folder, workspace)
 	if err != nil {
 		return plumbing.ZeroHash, err
+	}
+	shallow, err := repo.Storer.Shallow()
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if len(shallow) > 0 {
+		return plumbing.ZeroHash, &NotApplicableError{Reason: "the workspace repository is shallow; Apply branch needs its whole history"}
 	}
 	var auth transport.AuthMethod
 	if r.Auth != nil {

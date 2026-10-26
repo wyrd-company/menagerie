@@ -129,3 +129,32 @@ func TestCommitAllNeedsTheWorkspaceBranch(t *testing.T) {
 		t.Fatal("pending without a repository")
 	}
 }
+
+func TestPathsGoGitCannotReadBackStayUnstaged(t *testing.T) {
+	folder := committed(t, "alpha")
+	for _, name := range []string{"tab\there.txt", "new\nline.txt", "x/GIT~1/y"} {
+		write(t, folder, name, "unreadable\n")
+	}
+	if pendingOf(t, folder, "alpha") {
+		t.Fatal("only unreadable paths are pending")
+	}
+	write(t, folder, "ok.txt", "fine\n")
+	if !pendingOf(t, folder, "alpha") {
+		t.Fatal("ok.txt is not pending")
+	}
+	var log bytes.Buffer
+	c, err := CommitAll(folder, "alpha", "chore: record", &log)
+	if err != nil || !c.Changed || !reflect.DeepEqual(c.Staged, []string{"ok.txt"}) {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if !strings.Contains(log.String(), `not staged, not a valid path in a Git tree: "tab\there.txt"`) {
+		t.Fatalf("log:\n%s", log.String())
+	}
+	// The repository still reads back: the next check and commit agree.
+	if pendingOf(t, folder, "alpha") {
+		t.Fatal("pending after the commit")
+	}
+	if c, err := CommitAll(folder, "alpha", "chore: again", &log); err != nil || c.Changed {
+		t.Fatalf("%+v %v", c, err)
+	}
+}

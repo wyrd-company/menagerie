@@ -168,8 +168,8 @@ func CommitTracked(folder, workspace, message string) (Commit, error) {
 // git add --all followed by a commit would: untracked, modified and
 // deleted files, and whatever is already staged. Untracked paths the
 // workspace's ignore rules exclude stay untracked, and anything inside a
-// nested Git repository stays unstaged. Nothing to commit is Changed
-// false.
+// nested Git repository, or whose path is not valid in a Git tree, stays
+// unstaged. Nothing to commit is Changed false.
 func CommitAll(folder, workspace, message string, log io.Writer) (Commit, error) {
 	c, err := changes(folder, workspace, log)
 	if err != nil {
@@ -241,13 +241,23 @@ func changes(folder, workspace string, log io.Writer) (workspaceChanges, error) 
 	}
 	nested := nestedRepositories{folder: folder, known: map[string]bool{}}
 	c := workspaceChanges{repo: repo, w: w, branch: branch}
+	var invalid []string
 	for p, s := range status {
 		changed := s.Worktree == git.Untracked || s.Worktree == git.Modified || s.Worktree == git.Deleted
-		if changed && !nested.contains(p) {
+		switch {
+		case !changed || nested.contains(p):
+		// go-git could not read the repository back with such a path.
+		case !validTreePath(p):
+			invalid = append(invalid, p)
+		default:
 			c.paths = append(c.paths, p)
 		}
 	}
 	sort.Strings(c.paths)
+	sort.Strings(invalid)
+	for _, p := range invalid {
+		fmt.Fprintf(log, "not staged, not a valid path in a Git tree: %q\n", p)
+	}
 	return c, nil
 }
 
