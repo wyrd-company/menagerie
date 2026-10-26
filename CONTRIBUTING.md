@@ -49,7 +49,9 @@ record. The first release also tags its parent as the `0.0.0` baseline. The
 tag push starts the CD workflow, which delivers only Intentional release
 records: it pushes `ghcr.io/wyrd-company/menagerie:<version>` for linux/amd64
 and linux/arm64. `task release:rehearse` runs the same steps in a scratch
-clone and changes nothing.
+clone and changes nothing. A release whose pending intents are all for the
+`menagerie-docs` unit tags only that unit (`menagerie-docs@<version>`); CD
+delivers no image for it.
 
 The Publish docs workflow then publishes `docs/user/` to wyrd.foo through
 wyrd.foo's reusable workflow: when CD succeeds for a release tag, and when a

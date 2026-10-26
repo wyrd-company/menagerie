@@ -338,7 +338,7 @@ tasks:
     desc: Install Intentional
     cmds:
       # renovate: datasource=crate depName=intentional-cli
-      - cargo install --locked intentional-cli --version 0.1.6
+      - cargo install --locked intentional-cli --version 0.2.0
 
   tools:install:openbao:
     desc: Install OpenBao's bao, checked against its release checksums (Linux amd64)
