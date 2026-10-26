@@ -388,12 +388,15 @@ proposed-design:
     through Wyrwood, chosen by URL; no key or token is stored in the
     container. An SSH URL uses the SSH agent at Wyrwood's `ssh-agent.sock`,
     mounted from the host consumer directory. The agent offers one key, an
-    OpenBao Transit key: a deploy key with write access on the workspace
-    repository when every template it must fetch is public, else the SSH
-    key of a machine user with write access on the workspace repository and
-    read access on the private template repositories. Toha fetches SSH
-    templates through the same agent; its git transport runs the image's
-    ssh client with `SSH_AUTH_SOCK` set to Wyrwood's socket.
+    OpenBao Transit key, which must reach every repository Menagerie uses
+    over SSH: a deploy key with write access on the workspace repository
+    when it is the only one, else the SSH key of a machine user with write
+    access on the workspace repository and read access on the private
+    template repositories. Toha fetches SSH templates through the same
+    agent; its git transport runs the image's ssh client with
+    `SSH_AUTH_SOCK` set to Wyrwood's socket. Repositories on GitHub can
+    use the GitHub App instead (see github-app), which needs no SSH key and
+    no machine user; SSH stays for other hosts.
   github-app: >-
     With `github-app` configured, an `https` URL on the App's server whose
     path is `/{owner}/{repo}` or `/{owner}/{repo}.git`, with no user
@@ -419,8 +422,11 @@ proposed-design:
     leaves others to go-git's own policy. The remote's text reaches the job
     console line by line with the URL and the token, raw and in every
     base64 form of its basic-authentication pair, redacted. The
-    template service asks for a template's token on the hook runner socket
-    (see credential-route). Every failure is a fixed reason, with at most a
+    template service runs each request's Toha work on one worker thread
+    inside one Toha credential resolver scope. When an `https` remote of a
+    fetch asks for credentials, the resolver asks for the template's token
+    on the hook runner socket (see credential-route) and answers that one
+    challenge with it. Every failure is a fixed reason, with at most a
     status code: no error carries a token, a JWT, a signature, a URL, a
     response body or a transport error's text. A push or fetch to a remote
     that is not SSH or a local path, a URL go-git cannot read included,
@@ -458,8 +464,11 @@ proposed-design:
     bind source, and Menagerie's own image is their default image. It has a
     Docker restart policy, so it returns after a host restart. Its UI is
     not exposed to the public internet. Menagerie is bound to a Wyrwood policy
-    that grants only the SSH Transit key, signing with the GitHub App's
-    Transit key, and read access to the registry credential secrets.
+    that grants only what it uses: the SSH Transit key, signing with the
+    GitHub App's Transit key, or both, and read access to the registry
+    credential secrets. Both services trust the certificates
+    `SSL_CERT_FILE` names when it is set, so a GitHub Enterprise Server
+    signed by a private authority is reachable.
   dependencies: >-
     Toha exposes template resolution, fetching and caching, and the upgrade
     driver from its library, takes the hook runner from its caller, and
@@ -479,4 +488,8 @@ proposed-design:
     workspace left dirty. `initializeCommand` finds no workspace socket.
     A commit pushed on top of a workspace's branch is applied with Apply
     branch: the folder has it, the devcontainer is rebuilt, and the next
-    backup keeps it.
+    backup keeps it. With a GitHub App as its only Git identity, its key
+    imported into OpenBao Transit and no SSH key, Menagerie creates a
+    workspace from a private `https` template and backs it up; the Git host
+    sees only installation tokens, read for the template and write for the
+    backup, and no job event, log line or reply holds a token or a JWT.

@@ -78,6 +78,10 @@ the App's JWT, a URL and GitHub's or OpenBao's response text never appear.
 | GitHub could not be reached | Network access to the API, `server`, and the certificate of GitHub Enterprise Server. |
 | GitHub returned a malformed response | `server` names a GitHub server. |
 | the operation ended before GitHub answered, or before OpenBao answered | The job ended first, for example at a restart or a time limit. |
+| the workspace service's credential route could not be reached | A template fetch: the workspace service is running, and `template-service.hook-runner-socket` names its socket. |
+| the workspace service's credential route answered with an unexpected status | A template fetch: the template service and the workspace service come from the same image. |
+| the workspace service's credential route gave a malformed answer | As for an unexpected status. |
+| the token could not be minted | A template fetch: the workspace service's log. |
 
 A push or fetch over `https` names a fixed reason too:
 

@@ -205,6 +205,24 @@ description: >-
   in memory for the one fetch and never writes it to disk.
 
 
+  Every request runs its Toha work on one worker thread inside one Toha
+  credential resolver scope, so every fetch of that request, and only that
+  request, can ask the route. This service asks only when an `https`
+  remote asks for credentials, once for each challenge, with the URL
+  `https://host[:port]/path`. The default port 443 is left out, and the path
+  is percent-encoded outside the unreserved characters and `/`. A 200 is the
+  fetch's credential. A 404 leaves the challenge to Toha's default
+  behaviour. A 502 fails the fetch with the prefix
+  `GitHub App credentials are unavailable: ` and the route's reason, when
+  that reason is one line of at most 200 bytes, and with
+  `the token could not be minted` otherwise. Any other
+  status, a malformed answer or an unreachable socket fails the fetch with
+  a fixed reason of this service, after the same prefix. A failed fetch is
+  a template refusal such as `template-resolve-failed`, whose message is
+  that reason where the flow reports Toha's message. No reply, error or log
+  line carries the token.
+
+
   Apply replies. Generate and apply answer 200 with `{"outcome","files",
   "recordPath","messages","hooks","conflicts"}`. `outcome` is `written`,
   `conflicted`, `already-current`, `needs-trust` or `planned`; only
@@ -276,7 +294,13 @@ validation-criteria: >-
   replies, none of which puts a stream or a reply's text in an error; the
   unit tests in `src/error.rs` drive a captured value through every apply
   error that can carry one, alone and wrapped as generate and apply
-  return it, and find it in no refusal;
+  return it, and find it in no refusal; the unit tests in
+  `src/credentials.rs` cover the credential request's URL and every answer
+  of the route, and find a granted token in no refusal or `Debug` output;
+  `tests/credentials.rs` fetches a private template over TLS with the
+  route's token through create and generate, leaves the challenge to Toha
+  on a 404, fails with the route's reason on a 502, and runs two creates at
+  once that each fetch with their own repository's token;
   `tests/numbers.rs` covers number values through the session and the
   applied record; `tests/revisions.rs` covers admitted revisions for
   fixed and moving addresses, installed branches and tags;

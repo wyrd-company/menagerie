@@ -5,9 +5,11 @@
 # The same path as on the host: compose.yml mounts it at its own path.
 workspace-root: /srv/menagerie/workspaces
 
-# Each workspace is backed up to its own orphan branch here, over SSH,
-# through the Wyrwood agent's ssh-agent.sock.
-workspace-repository: ssh://git@github.com/example-org/workspace-backups.git
+# Each workspace is backed up to its own orphan branch here. An https URL
+# on GitHub uses the GitHub App below; an SSH URL uses the Wyrwood agent's
+# ssh-agent.sock instead.
+workspace-repository: https://github.com/example-org/workspace-backups.git
+# workspace-repository: ssh://git@github.com/example-org/workspace-backups.git
 
 # Where compose.yml mounts the Wyrwood consumer directory.
 wyrwood-directory: /run/wyrwood
@@ -29,6 +31,14 @@ templates:
 # hooks of templates without their own runner-image. Without it, Menagerie's
 # own image.
 # runner-image: ghcr.io/example-org/workspace-runner:1.0.0
+
+# The GitHub App Menagerie authenticates to GitHub with: installation tokens
+# for the backup repository and private https templates. Its private key is
+# the Transit key transit-key, used through the Wyrwood vault socket. Without
+# this section, only the SSH identity authenticates.
+github-app:
+  app-id: 123456
+  transit-key: menagerie-github-app
 
 # Registry credentials read from OpenBao through the Wyrwood vault socket.
 # Without this section every registry is anonymous.

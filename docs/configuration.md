@@ -197,8 +197,11 @@ and templates on another host over SSH.
 
 Install the App on the backup repository with Contents read and write, and
 on each private template repository with Contents read. Import its private
-key into OpenBao's Transit engine as an RSA key; the Wyrwood policy grants
-`update` on `transit/sign/<transit-key>/sha2-256`. Menagerie signs the App's
+key into OpenBao's Transit engine as an RSA key, as
+[Installation](install.md#github-app) shows; the Wyrwood policy grants
+`update` on `transit/sign/<transit-key>/sha2-256`. For a `server` whose
+certificate a private authority signed, see
+[Git hosts](install.md#git-hosts). Menagerie signs the App's
 JWT through Wyrwood's `vault.sock`, sending no token, and exchanges it for a
 token that covers one repository and one permission. Tokens stay in
 Menagerie's memory until five minutes before they expire; nothing is written
