@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
 	"github.com/wyrd-company/devcontainer-builder/pkg/substitute"
@@ -135,8 +136,14 @@ func (r CommandRunner) run(ctx context.Context, cmd spec.Command, prefix string)
 	return nil
 }
 
+// commandWaitDelay bounds how long a cancelled command's Wait waits for
+// its output pipes after the process is killed, so a child process that
+// holds them cannot keep a cancelled job running.
+var commandWaitDelay = 5 * time.Second
+
 func (r CommandRunner) exec(ctx context.Context, prefix, name string, args ...string) error {
 	c := exec.CommandContext(ctx, name, args...)
+	c.WaitDelay = commandWaitDelay
 	c.Dir = r.Dir
 	c.Env = r.Env
 	c.Stdout, c.Stderr = io.Discard, io.Discard
