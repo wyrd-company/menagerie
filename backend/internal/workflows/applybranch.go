@@ -30,9 +30,6 @@ const (
 
 // applyBranch validates an apply-branch request. It changes nothing.
 func (w *Workflows) applyBranch(req api.JobRequest) (jobsRunner, error) {
-	if err := workspace.ValidName(req.Workspace); err != nil {
-		return nil, &api.RequestError{Status: http.StatusBadRequest, Kind: "invalid-workspace-name", Message: err.Error()}
-	}
 	if _, err := backup.Branch(req.Workspace); err != nil {
 		return nil, &api.RequestError{Status: http.StatusBadRequest, Kind: "invalid-workspace-name", Message: err.Error()}
 	}

@@ -203,8 +203,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                         aria-label={`Apply a branch to ${ws.name}`}
                         onSubmit={(e) => {
                           e.preventDefault();
-                          const name = branch.trim();
-                          if (name) void run(ws.name, "apply-branch", name);
+                          void run(ws.name, "apply-branch", branch.trim());
                         }}
                       >
                         <input

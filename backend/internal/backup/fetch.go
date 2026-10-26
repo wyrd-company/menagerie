@@ -43,7 +43,7 @@ func ApplyBranch(name string) (plumbing.ReferenceName, error) {
 
 // Fetch fetches branch, with the history it needs, from the workspace
 // repository into FetchedRef, replacing what FetchedRef held, and returns
-// its commit. It fetches only that branch and no tags, through an
+// its commit. It fetches only that branch, no tag, through an
 // in-memory remote that is never written to the workspace repository's
 // configuration, and changes no other ref. A branch the workspace
 // repository does not have is ErrBranchNotFound.
@@ -54,9 +54,6 @@ func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, pr
 	}
 	repo, _, err := open(folder, workspace)
 	if err != nil {
-		return plumbing.ZeroHash, err
-	}
-	if err := repo.Storer.RemoveReference(FetchedRef); err != nil {
 		return plumbing.ZeroHash, err
 	}
 	var auth transport.AuthMethod
@@ -74,11 +71,10 @@ func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, pr
 		RefSpecs:   []config.RefSpec{config.RefSpec("+" + name.String() + ":" + FetchedRef.String())},
 		Auth:       auth,
 		Progress:   progress,
-		Tags:       git.NoTags,
 		Force:      true,
 	})
 	switch {
-	case errors.Is(err, git.NoMatchingRefSpecError{}), errors.Is(err, plumbing.ErrReferenceNotFound), errors.Is(err, transport.ErrEmptyRemoteRepository):
+	case errors.Is(err, git.NoMatchingRefSpecError{}), errors.Is(err, transport.ErrEmptyRemoteRepository):
 		return plumbing.ZeroHash, fmt.Errorf("%w: %s", ErrBranchNotFound, branch)
 	case err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate):
 		return plumbing.ZeroHash, fmt.Errorf("fetch %s: %w", branch, err)

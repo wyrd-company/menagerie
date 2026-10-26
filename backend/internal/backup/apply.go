@@ -131,10 +131,7 @@ func Apply(folder, workspace, branch string, log io.Writer) (Applied, error) {
 		return Applied{}, err
 	}
 	out := Applied{Before: head.Hash, Hash: head.Hash}
-	if theirs.Hash == head.Hash {
-		out.Outcome = AlreadyApplied
-		return out, nil
-	}
+	// IsAncestor holds for the commit itself.
 	contained, err := theirs.IsAncestor(head)
 	if err != nil {
 		return Applied{}, err
@@ -512,18 +509,8 @@ func folderInTheWay(root *os.Root, p string, removed func(string) bool) (kind st
 // matches reports whether the file at p, a regular file or symbolic link
 // whose information is info, has H's mode and blob.
 func matches(root *os.Root, p string, info os.FileInfo, h entry) bool {
-	if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
-		return false
-	}
 	mode, err := filemode.NewFromOSFileMode(info.Mode())
-	if err != nil {
-		return false
-	}
-	want := h.mode
-	if want == filemode.Deprecated {
-		want = filemode.Regular
-	}
-	if mode != want {
+	if err != nil || mode != h.mode {
 		return false
 	}
 	hash, err := blob(root, p, info, nil)
@@ -606,7 +593,7 @@ func removeEmptyFolders(root *os.Root, p string) error {
 
 // writeEntry creates p, which must not exist, with e's blob: a symbolic
 // link for a link entry, otherwise a regular file that is executable for
-// an executable entry.
+// an executable entry. The process umask applies, as it does for Git.
 func writeEntry(root *os.Root, objects storer.EncodedObjectStorer, p string, e entry) error {
 	obj, err := objects.EncodedObject(plumbing.BlobObject, e.hash)
 	if err != nil {
@@ -628,7 +615,8 @@ func writeEntry(root *os.Root, objects storer.EncodedObjectStorer, p string, e e
 	if e.mode == filemode.Executable {
 		perm = 0o755
 	}
-	f, err := root.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, perm)
+	// O_EXCL also refuses a symbolic link put at p since the check.
+	f, err := root.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
 		return err
 	}
@@ -636,11 +624,7 @@ func writeEntry(root *os.Root, objects storer.EncodedObjectStorer, p string, e e
 		f.Close()
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	// The process umask may have cleared bits the entry needs.
-	return root.Chmod(p, perm)
+	return f.Close()
 }
 
 // recordIndex makes the index record result for paths: each path's entry

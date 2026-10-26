@@ -176,12 +176,23 @@ func (f *applyFixture) read(t *testing.T, rel string) string {
 	return string(body)
 }
 
-// clean fails unless the folder and index record exactly the branch's
-// commit outside ignored and nested paths.
+// clean fails unless the index records exactly the branch's commit and
+// the folder matches it outside ignored and nested paths.
 func (f *applyFixture) clean(t *testing.T) {
 	t.Helper()
+	repo, err := git.PlainOpen(f.folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same, err := matchesHead(repo, f.head(t), idx); err != nil || !same {
+		t.Fatalf("the index differs from the branch after the apply: %v", err)
+	}
 	if pendingOf(t, f.folder, "alpha") {
-		t.Fatal("the folder or index differs from the branch after the apply")
+		t.Fatal("the folder differs from the branch after the apply")
 	}
 }
 
@@ -219,7 +230,8 @@ func TestFetchKeepsOnlyTheNamedBranchAtThePrivateRef(t *testing.T) {
 	f := newApplyFixture(t)
 	tip := f.remoteCommit(t, "feature/one", map[string]*file{"new.txt": regular("new\n")}, f.head(t))
 	other := f.remoteCommit(t, "other", map[string]*file{"other.txt": regular("other\n")}, f.head(t))
-	if err := f.bare.Storer.SetReference(plumbing.NewHashReference("refs/tags/v1", other)); err != nil {
+	// A tag on the fetched commit is not fetched either.
+	if err := f.bare.Storer.SetReference(plumbing.NewHashReference("refs/tags/v1", tip)); err != nil {
 		t.Fatal(err)
 	}
 	configBefore, _ := os.ReadFile(filepath.Join(f.folder, ".git", "config"))
@@ -243,7 +255,11 @@ func TestFetchKeepsOnlyTheNamedBranchAtThePrivateRef(t *testing.T) {
 		t.Fatal("the fetch wrote the repository configuration")
 	}
 
-	// A later fetch replaces the ref; RemoveFetched deletes it.
+	// Fetching it again finds the ref up to date; a later fetch replaces
+	// it; RemoveFetched deletes it.
+	if got, err := f.remote.Fetch(context.Background(), f.folder, "alpha", "feature/one", nil); err != nil || got != tip {
+		t.Fatalf("second fetch %s %v", got, err)
+	}
 	if got, err := f.remote.Fetch(context.Background(), f.folder, "alpha", "alpha", nil); err != nil || got != f.head(t) {
 		t.Fatalf("refetch %s %v", got, err)
 	}
@@ -366,6 +382,22 @@ func TestAFileAndAFolderReplaceEachOtherOnApply(t *testing.T) {
 	f.clean(t)
 }
 
+func TestAFolderOfRemovedFilesAndEmptyFoldersGivesWayToAFile(t *testing.T) {
+	f := newApplyFixture(t)
+	if err := os.MkdirAll(filepath.Join(f.folder, "sub", "empty", "deeper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tip := f.remoteCommit(t, "swap", map[string]*file{"sub/kept.txt": nil, "sub": regular("now a file\n")}, f.head(t))
+	got, err := f.apply(t, "swap")
+	if err != nil || got.Hash != tip {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if f.read(t, "sub") != "now a file\n" {
+		t.Fatal("sub not written")
+	}
+	f.clean(t)
+}
+
 func TestDivergedBranchesMergeFileByFile(t *testing.T) {
 	f := newApplyFixture(t)
 	base := f.head(t)
@@ -482,7 +514,9 @@ func TestAFileWhereTheMergeHasAFolderConflicts(t *testing.T) {
 	f.local(t)
 	before := f.state(t)
 	_, err := f.apply(t, "review/one")
-	refused(t, err, before, f.state(t), "notes")
+	if na := refused(t, err, before, f.state(t), "notes"); !strings.Contains(na.Reason, "folder of the same name") {
+		t.Fatal(na.Reason)
+	}
 }
 
 func TestUntrackedFilesInTheWayAreNotApplicable(t *testing.T) {
@@ -524,7 +558,9 @@ func TestUntrackedFilesInTheWayAreNotApplicable(t *testing.T) {
 			f.remoteCommit(t, "review/one", c.edits, f.head(t))
 			before := f.state(t)
 			_, err := f.apply(t, "review/one")
-			refused(t, err, before, f.state(t), c.want...)
+			if na := refused(t, err, before, f.state(t), c.want...); !strings.Contains(na.Reason, "in the way") {
+				t.Fatal(na.Reason)
+			}
 		})
 	}
 }
@@ -609,6 +645,25 @@ func TestAWriteFailureLeavesTheBranchWhereItWas(t *testing.T) {
 	}
 	if f.head(t) != head {
 		t.Fatal("the branch moved after a failed write")
+	}
+}
+
+func TestALinkPutWhereTheApplyWritesIsNotFollowed(t *testing.T) {
+	f := newApplyFixture(t)
+	f.remoteCommit(t, "review/one", map[string]*file{"a.txt": regular("written\n")}, f.head(t))
+	beforeWrite = func() {
+		if err := os.Symlink("hook-marker.txt", filepath.Join(f.folder, "a.txt")); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforeWrite = func() {} })
+	_, err := f.apply(t, "review/one")
+	var failed *ApplyError
+	if !errors.As(err, &failed) {
+		t.Fatalf("got %v", err)
+	}
+	if f.read(t, "hook-marker.txt") != "ran\n" {
+		t.Fatal("the apply wrote through a link")
 	}
 }
 

@@ -329,6 +329,9 @@ func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 			if snap.State != jobs.Failed || snap.Error.Kind != c.kind {
 				t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 			}
+			if c.kind == KindApplyFailed && !strings.Contains(snap.Error.Message, "files written before the failure remain") {
+				t.Fatalf("an apply that failed while writing says %q", snap.Error.Message)
+			}
 			all, _, _ := job.EventsAfter(0)
 			for _, e := range all {
 				if strings.Contains(string(e.Data), sentinel) {

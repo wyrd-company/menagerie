@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expectNoHorizontalScroll, reset, shot } from "./support.ts";
+import { control, expectNoHorizontalScroll, reset, shot } from "./support.ts";
 
 const entry = (page: Page, name: string) =>
   page
@@ -27,7 +27,7 @@ test("applies a named branch and streams the job through the rebuild", async ({ 
   const form = await openApply(page, "sample-alpha");
   const apply = form.getByRole("button", { name: "Apply" });
   await expect(apply).toBeDisabled();
-  await form.getByRole("textbox", { name: "Branch" }).fill("review/devcontainer");
+  await form.getByRole("textbox", { name: "Branch" }).fill(" review/devcontainer ");
   await expect(apply).toBeEnabled();
   await shot(page, "apply-branch-form");
   await apply.click();
@@ -37,6 +37,7 @@ test("applies a named branch and streams the job through the rebuild", async ({ 
     console.getByRole("heading", { name: /Apply branch to sample-alpha/ }),
   ).toBeVisible();
   await expect(console.locator(".outcome")).toContainText("Completed.");
+  await expect(entry(page, "sample-alpha").getByRole("form")).toHaveCount(0);
   await expect(console.getByRole("list", { name: "Phases" })).toHaveText(
     /fetch.*backup-local-changes.*backup.*apply.*rebuild/s,
   );
@@ -90,6 +91,31 @@ test("cancels the apply without starting a job", async ({ page, request }) => {
   await again.getByRole("textbox", { name: "Branch" }).press("Enter");
   const jobs = await (await request.get("/api/jobs")).json();
   expect(jobs.jobs).toHaveLength(0);
+});
+
+test("keeps one inline confirmation open per row", async ({ page }) => {
+  await page.goto("/");
+  await openApply(page, "sample-alpha");
+  await entry(page, "sample-alpha").getByRole("button", { name: "Rebuild" }).click();
+  await expect(entry(page, "sample-alpha").getByRole("form")).toHaveCount(0);
+  await entry(page, "sample-alpha").getByRole("button", { name: "Apply branch" }).click();
+  await expect(
+    entry(page, "sample-alpha").getByRole("button", { name: "Confirm rebuild" }),
+  ).toHaveCount(0);
+});
+
+test("disables an open apply once the workspace has a job", async ({ page, request }) => {
+  await page.goto("/");
+  const form = await openApply(page, "sample-slow");
+  await form.getByRole("textbox", { name: "Branch" }).fill("review/devcontainer");
+  await expect(form.getByRole("button", { name: "Apply" })).toBeEnabled();
+  const started = await request.post("/api/jobs", {
+    data: { operation: "stop", workspace: "sample-slow" },
+  });
+  const { jobId } = await started.json();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(form.getByRole("button", { name: "Apply" })).toBeDisabled();
+  await control(request, `release/${jobId}`);
 });
 
 test("offers no apply while the workspace has a job", async ({ page }) => {
