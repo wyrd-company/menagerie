@@ -87,3 +87,45 @@ func TestServerServesCommit(t *testing.T) {
 		t.Fatalf("status %d kind %q", resp.StatusCode, body.Error.Kind)
 	}
 }
+
+// TestWorkspaceSocketStartUpErrorsNameNoPath gives the configuration and
+// the runtime paths holding a sentinel; no diagnostic may hold it.
+func TestWorkspaceSocketStartUpErrorsNameNoPath(t *testing.T) {
+	const sentinel = "s3ntinel-private-path"
+	dir := filepath.Join(t.TempDir(), sentinel)
+	if err := os.MkdirAll(filepath.Join(dir, "root"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root, err := workspace.NewRoot(filepath.Join(dir, "root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := filepath.Join(dir, workspacesocket.ClientName)
+	if err := os.WriteFile(client, []byte("sample client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	starter := commits.New(commits.Options{Root: root, Jobs: jobs.NewManager(context.Background(), jobs.Options{})})
+	clean := func(label string, err error) {
+		t.Helper()
+		if err == nil || strings.Contains(err.Error(), sentinel) {
+			t.Errorf("%s: %v", label, err)
+		}
+	}
+	var opts devcontainer.Options
+	_, err = workspaceSockets(context.Background(), &config.Config{WorkspaceSocket: &config.WorkspaceSocket{Folder: filepath.Join(dir, "missing")}}, root, starter, client, &opts)
+	clean("missing folder", err)
+	folder, err := os.MkdirTemp("", "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(folder) })
+	_, err = workspaceSockets(context.Background(), &config.Config{WorkspaceSocket: &config.WorkspaceSocket{Folder: folder}}, root, starter, filepath.Join(dir, "missing-client"), &opts)
+	clean("missing client", err)
+	sockets, err := workspaceSockets(context.Background(), &config.Config{WorkspaceSocket: &config.WorkspaceSocket{Folder: folder}}, root, starter, client, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sockets.Close()
+	_, err = opts.WorkspaceSocket(filepath.Join(dir, "elsewhere", "alpha"))
+	clean("folder outside the root", err)
+}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,8 @@ func TestCommitConfigurationErrorsNameNoValue(t *testing.T) {
 		{"interval zero unit", socket("  folder: /srv/s\n  min-interval: 0s\n"), "workspace-socket.min-interval must be a positive duration such as 45m, or 0 for none"},
 		{"interval empty", socket("  folder: /srv/s\n  min-interval:\n"), "workspace-socket.min-interval must be a duration"},
 		{"interval mapping", socket("  folder: /srv/s\n  min-interval: {a: " + marker + "}\n"), "workspace-socket.min-interval must be a duration such as 45m"},
+		{"unknown anchor", socket("  folder: *" + marker + "\n"), "an alias names no anchor defined before it"},
+		{"unknown anchor in auto-commit", valid + "auto-commit:\n  every: *" + marker + "\n", "an alias names no anchor"},
 		{"commit limit", valid + "job-limits:\n  operations:\n    commit: 1" + marker + "\n", "job-limits.operations.commit must be whole hours"},
 	}
 	for _, tc := range cases {
@@ -66,5 +69,21 @@ func TestCommitConfigurationErrorsNameNoValue(t *testing.T) {
 				t.Fatalf("got %v, want %q without the value", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestAnchorProblemsNameNoAnchor checks the decoder's texts that quote an
+// anchor's name, including one no document of the configuration reaches.
+func TestAnchorProblemsNameNoAnchor(t *testing.T) {
+	const marker = "v4lue-marker"
+	for _, text := range []string{
+		"yaml: unknown anchor '" + marker + "' referenced",
+		"yaml: anchor '" + marker + "' value contains itself",
+		"yaml: line 3: unknown anchor '" + marker + "' referenced",
+	} {
+		err := decodeError(nil, errors.New(text))
+		if !strings.Contains(err.Error(), "an alias names no anchor defined before it, or an anchor holds its own alias") || strings.Contains(err.Error(), marker) {
+			t.Errorf("%q became %v", text, err)
+		}
 	}
 }

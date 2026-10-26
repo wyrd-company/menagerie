@@ -45,6 +45,15 @@ paths:
                 $ref: "#/components/schemas/RefusalEnvelope"
         "500":
           $ref: "#/components/responses/Refusal"
+        "503":
+          description: >-
+            Menagerie is shutting down, kind shutting-down. When the request
+            had started a job before then, jobId names it; the job may not
+            have ended. Retry later.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefusalEnvelope"
 components:
   responses:
     Refusal:
@@ -115,9 +124,13 @@ components:
                 - not-found
                 - method-not-allowed
                 - internal-error
+                - shutting-down
             activeJobId:
               type: string
               description: Present with workspace-busy.
             retryAfterSeconds:
               type: integer
               description: Present with rate-limited.
+            jobId:
+              type: string
+              description: Present with shutting-down when the request had started a job.

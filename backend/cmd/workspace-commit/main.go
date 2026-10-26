@@ -14,8 +14,9 @@
 // job to end. It prints the job id, the commit and whether the backup
 // pushed it. Exit status: 0 the job succeeded; 1 it failed (the error kind
 // is printed; the detail is in the job's console in Menagerie); 2 usage or
-// an invalid message; 3 the workspace is busy or committed too recently
-// (when to retry is printed); 4 the socket cannot be reached.
+// an invalid message; 3 the workspace is busy, committed too recently
+// (when to retry is printed), or Menagerie is shutting down; 4 the socket
+// cannot be reached.
 //
 // It uses the standard library only, so it is one static executable that
 // runs in any devcontainer.
@@ -72,6 +73,7 @@ type refusal struct {
 		Kind              string `json:"kind"`
 		ActiveJobID       string `json:"activeJobId"`
 		RetryAfterSeconds int    `json:"retryAfterSeconds"`
+		JobID             string `json:"jobId"`
 	} `json:"error"`
 }
 
@@ -132,6 +134,13 @@ func run(args []string, socket string, stdout, stderr io.Writer) int {
 			retry = fmt.Sprint(r.Error.RetryAfterSeconds)
 		}
 		fmt.Fprintf(stderr, "workspace-commit: the workspace committed too recently; retry in %s seconds\n", retry)
+		return exitRetry
+	case res.StatusCode == http.StatusServiceUnavailable:
+		if r.Error.JobID != "" {
+			fmt.Fprintf(stderr, "workspace-commit: Menagerie is shutting down before job %s ended; retry later\n", r.Error.JobID)
+		} else {
+			fmt.Fprintln(stderr, "workspace-commit: Menagerie is shutting down; retry later")
+		}
 		return exitRetry
 	case res.StatusCode == http.StatusBadRequest:
 		fmt.Fprintf(stderr, "workspace-commit: Menagerie refused the request (%s)\n", orUnknown(kind))

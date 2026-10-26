@@ -68,6 +68,8 @@ func TestOutcomesAndExitStatuses(t *testing.T) {
 		{"commit failed", 200, `{"jobId":"` + id + `","state":"failed","commit":null,"changed":false,"pushed":false,"error":{"kind":"commit-failed"}}`, nil, 1, []string{"failed (commit-failed)"}},
 		{"busy", 409, `{"error":{"kind":"workspace-busy","activeJobId":"` + id + `"}}`, nil, 3, []string{"busy with job " + id}},
 		{"rate limited", 429, `{"error":{"kind":"rate-limited","retryAfterSeconds":42}}`, map[string]string{"Retry-After": "42"}, 3, []string{"retry in 42 seconds"}},
+		{"shutting down", 503, `{"error":{"kind":"shutting-down","jobId":"` + id + `"}}`, nil, 3, []string{"shutting down before job " + id + " ended; retry later"}},
+		{"shutting down before a job", 503, `{"error":{"kind":"shutting-down"}}`, nil, 3, []string{"shutting down; retry later"}},
 		{"refused", 400, `{"error":{"kind":"invalid-message"}}`, nil, 2, []string{"refused the request (invalid-message)"}},
 		{"gone", 404, `{"error":{"kind":"workspace-not-found"}}`, nil, 1, []string{"answered 404 (workspace-not-found)"}},
 		{"not a result", 200, `{}`, nil, 1, []string{"not a commit result"}},

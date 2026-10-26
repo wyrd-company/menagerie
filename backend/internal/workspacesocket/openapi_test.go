@@ -56,10 +56,10 @@ func TestTheSocketAPIAgreesWithItsDocument(t *testing.T) {
 		t.Errorf("result documented %s encoded %s", a, b)
 	}
 	refusal := schemas["RefusalEnvelope"].Properties["error"].Properties
-	if a, b := strings.Join(slices.Sorted(maps.Keys(refusal)), ","), strings.Join(members(t, Error{Kind: "k", ActiveJobID: "j", RetryAfterSeconds: 1}), ","); a != b {
+	if a, b := strings.Join(slices.Sorted(maps.Keys(refusal)), ","), strings.Join(members(t, Error{Kind: "k", ActiveJobID: "j", RetryAfterSeconds: 1, JobID: "j"}), ","); a != b {
 		t.Errorf("refusal documented %s encoded %s", a, b)
 	}
-	kinds := []string{KindInvalidRequest, KindInvalidMessage, KindRateLimited, KindWorkspaceBusy, KindWorkspaceMissing, KindNotFound, KindMethodNotAllowed, KindInternal}
+	kinds := []string{KindInvalidRequest, KindInvalidMessage, KindRateLimited, KindWorkspaceBusy, KindWorkspaceMissing, KindNotFound, KindMethodNotAllowed, KindInternal, KindShuttingDown}
 	if a, b := strings.Join(slices.Sorted(slices.Values(refusal["kind"].Enum)), ","), strings.Join(slices.Sorted(slices.Values(kinds)), ","); a != b {
 		t.Errorf("kinds documented %s served %s", a, b)
 	}

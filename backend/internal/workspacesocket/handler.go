@@ -46,6 +46,7 @@ const (
 	KindNotFound         = "not-found"
 	KindMethodNotAllowed = "method-not-allowed"
 	KindInternal         = "internal-error"
+	KindShuttingDown     = "shutting-down"
 )
 
 // ValidMessage reports whether message is a commit message the socket
@@ -79,6 +80,9 @@ type Error struct {
 	ActiveJobID string `json:"activeJobId,omitempty"`
 	// RetryAfterSeconds is when a rate-limited request may be repeated.
 	RetryAfterSeconds int `json:"retryAfterSeconds,omitempty"`
+	// JobID is the job a request had started when Menagerie began
+	// shutting down.
+	JobID string `json:"jobId,omitempty"`
 }
 
 type request struct {
@@ -89,6 +93,10 @@ type request struct {
 // listener is created; no part of a request selects a workspace.
 func (s *Sockets) handler(name string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The body, read here or discarded by the server after a refusal,
+		// has a deadline.
+		rc := http.NewResponseController(w)
+		_ = rc.SetReadDeadline(time.Now().Add(s.bounds.body))
 		if r.URL.Path != CommitsPath {
 			refuse(w, http.StatusNotFound, Error{Kind: KindNotFound})
 			return
@@ -98,11 +106,19 @@ func (s *Sockets) handler(name string) http.Handler {
 			refuse(w, http.StatusMethodNotAllowed, Error{Kind: KindMethodNotAllowed})
 			return
 		}
+		if s.ctx.Err() != nil {
+			refuse(w, http.StatusServiceUnavailable, Error{Kind: KindShuttingDown})
+			return
+		}
 		message, kind := readMessage(w, r)
 		if kind != "" {
 			refuse(w, http.StatusBadRequest, Error{Kind: kind})
 			return
 		}
+		// The wait for the job has no deadline: a commit job may take
+		// minutes, and its job time limit governs it. A refused body keeps
+		// its deadline, so the server stops reading what is left of it.
+		_ = rc.SetReadDeadline(time.Time{})
 		job, outcome, wait, err := s.start(name, message)
 		var busy *jobs.BusyError
 		switch {
@@ -121,8 +137,12 @@ func (s *Sockets) handler(name string) http.Handler {
 			refuse(w, http.StatusInternalServerError, Error{Kind: KindInternal})
 			return
 		}
-		// A client that goes away does not cancel the job.
+		// A client that goes away does not cancel the job. Shutting down
+		// answers the request; the job is the job manager's.
 		if !ended(r.Context(), job) {
+			if s.ctx.Err() != nil {
+				refuse(w, http.StatusServiceUnavailable, Error{Kind: KindShuttingDown, JobID: job.ID()})
+			}
 			return
 		}
 		snap := job.Snapshot()

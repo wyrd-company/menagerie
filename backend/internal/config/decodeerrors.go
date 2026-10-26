@@ -27,6 +27,8 @@ var (
 	duplicateEntry = regexp.MustCompile(`(?s)^line ([0-9]+): mapping key .* already defined at line ([0-9]+)$`)
 	lineEntry      = regexp.MustCompile(`^line ([0-9]+): `)
 	tagEntry       = regexp.MustCompile(`(?s)^yaml: cannot decode .* as a (!![a-z]+)$`)
+	// anchorEntry is a problem text that quotes an anchor's name.
+	anchorEntry = regexp.MustCompile(`(?s)^yaml: (?:line ([0-9]+): )?(?:unknown anchor .* referenced|anchor .* value contains itself)$`)
 	// syntaxProblem is the shape of the parser's fixed problem texts. A
 	// message that also carries a value, such as an unknown tag's, has
 	// characters outside it.
@@ -45,6 +47,9 @@ func decodeError(data []byte, err error) error {
 	}
 	var te *yaml.TypeError
 	if !errors.As(err, &te) {
+		if m := anchorEntry.FindStringSubmatch(err.Error()); m != nil {
+			return errors.New(atLine(m[1]) + "an alias names no anchor defined before it, or an anchor holds its own alias")
+		}
 		if m := syntaxProblem.FindStringSubmatch(err.Error()); m != nil {
 			return errors.New(atLine(m[1]) + m[2])
 		}

@@ -186,7 +186,7 @@ func workspaceSockets(ctx context.Context, cfg *config.Config, root *workspace.R
 	opts.WorkspaceSocket = func(folder string) (string, error) {
 		name := filepath.Base(folder)
 		if own, err := root.FolderPath(name); err != nil || own != folder {
-			return "", fmt.Errorf("workspace socket: %s is not a folder of the workspace root", folder)
+			return "", errors.New("workspace socket: the workspace's folder is not a folder of the workspace root")
 		}
 		return sockets.Ensure(name)
 	}
@@ -209,7 +209,7 @@ func workspaceSockets(ctx context.Context, cfg *config.Config, root *workspace.R
 func clientPath() (string, error) {
 	self, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("workspace socket client: %w", err)
+		return "", errors.New("workspace socket client: the menagerie executable's path is unknown")
 	}
 	return filepath.Join(filepath.Dir(self), workspacesocket.ClientName), nil
 }
