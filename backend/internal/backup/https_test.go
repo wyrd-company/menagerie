@@ -221,6 +221,7 @@ func TestHTTPSFailuresHaveFixedReasons(t *testing.T) {
 		{http.StatusUnauthorized, transport.ErrAuthenticationRequired, "the workspace repository did not accept the credentials"},
 		{http.StatusForbidden, transport.ErrAuthorizationFailed, "the workspace repository denied access"},
 		{http.StatusNotFound, transport.ErrRepositoryNotFound, "the workspace repository was not found"},
+		{http.StatusTeapot, nil, "the workspace repository answered status 418"},
 		{http.StatusBadGateway, nil, "the workspace repository answered status 502"},
 	}
 	folder := committedWorkspace(t)
@@ -383,5 +384,21 @@ func TestCredentialFailuresKeepTheAppsReasonAndNameNoValue(t *testing.T) {
 	// SSH keeps its text.
 	if _, err = (&Remote{URL: "git@example.invalid:o/r.git", Auth: failing}).Push(context.Background(), folder, "alpha", nil); err == nil || !strings.Contains(err.Error(), "no credentials for git@example.invalid") {
 		t.Fatalf("ssh credential failure: %v", err)
+	}
+}
+
+// TestATransferReleasesItsCredentials: push and fetch release what Auth
+// gave them, whether they succeed or fail.
+func TestATransferReleasesItsCredentials(t *testing.T) {
+	folder := committedWorkspace(t)
+	released := 0
+	auth := func(context.Context, string) (transport.AuthMethod, func(), error) {
+		return nil, func() { released++ }, nil
+	}
+	remote := &Remote{URL: filepath.Join(t.TempDir(), "absent.git"), Auth: auth}
+	_, _ = remote.Push(context.Background(), folder, "alpha", nil)
+	_, _ = remote.Fetch(context.Background(), folder, "alpha", "alpha", nil)
+	if released != 2 {
+		t.Fatalf("released %d times", released)
 	}
 }

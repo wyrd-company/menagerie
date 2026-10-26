@@ -49,9 +49,6 @@ func Transport(c *http.Client) transport.Transport {
 	if c != nil {
 		cl = *c
 	}
-	if cl.Transport == nil {
-		cl.Transport = http.DefaultTransport
-	}
 	cl.CheckRedirect = refuseMarked
 	return githttp.NewClient(&cl)
 }

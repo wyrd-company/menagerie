@@ -107,7 +107,8 @@ func TestTheRemotesTextNamesNeitherTheTokenNorTheURL(t *testing.T) {
 		"printf 'diagnostic: %s' '" + sampleToken[:7] + "' >&2\nsleep 0.2\n" +
 		"printf '%s at %s' '" + sampleToken[7:] + "' '" + url[:12] + "' >&2\nsleep 0.2\n" +
 		"printf '%s\\n' '" + url[12:] + "' >&2\n" +
-		"printf 'auth %s\\n' '" + basic + "' >&2\n"
+		"printf 'auth %s\\n' '" + basic + "' >&2\n" +
+		"printf 'tail %s' '" + sampleToken + "' >&2\n"
 	source := committedWorkspace(t)
 	if _, err := remote.Push(context.Background(), source, "alpha", nil); err != nil {
 		t.Fatal(err)
@@ -120,7 +121,7 @@ func TestTheRemotesTextNamesNeitherTheTokenNorTheURL(t *testing.T) {
 				t.Fatalf("%s progress carries %q:\n%s", op, v, text)
 			}
 		}
-		if !strings.Contains(text, "diagnostic: [redacted] at [redacted]") || !strings.Contains(text, "auth [redacted]") {
+		if !strings.Contains(text, "diagnostic: [redacted] at [redacted]") || !strings.Contains(text, "auth [redacted]") || !strings.Contains(text, "tail [redacted]") {
 			t.Fatalf("%s progress lost the remote's text:\n%s", op, text)
 		}
 	}
