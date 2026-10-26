@@ -128,6 +128,8 @@ digits and underscores, not starting with a digit, and each name once.
   the listed variables.
 - `initializeCommand` runs with only the listed variables and `PATH`. `PATH`
   is readable through `${localEnv:PATH}` only when it is listed.
+- `build.args` reach the build as written: devcontainer-builder does not
+  substitute variables in them yet.
 
 ## Listen address and template service
 
