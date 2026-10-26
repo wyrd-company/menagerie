@@ -38,6 +38,18 @@ registry-credentials:
     - {registry: docker.io, path: menagerie/docker-hub}
 
 local-env: [TZ, LANG]
+
+job-limits:
+  default: 2h
+  operations:
+    rebuild: 1h
+  phases:
+    initialize-command: 10m
+    build: 45m
+
+alerts:
+  webhook: https://ntfy.example.test/menagerie
+  long-running: 45m
 ```
 
 ## Workspaces
@@ -130,6 +142,56 @@ digits and underscores, not starting with a digit, and each name once.
   is readable through `${localEnv:PATH}` only when it is listed.
 - `build.args` reach the build as written: devcontainer-builder does not
   substitute variables in them yet.
+
+## Job time limits
+
+Without `job-limits` a job runs until it ends. With it, a job past a limit
+is cancelled and fails as `timed-out`, and its workspace takes the next job
+once the cancelled work has stopped.
+
+- `default` limits every operation.
+- `operations` gives `start`, `stop`, `rebuild`, `create` or `upgrade` its
+  own limit, which replaces `default`.
+- `phases` limits each stay in a phase, inside any operation:
+  `read-definition`, `initialize-command`, `build`, `remove-container`,
+  `up`, `stop`, `interview`, `initialize-repository`, `generate`, `apply`,
+  `commit`, `backup-local-changes` or `backup`. Template hooks run inside
+  `generate` and `apply`.
+
+A duration is whole hours, minutes and seconds, such as `2h`, `45m` or
+`1h30m`. Limits count only the time Menagerie works: while a job waits for
+answers to an interview, no limit counts and the interview has no expiry.
+The job console shows the limit that ends first and the time left.
+
+## Alerts
+
+With `alerts`, Menagerie posts one JSON message to `webhook` for every job
+that fails, timed-out jobs included. With `long-running`, it also posts one
+when a job's running time passes that duration. Ended and succeeded jobs
+send nothing.
+
+```json
+{
+  "event": "job-failed",
+  "jobId": "4f1c...",
+  "workspace": "sample-space",
+  "operation": "rebuild",
+  "phase": "build",
+  "state": "failed",
+  "error": { "kind": "timed-out", "message": "the build phase passed its 45m limit" },
+  "console": "https://menagerie.example.test/?job=4f1c..."
+}
+```
+
+`event` is `job-failed` or `job-long-running`; a long-running alert has
+`"state": "running"` and `"error": null`. `console` opens the job's console
+at the origin of `oidc.redirect-url`. The body suits a generic webhook such
+as ntfy, Slack through a relay, or Dagu.
+
+Menagerie makes one attempt per alert with a 10 second limit and does not
+follow redirects. An alert never delays or fails a job. A failed delivery
+writes one line to the container's log. The webhook URL can carry a token,
+so Menagerie never writes it to a log, an event or an error.
 
 ## Listen address and template service
 
