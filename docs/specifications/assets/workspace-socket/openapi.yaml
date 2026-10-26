@@ -1,0 +1,123 @@
+openapi: 3.1.0
+info:
+  title: Menagerie workspace socket
+  version: "1"
+  description: >-
+    Served on a workspace's own Unix socket, at
+    /run/menagerie/workspace.sock in its devcontainer. The socket serves
+    the one workspace it was created for. No reply carries a message.
+paths:
+  /v1/commits:
+    post:
+      operationId: commit
+      summary: Commit every change of the workspace and back it up.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitRequest"
+      responses:
+        "200":
+          description: The commit job ended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitResult"
+        "400":
+          $ref: "#/components/responses/Refusal"
+        "404":
+          $ref: "#/components/responses/Refusal"
+        "405":
+          $ref: "#/components/responses/Refusal"
+        "409":
+          $ref: "#/components/responses/Refusal"
+        "429":
+          description: The workspace's last accepted commit is within the minimum interval.
+          headers:
+            Retry-After:
+              description: Seconds until a commit is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefusalEnvelope"
+        "500":
+          $ref: "#/components/responses/Refusal"
+components:
+  responses:
+    Refusal:
+      description: The request was refused; nothing started.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefusalEnvelope"
+  schemas:
+    CommitRequest:
+      type: object
+      required: [message]
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+          minLength: 1
+          description: >-
+            Not blank, at most 4096 bytes of UTF-8, without NUL. The body is
+            at most 16 KiB.
+    CommitResult:
+      type: object
+      required: [jobId, state, commit, changed, pushed, error]
+      additionalProperties: false
+      properties:
+        jobId:
+          type: string
+        state:
+          type: string
+          enum: [succeeded, failed]
+        commit:
+          type: [string, "null"]
+          description: The workspace branch's commit after the commit phase; null when it failed.
+        changed:
+          type: boolean
+          description: The commit phase made a commit.
+        pushed:
+          type: boolean
+          description: The backup changed the workspace repository's branch.
+        error:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [kind]
+              additionalProperties: false
+              properties:
+                kind:
+                  type: string
+                  examples: [commit-failed, backup-failed, timed-out, internal-error]
+    RefusalEnvelope:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [kind]
+          additionalProperties: false
+          properties:
+            kind:
+              type: string
+              enum:
+                - invalid-request
+                - invalid-message
+                - rate-limited
+                - workspace-busy
+                - workspace-not-found
+                - not-found
+                - method-not-allowed
+                - internal-error
+            activeJobId:
+              type: string
+              description: Present with workspace-busy.
+            retryAfterSeconds:
+              type: integer
+              description: Present with rate-limited.

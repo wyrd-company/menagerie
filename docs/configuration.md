@@ -51,6 +51,13 @@ job-limits:
 alerts:
   webhook: https://ntfy.example.test/menagerie
   long-running: 45m
+
+auto-commit:
+  every: 1h
+
+workspace-socket:
+  folder: /srv/menagerie/sockets
+  min-interval: 1m
 ```
 
 ## Workspaces
@@ -182,8 +189,8 @@ is cancelled and fails as `timed-out`, and its workspace takes the next job
 once the cancelled work has stopped.
 
 - `default` limits every operation.
-- `operations` gives `start`, `stop`, `rebuild`, `create` or `upgrade` its
-  own limit, which replaces `default`.
+- `operations` gives `start`, `stop`, `rebuild`, `create`, `upgrade` or
+  `commit` its own limit, which replaces `default`.
 - `phases` limits each stay in a phase, inside any operation:
   `read-definition`, `initialize-command`, `build`, `remove-container`,
   `up`, `stop`, `interview`, `initialize-repository`, `generate`, `apply`,
@@ -236,6 +243,42 @@ what failed: `timeout`, `transport error`, `redirect refused` or
 so Menagerie never writes it to a log, an event or an error. A
 configuration error names the field and what it expects, never the value
 of the webhook or of a duration.
+
+## Automatic commits
+
+With `auto-commit`, Menagerie checks every workspace each `every`, the first
+time one interval after it starts. A workspace with uncommitted changes and
+no job in progress gets a commit job: every change is committed, as
+`git add --all` and a commit would, with the message
+`chore(menagerie): automatic commit`, and the workspace's branch is backed
+up. A workspace with a job in progress is skipped until the next check.
+Files the workspace's ignore rules exclude, and repositories cloned inside
+it, are not committed. Without `auto-commit` nothing is committed on a
+schedule.
+
+## Workspace sockets
+
+With `workspace-socket`, every workspace's devcontainer can commit and back
+up its own workspace with `workspace-commit`, as
+[Usage](usage.md#commit-from-inside-a-workspace) shows. Menagerie keeps one
+folder per workspace in `folder`, with a Unix socket and the client, and
+mounts it read-only at `/run/menagerie` in that workspace's devcontainer.
+The socket only knows its own workspace, and needs no token.
+
+- `folder` is an absolute folder that is mounted at the same path on the
+  host and in Menagerie's container, like the workspace root. It must exist
+  before Menagerie starts and belong to the owner of the workspace root,
+  the user the services run as; Menagerie sets its mode to 0700. It must
+  not hold a comma, and must be neither inside nor around the workspace
+  root, the Wyrwood directory or the candidate folder.
+- `min-interval` is the shortest time between two commits of one workspace
+  through its socket, `1m` by default; `0` allows any number. A request
+  that comes sooner is refused with the time to wait, so a loop in a
+  devcontainer cannot fill its backup branch.
+
+A devcontainer gets the socket when its container is created: a workspace
+that already had a container gets it at its next rebuild. A Compose
+workspace gets the socket on its primary service only.
 
 ## Listen address and template service
 

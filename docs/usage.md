@@ -20,7 +20,9 @@ Every folder in the workspace root is a row, with its container's state:
 devcontainer was never created. Containers that belong to no folder in the
 root do not appear. **Refresh** reads the folders and containers again.
 
-Each row has **Stop**, **Start**, **Rebuild** and **Upgrade**. Rebuild asks
+Each row has **Stop**, **Start**, **Rebuild** and **Upgrade**. A commit,
+from the [schedule or the workspace itself](#commit-from-inside-a-workspace),
+shows on its row as **committing**. Rebuild asks
 for confirmation, then removes the container and creates it again from the
 workspace's definition. While a job runs on a workspace, its row is busy and
 its actions wait: a workspace runs one job at a time. Other workspaces stay
@@ -84,6 +86,38 @@ Each workspace is backed up to a branch named after its folder, created
 without a parent and replaced by force at every backup. To restore a
 workspace, clone its branch into a folder in the workspace root by hand;
 Menagerie lists it like any other folder.
+
+## Commit from inside a workspace
+
+When Menagerie has [workspace sockets](configuration.md#workspace-sockets),
+every devcontainer has `/run/menagerie/bin/workspace-commit`. It commits
+every change of the workspace, as `git add --all` and a commit would, and
+backs the workspace's branch up:
+
+```sh
+/run/menagerie/bin/workspace-commit -m "feat: add the build scripts"
+```
+
+It waits for the job and prints its id, the commit, and whether the backup
+pushed it. A commit job also appears in **Jobs since Menagerie started**,
+with its whole log. The exit status says what happened:
+
+| Status | Meaning |
+| --- | --- |
+| 0 | Committed (or nothing to commit) and backed up. |
+| 1 | The job failed, as `commit-failed` or `backup-failed` for example. The job's console has the detail. |
+| 2 | Usage error, or a message that is blank, longer than 4096 bytes, or holds a NUL. |
+| 3 | The workspace has a job in progress, or committed less than the minimum interval ago. It prints when to retry. |
+| 4 | The socket cannot be reached: the container was created before Menagerie had workspace sockets, or Menagerie is not running. |
+
+A container gets the socket when it is created, so a workspace that was
+running before sockets were configured needs one **Rebuild**. A restart of
+Menagerie does not: the socket comes back in the same mounted folder.
+`MENAGERIE_WORKSPACE_SOCKET` names the socket inside the devcontainer.
+
+With [automatic commits](configuration.md#automatic-commits), Menagerie
+also commits a workspace with changes on a schedule, with the message
+`chore(menagerie): automatic commit`.
 
 ## Stop, start and rebuild
 

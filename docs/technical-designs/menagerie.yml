@@ -33,6 +33,12 @@ design-challenges:
   git-credentials: >-
     Menagerie backs up each workspace to GitHub. No credential may be stored
     in the Menagerie container.
+  workspace-commits: >-
+    Changes made inside a devcontainer, such as scripts an agent adds to a
+    writable folder of the workspace, must be committed and backed up
+    between upgrades. The devcontainer must be able to ask for that without
+    a credential and without a way to name another workspace or to reach
+    Menagerie's API.
   long-running-operations: >-
     Builds and rebuilds take minutes. The UI must show progress and must not
     start two operations on one workspace.
@@ -107,7 +113,7 @@ proposed-design:
     A workspace that must start after a host restart sets a Docker restart
     policy in its definition; the daemon restarts it.
   operations-and-jobs: >-
-    Each create, upgrade, start, stop or rebuild is a job. A workspace has at
+    Each create, upgrade, start, stop, rebuild or commit is a job. A workspace has at
     most one job at a time. Jobs and their logs are held in memory and
     streamed to the UI. A restart of Menagerie drops job history. Optional
     time limits, a default, per operation and per phase, count running time
@@ -115,6 +121,61 @@ proposed-design:
     through its context and fails as timed-out once its work returns. An
     optional webhook hears of every failed job and, past a threshold, of a
     long-running one.
+  commit-operation: >-
+    The commit operation is a job of two phases. Its `commit` phase stages
+    every change of the workspace, as `git add --all` would: untracked,
+    modified and deleted files, and what is already staged. Untracked paths
+    the workspace's ignore rules exclude and anything inside a nested Git
+    repository stay unstaged. When anything changed, it commits on the
+    workspace branch as Menagerie. Its `backup` phase force-pushes the
+    branch as every backup does, also when nothing changed, so a backup
+    that failed before is pushed again. A failed phase fails the job as
+    `commit-failed` or `backup-failed`. The API starts it on any workspace;
+    the schedule and the workspace sockets start it too, and a time limit
+    on the `commit` operation applies to all of them.
+  scheduled-commits: >-
+    With `auto-commit`, a sweep runs every interval, the first one interval
+    after start-up. It lists the workspaces under the root and starts a
+    commit job, with the message `chore(menagerie): automatic commit`, on
+    each workspace that has no unfinished job and has a change the job
+    would commit. A busy workspace is skipped until the next sweep, never
+    queued. Checking for changes changes nothing. A workspace whose changes
+    cannot be read is logged by its name with a fixed text.
+  workspace-socket: >-
+    With `workspace-socket`, each workspace has a Unix socket that its
+    devcontainer reaches at `/run/menagerie/workspace.sock`, the only
+    Menagerie endpoint inside a devcontainer. The socket folder is mounted
+    at the same path on the host and in Menagerie's container, belongs to
+    the services' user and has mode 0700. It holds a folder per workspace,
+    mode 0755, with `workspace.sock`, mode 0666, and
+    `bin/workspace-commit`, the static client copied from Menagerie's
+    image. Each start and rebuild, of a single container or a Compose
+    primary, bind-mounts the workspace's folder read-only at
+    `/run/menagerie`, and sets `MENAGERIE_WORKSPACE_SOCKET` to the socket
+    unless the definition sets that name itself; the definition on disk
+    does not change. A container gets the mount when it is created, so an
+    existing container gets it at its next rebuild. The folder is mounted,
+    not the socket, so a socket that a restarted Menagerie re-creates is
+    reached through the same mount. The workspace service creates a
+    listener for every workspace at start-up, and before each start or
+    rebuild when it has none or its socket file is no longer its own, so a
+    created workspace has its socket before its devcontainer starts. A
+    stale socket file is replaced and the client copied in again through a
+    new file; no symbolic link is followed, and a workspace folder that is
+    not a folder of the services' user is refused, which fails the start.
+    The workspace is bound to its listener: the socket API has no way to
+    name a workspace, and no token is needed. It has one route, `POST
+    /v1/commits` with a commit message, which starts a commit job on the
+    bound workspace, waits for it to end and returns the job's id, end
+    state, commit, whether it changed and was pushed, and the error kind.
+    A client that goes away does not cancel the job. A second commit of a
+    workspace within the minimum interval of its last accepted one is
+    refused with the time left, so a loop in a container cannot fill its
+    backup branch. Every reply carries kinds, ids, hashes, numbers and
+    booleans only, never a message, so no error, path or remote address
+    reaches the container; the job console has the detail. A commit
+    records what the container could already write: no path is refused.
+    Throwaway containers never get the socket folder.
   docker-access: >-
     The workspace service talks to the host Docker daemon through the mounted
     socket, with devcontainer-builder for devcontainers and the Docker
@@ -137,7 +198,8 @@ proposed-design:
     Docker library. The workspace folder is bind-mounted read-write at its
     own path, which is the host path, except for an upgrade's hook, which
     gets no mount at all: its candidate is copied in instead. Nothing else
-    is mounted, so no Docker socket and no Wyrwood socket is reachable. The environment holds only
+    is mounted, so no Docker socket, no Wyrwood socket and no workspace
+    socket is reachable. The environment holds only
     what the specification defines and the runner image's own variables,
     its `PATH` included. The container runs as the services' user, the owner
     of the workspace root, with `no-new-privileges`, on the default bridge
@@ -251,11 +313,13 @@ proposed-design:
   configuration: >-
     Configuration names the workspace root, the workspace repository, the
     approved template list with optional runner images, the OIDC issuer and
-    client, the Wyrwood consumer directory, the registry credential secrets
-    and the default runner image.
+    client, the Wyrwood consumer directory, the registry credential secrets,
+    the default runner image, the commit schedule and the socket folder.
   deployment: >-
     The Menagerie container mounts the workspace root at the same path as on
-    the host, the host Docker socket and the Wyrwood consumer directory.
+    the host, the host Docker socket and the Wyrwood consumer directory,
+    and, with workspace sockets, the socket folder at the same path as on
+    the host.
     Throwaway containers need nothing more: the root's host path is their
     bind source, and Menagerie's own image is their default image. It has a
     Docker restart policy, so it returns after a host restart. Its UI is
@@ -275,4 +339,7 @@ proposed-design:
     created by Menagerie never appears in the list. A hook and an
     `initializeCommand` that look for the Docker socket, the SSH agent or
     Menagerie's environment find none of them, and still write into the
-    workspace folder.
+    workspace folder. A test devcontainer writes a file and calls
+    `workspace-commit` through its mounted socket, and the file is on the
+    workspace's backup branch; a scheduled sweep does the same for a
+    workspace left dirty. `initializeCommand` finds no workspace socket.

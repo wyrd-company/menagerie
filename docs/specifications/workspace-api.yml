@@ -7,6 +7,7 @@ relationships:
     - authentication
     - template-service-api
     - backup-force-push-overwrites-branch
+    - workspace-fills-its-backup-branch
 format: openapi
 description: >-
   The workspace service serves a JSON API to the browser, defined by
@@ -35,8 +36,8 @@ description: >-
 
 
   `POST /api/jobs` starts an operation on a workspace. The operations are
-  `start`, `stop` and `rebuild` on an existing workspace folder, and the
-  interview operations `create` and `upgrade`, which also name an approved
+  `start`, `stop`, `rebuild` and `commit` on an existing workspace folder,
+  and the interview operations `create` and `upgrade`, which also name an approved
   template's `templateId`. Any other operation is refused as
   `unknown-operation`. The service acquires the workspace's job slot before
   any work begins. A workspace has at most one unfinished job; another
@@ -58,7 +59,7 @@ description: >-
   for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
   `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
-  or `backup-failed`. Its message says what was written and what recovery
+  or `backup-failed`, and for `commit` `commit-failed` or `backup-failed`. Its message says what was written and what recovery
   is needed.
 
 
@@ -202,6 +203,58 @@ description: >-
   rebuilt.
 
 
+  Commit. A `commit` job stages every change of the workspace, as `git
+  add --all` would: untracked, modified and deleted files, and what is
+  already staged. Untracked paths the ignore rules exclude and files inside
+  a nested Git repository stay unstaged. In the `commit` phase it commits
+  on the workspace branch, as Menagerie, when anything changed; in the
+  `backup` phase it force-pushes the branch, also when nothing changed. A
+  commit that fails, for example on a workspace whose HEAD is not on its
+  branch, fails as `commit-failed` with nothing pushed; a failed push fails
+  as `backup-failed` and keeps the commit. A commit started through this
+  API has the message `chore(menagerie): commit workspace changes`. With
+  `auto-commit`, the service sweeps the workspace root every interval,
+  first one interval after start-up, and starts a commit with the message
+  `chore(menagerie): automatic commit` on each workspace that has no
+  unfinished job and a change the job would commit; a busy workspace is
+  skipped, never queued. The `commit` operation's time limit applies to
+  every commit job.
+
+
+  Workspace socket. With `workspace-socket`, each workspace's devcontainer
+  has a Unix socket at `/run/menagerie/workspace.sock`, named by
+  `MENAGERIE_WORKSPACE_SOCKET` unless the definition sets that name, and
+  the client `/run/menagerie/bin/workspace-commit`. The folder
+  `/run/menagerie` is the workspace's folder in the socket folder, mounted
+  read-only on each start and rebuild of a single container or a Compose
+  primary; an existing container gets it at its next rebuild. A Compose
+  workspace whose socket folder path holds a comma or ends in a space gets
+  no mount, and the job log says so. The socket serves the one workspace
+  it was created for and speaks HTTP/1.1 JSON, defined by
+  `assets/workspace-socket/openapi.yaml`. `POST /v1/commits` takes
+  `{"message"}`: a commit message that is not blank, at most 4096 bytes of
+  UTF-8, without NUL, in a body of at most 16 KiB with no other member. It
+  starts a commit job on the workspace with that message, waits for the
+  job to end and answers 200 `{"jobId","state","commit","changed",
+  "pushed","error"}`: `commit` is the branch's commit after the commit
+  phase, null when that phase failed, and `error` is null or `{"kind"}`. A
+  client that disconnects does not cancel the job. Refusals answer
+  `{"error":{"kind"}}`: 400 `invalid-message` or `invalid-request`; 409
+  `workspace-busy` with `activeJobId`; 429 `rate-limited` with
+  `retryAfterSeconds` and `Retry-After` when the workspace's last accepted
+  commit is within `workspace-socket.min-interval`; 404
+  `workspace-not-found` when the workspace's folder is gone; 500
+  `internal-error`. Any other path answers 404 `not-found` and any other
+  method 405 `method-not-allowed`. A refused request does not count toward
+  the interval. No reply carries a message: the job's console has the
+  detail, so no error text, path or remote address reaches the container.
+  `workspace-commit [-m] <message>` prints the job id, the commit and
+  whether the backup pushed, and exits 0 when the job succeeded, 1 when it
+  failed (with its kind), 2 on a usage error or an invalid message, 3 when
+  the workspace is busy or rate limited (with when to retry) and 4 when
+  the socket cannot be reached.
+
+
   `GET /api/jobs/{id}/events` streams the job's events as Server-Sent Events.
   Event ids are the job's sequence numbers from 1. `state` carries
   `{state, phase, deadline, limit}`, `log` carries one output line `{text}`, and `result`
@@ -322,4 +375,16 @@ validation-criteria: >-
   'templateservice docker' ./backend/internal/workflows/` runs those
   templates in throwaway containers, and a hook that never ends under a
   short `generate` limit: the job ends timed-out with no hook container
-  left and no write to the folder after it.
+  left and no write to the folder after it. `go test
+  ./backend/internal/commits/ ./backend/internal/workspacesocket/
+  ./backend/cmd/workspace-commit/` covers the commit job's phases and
+  kinds, the sweep's idle and change checks, the socket's binding to its
+  workspace, message and request checks, the minimum interval, the busy
+  refusal, a client that leaves, stale and linked socket files, and a
+  reply for every refusal and failure that carries only kinds, ids,
+  hashes, numbers and booleans. `go test -tags docker
+  ./backend/internal/devcontainer/` also has a devcontainer commit a file
+  through `workspace-commit` and its read-only mounted socket, before and
+  after the socket is re-created and after a rebuild, a Compose primary do
+  the same, a sweep commit a workspace left dirty, each onto the backup
+  branch, and an `initializeCommand` find no socket.

@@ -49,3 +49,16 @@ templates:
 # alerts:
 #   webhook: https://ntfy.example.test/menagerie
 #   long-running: 45m
+
+# A socket in each workspace's devcontainer, at /run/menagerie/workspace.sock,
+# with the workspace-commit client beside it: the devcontainer commits and
+# backs up its own workspace. compose.yml mounts the folder at its own path.
+# A second commit of a workspace within min-interval is refused.
+workspace-socket:
+  folder: /srv/menagerie/sockets
+  # min-interval: 1m
+
+# Commit and back up every idle workspace with changes, once an interval.
+# Without this section nothing is committed on a schedule.
+# auto-commit:
+#   every: 1h
