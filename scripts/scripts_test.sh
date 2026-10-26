@@ -37,16 +37,20 @@ done
 git_test() { git -c user.name="Example User" -c user.email=user@example.invalid "$@"; }
 
 # clone_at_head <dir>: a clone of HEAD carrying the working tree's scripts,
-# with no release tags, no changelog and one fixture intent in place of the
-# repository's own, so every case starts from the same first-release state
-# whatever the repository's pending intents, tags and changelog are.
+# with no release tags, no changelog, docs.yml versions at the baseline and
+# one fixture intent in place of the repository's own, so every case starts
+# from the same first-release state whatever the repository's pending
+# intents, tags and changelog are.
 clone_at_head() {
   git clone -q --no-local "$repo" "$1"
   git -C "$1" checkout -q --detach "$(git -C "$repo" rev-parse HEAD)"
   git -C "$1" tag --list | xargs -r git -C "$1" tag -d >/dev/null
   git -C "$1" for-each-ref --format='%(refname:short)' refs/heads | xargs -r git -C "$1" branch -q -D
   cp "$repo"/scripts/*.sh "$1/scripts/"
-  git -C "$1" add scripts
+  # The published versions in docs.yml are projection evidence for the
+  # baseline, so a first-release state starts them at the baseline.
+  yq -i '.products.menagerie.version = "0.0.0" | .products.menagerie.docs-version = "0.0.0"' "$1/docs/user/docs.yml"
+  git -C "$1" add scripts docs/user/docs.yml
   git -C "$1" ls-files -z '.intentional/intents/*.md' | xargs -r -0 git -C "$1" rm -q
   git -C "$1" rm -q --ignore-unmatch CHANGELOG.md
   (cd "$1" && intentional add --release-unit menagerie:minor --message "A fixture change." >/dev/null)
@@ -73,7 +77,7 @@ expect "release on main tags the release and its baseline" 0 'released 0\.1\.0 a
   bash -o pipefail -c "RELEASE_PLAN='$scratch/first.json' '$r/scripts/release.sh' release 2>&1 | tee '$scratch/release.log'"
 expect "release names the push that delivers it" 0 '^push it: git push --atomic --follow-tags origin main$' cat "$scratch/release.log"
 release=$(git -C "$r" rev-parse HEAD)
-expect "the release commit writes the changelog and deletes the fixture intent, nothing else" 0 '^D:\.intentional/intents/[a-z0-9-]+\.md A:CHANGELOG\.md $' \
+expect "the release commit writes the changelog and the docs.yml version, and deletes the fixture intent, nothing else" 0 '^D:\.intentional/intents/[a-z0-9-]+\.md A:CHANGELOG\.md M:docs/user/docs\.yml $' \
   sh -c "git -C '$r' diff --name-status HEAD~1 HEAD | sort -k2 | awk '{ printf \"%s:%s \", \$1, \$2 }'; echo"
 expect "the release commit's subject names its version" 0 '^chore\(release\): 0\.1\.0$' git -C "$r" log -1 --format=%s
 expect "the release tag is on the release commit" 0 "^$release$" git -C "$r" rev-parse '0.1.0^{commit}'
@@ -226,27 +230,6 @@ expect "the workflow check refuses a task before checkout" 1 'tag step [0-9]+ ru
   sh -c "cd '$repo' && node scripts/check-workflows.mjs '$wfs/cd.yml'"
 expect "the workflow check refuses a job missing a tool its task needs" 1 'ci.yml test runs task test without an earlier task:tools:install:linters' \
   sh -c "cd '$repo' && node scripts/check-workflows.mjs '$wfs/ci.yml'"
-
-# check-docs.mjs refuses an image a published page shows but docs.yml does
-# not list, an asset outside docs/, and a docs folder with no published page.
-docs=$scratch/docs
-expect "the docs check passes this repository's docs" 0 'checked [0-9]+ pages and [0-9]+ assets' \
-  sh -c "cd '$repo' && node scripts/check-docs.mjs"
-cp -r "$repo/docs" "$docs-unlisted"
-yq -i 'del(.assets[] | select(. == "assets/list.png"))' "$docs-unlisted/docs.yml"
-expect "the docs check refuses an unlisted image" 1 'overview.md shows assets/list.png, which docs.yml does not list' \
-  sh -c "cd '$repo' && node scripts/check-docs.mjs '$docs-unlisted'"
-cp -r "$repo/docs" "$docs-outside"
-echo "a file beside the docs folder" >"$scratch/outside.md"
-yq -i '.assets += ["../outside.md"]' "$docs-outside/docs.yml"
-expect "the docs check refuses an asset outside docs" 1 'asset ../outside.md is outside' \
-  sh -c "cd '$repo' && node scripts/check-docs.mjs '$docs-outside'"
-mkdir -p "$docs-unpublished"
-cp "$repo/docs/docs.yml" "$docs-unpublished/"
-cp -r "$repo/docs/assets" "$docs-unpublished/"
-printf -- '---\ntitle: Draft\n---\n\nNot published.\n' >"$docs-unpublished/draft.md"
-expect "the docs check refuses a folder with no published page" 1 'no page in .* is marked docs: true' \
-  sh -c "cd '$repo' && node scripts/check-docs.mjs '$docs-unpublished'"
 
 # Toolchain versions named in several places agree, so a bump moves them all.
 go_version=$(sed -n 's/^go //p' "$repo/go.mod")

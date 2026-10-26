@@ -50,3 +50,10 @@ tag push starts the CD workflow, which delivers only Intentional release
 records: it pushes `ghcr.io/wyrd-company/menagerie:<version>` for linux/amd64
 and linux/arm64. `task release:rehearse` runs the same steps in a scratch
 clone and changes nothing.
+
+The Publish docs workflow then publishes `docs/user/` to wyrd.foo through
+wyrd.foo's reusable workflow: when CD succeeds for a release tag, and when a
+`menagerie-docs@*` tag is pushed. The publisher reads the release tag's
+GitHub Release, so create that Release first; to publish a tag or commit
+again, dispatch Publish docs with its `ref`. A push to `main` does not
+publish.
