@@ -247,7 +247,7 @@ func TestShuttingDownAnswersAWaitingRequest(t *testing.T) {
 
 func TestARequestAfterShutdownStartsNoJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	f := newFixture(t, func(o *Options) { o.Context = ctx })
+	f := newFixture(t, short, func(o *Options) { o.Context = ctx })
 	f.workspace("alpha")
 	cancel()
 	r := f.post("alpha", commitBody("too late"))
@@ -256,6 +256,22 @@ func TestARequestAfterShutdownStartsNoJob(t *testing.T) {
 	}
 	if len(f.jobs.List()) != 0 {
 		t.Fatal("a job started")
+	}
+	// A request that arrives during shutdown is answered shutting-down even
+	// when its body never ends.
+	conn := f.dial("alpha")
+	if _, err := io.WriteString(conn, "POST "+CommitsPath+" HTTP/1.1\r\nHost: workspace\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n{\"message\":"); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	res, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer: %v", err)
+	}
+	defer res.Body.Close()
+	data, _ := io.ReadAll(res.Body)
+	if r := (answer{status: res.StatusCode, body: data}); r.status != http.StatusServiceUnavailable || r.kind(t) != KindShuttingDown {
+		t.Fatalf("answer %d %s", r.status, r.body)
 	}
 }
 
