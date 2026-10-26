@@ -19,6 +19,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
 // creation is one create job.
@@ -54,7 +55,7 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	run.Phase("generate")
-	grant, err := c.w.grantHooks(ctx, run, c.folder, c.template)
+	grant, err := c.w.grantHooks(ctx, run, c.folder, c.template, throwaway.TargetFolder)
 	if err != nil {
 		return fmt.Errorf("%w; %s", err, c.recovery("holds only the initialized repository"))
 	}

@@ -16,13 +16,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -122,14 +125,22 @@ type writer func([]byte) (int, error)
 
 func (w writer) Write(b []byte) (int, error) { return w(b) }
 
-// grant registers a job for folder on a new hook runner.
+// grant registers a generate's job for folder on a new hook runner.
 func (h *harness) grant(ctx context.Context, folder string) (*throwaway.HookRunner, *throwaway.HookGrant, *console) {
 	h.t.Helper()
-	runner := throwaway.NewHookRunner(h.docker)
+	return h.grantOf(ctx, folder, throwaway.TargetFolder, "")
+}
+
+// grantOf registers a job for folder whose hooks run against targets of
+// kind, on a new hook runner whose candidate folder is candidates.
+func (h *harness) grantOf(ctx context.Context, folder string, kind throwaway.TargetKind, candidates string) (*throwaway.HookRunner, *throwaway.HookGrant, *console) {
+	h.t.Helper()
+	runner := throwaway.NewHookRunner(h.docker, candidates)
 	out := &console{}
 	g, err := runner.Grant(ctx, throwaway.HookJob{
 		ID:     "job-" + random(h.t),
 		Folder: folder,
+		Target: kind,
 		Image:  func(context.Context) (string, error) { return runnerImage, nil },
 		Log:    out.Log,
 	})
@@ -293,6 +304,97 @@ func TestAScriptHookRunsFromItsCopiedTemplate(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "changed")); err == nil {
 		t.Fatal("the hook wrote into Menagerie's template copy")
 	}
+}
+
+// TestAnUpgradeHookChangesOnlyItsCandidate runs an upgrade's hook, which
+// fails after it changed its candidate: the workspace folder is not in the
+// container, and the candidate on disk then holds exactly what the hook
+// left, links as links and entries as the services' user.
+func TestAnUpgradeHookChangesOnlyItsCandidate(t *testing.T) {
+	h := newHarness(t)
+	folder := h.folder("alpha")
+	if err := os.WriteFile(filepath.Join(folder, "live.txt"), []byte("live\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := filepath.Join(base, "candidates")
+	candidate := filepath.Join(candidates, ".tmpSample")
+	for rel, body := range map[string]string{"marker.txt": "v1\n", "removed.txt": "x\n", "sub/kept.txt": "kept\n"} {
+		path := filepath.Join(candidate, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner, g, _ := h.grantOf(context.Background(), folder, throwaway.TargetCandidate, candidates)
+	script := `[ -e "$1" ] && echo "the workspace folder is in the container"
+echo v2 > marker.txt
+rm removed.txt
+mkdir added
+echo added > added/run.sh
+chmod 755 added/run.sh
+ln -s ../outside link
+id -u > uid.txt
+exit 3`
+	r := post(t, runner, hook(g, candidate, map[string]any{"run": []string{"/bin/sh", "-c", script, "sh", folder}}, true))
+	if r.status != http.StatusOK || r.ExitCode != 3 || decoded(t, r.Stdout) != "" {
+		t.Fatalf("reply %+v %+v", r, r.Error)
+	}
+	want := map[string]string{
+		"marker.txt": "v2\n", "sub": "/", "sub/kept.txt": "kept\n", "added": "/", "added/run.sh": "added\n",
+		"link": "-> ../outside", "uid.txt": fmt.Sprintf("%d\n", os.Getuid()),
+	}
+	if got := tree(t, candidate); !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidate %v, want %v", got, want)
+	}
+	if info, err := os.Lstat(filepath.Join(candidate, "added/run.sh")); err != nil || info.Mode().Perm() != 0o755 || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
+		t.Fatalf("added/run.sh %v %v", info.Mode(), err)
+	}
+	if got := tree(t, folder); !reflect.DeepEqual(got, map[string]string{"live.txt": "live\n"}) {
+		t.Fatalf("the workspace folder changed: %v", got)
+	}
+	if entries, _ := os.ReadDir(candidates); len(entries) != 1 {
+		t.Fatalf("the copy back left %d entries in the candidate folder", len(entries))
+	}
+	g.Revoke()
+	if left := h.containers(filters.Arg("label", "menagerie.test.run="+h.runID)); len(left) != 0 {
+		t.Fatalf("%d hook containers remain", len(left))
+	}
+}
+
+// tree is folder's tree by relative path: a file's content, a folder's
+// "/", a link's "-> " and its target.
+func tree(t *testing.T, folder string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(folder, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == folder {
+			return err
+		}
+		rel, _ := filepath.Rel(folder, path)
+		switch {
+		case d.Type()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			out[rel] = "-> " + target
+			return err
+		case d.IsDir():
+			out[rel] = "/"
+		default:
+			body, err := os.ReadFile(path)
+			out[rel] = string(body)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // TestACancelledHookLeavesNoContainerAndStopsWriting revokes a grant

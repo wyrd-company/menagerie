@@ -1,7 +1,9 @@
 //! Template hooks run by the workspace service. The service never starts a
 //! hook process itself: each hook goes over the hook runner socket to the
-//! workspace service, which runs it in a throwaway container in the
-//! workspace folder and returns its exit code and captured streams.
+//! workspace service, which runs it in a throwaway container against Toha's
+//! target (the workspace folder for a generate, the candidate in this
+//! service's candidate folder for an upgrade) and returns its exit code and
+//! captured streams.
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use http_body_util::{BodyExt, Full};
@@ -15,12 +17,11 @@ use toha::plan::{PlannedHook, PlannedProgram};
 /// The hook runner's one route.
 pub const HOOK_PATH: &str = "/v1/hooks/run";
 
-/// Toha's hook runner for one generate or apply request. `folder` is the
-/// workspace folder as configured, the path the containers mount; `token`
-/// is the request's hook grant.
+/// Toha's hook runner for one generate or apply request. `token` is the
+/// request's hook grant, which binds the kind of target its hooks may run
+/// against.
 pub struct CallbackRunner<'a> {
     pub socket: &'a Path,
-    pub folder: &'a Path,
     pub token: Option<&'a str>,
 }
 
@@ -112,7 +113,7 @@ fn refused(kind: &str) -> &'static str {
 impl HookRunner for CallbackRunner<'_> {
     /// No error built here carries a captured stream, a path or a reply's
     /// text: each names one fixed reason.
-    fn run(&self, hook: &PlannedHook, _target: &Path) -> Result<HookOutcome, HookError> {
+    fn run(&self, hook: &PlannedHook, target: &Path) -> Result<HookOutcome, HookError> {
         let Some(token) = self.token else {
             return Err(failure(
                 "the request carries no hook token, so the workspace service runs none of its hooks",
@@ -129,7 +130,7 @@ impl HookRunner for CallbackRunner<'_> {
         };
         let request = HookRequest {
             token,
-            target: self.folder,
+            target,
             program,
             cwd: hook.cwd.as_ref().map(ToString::to_string),
             template_root: &hook.template_root,
@@ -287,7 +288,6 @@ mod tests {
         fn run(&self, hook: &PlannedHook, token: Option<&str>) -> Result<HookOutcome, HookError> {
             CallbackRunner {
                 socket: &self.socket,
-                folder: Path::new("/srv/spaces/alpha"),
                 token,
             }
             .run(hook, Path::new("/real/spaces/alpha"))
@@ -328,7 +328,7 @@ mod tests {
     const SECRET: &str = "c2VjcmV0LW91dHB1dA=="; // base64 of "secret-output"
 
     #[test]
-    fn a_hook_is_sent_with_its_grant_folder_and_capture() {
+    fn a_hook_is_sent_with_its_grant_target_and_capture() {
         let runner = Scripted::start(
             200,
             json!({"exitCode": 3, "success": false, "stdout": SECRET, "stderr": null}),
@@ -353,7 +353,7 @@ mod tests {
         );
         assert_eq!(
             runner.requests(),
-            [json!({"token": "token-1", "target": "/srv/spaces/alpha",
+            [json!({"token": "token-1", "target": "/real/spaces/alpha",
                 "program": {"run": ["sh", "-c", "exit 0"]}, "cwd": "sub/dir",
                 "templateRoot": "/var/lib/sample/cache/t",
                 "capture": {"stdout": true, "stderr": false}})]
@@ -465,7 +465,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let error = CallbackRunner {
             socket: &dir.path().join("absent.sock"),
-            folder: Path::new("/srv/spaces/alpha"),
             token: Some("token-1"),
         }
         .run(

@@ -19,14 +19,18 @@ menagerie-template-service -config /etc/menagerie/config.yml -data /var/lib/mena
 ```
 
 - `-config` is Menagerie's configuration file. The service reads only
-  `workspace-root`, `templates`, `template-service.socket` and
-  `template-service.hook-runner-socket` from it.
+  `workspace-root`, `templates`, `template-service.socket`,
+  `template-service.hook-runner-socket` and
+  `template-service.candidate-folder` from it. The candidate folder is the
+  service's temporary folder, where Toha builds an upgrade's candidate.
 - `-data` holds Toha's configuration, registry, template cache and state.
 
 The service runs no hook itself. Its Toha hook runner (`src/hooks.rs`) sends
-each hook, with the token of its generate or apply request, to the workspace
-service's hook runner socket; the workspace service runs it in a throwaway
-container and returns its exit code and captured streams. Private templates
+each hook, with the token of its generate or apply request and Toha's
+target, to the workspace service's hook runner socket; the workspace
+service runs it in a throwaway container against that target (the
+workspace folder for a generate, the candidate for an upgrade) and returns
+its exit code and captured streams. Private templates
 are fetched over SSH by Toha's Git transport, which runs the image's `ssh`
 client with `SSH_AUTH_SOCK`.
 

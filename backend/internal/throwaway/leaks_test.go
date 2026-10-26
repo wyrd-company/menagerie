@@ -25,7 +25,7 @@ func TestNoEngineErrorTextLeavesThePackage(t *testing.T) {
 	for stage, want := range map[string]Stage{
 		"inspect": StageInspect, "pull": StagePull, "pull-stream": StagePull, "create": StageCreate,
 		"copy": StageCopy, "attach": StageAttach, "start": StageStart, "wait": StageWait,
-		"wait-result": StageWait, "remove": StageRemove, "list": StageCreate,
+		"wait-result": StageWait, "remove": StageRemove, "list": StageCreate, "copy-back": StageCopyBack,
 	} {
 		t.Run(stage, func(t *testing.T) {
 			e, client := newEngine(t)
@@ -38,6 +38,9 @@ func TestNoEngineErrorTextLeavesThePackage(t *testing.T) {
 			var log bytes.Buffer
 			c := sample(t)
 			c.Dir, c.Copy, c.Log = "/"+capturedValue, t.TempDir(), &log
+			if stage == "copy-back" {
+				c.Folder, c.Target = "", t.TempDir()
+			}
 			_, err := NewDocker(client, DockerOptions{Root: "/srv"}).Run(context.Background(), c)
 			var runErr *RunError
 			if !errors.As(err, &runErr) || runErr.Stage != want {
@@ -183,7 +186,7 @@ func TestAWorkingDirectoryKeepsTheFoldersOwnPath(t *testing.T) {
 	folder := filepath.Join(t.TempDir(), "alpha")
 	link(t, real, folder)
 	fake := &fakeContainers{}
-	runner := NewHookRunner(fake)
+	runner := NewHookRunner(fake, "")
 	grant, err := runner.Grant(context.Background(), HookJob{
 		ID: "job-1", Folder: folder,
 		Image: func(context.Context) (string, error) { return "runner:sample", nil },
@@ -195,7 +198,7 @@ func TestAWorkingDirectoryKeepsTheFoldersOwnPath(t *testing.T) {
 	defer grant.Revoke()
 	cwd := "sub"
 	if _, herr := runner.run(context.Background(), &hookRequest{
-		Token: grant.Token(), Target: folder, Cwd: &cwd, Program: hookProgram{Run: []string{"true"}},
+		Token: grant.Token(), Target: real, Cwd: &cwd, Program: hookProgram{Run: []string{"true"}},
 	}); herr != nil {
 		t.Fatalf("refused: %s", herr.message)
 	}

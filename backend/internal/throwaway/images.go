@@ -9,7 +9,6 @@ package throwaway
 import (
 	"bufio"
 	"context"
-	"errors"
 	"os"
 	"regexp"
 	"sync"
@@ -114,7 +113,7 @@ func (i *Images) find(s *ownSearch) {
 // but only Menagerie's own is mounted into it.
 func (i *Images) findOwn(ctx context.Context) (string, error) {
 	if i.Docker == nil {
-		return "", &ImageError{Err: errors.New("no runner-image is configured and Menagerie has no Docker client to find its own image")}
+		return "", &ImageError{Err: Reason("no runner-image is configured and Menagerie has no Docker client to find its own image")}
 	}
 	candidates := containerIDs(i.mountInfo())
 	byName := len(candidates) == 0
@@ -137,7 +136,7 @@ func (i *Images) findOwn(ctx context.Context) (string, error) {
 		}
 		return info.Image, nil
 	}
-	return "", &ImageError{Err: errors.New("no runner-image is configured and Menagerie could not find its own container to use its image; set runner-image")}
+	return "", &ImageError{Err: Reason("no runner-image is configured and Menagerie could not find its own container to use its image; set runner-image")}
 }
 
 func (i *Images) mountInfo() string {

@@ -125,7 +125,6 @@ pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, Ser
     let done = reply::completed(session.state().map_err(ValueFree::value_free)?)?;
     let runner = CallbackRunner {
         socket: &service.settings.hook_runner_socket,
-        folder: &selected.folder,
         token: request.hook_token.as_deref(),
     };
     let (merged, report) = session

@@ -46,16 +46,25 @@ func postHook(t *testing.T, runner *throwaway.HookRunner, token, target string) 
 
 // TestHooksRunOnlyWhileTheirGenerateOrApplyRuns grants each generate and
 // apply its own token: the template service's hooks run with it in the
-// job's folder and the template's runner image, and it is refused once the
-// request returned.
+// job's folder, for a generate, or in a candidate, for an apply, and the
+// template's runner image, and it is refused once the request returned. A
+// generate's token refuses a candidate and an apply's the workspace folder.
 func TestHooksRunOnlyWhileTheirGenerateOrApplyRuns(t *testing.T) {
 	w := newWorld(t)
 	containers := &markerContainers{}
-	runner := throwaway.NewHookRunner(containers)
+	candidates := t.TempDir()
+	candidate := filepath.Join(candidates, ".tmpSample")
+	if err := os.Mkdir(candidate, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := throwaway.NewHookRunner(containers, candidates)
 	w.flows.opts.Hooks = runner
 	w.flows.opts.RunnerImage = func(_ context.Context, id string) (string, error) { return "runner:" + id, nil }
 	generate := w.tmpl.generate
 	w.tmpl.generate = func(s templates.Selector) (*templates.Applied, error) {
+		if status, kind := postHook(t, runner, w.tmpl.token("generate"), candidate); status != http.StatusForbidden || kind != throwaway.KindHookTokenRefused {
+			t.Errorf("generate's hook in a candidate: %d %s", status, kind)
+		}
 		if status, kind := postHook(t, runner, w.tmpl.token("generate"), s.Target); status != http.StatusOK {
 			t.Errorf("generate's hook: %d %s", status, kind)
 		}
@@ -75,7 +84,10 @@ func TestHooksRunOnlyWhileTheirGenerateOrApplyRuns(t *testing.T) {
 	}
 
 	w.tmpl.applyUpgrade = func(s templates.Selector) (*templates.Applied, error) {
-		if status, kind := postHook(t, runner, w.tmpl.token("apply-upgrade"), s.Target); status != http.StatusOK {
+		if status, kind := postHook(t, runner, w.tmpl.token("apply-upgrade"), s.Target); status != http.StatusForbidden || kind != throwaway.KindHookTokenRefused {
+			t.Errorf("apply's hook in the workspace folder: %d %s", status, kind)
+		}
+		if status, kind := postHook(t, runner, w.tmpl.token("apply-upgrade"), candidate); status != http.StatusOK {
 			t.Errorf("apply's hook: %d %s", status, kind)
 		}
 		return appliedReply(templates.Written, []templates.File{{Path: "hook-marker.txt", Action: "create"}}, nil), nil
@@ -90,7 +102,8 @@ func TestHooksRunOnlyWhileTheirGenerateOrApplyRuns(t *testing.T) {
 	if status, _ := postHook(t, runner, applied, folder); status != http.StatusForbidden {
 		t.Fatalf("after apply: %d", status)
 	}
-	if len(containers.commands) != 2 || containers.commands[1].Image != "runner:sample-v2" || containers.commands[0].Job == containers.commands[1].Job {
+	if len(containers.commands) != 2 || containers.commands[1].Image != "runner:sample-v2" || containers.commands[0].Job == containers.commands[1].Job ||
+		containers.commands[0].Folder != folder || containers.commands[1].Folder != "" || containers.commands[1].Target != candidate {
 		t.Fatalf("commands %+v", containers.commands)
 	}
 }
@@ -100,7 +113,7 @@ func TestHooksRunOnlyWhileTheirGenerateOrApplyRuns(t *testing.T) {
 // template.
 func TestAHookWithoutARunnerImageFailsAsRunnerImageUnavailable(t *testing.T) {
 	w := newWorld(t)
-	runner := throwaway.NewHookRunner(&markerContainers{})
+	runner := throwaway.NewHookRunner(&markerContainers{}, "")
 	w.flows.opts.Hooks = runner
 	w.flows.opts.RunnerImage = func(context.Context, string) (string, error) {
 		return "", &throwaway.ImageError{Err: errors.New("no runner-image is configured")}

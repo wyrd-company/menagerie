@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 )
 
 // HookPath is the hook runner's one route.
@@ -41,12 +43,27 @@ const (
 // a few paths.
 const maxHookRequest = 1 << 20
 
+// TargetKind is the kind of target a grant's hooks may run against.
+type TargetKind int
+
+const (
+	// TargetFolder is a generate's target: the job's workspace folder or a
+	// folder inside it, bind-mounted into each hook's container.
+	TargetFolder TargetKind = iota
+	// TargetCandidate is an upgrade's target: a candidate folder Toha
+	// builds inside the hook runner's candidate folder, copied into each
+	// hook's container and back. The workspace folder is never mounted.
+	TargetCandidate
+)
+
 // HookJob is the job a hook grant belongs to.
 type HookJob struct {
 	// ID is the job id, a container label.
 	ID string
 	// Folder is the workspace folder the job's template writes.
 	Folder string
+	// Target is the kind of target the job's hooks may run against.
+	Target TargetKind
 	// Image returns the runner image; it is called for the job's first
 	// hook only.
 	Image func(ctx context.Context) (string, error)
@@ -59,14 +76,18 @@ type HookJob struct {
 // and runs in the folder, image and console of that grant's job.
 type HookRunner struct {
 	containers Containers
+	// candidates is the template service's temporary folder, where Toha
+	// builds an upgrade's candidate.
+	candidates string
 
 	mu     sync.Mutex
 	grants map[string]*HookGrant
 }
 
 // NewHookRunner returns a HookRunner that runs hooks with containers.
-func NewHookRunner(containers Containers) *HookRunner {
-	return &HookRunner{containers: containers, grants: map[string]*HookGrant{}}
+// candidates is the folder an upgrade's candidate targets must lie in.
+func NewHookRunner(containers Containers, candidates string) *HookRunner {
+	return &HookRunner{containers: containers, candidates: candidates, grants: map[string]*HookGrant{}}
 }
 
 // HookGrant lets the template service run hooks for one generate or apply
@@ -157,7 +178,7 @@ func (g *HookGrant) runnerImage(ctx context.Context) (string, error) {
 		return g.image, nil
 	}
 	if g.job.Image == nil {
-		return "", &ImageError{Err: errors.New("no runner image is configured")}
+		return "", &ImageError{Err: Reason("no runner image is configured")}
 	}
 	image, err := g.job.Image(ctx)
 	if err != nil {
@@ -227,41 +248,126 @@ func refuse(status int, kind, message string) *hookError {
 	return &hookError{status: status, kind: kind, message: message}
 }
 
-// describe is the text of a failed run that may leave this package: a
-// *RunError's, which is fixed per stage, else a fixed sentence per kind. A
-// Containers other than *Docker can fail with any text.
+// describe is the text of a failed run that may leave this package: for
+// an image failure, the image and its reason; else a *RunError's text,
+// which is fixed per stage and the Engine error's class, or a fixed
+// sentence. A Containers other than *Docker can fail with any text.
 func describe(err error) string {
-	var runErr *RunError
 	var imageErr *ImageError
-	switch {
-	case errors.As(err, &imageErr):
-		return "no runner image is available for the hook"
-	case errors.As(err, &runErr):
+	if errors.As(err, &imageErr) {
+		if imageErr.Image == "" {
+			return "runner image unavailable: " + reason(imageErr.Err)
+		}
+		return fmt.Sprintf("runner image %s unavailable: %s", imageErr.Image, reason(imageErr.Err))
+	}
+	var runErr *RunError
+	if errors.As(err, &runErr) {
 		return runErr.Error()
 	}
 	return "the hook's throwaway container failed"
 }
 
-// errHookDir refuses a working directory that is not a folder inside the
-// workspace folder.
-var errHookDir = refuse(http.StatusBadRequest, KindInvalidHook, "the hook's working directory is not a folder in the workspace folder")
+// reason is why no runner image is available, from the errors whose text
+// is value-free: a *RunError, a registry credential error and a Reason.
+func reason(err error) string {
+	var runErr *RunError
+	var credErr *registrycreds.Error
+	var chosen Reason
+	switch {
+	case errors.As(err, &runErr):
+		return runErr.Error()
+	case errors.As(err, &credErr):
+		return credErr.Error()
+	case errors.As(err, &chosen):
+		return chosen.Error()
+	}
+	return "no image could be found or pulled"
+}
 
-// workingDir is the hook's working directory: cwd resolved inside folder
-// with symbolic links followed, named under folder as the container mounts
-// it. A cwd that is missing, not a folder, or resolves outside folder is
-// refused before any container exists.
-func workingDir(folder string, cwd *string) (string, *hookError) {
+// errHookDir refuses a working directory that is not a folder inside the
+// hook's target.
+var errHookDir = refuse(http.StatusBadRequest, KindInvalidHook, "the hook's working directory is not a folder in its target")
+
+// errTarget refuses a target the token's job does not allow.
+var errTarget = refuse(http.StatusForbidden, KindHookTokenRefused, "the hook's target is not one the token's job allows")
+
+// target is where one hook runs.
+type target struct {
+	// real is the target with symbolic links followed.
+	real string
+	// named is the target as the container names it.
+	named string
+	// mount is the workspace folder to bind-mount, or "".
+	mount string
+	// copied is the target to copy in and back, or "".
+	copied string
+}
+
+// target checks the hook's target against the kind the grant allows. A
+// folder target is the workspace folder or a folder inside it, named under
+// the workspace folder as the container mounts it. A candidate target is
+// a folder inside the candidate folder, named by its own path, which must
+// have no symbolic link in it, and never inside the workspace folder.
+func (h *HookRunner) target(g *HookGrant, path string) (target, *hookError) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return target{}, errTarget
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return target{}, errTarget
+	}
+	if info, err := os.Stat(real); err != nil || !info.IsDir() {
+		return target{}, errTarget
+	}
+	folder, err := filepath.EvalSymlinks(g.job.Folder)
+	if err != nil {
+		return target{}, errTarget
+	}
+	inFolder, ok := beneath(folder, real)
+	switch g.job.Target {
+	case TargetFolder:
+		if !ok {
+			return target{}, errTarget
+		}
+		return target{real: real, named: filepath.Join(g.job.Folder, inFolder), mount: g.job.Folder}, nil
+	case TargetCandidate:
+		if ok || h.candidates == "" || real != path {
+			return target{}, errTarget
+		}
+		candidates, err := filepath.EvalSymlinks(h.candidates)
+		if err != nil {
+			return target{}, errTarget
+		}
+		if rel, ok := beneath(candidates, real); !ok || rel == "." {
+			return target{}, errTarget
+		}
+		return target{real: real, named: real, copied: real}, nil
+	}
+	return target{}, errTarget
+}
+
+// beneath is path relative to root when it is root or inside it.
+func beneath(root, path string) (string, bool) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || (rel != "." && !filepath.IsLocal(rel)) {
+		return "", false
+	}
+	return rel, true
+}
+
+// workingDir is the hook's working directory: cwd resolved inside the
+// target with symbolic links followed, named as the container names the
+// target. A cwd that is missing, not a folder, or resolves outside the
+// target is refused before any container exists.
+func workingDir(t target, cwd *string) (string, *hookError) {
 	rel := ""
 	if cwd != nil {
 		rel = *cwd
 	}
 	if rel != "" && !filepath.IsLocal(rel) {
-		return "", refuse(http.StatusBadRequest, KindInvalidHook, "the hook's working directory must be a relative path inside the workspace folder")
+		return "", refuse(http.StatusBadRequest, KindInvalidHook, "the hook's working directory must be a relative path inside its target")
 	}
-	root, err := filepath.EvalSymlinks(folder)
-	if err != nil {
-		return "", errHookDir
-	}
+	root := t.real
 	resolved, err := filepath.EvalSymlinks(filepath.Join(root, rel))
 	if err != nil {
 		return "", errHookDir
@@ -275,7 +381,7 @@ func workingDir(folder string, cwd *string) (string, *hookError) {
 	if info, err := os.Stat(resolved); err != nil || !info.IsDir() {
 		return "", errHookDir
 	}
-	return filepath.Join(folder, inside), nil
+	return filepath.Join(t.named, inside), nil
 }
 
 // ServeHTTP runs one hook. No reply, error or log line carries a captured
@@ -312,14 +418,15 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 		return nil, refuse(http.StatusForbidden, KindHookTokenRefused, "the hook token is unknown or revoked")
 	}
 	defer g.running.Done()
-	if filepath.Clean(req.Target) != filepath.Clean(g.job.Folder) || !filepath.IsAbs(req.Target) {
-		return nil, refuse(http.StatusForbidden, KindHookTokenRefused, "the hook's target is not the folder of the token's job")
+	t, herr := h.target(g, req.Target)
+	if herr != nil {
+		return nil, herr
 	}
 	argv, copyRoot, herr := program(req)
 	if herr != nil {
 		return nil, herr
 	}
-	dir, herr := workingDir(g.job.Folder, req.Cwd)
+	dir, herr := workingDir(t, req.Cwd)
 	if herr != nil {
 		return nil, herr
 	}
@@ -338,11 +445,11 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 			return nil, refuse(http.StatusConflict, KindHookCancelled, "the job was cancelled; the hook did not run")
 		}
 		g.recordImageFailure(err)
-		return nil, refuse(http.StatusServiceUnavailable, KindRunnerUnavailable, describe(err))
+		return nil, h.failed(g, KindRunnerUnavailable, err)
 	}
 	console := g.job.Log("hook: ")
 	var stdout, stderr bytes.Buffer
-	cmd := Command{Kind: KindHook, Job: g.job.ID, Image: image, Folder: g.job.Folder, Dir: dir, Argv: argv, Env: []string{}, Copy: copyRoot, Stdout: console, Stderr: console, Log: g.job.Log("")}
+	cmd := Command{Kind: KindHook, Job: g.job.ID, Image: image, Folder: t.mount, Target: t.copied, Dir: dir, Argv: argv, Env: []string{}, Copy: copyRoot, Stdout: console, Stderr: console, Log: g.job.Log("")}
 	if req.Capture.Stdout {
 		cmd.Stdout = &stdout
 	}
@@ -358,9 +465,9 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 			return nil, refuse(http.StatusConflict, KindHookCancelled, "the job was cancelled; the hook's container was removed")
 		case errors.As(err, &imageErr):
 			g.recordImageFailure(err)
-			return nil, refuse(http.StatusServiceUnavailable, KindRunnerUnavailable, describe(err))
+			return nil, h.failed(g, KindRunnerUnavailable, err)
 		}
-		return nil, refuse(http.StatusInternalServerError, KindHookContainer, describe(err))
+		return nil, h.failed(g, KindHookContainer, err)
 	}
 	reply := &hookReply{ExitCode: code, Success: code == 0}
 	// A captured stream is never nil, so an empty one is "" and not null.
@@ -373,6 +480,18 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 		reply.Stderr = &b
 	}
 	return reply, nil
+}
+
+// failed reports a hook that found no runner image or whose container
+// failed. The job console names the image, the stage and the Engine
+// error's class; the template service gets the kind and a fixed sentence.
+func (h *HookRunner) failed(g *HookGrant, kind string, err error) *hookError {
+	if kind == KindRunnerUnavailable {
+		fmt.Fprintf(g.job.Log(""), "a template hook found no runner image: %s\n", describe(err))
+		return refuse(http.StatusServiceUnavailable, kind, "no runner image is available for the hook")
+	}
+	fmt.Fprintf(g.job.Log(""), "a template hook's throwaway container failed: %s\n", describe(err))
+	return refuse(http.StatusInternalServerError, kind, "the hook's throwaway container failed")
 }
 
 // program checks the hook's program and returns its argv and, for a

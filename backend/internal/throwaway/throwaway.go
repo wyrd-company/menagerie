@@ -6,9 +6,10 @@
 
 // Package throwaway runs template hooks and initializeCommand in throwaway
 // containers through the Docker Engine API. Each command gets its own
-// container: the workspace folder bind-mounted read-write at its own path
-// and nothing else, no environment beyond what the caller gives and the
-// image's own, the services' user, and the default bridge network. Every
+// container: the workspace folder bind-mounted read-write at its own path,
+// or a candidate folder copied in and back, and nothing else, no
+// environment beyond what the caller gives and the image's own, the
+// services' user, and the default bridge network. Every
 // container carries Menagerie's labels and is removed when its command
 // ends or its context is cancelled; leftovers are removed when the
 // workspace service starts. No process in a container gains privileges
@@ -69,10 +70,16 @@ type Command struct {
 	Job string
 	// Image is the image reference the container runs.
 	Image string
-	// Folder is the workspace folder, bind-mounted read-write at its own
-	// path.
+	// Folder, when set, is the workspace folder, bind-mounted read-write
+	// at its own path.
 	Folder string
-	// Dir is the working directory, inside Folder.
+	// Target, when set, is a folder that is not a host path, such as an
+	// upgrade's candidate: it is copied into the container at its own path
+	// and, when the command exits, copied back over itself, so it holds
+	// exactly what the command left. It is never mounted. A command has
+	// Folder or Target, not both.
+	Target string
+	// Dir is the working directory, inside Folder or Target.
 	Dir string
 	// Argv is run as given: Argv[0] is the program, found on the image's
 	// PATH when it has no slash.
@@ -150,6 +157,12 @@ func (e *ImageError) Error() string {
 }
 func (e *ImageError) Unwrap() error { return e.Err }
 
+// Reason is a reason Menagerie chose that no runner image is available.
+// It carries no value from a template, a command or the Engine.
+type Reason string
+
+func (r Reason) Error() string { return string(r) }
+
 // Stage is one step of a throwaway container's life.
 type Stage string
 
@@ -164,18 +177,21 @@ const (
 	StageWait    Stage = "wait"
 	StageRemove  Stage = "remove"
 	StageList    Stage = "list"
+	// StageCopyBack copies Target back out of the container.
+	StageCopyBack Stage = "copy-back"
 )
 
 var stageText = map[Stage]string{
-	StageInspect: "the runner image could not be inspected",
-	StagePull:    "the runner image could not be pulled",
-	StageCreate:  "the throwaway container could not be created",
-	StageCopy:    "the template could not be copied into the throwaway container",
-	StageAttach:  "the throwaway container's output could not be attached",
-	StageStart:   "the throwaway container could not start",
-	StageWait:    "the throwaway container's exit could not be read",
-	StageRemove:  "the throwaway container could not be removed; Menagerie removes it when it next starts",
-	StageList:    "the throwaway containers could not be listed",
+	StageInspect:  "the runner image could not be inspected",
+	StagePull:     "the runner image could not be pulled",
+	StageCreate:   "the throwaway container could not be created",
+	StageCopy:     "the template could not be copied into the throwaway container",
+	StageAttach:   "the throwaway container's output could not be attached",
+	StageStart:    "the throwaway container could not start",
+	StageWait:     "the throwaway container's exit could not be read",
+	StageRemove:   "the throwaway container could not be removed; Menagerie removes it when it next starts",
+	StageList:     "the throwaway containers could not be listed",
+	StageCopyBack: "the command's changes could not be copied back from the throwaway container",
 }
 
 // RunError is a failed stage of a throwaway container. Its text is fixed
@@ -239,6 +255,9 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	if len(c.Argv) == 0 || c.Argv[0] == "" {
 		return -1, errors.New("the command is empty")
 	}
+	if (c.Folder == "") == (c.Target == "") {
+		return -1, errors.New("the command needs exactly one of a mounted folder and a copied target")
+	}
 	stdout, stderr := orDiscard(c.Stdout), orDiscard(c.Stderr)
 	if err := d.ensureImage(ctx, c.Image, orDiscard(c.Log)); err != nil {
 		return -1, &ImageError{Image: c.Image, Err: err}
@@ -260,6 +279,10 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	// would lose its id, so the creation runs to its reply, bounded by
 	// cleanupTimeout, and a cancelled ctx removes the container after.
 	createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	var mounts []mount.Mount
+	if c.Folder != "" {
+		mounts = []mount.Mount{{Type: mount.TypeBind, Source: c.Folder, Target: c.Folder}}
+	}
 	created, err := d.client.ContainerCreate(createCtx, &container.Config{
 		Image: c.Image,
 		// The program is the entrypoint, so the image's own entrypoint and
@@ -273,7 +296,7 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 		AttachStdout: true,
 		AttachStderr: true,
 	}, &container.HostConfig{
-		Mounts:      []mount.Mount{{Type: mount.TypeBind, Source: c.Folder, Target: c.Folder}},
+		Mounts:      mounts,
 		SecurityOpt: []string{"no-new-privileges"},
 	}, nil, nil, "")
 	cancelCreate()
@@ -286,8 +309,11 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 			err = errors.Join(err, rerr)
 		}
 	}()
-	if c.Copy != "" {
-		if err := d.copyFolder(ctx, created.ID, c.Copy); err != nil {
+	for _, folder := range []string{c.Copy, c.Target} {
+		if folder == "" {
+			continue
+		}
+		if err := d.copyFolder(ctx, created.ID, folder); err != nil {
 			return -1, err
 		}
 	}
@@ -316,6 +342,15 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 		<-copied
 		if res.Error != nil {
 			return -1, &RunError{Stage: StageWait, Class: "unknown", Container: shortID(created.ID)}
+		}
+		// A cancelled command's target is left as it was copied in.
+		if ctx.Err() != nil {
+			return -1, fmt.Errorf("cancelled: %w", context.Cause(ctx))
+		}
+		if c.Target != "" {
+			if err := d.copyBack(ctx, created.ID, c.Target); err != nil {
+				return -1, err
+			}
 		}
 		return int(res.StatusCode), nil
 	case err := <-waitErr:
@@ -399,6 +434,24 @@ func (d *Docker) copyFolder(ctx context.Context, id, folder string) error {
 	defer pr.Close()
 	if err := d.client.CopyToContainer(ctx, id, "/", pr, container.CopyToContainerOptions{CopyUIDGID: true}); err != nil {
 		return failed(StageCopy, err, id)
+	}
+	return nil
+}
+
+// copyBack makes target on disk hold exactly the container's copy of it:
+// added, changed and removed entries, modes, and symbolic links as links.
+func (d *Docker) copyBack(ctx context.Context, id, target string) error {
+	rc, _, err := d.client.CopyFromContainer(ctx, id, target)
+	if err != nil {
+		return failed(StageCopyBack, err, id)
+	}
+	defer rc.Close()
+	if err := ReplaceFolder(target, rc); err != nil {
+		cls := "io"
+		if errors.Is(err, ErrUnsafeEntry) {
+			cls = "unsafe-entry"
+		}
+		return &RunError{Stage: StageCopyBack, Class: cls, Container: shortID(id)}
 	}
 	return nil
 }

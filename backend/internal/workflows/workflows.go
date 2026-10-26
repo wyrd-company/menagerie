@@ -149,10 +149,10 @@ func (w *Workflows) selector(name, folder, template string) templates.Selector {
 // value grants nothing, so the template service refuses every hook.
 type hooks struct{ grant *throwaway.HookGrant }
 
-// grantHooks lets the template service run the template's hooks in the
-// job's folder, runner image and console until revoke. The hooks stop
-// when ctx, the job's, is cancelled.
-func (w *Workflows) grantHooks(ctx context.Context, run *jobs.Run, folder, template string) (hooks, error) {
+// grantHooks lets the template service run the template's hooks against
+// targets of kind, for the job's folder, in its runner image and console,
+// until revoke. The hooks stop when ctx, the job's, is cancelled.
+func (w *Workflows) grantHooks(ctx context.Context, run *jobs.Run, folder, template string, kind throwaway.TargetKind) (hooks, error) {
 	if w.opts.Hooks == nil {
 		return hooks{}, nil
 	}
@@ -160,9 +160,10 @@ func (w *Workflows) grantHooks(ctx context.Context, run *jobs.Run, folder, templ
 	grant, err := w.opts.Hooks.Grant(ctx, throwaway.HookJob{
 		ID:     run.JobID(),
 		Folder: folder,
+		Target: kind,
 		Image: func(ctx context.Context) (string, error) {
 			if image == nil {
-				return "", &throwaway.ImageError{Err: errors.New("no runner image is configured")}
+				return "", &throwaway.ImageError{Err: throwaway.Reason("no runner image is configured")}
 			}
 			return image(ctx, template)
 		},

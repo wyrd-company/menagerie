@@ -145,7 +145,6 @@ pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, 
             },
             &CallbackRunner {
                 socket: &service.settings.hook_runner_socket,
-                folder: &selected.folder,
                 token: request.hook_token.as_deref(),
             },
             None,

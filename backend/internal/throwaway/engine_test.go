@@ -3,11 +3,15 @@ package throwaway
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -36,8 +40,14 @@ type engine struct {
 	onCreate func(w http.ResponseWriter, r *http.Request, register func() string)
 	// fail maps a stage to the message the Engine fails it with: inspect,
 	// pull, pull-stream, create, copy, attach, start, wait, wait-result,
-	// list or remove.
+	// copy-back, list or remove.
 	fail map[string]string
+	// copied are the archives copied into containers; archive is the one
+	// a copy out of a container returns.
+	copied  [][]byte
+	archive []byte
+	// onWait runs before a wait is answered.
+	onWait func()
 }
 
 // failing answers the request with the stage's failure, if it has one.
@@ -144,8 +154,19 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if e.failing(w, "copy", http.StatusInternalServerError) {
 			return
 		}
-		_, _ = io.Copy(io.Discard, r.Body)
+		body, _ := io.ReadAll(r.Body)
+		e.mu.Lock()
+		e.copied = append(e.copied, body)
+		e.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/archive"):
+		if e.failing(w, "copy-back", http.StatusInternalServerError) {
+			return
+		}
+		stat, _ := json.Marshal(container.PathStat{Name: "target", Mode: 0o755 | 1<<31})
+		w.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString(stat))
+		w.Header().Set("Content-Type", "application/x-tar")
+		_, _ = w.Write(e.archive)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/attach"):
 		if e.failing(w, "attach", http.StatusInternalServerError) {
 			return
@@ -161,6 +182,9 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/wait"):
 		if e.failing(w, "wait", http.StatusInternalServerError) {
 			return
+		}
+		if e.onWait != nil {
+			e.onWait()
 		}
 		if message, ok := e.fail["wait-result"]; ok {
 			_ = json.NewEncoder(w).Encode(map[string]any{"StatusCode": 1, "Error": map[string]string{"Message": message}})
@@ -276,6 +300,69 @@ func TestACancellationWhileTheContainerIsCreatedRemovesIt(t *testing.T) {
 	}
 	if _, err := NewDocker(client, DockerOptions{Root: "/srv"}).Run(ctx, sample(t)); err == nil {
 		t.Fatal("a cancelled run succeeded")
+	}
+	if left := e.left(); len(left) != 0 {
+		t.Fatalf("left %v", left)
+	}
+}
+
+// TestACandidateIsCopiedInAndBackAndNeverMounted runs a command on a
+// copied target: the container mounts nothing, the target is copied in,
+// and the copy the Engine returns replaces it.
+func TestACandidateIsCopiedInAndBackAndNeverMounted(t *testing.T) {
+	e, client := newEngine(t)
+	target := filepath.Join(t.TempDir(), "target")
+	writeTree(t, target, map[string]string{"marker.txt": "v1\n", "gone.txt": "x"})
+	e.archive = archive(t, []entry{{name: "target/", mode: 0o755, dir: true}, {name: "target/marker.txt", mode: 0o644, body: "v2\n"}})
+	c := sample(t)
+	c.Folder, c.Target, c.Dir = "", target, target
+	if code, err := NewDocker(client, DockerOptions{Root: "/srv"}).Run(context.Background(), c); err != nil || code != 0 {
+		t.Fatalf("run %d %v", code, err)
+	}
+	if mounts := e.creates[0].HostConfig.Mounts; len(mounts) != 0 {
+		t.Fatalf("mounts %+v", mounts)
+	}
+	if len(e.copied) != 1 || !bytes.Contains(e.copied[0], []byte(strings.TrimPrefix(target, "/")+"/marker.txt")) {
+		t.Fatal("the target was not copied in")
+	}
+	if got := readTree(t, target); !reflect.DeepEqual(got, map[string]string{"marker.txt": "v2\n"}) {
+		t.Fatalf("target %v", got)
+	}
+	e.archive = archive(t, []entry{{name: "target/", mode: 0o755, dir: true}, {name: "target/../escaped.txt", mode: 0o644, body: "x"}})
+	_, err := NewDocker(client, DockerOptions{Root: "/srv"}).Run(context.Background(), c)
+	var runErr *RunError
+	if !errors.As(err, &runErr) || runErr.Stage != StageCopyBack || runErr.Class != "unsafe-entry" {
+		t.Fatalf("error %v, want an unsafe-entry copy-back", err)
+	}
+	if got := readTree(t, target); !reflect.DeepEqual(got, map[string]string{"marker.txt": "v2\n"}) {
+		t.Fatalf("a refused copy changed the target: %v", got)
+	}
+	c.Folder = target
+	if _, err := NewDocker(client, DockerOptions{Root: "/srv"}).Run(context.Background(), c); err == nil {
+		t.Fatal("a command with both a mounted folder and a copied target ran")
+	}
+}
+
+// TestACancelledCommandsTargetIsNotCopiedBack cancels the command while it
+// runs: its target stays as it was before the command, and the container
+// is removed.
+func TestACancelledCommandsTargetIsNotCopiedBack(t *testing.T) {
+	e, client := newEngine(t)
+	target := filepath.Join(t.TempDir(), "target")
+	writeTree(t, target, map[string]string{"marker.txt": "v1\n"})
+	e.archive = archive(t, []entry{{name: "target/", mode: 0o755, dir: true}})
+	ctx, cancel := context.WithCancel(context.Background())
+	e.onWait = func() {
+		cancel()
+		time.Sleep(100 * time.Millisecond)
+	}
+	c := sample(t)
+	c.Folder, c.Target, c.Dir = "", target, target
+	if _, err := NewDocker(client, DockerOptions{Root: "/srv"}).Run(ctx, c); err == nil {
+		t.Fatal("a cancelled run succeeded")
+	}
+	if got := readTree(t, target); !reflect.DeepEqual(got, map[string]string{"marker.txt": "v1\n"}) {
+		t.Fatalf("target %v", got)
 	}
 	if left := e.left(); len(left) != 0 {
 		t.Fatalf("left %v", left)

@@ -65,8 +65,9 @@ const definition = `{
 `
 
 // sampleTemplate writes version 1 or 2 of a generic template. Version 2
-// adds one question. Its hook leaves a marker and clones a nested
-// repository that the template's .gitignore excludes.
+// adds one question. Its hook writes its version into a tracked marker,
+// leaves an ignored marker named by its version where it ran, and clones a
+// nested repository that the template's .gitignore excludes.
 func sampleTemplate(t *testing.T, dir string, version int) {
 	extra, extraLine := "", ""
 	if version == 2 {
@@ -74,7 +75,7 @@ func sampleTemplate(t *testing.T, dir string, version int) {
 		extraLine = "extra: {{ extra }}\n"
 	}
 	writeFile(t, dir, "template.yml", "name: sample\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\n"+extra+
-		"hooks:\n  - run: [sh, -c, 'echo ran > hook-marker.txt && git init -q clones/tool && echo cloned > clones/tool/README']\n")
+		fmt.Sprintf("hooks:\n  - run: [sh, -c, 'echo v%d > hook-marker.txt && mkdir -p markers && echo ran > markers/hook-v%d.txt && git init -q clones/tool && echo cloned > clones/tool/README']\n", version, version))
 	writeFile(t, dir, "template/result.txt", "label: {{ label }}\n"+extraLine)
 	writeFile(t, dir, "template/local.txt", fmt.Sprintf("first: template\nsecond: stable\nthird: stable\nfourth: stable\nfifth: v%d\n", version))
 	writeFile(t, dir, "template/.gitignore", "/clones/\n/markers/\n*.local\n")
@@ -218,7 +219,8 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	socket := filepath.Join(sockDir, "template.sock")
 	hookSocket := filepath.Join(sockDir, "hook-runner.sock")
-	hooks := throwaway.NewHookRunner(opts.containers)
+	candidates := filepath.Join(base, "candidates")
+	hooks := throwaway.NewHookRunner(opts.containers, candidates)
 	hookListener, err := throwaway.ListenHookRunner(hookSocket)
 	if err != nil {
 		t.Fatal(err)
@@ -227,11 +229,11 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	go func() { _ = hookServer.Serve(hookListener) }()
 	t.Cleanup(func() { _ = hookServer.Close() })
 	t2 := filepath.Join(base, "templates")
-	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s, hook-runner-socket: %s}\ntemplates:\n"+
+	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s, hook-runner-socket: %s, candidate-folder: %s}\ntemplates:\n"+
 		"  - {id: sample-v1, name: Sample, address: 'file://%s@v1'}\n  - {id: sample-v2, name: Sample, address: 'file://%s@v2'}\n"+
 		"  - {id: broken, name: Broken, address: 'file://%s/broken'}\n  - {id: flows, name: Flows, address: 'file://%s/flows'}\n  - {id: hangs, name: Hangs, address: 'file://%s/hangs'}\n"+
 		"  - {id: leaks, name: Leaks, address: 'file://%s/leaks'}\n",
-		a.root, a.host.URL("backups.git"), socket, hookSocket, a.repo, a.repo, t2, t2, t2, t2)
+		a.root, a.host.URL("backups.git"), socket, hookSocket, candidates, a.repo, a.repo, t2, t2, t2, t2)
 	approved := map[string]bool{"sample-v1": true, "sample-v2": true, "broken": true, "flows": true, "hangs": true, "leaks": true, "named": true}
 	config += fmt.Sprintf("  - {id: named, name: Named, address: 'file://%s/named'}\n", t2)
 	for name := range leakTemplates {
@@ -456,7 +458,10 @@ func acceptCreateAndUpgrade(t *testing.T, a *accept, afterCreate func(folder str
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("backed-up files %v, want %v", names, want)
 	}
-	for _, kept := range []string{"clones/tool/README", "clones/tool/.git"} {
+	if got := fileAt(t, history[0], "hook-marker.txt"); got != "v1\n" {
+		t.Fatalf("generated hook-marker.txt %q", got)
+	}
+	for _, kept := range []string{"clones/tool/README", "clones/tool/.git", "markers/hook-v1.txt"} {
 		if _, err := os.Stat(filepath.Join(folder, kept)); err != nil {
 			t.Fatalf("%s missing from the workspace: %v", kept, err)
 		}
@@ -492,6 +497,18 @@ func acceptCreateAndUpgrade(t *testing.T, a *accept, afterCreate func(folder str
 	upgraded := history[0]
 	if got := fileAt(t, upgraded, "local.txt"); !strings.Contains(got, "third: operator") || !strings.Contains(got, "fifth: v2") {
 		t.Fatalf("upgraded local.txt %q", got)
+	}
+	// The upgrade's hook changed its marker in Toha's candidate; only
+	// Toha's merge brought the change into the workspace folder, and the
+	// hook wrote nothing there itself.
+	if got := fileAt(t, upgraded, "hook-marker.txt"); got != "v2\n" {
+		t.Fatalf("upgraded hook-marker.txt %q", got)
+	}
+	if got, err := os.ReadFile(filepath.Join(folder, "hook-marker.txt")); err != nil || string(got) != "v2\n" {
+		t.Fatalf("the workspace's hook-marker.txt %q %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "markers/hook-v2.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the upgrade's hook ran in the workspace folder: %v", err)
 	}
 	if got := fileAt(t, upgraded, "result.txt"); got != "label: first\nextra: added\n" {
 		t.Fatalf("upgraded result.txt %q", got)

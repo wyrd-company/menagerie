@@ -75,22 +75,47 @@ type fixture struct {
 	grant   *HookGrant
 	console *console
 	folder  string
-	cancel  context.CancelFunc
+	// candidates is the hook runner's candidate folder, and candidate a
+	// candidate target inside it.
+	candidates, candidate string
+	// target is the target the fixture's requests name.
+	target string
+	cancel context.CancelFunc
 }
 
+// newFixture grants a generate's hooks: their target is the folder.
 func newFixture(t *testing.T, play func(context.Context, Command) (int, error)) *fixture {
 	t.Helper()
-	f := &fixture{t: t, fake: &fakeContainers{play: play}, console: &console{}, folder: filepath.Join(t.TempDir(), "alpha")}
-	if err := os.MkdirAll(f.folder, 0o755); err != nil {
+	return newFixtureOf(t, TargetFolder, play)
+}
+
+// newFixtureOf grants hooks against targets of kind; the requests name
+// the folder, or for TargetCandidate the candidate.
+func newFixtureOf(t *testing.T, kind TargetKind, play func(context.Context, Command) (int, error)) *fixture {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	f.runner = NewHookRunner(f.fake)
+	f := &fixture{t: t, fake: &fakeContainers{play: play}, console: &console{}, folder: filepath.Join(base, "alpha"),
+		candidates: filepath.Join(base, "candidates"), candidate: filepath.Join(base, "candidates", ".tmpSample")}
+	for _, d := range []string{f.folder, f.candidate} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.target = f.folder
+	if kind == TargetCandidate {
+		f.target = f.candidate
+	}
+	f.runner = NewHookRunner(f.fake, f.candidates)
 	ctx, cancel := context.WithCancel(context.Background())
 	f.cancel = cancel
 	t.Cleanup(cancel)
 	grant, err := f.runner.Grant(ctx, HookJob{
 		ID:     "job-1",
 		Folder: f.folder,
+		Target: kind,
 		Image:  func(context.Context) (string, error) { return "runner:sample", nil },
 		Log:    f.console.Log,
 	})
@@ -105,7 +130,7 @@ func newFixture(t *testing.T, play func(context.Context, Command) (int, error)) 
 func (f *fixture) request(members map[string]any) map[string]any {
 	body := map[string]any{
 		"token":        f.grant.Token(),
-		"target":       f.folder,
+		"target":       f.target,
 		"program":      map[string]any{"run": []string{"sh", "-c", "echo out"}},
 		"cwd":          nil,
 		"templateRoot": "/var/lib/sample/cache/t",
@@ -158,7 +183,7 @@ func TestAHookRunsInItsJobsFolderImageAndConsole(t *testing.T) {
 		t.Fatalf("reply %d %s", r.status, r.raw)
 	}
 	c := f.fake.ran()[0]
-	if c.Kind != KindHook || c.Job != "job-1" || c.Image != "runner:sample" || c.Folder != f.folder || c.Dir != filepath.Join(f.folder, "sub/dir") ||
+	if c.Kind != KindHook || c.Job != "job-1" || c.Image != "runner:sample" || c.Folder != f.folder || c.Target != "" || c.Dir != filepath.Join(f.folder, "sub/dir") ||
 		strings.Join(c.Argv, "|") != "sh|-c|echo out" || c.Copy != "" {
 		t.Fatalf("command %+v", c)
 	}
@@ -225,13 +250,116 @@ func TestUnknownAndRevokedTokensAreRefused(t *testing.T) {
 
 func TestAHookOutsideItsJobsFolderIsRefused(t *testing.T) {
 	f := newFixture(t, nil)
-	for _, target := range []string{filepath.Dir(f.folder), f.folder + "-other", "alpha", ""} {
+	if err := os.MkdirAll(filepath.Join(f.folder, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{filepath.Dir(f.folder), f.folder + "-other", "alpha", "", f.folder + "/", f.folder + "/absent"} {
 		if r := f.post(f.request(map[string]any{"target": target})); r.status != http.StatusForbidden || r.kind() != KindHookTokenRefused {
 			t.Fatalf("target %q: %d %s", target, r.status, r.raw)
 		}
 	}
-	if r := f.post(f.request(map[string]any{"target": f.folder + "/"})); r.status != http.StatusOK {
+	if r := f.post(f.request(nil)); r.status != http.StatusOK {
 		t.Fatalf("the job's folder: %d %s", r.status, r.raw)
+	}
+	if r := f.post(f.request(map[string]any{"target": filepath.Join(f.folder, "sub")})); r.status != http.StatusOK {
+		t.Fatalf("a folder in the job's folder: %d %s", r.status, r.raw)
+	}
+	if c := f.fake.ran()[1]; c.Folder != f.folder || c.Dir != filepath.Join(f.folder, "sub") {
+		t.Fatalf("command %+v", c)
+	}
+}
+
+// TestAnUpgradeHookRunsInItsCandidateAndNeverTheFolder runs an upgrade's
+// hook: its candidate is copied in and back, and the workspace folder is
+// not mounted.
+func TestAnUpgradeHookRunsInItsCandidateAndNeverTheFolder(t *testing.T) {
+	f := newFixtureOf(t, TargetCandidate, nil)
+	if err := os.MkdirAll(filepath.Join(f.candidate, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.post(f.request(map[string]any{"cwd": "sub"})); r.status != http.StatusOK {
+		t.Fatalf("%d %s", r.status, r.raw)
+	}
+	if c := f.fake.ran()[0]; c.Folder != "" || c.Target != f.candidate || c.Dir != filepath.Join(f.candidate, "sub") {
+		t.Fatalf("command %+v", c)
+	}
+}
+
+// TestTargetsAreBoundToTheirGrantsKind refuses a candidate target on a
+// generate's grant, the workspace folder on an upgrade's, and any upgrade
+// target that is not a folder inside the candidate folder by its own path.
+func TestTargetsAreBoundToTheirGrantsKind(t *testing.T) {
+	generate := newFixture(t, nil)
+	if r := generate.post(generate.request(map[string]any{"target": generate.candidate})); r.status != http.StatusForbidden || r.kind() != KindHookTokenRefused {
+		t.Fatalf("a candidate on a generate's grant: %d %s", r.status, r.raw)
+	}
+	upgrade := newFixtureOf(t, TargetCandidate, nil)
+	base := filepath.Dir(upgrade.folder)
+	elsewhere := filepath.Join(base, "elsewhere")
+	linked := filepath.Join(base, "linked")
+	inFolder := filepath.Join(upgrade.folder, "sub")
+	for _, d := range []string{elsewhere, inFolder} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(upgrade.candidates, linked); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{
+		"the workspace folder":     upgrade.folder,
+		"a folder in it":           inFolder,
+		"the candidate folder":     upgrade.candidates,
+		"a folder outside":         elsewhere,
+		"a candidate through link": filepath.Join(linked, filepath.Base(upgrade.candidate)),
+		"a missing candidate":      filepath.Join(upgrade.candidates, "absent"),
+	} {
+		if r := upgrade.post(upgrade.request(map[string]any{"target": target})); r.status != http.StatusForbidden || r.kind() != KindHookTokenRefused {
+			t.Errorf("%s on an upgrade's grant: %d %s", name, r.status, r.raw)
+		}
+	}
+	// A candidate folder inside the workspace folder still never admits it.
+	inside := newFixtureOf(t, TargetCandidate, nil)
+	inside.runner.candidates = filepath.Dir(inside.folder)
+	if r := inside.post(inside.request(map[string]any{"target": inside.folder})); r.status != http.StatusForbidden {
+		t.Errorf("the workspace folder inside the candidate folder: %d %s", r.status, r.raw)
+	}
+	if n := len(generate.fake.ran()) + len(upgrade.fake.ran()) + len(inside.fake.ran()); n != 0 {
+		t.Fatalf("%d refused hooks ran", n)
+	}
+}
+
+// TestAWorkingDirectoryStaysInsideItsTarget refuses a cwd that resolves
+// outside the hook's target, even when it stays in the workspace or
+// candidate folder.
+func TestAWorkingDirectoryStaysInsideItsTarget(t *testing.T) {
+	generate := newFixture(t, nil)
+	sub := filepath.Join(generate.folder, "sub")
+	if err := os.MkdirAll(filepath.Join(generate.folder, "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../other", filepath.Join(sub, "up")); err != nil {
+		t.Fatal(err)
+	}
+	if r := generate.post(generate.request(map[string]any{"target": sub, "cwd": "up"})); r.status != http.StatusBadRequest || r.kind() != KindInvalidHook {
+		t.Fatalf("a cwd outside a generate's target: %d %s", r.status, r.raw)
+	}
+	upgrade := newFixtureOf(t, TargetCandidate, nil)
+	sibling := filepath.Join(upgrade.candidates, "sibling")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../sibling", filepath.Join(upgrade.candidate, "up")); err != nil {
+		t.Fatal(err)
+	}
+	if r := upgrade.post(upgrade.request(map[string]any{"cwd": "up"})); r.status != http.StatusBadRequest || r.kind() != KindInvalidHook {
+		t.Fatalf("a cwd outside an upgrade's candidate: %d %s", r.status, r.raw)
+	}
+	if n := len(generate.fake.ran()) + len(upgrade.fake.ran()); n != 0 {
+		t.Fatalf("%d refused hooks ran", n)
 	}
 }
 
@@ -394,6 +522,30 @@ func TestAMissingRunnerImageIsRecorded(t *testing.T) {
 	h := newFixture(t, func(context.Context, Command) (int, error) { return -1, errors.New("engine refused") })
 	if r := h.post(h.request(nil)); r.status != http.StatusInternalServerError || r.kind() != KindHookContainer || h.grant.ImageFailure() != nil {
 		t.Fatalf("%d %s", r.status, r.raw)
+	}
+}
+
+// TestAFailedHookNamesItsStageInTheConsole: the job console names the
+// image, the stage and the Engine error's class of a hook whose image or
+// container failed; the reply carries only the kind and a fixed sentence.
+func TestAFailedHookNamesItsStageInTheConsole(t *testing.T) {
+	for _, tc := range []struct {
+		err          error
+		kind, inLine string
+	}{
+		{&ImageError{Image: "runner:sample", Err: &RunError{Stage: StagePull, Class: "not-found"}}, KindRunnerUnavailable,
+			"a template hook found no runner image: runner image runner:sample unavailable: the runner image could not be pulled (not-found)\n"},
+		{&RunError{Stage: StageStart, Class: "invalid-argument", Container: "0123456789ab"}, KindHookContainer,
+			"a template hook's throwaway container failed: the throwaway container could not start (container 0123456789ab, invalid-argument)\n"},
+	} {
+		f := newFixture(t, func(context.Context, Command) (int, error) { return -1, tc.err })
+		r := f.post(f.request(nil))
+		if r.kind() != tc.kind || strings.Contains(r.raw, "runner:sample") || strings.Contains(r.raw, "0123456789ab") {
+			t.Fatalf("reply %d %s", r.status, r.raw)
+		}
+		if out := f.console.String(); !strings.Contains(out, tc.inLine) {
+			t.Fatalf("console %q, want %q", out, tc.inLine)
+		}
 	}
 }
 

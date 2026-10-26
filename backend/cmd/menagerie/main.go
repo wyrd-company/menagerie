@@ -168,7 +168,7 @@ func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspac
 		log.Printf("menagerie: removed %d leftover throwaway containers", n)
 	}
 	opts.Containers, opts.RunnerImage = runner, images.ForWorkspace
-	return containers{docker: runner, images: images, hooks: throwaway.NewHookRunner(runner)}
+	return containers{docker: runner, images: images, hooks: throwaway.NewHookRunner(runner, cfg.TemplateService.CandidateFolder)}
 }
 
 // serveHooks serves hooks on the hook runner socket at path until stop,

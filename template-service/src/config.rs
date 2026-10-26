@@ -2,10 +2,13 @@
 //!
 //! The workspace service owns the file's full schema and strict validation. This
 //! service reads only the members it uses: `workspace-root`, `templates`,
-//! `template-service.socket` and `template-service.hook-runner-socket`, with
-//! the workspace service's rules for each: the root is cleaned lexically and
-//! never `/`, an empty socket takes the default, template ids are unique. Other members are ignored here. Toha's
-//! storage folder is this service's own `-data` flag, not a configuration key.
+//! `template-service.socket`, `template-service.hook-runner-socket` and
+//! `template-service.candidate-folder`, with the workspace service's rules
+//! for each: the root is cleaned lexically and never `/`, an empty socket or
+//! folder takes the default, the candidate folder is clean, never `/`, and
+//! neither inside the root nor containing it, template ids are unique.
+//! Other members are ignored here. Toha's storage folder is this service's
+//! own `-data` flag, not a configuration key.
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 
@@ -13,6 +16,7 @@ pub const DEFAULT_CONFIG: &str = "/etc/menagerie/config.yml";
 pub const DEFAULT_SOCKET: &str = "/run/menagerie/template.sock";
 pub const DEFAULT_HOOK_RUNNER_SOCKET: &str = "/run/menagerie/hook-runner.sock";
 pub const DEFAULT_DATA: &str = "/var/lib/menagerie/toha";
+pub const DEFAULT_CANDIDATE_FOLDER: &str = "/var/lib/menagerie/candidates";
 
 /// One approved template: its configuration id, display name and Toha address.
 /// Its `runner-image` belongs to the workspace service, which runs the hooks.
@@ -34,6 +38,10 @@ pub struct Settings {
     pub socket: PathBuf,
     /// The workspace service's hook runner, which runs every hook.
     pub hook_runner_socket: PathBuf,
+    /// This service's temporary folder, where Toha builds an upgrade's
+    /// candidate; the hook runner accepts an upgrade's hook target only
+    /// inside it.
+    pub candidate_folder: PathBuf,
     /// Absolute folder holding Toha's configuration, registry, cache and state.
     pub data: PathBuf,
 }
@@ -53,6 +61,8 @@ struct Service {
     socket: Option<String>,
     #[serde(rename = "hook-runner-socket")]
     hook_runner_socket: Option<String>,
+    #[serde(rename = "candidate-folder")]
+    candidate_folder: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -99,9 +109,9 @@ impl Settings {
                     "workspace-root {root:?} must be an absolute folder other than /"
                 ))
             })?;
-        let (socket, hook_runner_socket) = match file.template_service {
-            Some(s) => (s.socket, s.hook_runner_socket),
-            None => (None, None),
+        let (socket, hook_runner_socket, candidate_folder) = match file.template_service {
+            Some(s) => (s.socket, s.hook_runner_socket, s.candidate_folder),
+            None => (None, None, None),
         };
         let socket = socket_path(socket, "template-service.socket", DEFAULT_SOCKET)?;
         let hook_runner_socket = socket_path(
@@ -109,6 +119,7 @@ impl Settings {
             "template-service.hook-runner-socket",
             DEFAULT_HOOK_RUNNER_SOCKET,
         )?;
+        let candidate_folder = candidate_folder_path(candidate_folder, &workspace_root)?;
         let data = clean_absolute(&data.to_string_lossy()).ok_or_else(|| {
             ConfigError::Invalid(format!("data folder {} must be absolute", data.display()))
         })?;
@@ -138,6 +149,7 @@ impl Settings {
             templates: file.templates,
             socket,
             hook_runner_socket,
+            candidate_folder,
             data,
         })
     }
@@ -160,6 +172,50 @@ fn socket_path(value: Option<String>, key: &str, default: &str) -> Result<PathBu
         }
         _ => Ok(PathBuf::from(default)),
     }
+}
+
+/// The configured candidate folder: absent or empty takes the default; it
+/// must be absolute and clean, not `/`, and neither inside the workspace
+/// root nor containing it.
+fn candidate_folder_path(value: Option<String>, root: &Path) -> Result<PathBuf, ConfigError> {
+    let folder = match value {
+        Some(folder) if !folder.is_empty() => folder,
+        _ => return Ok(PathBuf::from(DEFAULT_CANDIDATE_FOLDER)),
+    };
+    if clean_absolute(&folder)
+        .is_none_or(|clean| clean.as_os_str() != folder.as_str() || clean == Path::new("/"))
+    {
+        return Err(ConfigError::Invalid(format!(
+            "template-service.candidate-folder {folder:?} must be an absolute clean folder other than /"
+        )));
+    }
+    let folder = PathBuf::from(folder);
+    if folder.starts_with(root) || root.starts_with(&folder) {
+        return Err(ConfigError::Invalid(
+            "template-service.candidate-folder must be neither inside workspace-root nor contain it".into(),
+        ));
+    }
+    Ok(folder)
+}
+
+/// Create the candidate folder when it is missing, private to this user,
+/// and make it the temporary folder of every `tempfile` call in this
+/// process, Toha's included. Call it once, before any temporary file.
+pub fn prepare_candidate_folder(folder: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(folder)?;
+    let meta = std::fs::symlink_metadata(folder)?;
+    if !meta.is_dir() {
+        return Err(std::io::Error::other(
+            "the candidate folder is not a folder",
+        ));
+    }
+    std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))?;
+    tempfile::env::override_temp_dir(folder)
+        .map_err(|_| std::io::Error::other("the temporary folder was already chosen"))
 }
 
 /// `^[a-z0-9]+(-[a-z0-9]+)*$`, the workspace service's template id rule.
@@ -212,6 +268,10 @@ mod tests {
             PathBuf::from(DEFAULT_HOOK_RUNNER_SOCKET)
         );
         assert_eq!(
+            settings.candidate_folder,
+            PathBuf::from(DEFAULT_CANDIDATE_FOLDER)
+        );
+        assert_eq!(
             settings.template("sample-one").unwrap().address,
             "https://example.invalid/t"
         );
@@ -242,6 +302,14 @@ mod tests {
             "/run/sample/h.sock"
         );
         assert_eq!(settings.socket, PathBuf::from(DEFAULT_SOCKET));
+        let settings = Settings::parse(
+            "workspace-root: /srv/spaces
+template-service: {candidate-folder: /srv/candidates}
+",
+            Path::new(DATA),
+        )
+        .unwrap();
+        assert_eq!(settings.candidate_folder.as_os_str(), "/srv/candidates");
     }
 
     #[test]
@@ -258,6 +326,26 @@ mod tests {
             (
                 "workspace-root: /srv\ntemplate-service: {hook-runner-socket: rel.sock}\n",
                 "template-service.hook-runner-socket \"rel.sock\" must be absolute",
+            ),
+            (
+                "workspace-root: /srv\ntemplate-service: {candidate-folder: rel}\n",
+                "template-service.candidate-folder \"rel\" must be an absolute clean folder",
+            ),
+            (
+                "workspace-root: /srv\ntemplate-service: {candidate-folder: /var/sample/../c}\n",
+                "must be an absolute clean folder",
+            ),
+            (
+                "workspace-root: /srv\ntemplate-service: {candidate-folder: /}\n",
+                "must be an absolute clean folder",
+            ),
+            (
+                "workspace-root: /srv\ntemplate-service: {candidate-folder: /srv/c}\n",
+                "neither inside workspace-root nor contain it",
+            ),
+            (
+                "workspace-root: /srv/spaces\ntemplate-service: {candidate-folder: /srv}\n",
+                "neither inside workspace-root nor contain it",
             ),
             (
                 "workspace-root: /srv\ntemplates: [{id: Bad, name: n, address: a}]\n",

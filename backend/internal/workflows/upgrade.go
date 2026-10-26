@@ -17,6 +17,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
 // upgrading is one upgrade job.
@@ -56,7 +57,7 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	run.Phase("apply")
-	grant, err := u.w.grantHooks(ctx, run, u.folder, u.template)
+	grant, err := u.w.grantHooks(ctx, run, u.folder, u.template, throwaway.TargetCandidate)
 	if err != nil {
 		return fmt.Errorf("%w; nothing was upgraded", err)
 	}

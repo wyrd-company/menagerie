@@ -344,6 +344,31 @@ func TestParseRejects(t *testing.T) {
 	}
 }
 
+func TestParseCandidateFolder(t *testing.T) {
+	cfg, err := Parse([]byte(valid))
+	if err != nil || cfg.TemplateService.CandidateFolder != DefaultCandidateFolder {
+		t.Fatalf("absent: %+v %v", cfg.TemplateService, err)
+	}
+	cfg, err = Parse([]byte(valid + "template-service: {candidate-folder: /var/sample/candidates}\n"))
+	if err != nil || cfg.TemplateService.CandidateFolder != "/var/sample/candidates" {
+		t.Fatalf("set: %+v %v", cfg.TemplateService, err)
+	}
+	root := filepath.Clean(cfg.WorkspaceRoot)
+	for folder, want := range map[string]string{
+		"candidates":                "must be an absolute clean folder",
+		"/var/sample/../candidates": "must be an absolute clean folder",
+		"/":                         "must be an absolute clean folder",
+		root + "/candidates":        "neither inside workspace-root nor contain it",
+		root:                        "neither inside workspace-root nor contain it",
+		filepath.Dir(root):          "neither inside workspace-root nor contain it",
+	} {
+		doc := valid + "template-service: {candidate-folder: '" + folder + "'}\n"
+		if _, err := Parse([]byte(doc)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: got %v, want %q", folder, err, want)
+		}
+	}
+}
+
 func TestParseRunnerImages(t *testing.T) {
 	cfg, err := Parse([]byte(valid))
 	if err != nil || cfg.RunnerImage != "" || cfg.Templates[0].RunnerImage != "" || cfg.TemplateService.HookRunnerSocket != DefaultHookRunnerSocket {

@@ -161,12 +161,12 @@ oidc:
   issuer: %s
   client-id: %s
   redirect-url: %s
-template-service: {socket: %s, hook-runner-socket: %s}
+template-service: {socket: %s, hook-runner-socket: %s, candidate-folder: %s}
 runner-image: busybox:1.37
 templates:
   - {id: sample-kit-v1, name: "Sample kit, version 1", address: 'file://%s@v1'}
   - {id: sample-kit-v2, name: "Sample kit, version 2", address: 'file://%s@v2'}
-`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, socket, filepath.Join(sockDir, "hook-runner.sock"), repo, repo))
+`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, socket, filepath.Join(sockDir, "hook-runner.sock"), filepath.Join(base, "candidates"), repo, repo))
 	runTemplateService(t, bin, cfgPath, filepath.Join(base, "template-data"), socket)
 
 	cfg, err := config.Load(cfgPath)
