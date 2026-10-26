@@ -4,7 +4,7 @@
 use crate::Service;
 use crate::api::{AnswerRequest, ApplyReply, ApplyRequest, InterviewReply, StartRequest};
 use crate::checks::{self, Operation};
-use crate::error::ServiceError;
+use crate::error::{ServiceError, ValueFree};
 use crate::hooks::CallbackRunner;
 use crate::host::{self, ProcessEnvironment};
 use crate::reply;
@@ -118,14 +118,19 @@ pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, Ser
     )?;
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);
-    let session = resume(service, record, &selected.target, &mut environment)?;
-    let done = reply::completed(session.state()?)?;
+    // From here Toha renders the template and runs its hooks, so every
+    // refusal is value-free.
+    let session = resume(service, record, &selected.target, &mut environment)
+        .map_err(ValueFree::value_free)?;
+    let done = reply::completed(session.state().map_err(ValueFree::value_free)?)?;
     let runner = CallbackRunner {
         socket: &service.settings.hook_runner_socket,
         folder: &selected.folder,
         token: request.hook_token.as_deref(),
     };
-    let (merged, report) = session.apply(&done, false, &runner, None)?;
+    let (merged, report) = session
+        .apply(&done, false, &runner, None)
+        .map_err(ValueFree::value_free)?;
     Ok(reply::merged(merged, report))
 }
 
@@ -151,12 +156,12 @@ fn resume(
     record: StagedRecord,
     target: &CanonicalTarget,
     environment: &mut Environment<'_, ProcessEnvironment>,
-) -> Result<UpdateSession, ServiceError> {
-    Ok(UpdateSession::resume(
+) -> Result<UpdateSession, toha::updates::SessionError> {
+    UpdateSession::resume(
         record,
         target.clone(),
         &service.host.paths,
         true,
         environment,
-    )?)
+    )
 }

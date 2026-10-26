@@ -160,7 +160,7 @@ async fn a_hook_runs_in_its_target_relative_folder() {
 async fn a_hook_without_a_granted_token_runs_nowhere() {
     for (token, needle) in [
         (json!(null), "no hook token"),
-        (json!("not-granted"), "(hook-token-refused)"),
+        (json!("not-granted"), "refused its hook token"),
     ] {
         let world = World::new();
         let service = Running::start(&world).await;

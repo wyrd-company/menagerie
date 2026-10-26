@@ -65,16 +65,53 @@ struct Refusal {
 #[derive(Deserialize)]
 struct RefusalBody {
     kind: String,
-    message: String,
 }
 
-fn failure(message: impl Into<String>) -> HookError {
-    HookError::Io(std::io::Error::other(message.into()))
+/// Why a hook did not run, in words the service chose. It never carries a
+/// reply's text, a path or an operating system message.
+#[derive(Debug)]
+struct NotRun(&'static str);
+
+impl std::fmt::Display for NotRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for NotRun {}
+
+fn failure(reason: &'static str) -> HookError {
+    HookError::Io(std::io::Error::other(NotRun(reason)))
+}
+
+/// Why a hook could not run, value-free: the reason this runner chose, or a
+/// fixed sentence for any other error.
+pub fn reason(error: &HookError) -> &'static str {
+    match error {
+        HookError::EmptyCommand => "its command is empty",
+        HookError::Io(e) => e
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<NotRun>())
+            .map_or("the hook runner failed", |not_run| not_run.0),
+    }
+}
+
+/// A refusal's reason, chosen by its kind. The workspace service's message
+/// is not read.
+fn refused(kind: &str) -> &'static str {
+    match kind {
+        "hook-token-refused" => "the workspace service refused its hook token",
+        "invalid-hook" => "the workspace service refused it as invalid",
+        "hook-cancelled" => "the job was cancelled",
+        "runner-image-unavailable" => "no runner image is available",
+        "hook-container-failed" => "its throwaway container failed",
+        _ => "the workspace service refused it",
+    }
 }
 
 impl HookRunner for CallbackRunner<'_> {
-    /// No error built here carries a captured stream: a reply's streams are
-    /// decoded only into the outcome.
+    /// No error built here carries a captured stream, a path or a reply's
+    /// text: each names one fixed reason.
     fn run(&self, hook: &PlannedHook, _target: &Path) -> Result<HookOutcome, HookError> {
         let Some(token) = self.token else {
             return Err(failure(
@@ -105,23 +142,21 @@ impl HookRunner for CallbackRunner<'_> {
             .map_err(|_| failure("the hook's paths are not UTF-8, so it cannot be sent"))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_io()
-            .build()?;
-        let (status, reply) = runtime.block_on(post(self.socket, body))?;
+            .build()
+            .map_err(|_| failure("the hook runner's client could not start"))?;
+        let (status, reply) = runtime
+            .block_on(post(self.socket, body))
+            .map_err(|_| failure("the workspace service's hook runner is unreachable"))?;
         if status != 200 {
-            return Err(match serde_json::from_slice::<Refusal>(&reply) {
-                Ok(r) => failure(format!(
-                    "the workspace service refused the hook ({}): {}",
-                    r.error.kind, r.error.message
-                )),
-                Err(_) => failure(format!(
-                    "the workspace service's hook runner answered {status} without an error"
-                )),
-            });
+            return Err(failure(match serde_json::from_slice::<Refusal>(&reply) {
+                Ok(r) => refused(&r.error.kind),
+                Err(_) => "the workspace service's hook runner answered without an error",
+            }));
         }
         let reply: HookReply = serde_json::from_slice(&reply)
             .map_err(|_| failure("the workspace service's hook runner gave a malformed reply"))?;
-        let stdout = stream(reply.stdout, hook.capture.stdout, "stdout")?;
-        let stderr = stream(reply.stderr, hook.capture.stderr, "stderr")?;
+        let stdout = stream(reply.stdout, hook.capture.stdout, STDOUT)?;
+        let stderr = stream(reply.stderr, hook.capture.stderr, STDERR)?;
         Ok(HookOutcome {
             success: reply.success,
             code: Some(reply.exit_code),
@@ -131,50 +166,53 @@ impl HookRunner for CallbackRunner<'_> {
     }
 }
 
+/// The fixed reasons a reply stream fails for.
+struct Stream {
+    not_base64: &'static str,
+    mismatched: &'static str,
+}
+
+const STDOUT: Stream = Stream {
+    not_base64: "the hook runner's stdout is not base64",
+    mismatched: "the hook runner's stdout does not match the hook's capture",
+};
+
+const STDERR: Stream = Stream {
+    not_base64: "the hook runner's stderr is not base64",
+    mismatched: "the hook runner's stderr does not match the hook's capture",
+};
+
 /// A reply stream: present exactly when the hook captures it.
-fn stream(value: Option<String>, captured: bool, name: &str) -> Result<Option<Vec<u8>>, HookError> {
+fn stream(
+    value: Option<String>,
+    captured: bool,
+    name: Stream,
+) -> Result<Option<Vec<u8>>, HookError> {
     match (value, captured) {
         (Some(text), true) => STANDARD
             .decode(text)
             .map(Some)
-            .map_err(|_| failure(format!("the hook runner's {name} is not base64"))),
+            .map_err(|_| failure(name.not_base64)),
         (None, false) => Ok(None),
-        _ => Err(failure(format!(
-            "the hook runner's {name} does not match the hook's capture"
-        ))),
+        _ => Err(failure(name.mismatched)),
     }
 }
 
 /// POST `body` to the hook runner and read the whole reply. The reply
 /// waits as long as the hook runs; the workspace service ends it when the
 /// job's limit or its cancellation stops the hook.
-async fn post(socket: &Path, body: Vec<u8>) -> std::io::Result<(u16, Bytes)> {
-    let unavailable = |e: &dyn std::fmt::Display| {
-        std::io::Error::other(format!("the workspace service's hook runner: {e}"))
-    };
-    let stream = tokio::net::UnixStream::connect(socket)
-        .await
-        .map_err(|e| unavailable(&e))?;
-    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .map_err(|e| unavailable(&e))?;
+async fn post(socket: &Path, body: Vec<u8>) -> Result<(u16, Bytes), Box<dyn std::error::Error>> {
+    let stream = tokio::net::UnixStream::connect(socket).await?;
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
     tokio::spawn(connection);
     let request = hyper::Request::post(HOOK_PATH)
         .header(hyper::header::HOST, "workspace-service")
         .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(Full::new(Bytes::from(body)))
-        .map_err(|e| unavailable(&e))?;
-    let response = sender
-        .send_request(request)
-        .await
-        .map_err(|e| unavailable(&e))?;
+        .body(Full::new(Bytes::from(body)))?;
+    let response = sender.send_request(request).await?;
     let status = response.status().as_u16();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .map_err(|e| unavailable(&e))?
-        .to_bytes();
+    let bytes = response.into_body().collect().await?.to_bytes();
     Ok((status, bytes))
 }
 
@@ -353,24 +391,35 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_names_its_kind_and_message() {
+    fn a_refusal_names_a_reason_chosen_by_its_kind_and_never_its_text() {
         let runner = Scripted::start(
             403,
-            json!({"error": {"kind": "hook-token-refused", "message": "the hook token is unknown or revoked"}}),
+            json!({"error": {"kind": "hook-token-refused", "message": "secret refusal text"}}),
         );
         let error = runner
             .run(&run_hook(Captured::default()), Some("token-1"))
             .unwrap_err();
         assert_eq!(
-            error.to_string(),
-            "the workspace service refused the hook (hook-token-refused): the hook token is unknown or revoked"
+            reason(&error),
+            "the workspace service refused its hook token"
         );
+        assert_eq!(error.to_string(), reason(&error));
         let runner = Scripted::start(502, json!(["secret reply body"]));
         let error = runner
             .run(&run_hook(Captured::default()), Some("token-1"))
             .unwrap_err();
-        assert!(error.to_string().contains("answered 502"), "{error}");
-        assert!(!error.to_string().contains("secret"), "{error}");
+        assert_eq!(
+            reason(&error),
+            "the workspace service's hook runner answered without an error"
+        );
+        assert!(!format!("{error:?}").contains("secret"), "{error:?}");
+    }
+
+    #[test]
+    fn an_error_not_built_here_has_a_fixed_reason() {
+        let error = HookError::Io(std::io::Error::other("secret operating system text"));
+        assert_eq!(reason(&error), "the hook runner failed");
+        assert_eq!(reason(&HookError::EmptyCommand), "its command is empty");
     }
 
     /// A reply that does not match the hook's capture, or is not a reply,
@@ -424,11 +473,9 @@ mod tests {
             Path::new("/srv/spaces/alpha"),
         )
         .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .starts_with("the workspace service's hook runner: "),
-            "{error}"
+        assert_eq!(
+            reason(&error),
+            "the workspace service's hook runner is unreachable"
         );
     }
 }
