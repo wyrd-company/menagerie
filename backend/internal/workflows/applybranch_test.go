@@ -105,7 +105,7 @@ func TestApplyBranchBringsAPushedCommitIntoTheWorkspaceAndTheNextBackupKeepsIt(t
 		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 	}
 	// The workspace's own branch is pushed only after the apply.
-	if want := []string{"fetch", "backup-local-changes", "apply", "backup", "rebuild"}; !reflect.DeepEqual(phases(job), want) {
+	if want := []string{"fetch", "backup-local-changes", "plan", "stop", "backup-local-changes", "apply", "backup", "rebuild"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v, want %v", phases(job), want)
 	}
 	if !strings.Contains(logText(job), "own branch alpha is not pushed before the apply") {
@@ -114,7 +114,7 @@ func TestApplyBranchBringsAPushedCommitIntoTheWorkspaceAndTheNextBackupKeepsIt(t
 	if body, _ := os.ReadFile(filepath.Join(folder, ".devcontainer", "devcontainer.json")); string(body) != `{"image":"alpine"}`+"\n" {
 		t.Fatalf("the folder has %q", body)
 	}
-	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "rebuild alpha"}) {
+	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "stop alpha", "rebuild alpha"}) {
 		t.Fatalf("runtime %v", got)
 	}
 	if history := w.remoteHistory(t, "alpha"); history[0].Hash != pushed {
@@ -147,7 +147,7 @@ func TestApplyBranchBacksUpEveryLocalChangeAndMerges(t *testing.T) {
 	if snap.State != jobs.Succeeded {
 		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 	}
-	if want := []string{"fetch", "backup-local-changes", "backup", "apply", "backup", "rebuild"}; !reflect.DeepEqual(phases(job), want) {
+	if want := []string{"fetch", "backup-local-changes", "backup", "plan", "stop", "backup-local-changes", "apply", "backup", "rebuild"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v, want %v", phases(job), want)
 	}
 	history := w.remoteHistory(t, "alpha")
@@ -179,10 +179,10 @@ func TestApplyingAnAppliedBranchChangesNothing(t *testing.T) {
 	if snap.State != jobs.Succeeded || !strings.Contains(logText(job), "is already applied") {
 		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 	}
-	if want := []string{"fetch", "backup-local-changes", "backup", "apply"}; !reflect.DeepEqual(phases(job), want) {
+	if want := []string{"fetch", "backup-local-changes", "backup", "plan"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v", phases(job))
 	}
-	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "rebuild alpha"}) {
+	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "stop alpha", "rebuild alpha"}) {
 		t.Fatalf("runtime %v", got)
 	}
 	w.fetchedRefGone(t, "alpha")
@@ -196,7 +196,7 @@ func TestAnAppliedOwnBranchStillBacksUpLocalChanges(t *testing.T) {
 	if snap.State != jobs.Succeeded || !strings.Contains(logText(job), "is already applied") {
 		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 	}
-	if want := []string{"fetch", "backup-local-changes", "apply", "backup"}; !reflect.DeepEqual(phases(job), want) {
+	if want := []string{"fetch", "backup-local-changes", "plan", "backup"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v", phases(job))
 	}
 	if history := w.remoteHistory(t, "alpha"); len(history) != 2 || fileAt(t, history[0], "notes.txt") != "local\n" {
@@ -386,7 +386,7 @@ func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 		}},
 		"rebuild": {"operation-failed", func(t *testing.T, w *world, auth *countingAuth) string {
 			w.contribute(t, "alpha", "alpha", map[string]string{"new.txt": "new\n"})
-			w.rt.fail = errors.New("devcontainer failed")
+			w.rt.failOn = map[string]error{"rebuild": errors.New("devcontainer failed")}
 			return "alpha"
 		}},
 	}
@@ -427,5 +427,120 @@ func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 			}
 			w.fetchedRefGone(t, "alpha")
 		})
+	}
+}
+
+// failsAfterTheStop starts an apply of review/one on alpha whose stop
+// runs onStop, and returns the job when it ends failed with kind.
+func (w *world) failsAfterTheStop(t *testing.T, kind string, onStop func(folder string)) (*jobs.Job, jobs.Snapshot) {
+	t.Helper()
+	folder := filepath.Join(w.root, "alpha")
+	w.rt.onStop = func() { onStop(folder) }
+	job, snap := w.applyBranch(t, "alpha", "review/one")
+	if snap.State != jobs.Failed || snap.Error.Kind != kind {
+		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+	}
+	return job, snap
+}
+
+func TestARefusalAfterTheStopStartsTheDevcontainerAgain(t *testing.T) {
+	t.Run("the second plan", func(t *testing.T) {
+		w := newWorld(t)
+		w.createWorkspace(t, "alpha")
+		w.contribute(t, "alpha", "review/one", map[string]string{"local.txt": "first: reviewed\n"})
+		// The devcontainer writes as it stops.
+		job, _ := w.failsAfterTheStop(t, KindNotApplicable, func(folder string) {
+			writeFile(t, folder, "local.txt", "first: written while stopping\n")
+		})
+		if want := []string{"fetch", "backup-local-changes", "backup", "plan", "stop", "backup-local-changes", "backup", "plan", "up"}; !reflect.DeepEqual(phases(job), want) {
+			t.Fatalf("phases %v", phases(job))
+		}
+		if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "stop alpha", "up alpha"}) {
+			t.Fatalf("runtime %v", got)
+		}
+		if history := w.remoteHistory(t, "alpha"); fileAt(t, history[0], "local.txt") != "first: written while stopping\n" {
+			t.Fatal("the write made while stopping was not backed up")
+		}
+	})
+	t.Run("the folder check", func(t *testing.T) {
+		w := newWorld(t)
+		w.createWorkspace(t, "alpha")
+		w.contribute(t, "alpha", "review/one", map[string]string{"clone/x.txt": "x\n"})
+		job, _ := w.failsAfterTheStop(t, KindNotApplicable, func(folder string) {
+			if _, err := git.PlainInit(filepath.Join(folder, "clone"), false); err != nil {
+				t.Error(err)
+			}
+		})
+		if !strings.Contains(logText(job), "not applicable: clone") {
+			t.Fatalf("log:\n%s", logText(job))
+		}
+		if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "stop alpha", "up alpha"}) {
+			t.Fatalf("runtime %v", got)
+		}
+	})
+	t.Run("the backup after the stop", func(t *testing.T) {
+		w := newWorld(t)
+		w.createWorkspace(t, "alpha")
+		w.contribute(t, "alpha", "review/one", map[string]string{"x.txt": "x\n"})
+		auth := &countingAuth{failAt: 3}
+		w.flows.opts.Remote.Auth = auth.auth
+		w.failsAfterTheStop(t, KindBackupFailed, func(folder string) { writeFile(t, folder, "notes.txt", "late\n") })
+		if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "stop alpha", "up alpha"}) {
+			t.Fatalf("runtime %v", got)
+		}
+	})
+	t.Run("a move aside that fails", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root renames in a read-only folder")
+		}
+		w := newWorld(t)
+		w.createWorkspace(t, "alpha")
+		folder := filepath.Join(w.root, "alpha")
+		writeFile(t, folder, "locked/kept.txt", "kept\n")
+		w.applyBranch(t, "alpha", "alpha")
+		w.contribute(t, "alpha", "review/one", map[string]string{"locked/kept.txt": "changed\n"})
+		_, snap := w.failsAfterTheStop(t, KindApplyFailed, func(folder string) {
+			locked := filepath.Join(folder, "locked")
+			if err := os.Chmod(locked, 0o555); err != nil {
+				t.Error(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+		})
+		if !strings.Contains(snap.Error.Message, "nothing was applied") {
+			t.Fatal(snap.Error.Message)
+		}
+		if got := w.rt.seen(); !reflect.DeepEqual(got[len(got)-2:], []string{"stop alpha", "up alpha"}) {
+			t.Fatalf("runtime %v", got)
+		}
+	})
+}
+
+func TestAStartThatFailsAfterARefusalIsTheJobsError(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	w.contribute(t, "alpha", "review/one", map[string]string{"local.txt": "first: reviewed\n"})
+	w.rt.failOn = map[string]error{"up": errors.New("the start failed")}
+	job, snap := w.failsAfterTheStop(t, "operation-failed", func(folder string) {
+		writeFile(t, folder, "local.txt", "first: written while stopping\n")
+	})
+	if !strings.Contains(snap.Error.Message, "did not start again") || !strings.Contains(logText(job), "cannot be applied") {
+		t.Fatalf("%s\n%s", snap.Error.Message, logText(job))
+	}
+}
+
+func TestAStopThatFailsAppliesNothing(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	w.contribute(t, "alpha", "review/one", map[string]string{"x.txt": "x\n"})
+	w.rt.failOn = map[string]error{"stop": errors.New("the stop failed")}
+	job, snap := w.failsAfterTheStop(t, "operation-failed", func(string) {})
+	if !strings.Contains(snap.Error.Message, "did not stop") {
+		t.Fatal(snap.Error.Message)
+	}
+	if _, err := os.Stat(filepath.Join(w.root, "alpha", "x.txt")); err == nil {
+		t.Fatal("an apply whose stop failed wrote the folder")
+	}
+	if want := []string{"fetch", "backup-local-changes", "backup", "plan", "stop"}; !reflect.DeepEqual(phases(job), want) {
+		t.Fatalf("phases %v", phases(job))
 	}
 }

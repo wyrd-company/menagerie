@@ -53,8 +53,8 @@ description: >-
   and every client that sees the result event can start the next job.
   `phase` names the current step, for example `read-definition`,
   `initialize-command`, `build`, `remove-container`, `up`, `stop`,
-  `interview`, `initialize-repository`, `generate`, `fetch`, `apply`,
-  `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
+  `interview`, `initialize-repository`, `generate`, `fetch`, `plan`,
+  `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `runner-image-unavailable`, `operation-failed` or `internal-error`, and
   for interview operations
@@ -230,7 +230,9 @@ description: >-
   the apply: the console says the branch is not pushed before the apply,
   so a refused apply leaves the workspace repository as it was.
 
-  In `apply`, H is the workspace branch's commit and T the fetched one.
+  In `plan` the service works out the apply in memory, writing nothing to
+  the folder, the index or a ref. H is the workspace branch's commit and
+  T the fetched one.
   When T is H or an ancestor of H the job succeeds as already applied,
   with no commit and no rebuild; for the workspace's own branch it then
   force-pushes the branch in `backup`, which only moves the workspace
@@ -251,13 +253,29 @@ description: >-
   HFS+ reads as `.git`, `git~1` included; a submodule entry in the
   change; an untracked or ignored file, folder or symbolic link, or a
   nested Git repository, where the change writes; and a file of H that no
-  longer matches H, as the devcontainer keeps running. The console has one `not applicable: <path>` line per path and
-  the message names the reason and the paths; nothing is applied.
+  longer matches H. The console has one `not applicable: <path>` line per
+  path and the message names the reason and the paths; nothing is
+  applied.
+
+  A plan refused in `plan` leaves the devcontainer as it was. Otherwise,
+  so that nothing in the devcontainer writes to the folder while the
+  apply does, the service stops it in `stop` as a `stop` job does,
+  Compose included; a failed stop fails with the container operations'
+  kinds and nothing applied. It then commits again in
+  `backup-local-changes` what the devcontainer wrote before it stopped;
+  when that changed the branch it pushes it in `backup`, with the same
+  rule for the workspace's own branch, and plans again in `plan`. When
+  that commit or push fails, the second plan refuses, or the folder
+  checks of `apply` refuse, nothing is applied and the service starts the
+  devcontainer again as a `start` job does; when that start fails, the
+  job fails with the start's failure and the console keeps the refusal.
+  An already applied branch never stops the devcontainer.
 
   The service changes the folder through descriptors: each folder is
   opened beneath the workspace with no symbolic link in any component, and
   each file is renamed, created or removed relative to its folder, so a
-  folder swapped for a link is refused, never followed. It first moves
+  folder swapped for a link is refused, never followed. In `apply` it
+  first checks that the workspace branch is still at H, then moves
   every file of H the change replaces or removes to a temporary name,
   `.menagerie-apply-<random>-<n>`, in its own folder, and checks that each
   still has H's mode and content, a link's target included. When one does
@@ -266,12 +284,17 @@ description: >-
   made is kept. It then writes only the paths that differ between H and
   the result, each to a name nothing holds, writing symbolic links as
   links and keeping the executable mode, removes the moved-aside files and
-  the folders the change empties. It records the result in the index and moves the branch
-  last, only from H. A failure while writing fails as `apply-failed`: the
-  files written before it remain, the branch stays at H, which is backed
-  up unless `branch` is the workspace's own, and recovery is manual; a
-  file that could not be moved back is named with its temporary name. A
-  changed branch is then force-pushed in
+  the folders the change empties. The index records the result with the
+  stat data taken from each file as it was written, from its descriptor
+  before it closes or, for a link, right after it is made; an entry
+  without such data keeps none, so its content is compared. The branch
+  moves last, only from H. A failure while writing fails as
+  `apply-failed` with the devcontainer stopped: the files written before
+  it remain, the branch stays at H, which is backed up unless `branch` is
+  the workspace's own, the moved-aside files go back to their names where
+  nothing was written, and the message and console name each file still
+  at a temporary name with its path; recovery is manual. A changed branch
+  is then force-pushed in
   `backup`, where a failure fails as `backup-failed` without a rebuild,
   and the devcontainer is rebuilt as after an upgrade, a failure failing
   with the container operations' kinds. The applied record `.toha.json`

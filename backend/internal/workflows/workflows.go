@@ -44,10 +44,11 @@ type Templates interface {
 	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
 }
 
-// Runtime starts and rebuilds devcontainers. *devcontainer.Runtime
+// Runtime starts, stops and rebuilds devcontainers. *devcontainer.Runtime
 // satisfies it.
 type Runtime interface {
 	Start(ctx context.Context, folder string, p devcontainer.Progress) error
+	Stop(ctx context.Context, folder string, p devcontainer.Progress) error
 	Rebuild(ctx context.Context, folder string, p devcontainer.Progress) error
 }
 

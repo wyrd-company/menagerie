@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -139,7 +140,7 @@ func (f *applyFixture) apply(t *testing.T, branch string) (Applied, error) {
 	if _, err := f.remote.Fetch(context.Background(), f.folder, "alpha", branch, &f.log); err != nil {
 		t.Fatalf("fetch %s: %v", branch, err)
 	}
-	return Apply(f.folder, "alpha", branch, &f.log)
+	return applyNow(f.folder, "alpha", branch, &f.log)
 }
 
 // state is everything an apply may change: the branch, the index and
@@ -362,6 +363,16 @@ func TestAFastForwardWritesOnlyTheChangedPaths(t *testing.T) {
 	// Ignored files and the nested repository are untouched.
 	if f.read(t, "cache/blob") != "ignored hook output\n" || f.read(t, "clone/README") != "nested repository file\n" {
 		t.Fatal("ignored or nested files changed")
+	}
+	// The index holds the stat data of what the apply wrote.
+	repo, _ := git.PlainOpen(f.folder)
+	idx, _ := repo.Storer.Index()
+	for _, p := range []string{"result.txt", "docs/link"} {
+		e, err := idx.Entry(p)
+		info, lerr := os.Lstat(filepath.Join(f.folder, p))
+		if err != nil || lerr != nil || !e.ModifiedAt.Equal(info.ModTime()) || int64(e.Size) != info.Size() || e.Inode == 0 {
+			t.Fatalf("%s: index %+v, file %v", p, e, info)
+		}
 	}
 	f.clean(t)
 }
@@ -604,7 +615,7 @@ func TestSubmodulesAndInvalidPathsAreNotApplicable(t *testing.T) {
 			g := newApplyFixture(t)
 			g.fetchedWith(t, map[string]*file{bad: regular("x\n")})
 			before := g.state(t)
-			_, err := Apply(g.folder, "alpha", "review/two", &g.log)
+			_, err := applyNow(g.folder, "alpha", "review/two", &g.log)
 			if na := refused(t, err, before, g.state(t), bad); !strings.Contains(na.Reason, "not valid") {
 				t.Fatal(na.Reason)
 			}
@@ -850,7 +861,7 @@ func TestMissingHistoryIsNotApplicable(t *testing.T) {
 		c, _ := head.CommitObject(f.head(t))
 		f.fetched(t, c.TreeHash, missing)
 		before := f.state(t)
-		_, err := Apply(f.folder, "alpha", "partial", &f.log)
+		_, err := applyNow(f.folder, "alpha", "partial", &f.log)
 		if na := refused(t, err, before, f.state(t)); !strings.Contains(na.Reason, "lacks part of the history") {
 			t.Fatal(na.Reason)
 		}
@@ -874,7 +885,7 @@ func TestMissingHistoryIsNotApplicable(t *testing.T) {
 		partial, _ := repo.Storer.SetEncodedObject(obj)
 		f.fetched(t, partial, f.head(t))
 		before := f.state(t)
-		_, err := Apply(f.folder, "alpha", "partial", &f.log)
+		_, err := applyNow(f.folder, "alpha", "partial", &f.log)
 		if na := refused(t, err, before, f.state(t)); !strings.Contains(na.Reason, "lacks part of the history") {
 			t.Fatal(na.Reason)
 		}
@@ -899,7 +910,7 @@ func TestAnAbsoluteTreePathIsNotApplicable(t *testing.T) {
 	before := f.state(t)
 	done := make(chan error, 1)
 	go func() {
-		_, err := Apply(f.folder, "alpha", "review/one", &f.log)
+		_, err := applyNow(f.folder, "alpha", "review/one", &f.log)
 		done <- err
 	}()
 	select {
@@ -975,5 +986,83 @@ func TestALinkOfTheBranchIsReplacedAndALinkRetargetedRefuses(t *testing.T) {
 	}
 	if target, _ := os.Readlink(filepath.Join(f.folder, "docs", "link")); target != "../result.txt" {
 		t.Fatalf("link to %q", target)
+	}
+}
+
+// applyNow plans the apply of the fetched commit and writes it.
+func applyNow(folder, workspace, branch string, log io.Writer) (Applied, error) {
+	plan, err := PlanApply(folder, workspace, branch, log)
+	if err != nil {
+		return Applied{}, err
+	}
+	return plan.Write(folder, log)
+}
+
+func TestTheIndexKeepsTheStatOfWhatTheApplyWrote(t *testing.T) {
+	f := newApplyFixture(t)
+	f.remoteCommit(t, "alpha", map[string]*file{"result.txt": regular("label: reviewed\n")}, f.head(t))
+	// A writer after the write and before the index update: same size,
+	// another time.
+	beforeIndex = func() {
+		p := filepath.Join(f.folder, "result.txt")
+		write(t, f.folder, "result.txt", "label: REVIEWED\n")
+		later := time.Now().Add(time.Hour)
+		if err := os.Chtimes(p, later, later); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforeIndex = func() {} })
+	if _, err := f.apply(t, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if !pendingOf(t, f.folder, "alpha") {
+		t.Fatal("the edit after the write is not pending")
+	}
+	c, err := CommitAll(f.folder, "alpha", "after", &bytes.Buffer{})
+	if err != nil || !c.Changed {
+		t.Fatalf("the edit after the write was not committed: %v %v", c.Changed, err)
+	}
+}
+
+func TestAWriteFailureGivesBackTheNamesItCan(t *testing.T) {
+	f := newApplyFixture(t)
+	f.remoteCommit(t, "alpha", map[string]*file{
+		".toha.json": regular(`{"applications":["reviewed"]}` + "\n"),
+		"b.txt":      regular("b\n"),
+		"result.txt": regular("label: reviewed\n"),
+	}, f.head(t))
+	head := f.head(t)
+	// .toha.json is written first; b.txt is then taken.
+	afterMoveAside = func() { write(t, f.folder, "b.txt", "in the way\n") }
+	t.Cleanup(func() { afterMoveAside = func() {} })
+	_, err := f.apply(t, "alpha")
+	var failed *ApplyError
+	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "keep a temporary name: .toha.json at .menagerie-apply-") || strings.Contains(err.Error(), "result.txt at") {
+		t.Fatalf("got %v", err)
+	}
+	if !strings.Contains(f.log.String(), "left at a temporary name: .toha.json is at .menagerie-apply-") {
+		t.Fatalf("log:\n%s", f.log.String())
+	}
+	if f.read(t, "result.txt") != "label: first\n" || len(tempFiles(t, f.folder)) != 1 || f.head(t) != head {
+		t.Fatalf("result.txt %q, left %v", f.read(t, "result.txt"), tempFiles(t, f.folder))
+	}
+}
+
+func TestAPlanIsNotWrittenOnceTheBranchMoved(t *testing.T) {
+	f := newApplyFixture(t)
+	f.remoteCommit(t, "alpha", map[string]*file{"result.txt": regular("label: reviewed\n")}, f.head(t))
+	if _, err := f.remote.Fetch(context.Background(), f.folder, "alpha", "alpha", nil); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanApply(f.folder, "alpha", "alpha", &f.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, f.folder, "notes.txt", "committed after the plan\n")
+	f.local(t)
+	before := f.state(t)
+	_, err = plan.Write(f.folder, &f.log)
+	if na := refused(t, err, before, f.state(t)); !strings.Contains(na.Reason, "moved") {
+		t.Fatal(na.Reason)
 	}
 }

@@ -104,11 +104,20 @@ The job console shows each phase:
    workspace up. When the branch is the workspace's own, it commits but
    does not push, and there is no `backup` phase here, so that the
    branch's commits stay on the workspace repository.
-3. `apply`: when the branch extends the workspace's branch, the workspace
-   fast-forwards to it. When both have changed, Menagerie merges them file
-   by file and commits the merge as `Apply <branch> to workspace
-   <workspace>`. It writes only the files that change.
-4. `backup`, then the rebuild of the devcontainer.
+3. `plan`: Menagerie works out the apply without writing anything. When
+   the branch extends the workspace's branch, the workspace fast-forwards
+   to it. When both have changed, Menagerie merges them file by file and
+   commits the merge as `Apply <branch> to workspace <workspace>`. A plan
+   that cannot apply fails here and leaves the devcontainer running.
+4. `stop`: the devcontainer stops, so that nothing writes to the
+   workspace while the apply does. What it wrote before it stopped is
+   committed (and backed up, for another branch than the workspace's own),
+   and the plan is made again.
+5. `apply`: Menagerie writes only the files that change.
+6. `backup`, then the rebuild of the devcontainer.
+
+When the apply is refused after the stop, nothing is applied and
+Menagerie starts the devcontainer again.
 
 The backup after the apply pushes the branch's commits to the workspace's
 branch, and the forge marks the pull request merged. A branch already in
@@ -118,7 +127,8 @@ the workspace's own branch, the job still backs the workspace up.
 Menagerie writes only through real folders of the workspace, never
 through a symbolic link, and moves the files it replaces to
 `.menagerie-apply-…` names first. When the job fails as `apply-failed`,
-its message names any file still under such a name.
+the devcontainer stays stopped, and the message and console name each
+file still under such a name with its path.
 
 The job fails, with nothing applied, when:
 

@@ -175,11 +175,15 @@ func defaultTemplates(t *testing.T) *fakeTemplates {
 	return f
 }
 
-// fakeRuntime records starts and rebuilds.
+// fakeRuntime records starts, stops and rebuilds. fail fails every
+// call; failOn fails only calls of that operation. onStop runs in a stop,
+// as a devcontainer that writes as it stops.
 type fakeRuntime struct {
-	mu    sync.Mutex
-	calls []string
-	fail  error
+	mu     sync.Mutex
+	calls  []string
+	fail   error
+	failOn map[string]error
+	onStop func()
 }
 
 func (r *fakeRuntime) do(op, folder string, p devcontainer.Progress) error {
@@ -187,7 +191,16 @@ func (r *fakeRuntime) do(op, folder string, p devcontainer.Progress) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, op+" "+filepath.Base(folder))
+	if err := r.failOn[op]; err != nil {
+		return err
+	}
 	return r.fail
+}
+func (r *fakeRuntime) Stop(_ context.Context, folder string, p devcontainer.Progress) error {
+	if r.onStop != nil {
+		r.onStop()
+	}
+	return r.do("stop", folder, p)
 }
 func (r *fakeRuntime) Start(_ context.Context, folder string, p devcontainer.Progress) error {
 	return r.do("up", folder, p)

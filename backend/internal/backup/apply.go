@@ -22,7 +22,6 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 )
@@ -86,8 +85,18 @@ type entry struct {
 
 func (e entry) present() bool { return e.mode != filemode.Empty }
 
-// Apply brings the commit at FetchedRef into the workspace branch and its
-// folder. The workspace branch's commit is H and the fetched commit T:
+// Plan is an apply worked out from the repository alone. Making it wrote
+// at most the objects of a merge commit, which no ref names; the folder,
+// the index and every ref are as they were.
+type Plan struct {
+	Applied
+	workspace    string
+	head, result map[string]entry
+}
+
+// PlanApply works out how the commit at FetchedRef comes into the
+// workspace branch. The workspace branch's commit is H and the fetched
+// commit T:
 //
 //   - T is H or an ancestor of H: AlreadyApplied, nothing changes.
 //   - H is an ancestor of T: the branch fast-forwards to T.
@@ -97,19 +106,113 @@ func (e entry) present() bool { return e.mode != filemode.Empty }
 //     any other path conflicts. The branch gains a merge commit, parents
 //     H and T, by Menagerie.
 //
-// No merge base, several merge bases, a conflict, or a file where the
-// result has a folder of the same name refuse with *NotApplicableError.
-// So do, before anything is written, a path the change writes or removes
-// that is not a valid tree path or is a submodule, and a folder that no
-// longer matches H where the change writes: a file differing from H, or an
-// untracked or ignored file, folder or nested Git repository in the way.
-//
-// Only the paths that differ between H and the result are written to the
-// folder, without following symbolic links, then the index records the
-// result and the branch moves last. A failure while writing is
-// *ApplyError: the branch has not moved and recovery is manual.
-func Apply(folder, workspace, branch string, log io.Writer) (Applied, error) {
+// No merge base, several merge bases, a conflict, a file where the result
+// has a folder of the same name, a path the change writes or removes that
+// is not a valid tree path or is a submodule, and fetched history that
+// lacks a commit or tree refuse with *NotApplicableError.
+func PlanApply(folder, workspace, branch string, log io.Writer) (*Plan, error) {
 	repo, ref, err := open(folder, workspace)
+	if err != nil {
+		return nil, err
+	}
+	if err := onBranch(repo, ref); err != nil {
+		return nil, err
+	}
+	headRef, err := repo.Reference(ref, false)
+	if err != nil {
+		return nil, err
+	}
+	fetchedRef, err := repo.Reference(FetchedRef, false)
+	if err != nil {
+		return nil, fmt.Errorf("read the fetched commit: %w", err)
+	}
+	head, err := repo.CommitObject(headRef.Hash())
+	if err != nil {
+		return nil, err
+	}
+	theirs, err := repo.CommitObject(fetchedRef.Hash())
+	if err != nil {
+		return nil, err
+	}
+	out := Applied{Before: head.Hash, Hash: head.Hash}
+	// IsAncestor holds for the commit itself.
+	contained, err := theirs.IsAncestor(head)
+	if err != nil {
+		return nil, err
+	}
+	if contained {
+		out.Outcome = AlreadyApplied
+		return &Plan{Applied: out, workspace: workspace}, nil
+	}
+
+	headFiles, err := commitFiles(repo.Storer, head)
+	if err != nil {
+		return nil, err
+	}
+	theirFiles, err := commitFiles(repo.Storer, theirs)
+	if err != nil {
+		return nil, missingHistory(err)
+	}
+	forward, err := head.IsAncestor(theirs)
+	if err != nil {
+		return nil, missingHistory(err)
+	}
+	var result map[string]entry
+	if forward {
+		out.Outcome, out.Hash, result = FastForwarded, theirs.Hash, theirFiles
+		fmt.Fprintf(log, "%s fast-forwards the workspace branch from %s to %s\n", branch, head.Hash, theirs.Hash)
+	} else {
+		bases, err := head.MergeBase(theirs)
+		if err != nil {
+			return nil, err
+		}
+		switch len(bases) {
+		case 0:
+			return nil, &NotApplicableError{Reason: fmt.Sprintf("%s and the workspace branch have no commit in common", branch)}
+		case 1:
+		default:
+			return nil, &NotApplicableError{Reason: fmt.Sprintf("%s and the workspace branch have %d merge bases", branch, len(bases))}
+		}
+		baseFiles, err := commitFiles(repo.Storer, bases[0])
+		if err != nil {
+			return nil, err
+		}
+		var conflicts []string
+		result, conflicts = mergeFiles(baseFiles, headFiles, theirFiles)
+		if len(conflicts) > 0 {
+			return nil, &NotApplicableError{Reason: "both the workspace branch and " + branch + " changed these paths", Paths: conflicts}
+		}
+		out.Outcome = Merged
+		fmt.Fprintf(log, "merging %s at %s into the workspace branch at %s over their merge base %s\n", branch, theirs.Hash, head.Hash, bases[0].Hash)
+	}
+	// Paths are checked before the clash check walks their folders.
+	out.Paths = changedPaths(headFiles, result)
+	if err := checkChange(out.Paths, headFiles, result); err != nil {
+		return nil, err
+	}
+	if clashes := fileFolderClashes(result); len(clashes) > 0 {
+		return nil, &NotApplicableError{Reason: "the result has a file where it also has a folder of the same name", Paths: clashes}
+	}
+	if out.Outcome == Merged {
+		out.Hash, err = mergeCommit(repo.Storer, result, head.Hash, theirs.Hash, fmt.Sprintf("Apply %s to workspace %s", branch, workspace))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Plan{Applied: out, workspace: workspace, head: headFiles, result: result}, nil
+}
+
+// Write brings the plan into the workspace folder and branch. It refuses
+// with *NotApplicableError, before anything changes, when the workspace
+// branch is no longer at H, and as checkFolder and moveAside do. It
+// writes only the paths that differ between H and the result, through
+// workspaceFolder, then the index records the result and the branch moves
+// last. A failure while writing is *ApplyError: the branch has not moved,
+// the H files not yet replaced have their names back, those still at a
+// temporary name are named, and recovery is manual.
+func (p *Plan) Write(folder string, log io.Writer) (Applied, error) {
+	repo, ref, err := open(folder, p.workspace)
 	if err != nil {
 		return Applied{}, err
 	}
@@ -120,84 +223,10 @@ func Apply(folder, workspace, branch string, log io.Writer) (Applied, error) {
 	if err != nil {
 		return Applied{}, err
 	}
-	fetchedRef, err := repo.Reference(FetchedRef, false)
-	if err != nil {
-		return Applied{}, fmt.Errorf("read the fetched commit: %w", err)
+	if headRef.Hash() != p.Before {
+		return Applied{}, &NotApplicableError{Reason: fmt.Sprintf("the workspace branch moved to %s after the apply was planned", headRef.Hash())}
 	}
-	head, err := repo.CommitObject(headRef.Hash())
-	if err != nil {
-		return Applied{}, err
-	}
-	theirs, err := repo.CommitObject(fetchedRef.Hash())
-	if err != nil {
-		return Applied{}, err
-	}
-	out := Applied{Before: head.Hash, Hash: head.Hash}
-	// IsAncestor holds for the commit itself.
-	contained, err := theirs.IsAncestor(head)
-	if err != nil {
-		return Applied{}, err
-	}
-	if contained {
-		out.Outcome = AlreadyApplied
-		return out, nil
-	}
-
-	headFiles, err := commitFiles(repo.Storer, head)
-	if err != nil {
-		return Applied{}, err
-	}
-	theirFiles, err := commitFiles(repo.Storer, theirs)
-	if err != nil {
-		return Applied{}, missingHistory(err)
-	}
-	forward, err := head.IsAncestor(theirs)
-	if err != nil {
-		return Applied{}, missingHistory(err)
-	}
-	var result map[string]entry
-	if forward {
-		out.Outcome, out.Hash, result = FastForwarded, theirs.Hash, theirFiles
-		fmt.Fprintf(log, "%s fast-forwards the workspace branch from %s to %s\n", branch, head.Hash, theirs.Hash)
-	} else {
-		bases, err := head.MergeBase(theirs)
-		if err != nil {
-			return Applied{}, err
-		}
-		switch len(bases) {
-		case 0:
-			return Applied{}, &NotApplicableError{Reason: fmt.Sprintf("%s and the workspace branch have no commit in common", branch)}
-		case 1:
-		default:
-			return Applied{}, &NotApplicableError{Reason: fmt.Sprintf("%s and the workspace branch have %d merge bases", branch, len(bases))}
-		}
-		baseFiles, err := commitFiles(repo.Storer, bases[0])
-		if err != nil {
-			return Applied{}, err
-		}
-		var conflicts []string
-		result, conflicts = mergeFiles(baseFiles, headFiles, theirFiles)
-		if len(conflicts) > 0 {
-			return Applied{}, &NotApplicableError{Reason: "both the workspace branch and " + branch + " changed these paths", Paths: conflicts}
-		}
-		out.Outcome = Merged
-		fmt.Fprintf(log, "merging %s at %s into the workspace branch at %s over their merge base %s\n", branch, theirs.Hash, head.Hash, bases[0].Hash)
-	}
-	// Paths are checked before the clash check walks their folders.
-	out.Paths = changedPaths(headFiles, result)
-	if err := checkChange(out.Paths, headFiles, result); err != nil {
-		return Applied{}, err
-	}
-	if clashes := fileFolderClashes(result); len(clashes) > 0 {
-		return Applied{}, &NotApplicableError{Reason: "the result has a file where it also has a folder of the same name", Paths: clashes}
-	}
-	if out.Outcome == Merged {
-		out.Hash, err = mergeCommit(repo.Storer, result, head.Hash, theirs.Hash, fmt.Sprintf("Apply %s to workspace %s", branch, workspace))
-		if err != nil {
-			return Applied{}, err
-		}
-	}
-
+	out, headFiles, result := p.Applied, p.head, p.result
 	root, err := os.OpenRoot(folder)
 	if err != nil {
 		return Applied{}, fmt.Errorf("open workspace folder: %w", err)
@@ -216,10 +245,12 @@ func Apply(folder, workspace, branch string, log io.Writer) (Applied, error) {
 	if err != nil {
 		return Applied{}, err
 	}
-	if err := writeFolder(w, repo.Storer, moved, out.Paths, result, log); err != nil {
+	written, err := writeFolder(w, repo.Storer, moved, out.Paths, result, log)
+	if err != nil {
 		return Applied{}, &ApplyError{Err: err}
 	}
-	if err := recordIndex(repo, root, out.Paths, result); err != nil {
+	beforeIndex()
+	if err := recordIndex(repo, out.Paths, result, written); err != nil {
 		return Applied{}, &ApplyError{Err: err}
 	}
 	if err := repo.Storer.CheckAndSetReference(plumbing.NewHashReference(ref, out.Hash), headRef); err != nil {
@@ -235,6 +266,10 @@ var beforeWrite = func() {}
 // afterMoveAside runs between moving H files aside and checking them, in
 // tests.
 var afterMoveAside = func() {}
+
+// beforeIndex runs between the last write to the folder and the index
+// update, in tests.
+var beforeIndex = func() {}
 
 // missingHistory refuses an apply whose fetched history lacks a commit or
 // tree, as in a shallow repository.
@@ -595,10 +630,13 @@ func moveBack(w *workspaceFolder, moved []movedAside, cause error) error {
 }
 
 // writeFolder writes the result's files of paths, each to a name nothing
-// holds, then removes the moved-aside H files. A folder in the way, which
-// holds only moved-aside files and folders, is removed first; a folder
-// left empty by a removal is removed, as Git does.
-func writeFolder(w *workspaceFolder, objects storer.EncodedObjectStorer, moved []movedAside, paths []string, result map[string]entry, log io.Writer) error {
+// holds, then removes the moved-aside H files, and returns the stat data
+// of each file it wrote, taken from the file it wrote. A folder in the
+// way, which holds only moved-aside files and folders, is removed first;
+// a folder left empty by a removal is removed, as Git does. On a failure
+// the moved-aside files go back to their names where nothing was written
+// there; the error and log name those that keep a temporary name.
+func writeFolder(w *workspaceFolder, objects storer.EncodedObjectStorer, moved []movedAside, paths []string, result map[string]entry, log io.Writer) (map[string]fileStat, error) {
 	temps := map[string]bool{}
 	for _, m := range moved {
 		temps[path.Join(path.Dir(m.path), m.temp)] = true
@@ -609,6 +647,45 @@ func writeFolder(w *workspaceFolder, objects storer.EncodedObjectStorer, moved [
 		gone[key] = temps[key]
 		return temps[key]
 	}
+	written := map[string]fileStat{}
+	err := writeFiles(w, objects, paths, result, drop, written, log)
+	if err == nil {
+		err = removeAside(w, moved, gone, result, log)
+	}
+	if err != nil {
+		return nil, keepNames(w, moved, gone, err, log)
+	}
+	return written, nil
+}
+
+// removeAside removes the moved-aside files gone does not list, and the
+// folders a removal empties.
+func removeAside(w *workspaceFolder, moved []movedAside, gone map[string]bool, result map[string]entry, log io.Writer) error {
+	for i := len(moved) - 1; i >= 0; i-- {
+		m := moved[i]
+		key := path.Join(path.Dir(m.path), m.temp)
+		if !gone[key] {
+			if err := w.unlink(m.path, m.temp); err != nil {
+				return fmt.Errorf("remove %s: %w", m.path, err)
+			}
+			gone[key] = true
+		}
+		if result[m.path].present() {
+			continue
+		}
+		fmt.Fprintf(log, "removed: %s\n", m.path)
+		for dir := path.Dir(m.path); dir != "."; dir = path.Dir(dir) {
+			if w.rmdir(dir) != nil {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// writeFiles writes the result's files of paths and records their stat
+// data in written.
+func writeFiles(w *workspaceFolder, objects storer.EncodedObjectStorer, paths []string, result map[string]entry, drop func(dir, name string) bool, written map[string]fileStat, log io.Writer) error {
 	for _, p := range paths {
 		e := result[p]
 		if !e.present() {
@@ -624,48 +701,54 @@ func writeFolder(w *workspaceFolder, objects storer.EncodedObjectStorer, moved [
 				return fmt.Errorf("write %s: %w", p, err)
 			}
 		}
-		if err := writeEntry(w, objects, p, e); err != nil {
+		st, err := writeEntry(w, objects, p, e)
+		if err != nil {
 			return fmt.Errorf("write %s: %w", p, err)
 		}
+		written[p] = st
 		fmt.Fprintf(log, "wrote: %s\n", p)
-	}
-	for i := len(moved) - 1; i >= 0; i-- {
-		m := moved[i]
-		if !gone[path.Join(path.Dir(m.path), m.temp)] {
-			if err := w.unlink(m.path, m.temp); err != nil {
-				return fmt.Errorf("remove %s: %w", m.path, err)
-			}
-		}
-		if result[m.path].present() {
-			continue
-		}
-		fmt.Fprintf(log, "removed: %s\n", m.path)
-		for dir := path.Dir(m.path); dir != "."; dir = path.Dir(dir) {
-			if w.rmdir(dir) != nil {
-				break
-			}
-		}
 	}
 	return nil
 }
 
+// keepNames moves the moved-aside files that are still there back to
+// their names where nothing was written, and returns cause naming every
+// one that keeps a temporary name.
+func keepNames(w *workspaceFolder, moved []movedAside, gone map[string]bool, cause error, log io.Writer) error {
+	var left []string
+	for _, m := range moved {
+		temp := path.Join(path.Dir(m.path), m.temp)
+		if gone[temp] || w.rename(m.path, m.temp, path.Base(m.path)) == nil {
+			continue
+		}
+		fmt.Fprintf(log, "left at a temporary name: %s is at %s\n", m.path, temp)
+		left = append(left, fmt.Sprintf("%s at %s", m.path, temp))
+	}
+	if len(left) == 0 {
+		return cause
+	}
+	return fmt.Errorf("%w; these files of the state before the apply keep a temporary name: %s", cause, strings.Join(left, ", "))
+}
+
 // writeEntry creates p, which must not exist, with e's blob.
-func writeEntry(w *workspaceFolder, objects storer.EncodedObjectStorer, p string, e entry) error {
+func writeEntry(w *workspaceFolder, objects storer.EncodedObjectStorer, p string, e entry) (fileStat, error) {
 	obj, err := objects.EncodedObject(plumbing.BlobObject, e.hash)
 	if err != nil {
-		return err
+		return fileStat{}, err
 	}
 	r, err := obj.Reader()
 	if err != nil {
-		return err
+		return fileStat{}, err
 	}
 	defer r.Close()
 	return w.create(p, e.mode, r)
 }
 
 // recordIndex makes the index record result for paths: each path's entry
-// is removed, and a path the result has is recorded with what was written.
-func recordIndex(repo *git.Repository, root *os.Root, paths []string, result map[string]entry) error {
+// is removed, and a path the result has is recorded with the stat data
+// written holds for it. A path without stat data keeps none, so Git and
+// go-git compare its content.
+func recordIndex(repo *git.Repository, paths []string, result map[string]entry, written map[string]fileStat) error {
 	idx, err := repo.Storer.Index()
 	if err != nil {
 		return err
@@ -682,18 +765,10 @@ func recordIndex(repo *git.Repository, root *os.Root, paths []string, result map
 		}
 		ie := idx.Add(p)
 		ie.Hash, ie.Mode = e.hash, e.mode
-		if info, err := root.Lstat(p); err == nil {
-			setStat(ie, info)
+		if st, ok := written[p]; ok {
+			ie.ModifiedAt, ie.Size = st.modified, st.size
+			ie.Dev, ie.Inode, ie.UID, ie.GID = st.dev, st.inode, st.uid, st.gid
 		}
 	}
 	return repo.Storer.SetIndex(idx)
-}
-
-// setStat records a file's information in its index entry.
-func setStat(e *index.Entry, info os.FileInfo) {
-	e.ModifiedAt = info.ModTime()
-	e.Size = uint32(info.Size())
-	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		e.Dev, e.Inode, e.UID, e.GID = uint32(st.Dev), uint32(st.Ino), st.Uid, st.Gid
-	}
 }

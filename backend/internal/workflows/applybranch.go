@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-git/go-git/v5/plumbing"
+
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
@@ -81,45 +83,15 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	}
 	fmt.Fprintf(run.Log(""), "fetched branch %s at %s\n", a.branch, fetched)
 
-	run.Phase("backup-local-changes")
-	before, err := backup.CommitAll(a.folder, a.name, fmt.Sprintf("Back up local changes before applying %s", a.branch), run.Log("commit: "))
-	if err != nil {
-		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("committing local changes failed: %w; nothing was applied", err)}
+	before, failure := a.backUp(ctx, run, false)
+	if failure != nil {
+		return failure
 	}
-	if before.Changed {
-		fmt.Fprintf(run.Log(""), "committed local changes as %s\n", before.Hash)
-	} else {
-		fmt.Fprintf(run.Log(""), "no local changes; branch %s is at %s\n", a.name, before.Hash)
+	plan, failure := a.plan(run, fetched, before.Hash)
+	if failure != nil {
+		return failure
 	}
-	// The workspace's own branch is not pushed before the apply: the push
-	// would replace the commits about to be applied on the remote.
-	kept := "backed up"
-	if a.branch == a.name {
-		kept = "committed but not backed up"
-		fmt.Fprintf(run.Log(""), "the workspace's own branch %s is not pushed before the apply, so that its commits stay on the workspace repository\n", a.name)
-	} else {
-		run.Phase("backup")
-		if err := push(ctx, a.w.opts.Remote, a.folder, a.name, run); err != nil {
-			return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("backing up the workspace before applying %s failed; nothing was applied", a.branch)}
-		}
-	}
-
-	run.Phase("apply")
-	applied, err := backup.Apply(a.folder, a.name, a.branch, run.Log("apply: "))
-	var refused *backup.NotApplicableError
-	var failed *backup.ApplyError
-	switch {
-	case errors.As(err, &refused):
-		for _, p := range refused.Paths {
-			fmt.Fprintf(run.Log(""), "not applicable: %s\n", p)
-		}
-		return &jobs.Failure{Kind: KindNotApplicable, Err: fmt.Errorf("branch %s at %s cannot be applied: %s; nothing was applied; the workspace branch is at %s", a.branch, fetched, refusal(refused), before.Hash)}
-	case errors.As(err, &failed):
-		return &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; files written before the failure remain in %s; the state before the apply is %s as %s; recovery is manual", a.branch, failed, a.folder, kept, before.Hash)}
-	case err != nil:
-		return &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; nothing was applied", a.branch, err)}
-	}
-	if applied.Outcome == backup.AlreadyApplied {
+	if plan.Outcome == backup.AlreadyApplied {
 		fmt.Fprintf(run.Log(""), "branch %s at %s is already applied; nothing changed and the devcontainer was not rebuilt\n", a.branch, fetched)
 		// The workspace's own branch then contains the remote's commit, so
 		// the push only moves the remote forward.
@@ -131,6 +103,41 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 		}
 		return nil
 	}
+
+	// Nothing in the devcontainer writes to the folder while the apply
+	// does. What it wrote before it stopped is committed, and the merge is
+	// planned again on top of it.
+	run.Phase("stop")
+	if err := a.w.opts.Runtime.Stop(ctx, a.folder, run); err != nil {
+		return api.ContainerFailure(fmt.Errorf("the devcontainer did not stop: %w; nothing was applied", err))
+	}
+	again, failure := a.backUp(ctx, run, true)
+	if failure != nil {
+		return a.resume(ctx, run, failure)
+	}
+	if again.Changed {
+		before = again
+		if plan, failure = a.plan(run, fetched, before.Hash); failure != nil {
+			return a.resume(ctx, run, failure)
+		}
+	}
+
+	kept := "backed up"
+	if a.branch == a.name {
+		kept = "committed but not backed up"
+	}
+	run.Phase("apply")
+	applied, err := plan.Write(a.folder, run.Log("apply: "))
+	var refused *backup.NotApplicableError
+	var failed *backup.ApplyError
+	switch {
+	case errors.As(err, &refused):
+		return a.resume(ctx, run, a.refusal(run, refused, fetched, before.Hash))
+	case errors.As(err, &failed):
+		return &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; files written before the failure remain in %s; the state before the apply is %s as %s; the devcontainer is stopped; recovery is manual", a.branch, failed, a.folder, kept, before.Hash)}
+	case err != nil:
+		return a.resume(ctx, run, &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; nothing was applied", a.branch, err)})
+	}
 	fmt.Fprintf(run.Log(""), "applied branch %s (%s): the workspace branch moved from %s to %s\n", a.branch, applied.Outcome, applied.Before, applied.Hash)
 
 	run.Phase("backup")
@@ -141,6 +148,71 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 		return api.ContainerFailure(fmt.Errorf("branch %s was applied and backed up as %s, but the devcontainer did not rebuild: %w", a.branch, applied.Hash, err))
 	}
 	return nil
+}
+
+// backUp commits every local change and, unless the branch to apply is
+// the workspace's own, backs the workspace branch up: always, or with
+// onlyChanged only when the commit changed something. The workspace's own
+// branch is not pushed before the apply: the push would replace the
+// commits about to be applied on the remote.
+func (a *applying) backUp(ctx context.Context, run *jobs.Run, onlyChanged bool) (backup.Commit, error) {
+	run.Phase("backup-local-changes")
+	c, err := backup.CommitAll(a.folder, a.name, fmt.Sprintf("Back up local changes before applying %s", a.branch), run.Log("commit: "))
+	if err != nil {
+		return c, &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("committing local changes failed: %w; nothing was applied", err)}
+	}
+	if c.Changed {
+		fmt.Fprintf(run.Log(""), "committed local changes as %s\n", c.Hash)
+	} else {
+		fmt.Fprintf(run.Log(""), "no local changes; branch %s is at %s\n", a.name, c.Hash)
+	}
+	switch {
+	case a.branch == a.name:
+		fmt.Fprintf(run.Log(""), "the workspace's own branch %s is not pushed before the apply, so that its commits stay on the workspace repository\n", a.name)
+	case onlyChanged && !c.Changed:
+	default:
+		run.Phase("backup")
+		if err := push(ctx, a.w.opts.Remote, a.folder, a.name, run); err != nil {
+			return c, &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("backing up the workspace before applying %s failed; nothing was applied", a.branch)}
+		}
+	}
+	return c, nil
+}
+
+// plan works out the apply against the workspace branch at head.
+func (a *applying) plan(run *jobs.Run, fetched, head plumbing.Hash) (*backup.Plan, error) {
+	run.Phase("plan")
+	plan, err := backup.PlanApply(a.folder, a.name, a.branch, run.Log("apply: "))
+	var refused *backup.NotApplicableError
+	switch {
+	case errors.As(err, &refused):
+		return nil, a.refusal(run, refused, fetched, head)
+	case err != nil:
+		return nil, &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; nothing was applied", a.branch, err)}
+	}
+	return plan, nil
+}
+
+// refusal lists a refused apply's paths in the console and is its job
+// failure.
+func (a *applying) refusal(run *jobs.Run, refused *backup.NotApplicableError, fetched, head plumbing.Hash) error {
+	for _, p := range refused.Paths {
+		fmt.Fprintf(run.Log(""), "not applicable: %s\n", p)
+	}
+	return &jobs.Failure{Kind: KindNotApplicable, Err: fmt.Errorf("branch %s at %s cannot be applied: %s; nothing was applied; the workspace branch is at %s", a.branch, fetched, refusal(refused), head)}
+}
+
+// resume starts the devcontainer again after a failure that left the
+// folder as it was when the devcontainer stopped, and returns failure.
+// When the start fails, the start's failure is the job's error and
+// failure's message stays in the console.
+func (a *applying) resume(ctx context.Context, run *jobs.Run, failure error) error {
+	fmt.Fprintln(run.Log(""), "nothing was applied; starting the devcontainer again")
+	if err := a.w.opts.Runtime.Start(ctx, a.folder, run); err != nil {
+		fmt.Fprintln(run.Log(""), failure)
+		return api.ContainerFailure(fmt.Errorf("nothing was applied, and the devcontainer did not start again: %w", err))
+	}
+	return failure
 }
 
 // refusal describes a refused apply for the job's error.

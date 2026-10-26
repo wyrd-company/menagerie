@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -137,21 +138,43 @@ func (w *workspaceFolder) removeFolder(rel string, drop func(dir, name string) b
 	return w.rmdir(rel)
 }
 
+// fileStat is the stat data the index records for a file.
+type fileStat struct {
+	modified             time.Time
+	size                 uint32
+	dev, inode, uid, gid uint32
+}
+
+func newFileStat(st *unix.Stat_t) fileStat {
+	return fileStat{
+		modified: time.Unix(st.Mtim.Sec, st.Mtim.Nsec),
+		size:     uint32(st.Size),
+		dev:      uint32(st.Dev), inode: uint32(st.Ino), uid: st.Uid, gid: st.Gid,
+	}
+}
+
 // create writes p, which must not exist, with content: a symbolic link
 // for a link entry, otherwise a regular file that is executable for an
-// executable entry. The process umask applies, as it does for Git.
-func (w *workspaceFolder) create(p string, mode filemode.FileMode, content io.Reader) error {
+// executable entry. The process umask applies, as it does for Git. It
+// returns the stat data of what it wrote: of a file, from its descriptor
+// before it closes; of a link, read right after the link is made.
+func (w *workspaceFolder) create(p string, mode filemode.FileMode, content io.Reader) (fileStat, error) {
 	fd, name, err := w.parent(p)
 	if err != nil {
-		return err
+		return fileStat{}, err
 	}
 	defer unix.Close(fd)
+	var st unix.Stat_t
 	if mode == filemode.Symlink {
 		target, err := io.ReadAll(content)
 		if err != nil {
-			return err
+			return fileStat{}, err
 		}
-		return unix.Symlinkat(string(target), fd, name)
+		if err := unix.Symlinkat(string(target), fd, name); err != nil {
+			return fileStat{}, err
+		}
+		err = unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW)
+		return newFileStat(&st), err
 	}
 	perm := uint32(0o644)
 	if mode == filemode.Executable {
@@ -160,14 +183,17 @@ func (w *workspaceFolder) create(p string, mode filemode.FileMode, content io.Re
 	// O_EXCL also refuses a symbolic link put at p since the check.
 	file, err := unix.Openat(fd, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC, perm)
 	if err != nil {
-		return err
+		return fileStat{}, err
 	}
 	f := os.NewFile(uintptr(file), p)
-	if _, err := io.Copy(f, content); err != nil {
-		f.Close()
-		return err
+	_, err = io.Copy(f, content)
+	if err == nil {
+		err = unix.Fstat(file, &st)
 	}
-	return f.Close()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return newFileStat(&st), err
 }
 
 // matches reports whether name, in the folder that holds p, has h's mode

@@ -90,8 +90,8 @@ description: >-
   (an answered interview enters `interview` again), inside any operation.
   The phase names are `read-definition`, `initialize-command`, `build`,
   `remove-container`, `up`, `stop`, `interview`, `initialize-repository`,
-  `generate`, `fetch`, `apply`, `commit`, `backup-local-changes` and
-  `backup`.
+  `generate`, `fetch`, `plan`, `apply`, `commit`, `backup-local-changes`
+  and `backup`.
   Template hooks run inside `generate` and `apply`. A duration is positive
   whole hours, minutes and seconds in that order, such as `2h`, `45m` or
   `1h30m`. Unknown operation and phase keys are errors, and so is a key
