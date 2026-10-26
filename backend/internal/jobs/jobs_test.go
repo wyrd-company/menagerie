@@ -262,7 +262,7 @@ func TestLogWriterEndsALineAtACarriageReturn(t *testing.T) {
 		w := run.Log("backup: ")
 		fmt.Fprint(w, "remote: 10%\rremote: 20%\r")
 		fmt.Fprint(w, "\nremote: done\r\n\nnext\r")
-		fmt.Fprint(w, "last\n")
+		fmt.Fprint(w, "last\n\nend\n")
 		return nil
 	})
 	waitEnded(t, job)
@@ -273,7 +273,7 @@ func TestLogWriterEndsALineAtACarriageReturn(t *testing.T) {
 			lines = append(lines, eventText(t, e))
 		}
 	}
-	want := "backup: remote: 10%|backup: remote: 20%|backup: remote: done|backup: |backup: next|backup: last"
+	want := "backup: remote: 10%|backup: remote: 20%|backup: remote: done|backup: |backup: next|backup: last|backup: |backup: end"
 	if got := strings.Join(lines, "|"); got != want {
 		t.Fatalf("lines %q", got)
 	}

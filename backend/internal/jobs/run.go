@@ -104,6 +104,8 @@ type lineWriter struct {
 	buf []byte
 	// cr is set when the last line ended at a carriage return, so a
 	// newline that follows it, in this write or the next, ends no line.
+	// Every line end sets it again; until then the buffer starts with the
+	// same bytes, so a stale cr finds no newline to remove.
 	cr bool
 }
 
@@ -112,9 +114,8 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	w.buf = append(w.buf, p...)
 	for {
-		if w.cr && len(w.buf) > 0 {
+		if w.cr {
 			w.buf = bytes.TrimPrefix(w.buf, []byte("\n"))
-			w.cr = false
 		}
 		i := bytes.IndexAny(w.buf, "\r\n")
 		if i < 0 {
