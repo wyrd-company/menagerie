@@ -52,6 +52,8 @@ export const summary = (job: FixtureJob) => ({
   finishedAt: job.finishedAt,
   lastEventId: job.events.length,
   error: job.error,
+  deadline: null,
+  limit: null,
 });
 
 export function send(res: ServerResponse, event: StoredEvent) {
@@ -73,7 +75,7 @@ export function emit(job: FixtureJob, type: string, data: string) {
 export function setState(job: FixtureJob, state: string, phase: string) {
   job.state = state;
   job.phase = phase;
-  emit(job, "state", JSON.stringify({ state, phase }));
+  emit(job, "state", JSON.stringify({ state, phase, deadline: null, limit: null }));
 }
 
 export const log = (job: FixtureJob, text: string) => emit(job, "log", JSON.stringify({ text }));

@@ -27,9 +27,33 @@ const job: Job = {
   finishedAt: null,
   lastEventId: 3,
   error: null,
+  deadline: null,
+  limit: { seconds: 7200, scope: "job" },
 };
 
 describe("jobReducer", () => {
+  it("follows the deadline and limit of state events and clears them at the result", () => {
+    const limited = fold([
+      [
+        "state",
+        '{"state":"running","phase":"build","deadline":"2030-01-01T00:45:00Z","limit":{"seconds":2700,"scope":"phase"}}',
+      ],
+    ]);
+    expect(limited).toMatchObject({
+      deadline: "2030-01-01T00:45:00Z",
+      limit: { seconds: 2700, scope: "phase" },
+    });
+    const ended = jobReducer(limited, {
+      type: "event",
+      event: decodeEvent("result", "2", '{"state":"failed","error":null}'),
+    });
+    expect(ended).toMatchObject({ deadline: null, limit: null });
+    expect(jobReducer(initialJobView, { type: "summary", job })).toMatchObject({
+      deadline: null,
+      limit: { seconds: 7200, scope: "job" },
+    });
+  });
+
   it("records phases in stream order and log lines", () => {
     const view = fold([
       ["state", '{"state":"running","phase":"template"}'],
