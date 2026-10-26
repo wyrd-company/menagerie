@@ -188,32 +188,54 @@ func (j *Job) scheduleLocked(now time.Time) {
 
 // tick runs when a scheduled limit or threshold may have passed. It reads
 // the clock again, so a tick that a later schedule superseded only
-// reschedules. It does nothing for a waiting, ended or timed-out job, or
-// once the process is shutting down.
+// reschedules.
 func (j *Job) tick() {
-	m := j.manager
-	now := m.now()
+	now := j.manager.now()
 	j.mu.Lock()
-	if j.state.Terminal() || j.timedOut != nil || j.clock.since.IsZero() || m.ctx.Err() != nil {
+	if !j.countingLocked() {
 		j.mu.Unlock()
 		return
+	}
+	alert := j.settleLocked(now)
+	j.scheduleLocked(now)
+	j.mu.Unlock()
+	j.manager.alertLongRunning(alert)
+}
+
+// countingLocked reports whether the job's limits still count: it is
+// running, has not ended or timed out, and the process is not shutting
+// down, so shutdown is never a timeout.
+func (j *Job) countingLocked() bool {
+	return !j.state.Terminal() && j.timedOut == nil && !j.clock.since.IsZero() && j.manager.ctx.Err() == nil
+}
+
+// settleLocked brings the clock up to now and settles what has passed by
+// then, whether or not its timer has run: a passed limit times the job
+// out, and a passed long-running threshold returns the snapshot to alert
+// with, outside the lock. It runs before every change that ends the
+// running stretch, its phase or the job, so that a late timer loses
+// nothing.
+func (j *Job) settleLocked(now time.Time) *Snapshot {
+	if !j.countingLocked() {
+		return nil
 	}
 	j.clock.pause(now)
 	j.clock.resume(now)
 	var alert *Snapshot
-	if lr := m.opts.LongRunning; lr > 0 && !j.clock.longRunning && j.clock.total >= lr {
+	if lr := j.manager.opts.LongRunning; lr > 0 && !j.clock.longRunning && j.clock.total >= lr {
 		j.clock.longRunning = true
 		snap := j.snapshotLocked()
 		alert = &snap
 	}
 	if first, ok := j.firstDueLocked(); ok && first.remaining <= 0 {
 		j.timeOutLocked(first)
-	} else {
-		j.scheduleLocked(now)
 	}
-	j.mu.Unlock()
-	if alert != nil && m.opts.Alerts != nil {
-		m.opts.Alerts.JobLongRunning(*alert)
+	return alert
+}
+
+func (m *Manager) alertLongRunning(s *Snapshot) {
+	if s != nil && m.opts.Alerts != nil {
+		m.opts.Alerts.JobLongRunning(*s)
 	}
 }
 
@@ -236,10 +258,19 @@ func (j *Job) timeOutLocked(first due) {
 	j.cancel(fmt.Errorf("%w: %s", ErrTimedOut, msg))
 }
 
-func (j *Job) timedOutError() *Error {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.timedOut
+// outcomeLocked chooses how the job ends from its runner's error. A job
+// timed out before it ends fails as timed-out whatever its runner
+// returned.
+func (j *Job) outcomeLocked(err error) (State, *Error) {
+	switch {
+	case j.timedOut != nil:
+		return Failed, j.timedOut
+	case errors.Is(err, ErrEnded):
+		return Ended, nil
+	case err != nil:
+		return Failed, toError(err)
+	}
+	return Succeeded, nil
 }
 
 // FormatLimit writes d with whole units only, such as 2h, 1h30m or 45s; a

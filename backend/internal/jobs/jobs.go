@@ -184,20 +184,7 @@ func (m *Manager) run(ctx context.Context, job *Job, runner Runner) {
 		err = runner(ctx, run)
 	}()
 	run.flush()
-	// A job cancelled for time fails as timed-out whatever its runner
-	// returned after the cancel.
-	if timedOut := job.timedOutError(); timedOut != nil {
-		job.finish(Failed, timedOut)
-		return
-	}
-	switch {
-	case errors.Is(err, ErrEnded):
-		job.finish(Ended, nil)
-	case err != nil:
-		job.finish(Failed, toError(err))
-	default:
-		job.finish(Succeeded, nil)
-	}
+	job.finish(err)
 }
 
 func toError(err error) *Error {
@@ -347,15 +334,17 @@ func (j *Job) begin() {
 }
 
 // setState records a nonterminal state or phase change. enter restarts the
-// phase's running time, as entering a phase does. It is ignored once the
-// job has ended.
+// phase's running time, as entering a phase does. A limit or threshold
+// that the outgoing stretch passed is settled first. It is ignored once
+// the job has ended.
 func (j *Job) setState(state State, phase string, enter bool) {
 	now := j.manager.now()
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	if j.state.Terminal() {
+		j.mu.Unlock()
 		return
 	}
+	alert := j.settleLocked(now)
 	j.clock.pause(now)
 	if enter {
 		j.clock.phase = 0
@@ -366,6 +355,8 @@ func (j *Job) setState(state State, phase string, enter bool) {
 	j.state, j.phase = state, phase
 	j.scheduleLocked(now)
 	j.appendStateLocked()
+	j.mu.Unlock()
+	j.manager.alertLongRunning(alert)
 }
 
 func (j *Job) appendStateLocked() {
@@ -373,10 +364,13 @@ func (j *Job) appendStateLocked() {
 	j.appendLocked(EventState, raw)
 }
 
-// finish ends the job once. The workspace slot is released and the result
-// event published under the manager lock, so no observer can see the result
+// finish ends the job once, with the outcome of its runner's error. The
+// outcome is chosen under the job lock that timers take, after settling
+// what the running time passed, so a limit that passed before the end
+// always wins. The workspace slot is released and the result event
+// published under the manager lock, so no observer can see the result
 // while the workspace still looks busy.
-func (j *Job) finish(state State, jobErr *Error) {
+func (j *Job) finish(runErr error) {
 	m := j.manager
 	now := m.now()
 	m.mu.Lock()
@@ -386,6 +380,8 @@ func (j *Job) finish(state State, jobErr *Error) {
 		m.mu.Unlock()
 		return
 	}
+	longRunning := j.settleLocked(now)
+	state, jobErr := j.outcomeLocked(runErr)
 	j.stopTimerLocked()
 	j.deadline, j.limit = nil, nil
 	raw, err := marshalCompact(resultData{State: state, Error: jobErr, Apply: j.apply})
@@ -400,6 +396,7 @@ func (j *Job) finish(state State, jobErr *Error) {
 	snap := j.snapshotLocked()
 	j.mu.Unlock()
 	m.mu.Unlock()
+	m.alertLongRunning(longRunning)
 	if state == Failed && m.opts.Alerts != nil {
 		m.opts.Alerts.JobFailed(snap)
 	}

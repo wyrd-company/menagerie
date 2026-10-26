@@ -23,6 +23,9 @@ type fakeClock struct {
 	// lateStop makes Stop too late to stop a timer, as when a real timer
 	// has fired and its call waits for the job's lock.
 	lateStop bool
+	// onNow, when set, runs once at the next Now, before it reads the
+	// clock, so a test can run timers inside a window the code opens.
+	onNow func()
 }
 
 type fakeTimer struct {
@@ -46,8 +49,30 @@ func newFakeClock() *fakeClock { return &fakeClock{now: time.Date(2030, 1, 2, 3,
 
 func (c *fakeClock) Now() time.Time {
 	c.mu.Lock()
+	hook := c.onNow
+	c.onNow = nil
+	c.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.now
+}
+
+// Pass moves the clock by d without running timers, as when due timers
+// have fired but their calls have not run yet. Advance(0) runs them.
+func (c *fakeClock) Pass(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// SetOnNow sets onNow.
+func (c *fakeClock) SetOnNow(f func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onNow = f
 }
 
 func (c *fakeClock) AfterFunc(d time.Duration, f func()) Timer {
@@ -78,7 +103,9 @@ func (c *fakeClock) Advance(d time.Duration) {
 			return
 		}
 		next.stopped = true
-		c.now = next.at
+		if next.at.After(c.now) {
+			c.now = next.at
+		}
 		c.mu.Unlock()
 		next.f()
 	}
@@ -88,18 +115,28 @@ type recordedAlerts struct {
 	mu          sync.Mutex
 	failed      []Snapshot
 	longRunning []Snapshot
+	// order holds the event of each alert, as the alerts package names it.
+	order []string
 }
 
 func (a *recordedAlerts) JobFailed(s Snapshot) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.failed = append(a.failed, s)
+	a.order = append(a.order, "job-failed")
 }
 
 func (a *recordedAlerts) JobLongRunning(s Snapshot) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.longRunning = append(a.longRunning, s)
+	a.order = append(a.order, "job-long-running")
+}
+
+func (a *recordedAlerts) events() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.order...)
 }
 
 func (a *recordedAlerts) counts() (int, int) {
@@ -355,6 +392,119 @@ func TestALateTickChangesNothing(t *testing.T) {
 	}
 	if cancels != 1 {
 		t.Fatalf("%d cancel lines", cancels)
+	}
+}
+
+// TestATimeoutAtTheEndWins fires the limit inside finish's window, after
+// the runner has returned success and before the outcome is chosen, and
+// then with the limit's timer not yet run at all. Both end timed-out.
+func TestATimeoutAtTheEndWins(t *testing.T) {
+	for name, fire := range map[string]bool{"timer runs in the window": true, "timer not yet run": false} {
+		t.Run(name, func(t *testing.T) {
+			clock := newFakeClock()
+			m, alerts := limitedManager(context.Background(), clock, Options{Limits: Limits{Phases: map[string]time.Duration{"build": time.Minute}}})
+			job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
+				run.Phase("build")
+				clock.Pass(2 * time.Minute)
+				if fire {
+					clock.SetOnNow(func() { clock.Advance(0) })
+				}
+				return nil
+			})
+			snap := awaitEnd(t, job)
+			if snap.State != Failed || snap.Error == nil || snap.Error.Message != "the build phase passed its 1m limit" {
+				t.Fatalf("%+v %+v", snap, snap.Error)
+			}
+			if failed, _ := alerts.counts(); failed != 1 {
+				t.Fatalf("%d failed alerts", failed)
+			}
+		})
+	}
+}
+
+// TestAPassedLimitSurvivesTheChange changes the phase, or starts waiting,
+// after a limit has passed but before its timer runs. The change does not
+// erase the limit: the job times out on it.
+func TestAPassedLimitSurvivesTheChange(t *testing.T) {
+	cases := map[string]struct {
+		limits Limits
+		change func(*Run)
+		want   string
+	}{
+		"phase change": {
+			Limits{Phases: map[string]time.Duration{"build": time.Minute}},
+			func(run *Run) { run.Phase("up") },
+			"the build phase passed its 1m limit",
+		},
+		"waiting": {
+			Limits{Phases: map[string]time.Duration{"interview": time.Minute}},
+			func(run *Run) { _ = run.SetState(WaitingForAnswers) },
+			"the interview phase passed its 1m limit",
+		},
+		"job limit at a phase change": {
+			Limits{Default: time.Minute},
+			func(run *Run) { run.Phase("up") },
+			"the job passed its 1m limit in the build phase",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			clock := newFakeClock()
+			clock.lateStop = true
+			m, _ := limitedManager(context.Background(), clock, Options{Limits: tc.limits})
+			steps := make(steps)
+			job, _ := m.Start("alpha", "create", steps.serve)
+			first := "build"
+			if name == "waiting" {
+				first = "interview"
+			}
+			steps.do(func(run *Run) { run.Phase(first) })
+			clock.Pass(2 * time.Minute)
+			steps.do(tc.change)
+			clock.Advance(0)
+			snap := awaitEnd(t, job)
+			if snap.Error == nil || snap.Error.Kind != KindTimedOut || snap.Error.Message != tc.want {
+				t.Fatalf("%+v %+v", snap, snap.Error)
+			}
+		})
+	}
+}
+
+// TestAPassedThresholdIsAlertedAtTheEnd ends a job, or starts it waiting,
+// after its running time passed the long-running threshold but before the
+// threshold's timer runs. The threshold passed while the job ran, so the
+// alert is sent once, and before a failure's.
+func TestAPassedThresholdIsAlertedAtTheEnd(t *testing.T) {
+	cases := map[string]struct {
+		end  func(*Run) error
+		want []string
+	}{
+		"succeeded": {func(*Run) error { return nil }, []string{"job-long-running"}},
+		"failed":    {func(*Run) error { return errors.New("boom") }, []string{"job-long-running", "job-failed"}},
+		"waiting": {func(run *Run) error {
+			_ = run.SetState(WaitingForAnswers)
+			return ErrEnded
+		}, []string{"job-long-running"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			clock := newFakeClock()
+			clock.lateStop = true
+			m, alerts := limitedManager(context.Background(), clock, Options{LongRunning: time.Minute})
+			job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
+				run.Phase("build")
+				clock.Pass(2 * time.Minute)
+				return tc.end(run)
+			})
+			awaitEnd(t, job)
+			clock.Advance(0)
+			if got := alerts.events(); !slices.Equal(got, tc.want) {
+				t.Fatalf("alerts %q, want %q", got, tc.want)
+			}
+			if alerts.longRunning[0].State != Running || alerts.longRunning[0].Phase != "build" {
+				t.Fatalf("long-running snapshot %+v", alerts.longRunning[0])
+			}
+		})
 	}
 }
 
