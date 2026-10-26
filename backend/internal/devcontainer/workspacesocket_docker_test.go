@@ -305,6 +305,97 @@ func TestAComposePrimaryGetsTheSocket(t *testing.T) {
 	}
 }
 
+// capture is a progress whose console the test reads.
+type capture struct {
+	logProgress
+	out strings.Builder
+}
+
+func (c *capture) Log(prefix string) io.Writer {
+	return writerFunc(func(b []byte) (int, error) {
+		c.out.WriteString(prefix + string(b))
+		return c.logProgress.Log(prefix).Write(b)
+	})
+}
+
+// hasSocket reports whether container id has the socket mount and names
+// the socket in its environment.
+func (f *socketFixture) hasSocket(t *testing.T, id string) bool {
+	t.Helper()
+	info := f.h.inspect(id)
+	mounted := false
+	for _, m := range info.Mounts {
+		mounted = mounted || m.Destination == devcontainer.WorkspaceSocketTarget
+	}
+	named := envValue(info, devcontainer.WorkspaceSocketEnv) != ""
+	if mounted != named {
+		t.Fatalf("mount %t but variable %t", mounted, named)
+	}
+	return mounted
+}
+
+// TestAStartKeepsAContainerCreatedWithoutTheSocket starts a workspace
+// whose container was created before the socket was configured: the start
+// reuses that container as it is, and the socket attaches at the rebuild.
+// A container created with the socket keeps it on a start.
+func TestAStartKeepsAContainerCreatedWithoutTheSocket(t *testing.T) {
+	for name, definition := range map[string]map[string]string{
+		"compose": {
+			".devcontainer/compose.yml":       composeFile,
+			".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/data"}`,
+		},
+		"single": {".devcontainer/devcontainer.json": `{"image": "` + baseImage + `"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSocketFixture(t)
+			folder := f.workspace(t, "kept-"+name, definition)
+			// Started before the socket was configured.
+			f.h.mustRun(f.h.rt.Start, folder)
+			before := f.h.status(folder).ContainerID
+			if f.hasSocket(t, before) {
+				t.Fatal("a container started without a socket has one")
+			}
+
+			start := &capture{logProgress: logProgress{t: t}}
+			if err := f.rt.Start(f.h.ctx, folder, start); err != nil {
+				t.Fatal(err)
+			}
+			if after := f.h.status(folder).ContainerID; after != before {
+				t.Fatalf("the start recreated the container: %s, then %s", before, after)
+			}
+			if f.hasSocket(t, before) {
+				t.Fatal("the kept container has the socket")
+			}
+			if !strings.Contains(start.out.String(), "the workspace socket attaches at the next rebuild") || strings.Contains(start.out.String(), f.folder) {
+				t.Fatalf("console %q", start.out.String())
+			}
+
+			f.h.mustRun(f.rt.Rebuild, folder)
+			rebuilt := f.h.status(folder).ContainerID
+			if rebuilt == before || !f.hasSocket(t, rebuilt) {
+				t.Fatalf("the rebuild %s has no socket", rebuilt)
+			}
+			again := &capture{logProgress: logProgress{t: t}}
+			if err := f.rt.Start(f.h.ctx, folder, again); err != nil {
+				t.Fatal(err)
+			}
+			if id := f.h.status(folder).ContainerID; id != rebuilt || !f.hasSocket(t, id) {
+				t.Fatalf("a start changed the container with the socket: %s, then %s", rebuilt, id)
+			}
+			if strings.Contains(again.out.String(), "attaches at the next rebuild") {
+				t.Fatalf("console %q", again.out.String())
+			}
+			f.h.write(folder, map[string]string{"after-rebuild.txt": "written on the host\n"})
+			if out, code := f.run(t, rebuilt, "/run/menagerie/bin/workspace-commit", "chore: after the rebuild"); code != 0 {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+			if got := f.backedUp(t, "kept-"+name, "after-rebuild.txt"); got != "written on the host\n" {
+				t.Fatalf("backed up %q", got)
+			}
+		})
+	}
+}
+
 func quoteJSON(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')

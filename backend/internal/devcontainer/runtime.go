@@ -95,8 +95,10 @@ type Options struct {
 	RunnerImage func(ctx context.Context) (string, error)
 	// WorkspaceSocket returns the host folder that holds the workspace's
 	// socket, creating the socket when it is missing. The folder is
-	// mounted read-only at WorkspaceSocketTarget on each start and
-	// rebuild. Nil mounts nothing.
+	// mounted read-only at WorkspaceSocketTarget on each rebuild and on
+	// each start that creates the container or reuses one that has the
+	// mount; a start that reuses a container without it leaves the
+	// container as it is. Nil mounts nothing.
 	WorkspaceSocket func(folder string) (string, error)
 }
 
@@ -173,6 +175,14 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
+	if socket != "" && !replace {
+		if socket, err = r.keepContainer(ctx, folder, socket, p); err != nil {
+			return err
+		}
+	}
+	if socket != "" {
+		nameSocket(dc)
+	}
 	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx), socket: socket}
 	switch dc.Mode() {
 	case spec.ModeSingle:
@@ -205,10 +215,8 @@ type operation struct {
 }
 
 // workspaceSocket ensures the workspace's socket and returns the folder to
-// mount, or "" for none. The container's environment names the socket
-// unless the definition sets that name itself; the definition on disk is
-// not changed. Compose reads a mount as comma-separated fields with
-// surrounding spaces trimmed, so a folder it would misread is not
+// mount, or "" for none. Compose reads a mount as comma-separated fields
+// with surrounding spaces trimmed, so a folder it would misread is not
 // mounted.
 func (r *Runtime) workspaceSocket(dc *spec.DevContainer, folder string, p Progress) (string, error) {
 	if r.opts.WorkspaceSocket == nil {
@@ -222,13 +230,51 @@ func (r *Runtime) workspaceSocket(dc *spec.DevContainer, folder string, p Progre
 		fmt.Fprintln(p.Log(""), "the workspace socket is not mounted: Compose cannot mount a folder whose name holds a comma or ends in a space")
 		return "", nil
 	}
-	if _, set := dc.ContainerEnv[WorkspaceSocketEnv]; !set {
-		if dc.ContainerEnv == nil {
-			dc.ContainerEnv = map[string]any{}
-		}
-		dc.ContainerEnv[WorkspaceSocketEnv] = WorkspaceSocketPath
-	}
 	return source, nil
+}
+
+// noteSocketAtRebuild is the job console's note for a start that reuses
+// a container created without the workspace socket.
+const noteSocketAtRebuild = "the workspace socket attaches at the next rebuild: this container was created without it, and adding it would recreate the container"
+
+// keepContainer returns the socket folder to mount on a start, or "" when
+// the workspace's container exists without the socket mount. Adding a
+// mount or a variable changes the configuration devcontainer-builder
+// compares, so Compose would recreate the primary; the start keeps the
+// container, and the socket attaches at the next rebuild. A container
+// that has the mount keeps getting it, so its configuration is unchanged.
+func (r *Runtime) keepContainer(ctx context.Context, folder, socket string, p Progress) (string, error) {
+	found, err := hostdocker.New(r.client, hostdocker.Options{}).Inspect(ctx, folder)
+	if errors.Is(err, hostdocker.ErrContainerNotFound) {
+		return socket, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	info, err := r.client.ContainerInspect(ctx, found.ID)
+	if err != nil {
+		return "", fmt.Errorf("inspect container %s: %w", shortID(found.ID), err)
+	}
+	for _, m := range info.Mounts {
+		if m.Destination == WorkspaceSocketTarget {
+			return socket, nil
+		}
+	}
+	fmt.Fprintln(p.Log(""), noteSocketAtRebuild)
+	return "", nil
+}
+
+// nameSocket names the socket in the container's environment unless the
+// definition sets that name itself. Only the definition in memory
+// changes, not the file.
+func nameSocket(dc *spec.DevContainer) {
+	if _, set := dc.ContainerEnv[WorkspaceSocketEnv]; set {
+		return
+	}
+	if dc.ContainerEnv == nil {
+		dc.ContainerEnv = map[string]any{}
+	}
+	dc.ContainerEnv[WorkspaceSocketEnv] = WorkspaceSocketPath
 }
 
 // featureLockfile reads the definition's feature lockfile snapshot, as
