@@ -95,9 +95,13 @@ func New(opts Options) (*Webhook, error) {
 	if w.timeout <= 0 {
 		w.timeout = Timeout
 	}
-	// A redirect is reported as a non-2xx answer rather than followed, so
-	// the alert goes only where it was configured to.
-	w.client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// A redirect ends the delivery before net/http reads its Location, so
+	// the alert and any credential in the URL go only where they were
+	// configured to.
+	w.client = &http.Client{
+		Transport:     refuseRedirects{next: http.DefaultTransport},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect },
+	}
 	return w, nil
 }
 
@@ -145,32 +149,47 @@ func (w *Webhook) send(event string, s jobs.Snapshot) {
 	}()
 }
 
+// errRedirect ends a delivery that the webhook answered with a redirect.
+var errRedirect = errors.New("redirect refused")
+
+// refuseRedirects turns every 3xx answer into errRedirect, so the client
+// never parses a Location header, whose text could hold the webhook URL.
+type refuseRedirects struct{ next http.RoundTripper }
+
+func (t refuseRedirects) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.next.RoundTrip(req)
+	if err == nil && resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+		resp.Body.Close()
+		return nil, errRedirect
+	}
+	return resp, err
+}
+
+// deliver posts body once. Its error is one of a fixed set of messages:
+// net/http error text can carry the webhook URL, or a Location built from
+// it, so it is never passed on.
 func (w *Webhook) deliver(body []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), w.timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.url, bytes.NewReader(body))
 	if err != nil {
-		return errors.New("the webhook request could not be built")
+		return errors.New("request error")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := w.client.Do(req)
-	if err != nil {
-		return withoutURL(err)
+	switch {
+	case errors.Is(err, errRedirect):
+		return errRedirect
+	case err != nil && ctx.Err() != nil:
+		return errors.New("timeout")
+	case err != nil:
+		return errors.New("transport error")
 	}
 	resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("the webhook answered %d", resp.StatusCode)
+		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return nil
-}
-
-// withoutURL drops the request URL that net/http adds to a client error.
-func withoutURL(err error) error {
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		return ue.Err
-	}
-	return err
 }
 
 // ConsoleURL is the browser address of the job's console: the screen that

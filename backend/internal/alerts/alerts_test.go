@@ -98,8 +98,9 @@ func TestJobLongRunningCarriesANullError(t *testing.T) {
 }
 
 // TestDeliveryFailuresAreLoggedWithoutTheURL covers every way a delivery
-// fails: an error answer, a redirect (never followed), an unreachable
-// host and a webhook slower than the time limit.
+// fails: an error answer, a redirect (never followed), a redirect whose
+// malformed Location carries the URL, an unreachable host and a webhook
+// slower than the time limit.
 func TestDeliveryFailuresAreLoggedWithoutTheURL(t *testing.T) {
 	followed := make(chan struct{}, 1)
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { followed <- struct{}{} }))
@@ -111,6 +112,9 @@ func TestDeliveryFailuresAreLoggedWithoutTheURL(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		case strings.HasPrefix(r.URL.Path, "/redirect"):
 			http.Redirect(w, r, elsewhere.URL+"/"+secret, http.StatusFound)
+		case strings.HasPrefix(r.URL.Path, "/malformed"):
+			w.Header().Set("Location", "http://"+r.Host+r.URL.Path+"/%zz")
+			w.WriteHeader(http.StatusFound)
 		case strings.HasPrefix(r.URL.Path, "/slow"):
 			<-release
 		}
@@ -125,10 +129,11 @@ func TestDeliveryFailuresAreLoggedWithoutTheURL(t *testing.T) {
 	closed.Close()
 
 	cases := map[string]struct{ target, want string }{
-		"error":       {srv.URL + "/error/" + secret + "?auth=" + secret, "the webhook answered 500"},
-		"redirect":    {srv.URL + "/redirect/" + secret, "the webhook answered 302"},
-		"unreachable": {unreachable + "/" + secret + "?auth=" + secret, "connection refused"},
-		"slow":        {srv.URL + "/slow/" + secret, "context deadline exceeded"},
+		"error":       {srv.URL + "/error/" + secret + "?auth=" + secret, "not delivered: status 500"},
+		"redirect":    {srv.URL + "/redirect/" + secret, "not delivered: redirect refused"},
+		"malformed":   {srv.URL + "/malformed/" + secret, "not delivered: redirect refused"},
+		"unreachable": {unreachable + "/" + secret + "?auth=" + secret, "not delivered: transport error"},
+		"slow":        {srv.URL + "/slow/" + secret, "not delivered: timeout"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -143,7 +148,7 @@ func TestDeliveryFailuresAreLoggedWithoutTheURL(t *testing.T) {
 				t.Fatal("a delivery outlived its time limit")
 			}
 			lines := logs.all()
-			if len(lines) != 1 || !strings.Contains(lines[0], tc.want) || !strings.Contains(lines[0], "job-failed alert for job j1") {
+			if len(lines) != 1 || !strings.HasSuffix(lines[0], tc.want) || !strings.Contains(lines[0], "job-failed alert for job j1") {
 				t.Fatalf("log %q", lines)
 			}
 			if strings.Contains(lines[0], secret) || strings.Contains(lines[0], srv.URL) {
