@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 )
@@ -193,6 +195,16 @@ func TestAnExcludeFileOutsideTheWorkspaceIsNotRead(t *testing.T) {
 			}
 			setExcludesFile(t, folder, "tools")
 		}, noteExcludesFile},
+		"named pipe": {func(t *testing.T, folder string) {
+			if err := syscall.Mkfifo(filepath.Join(folder, ".excludes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			setExcludesFile(t, folder, ".excludes")
+		}, noteExcludesFile},
+		"too large": {func(t *testing.T, folder string) {
+			write(t, folder, ".excludes", "secret.txt\n"+strings.Repeat("#\n", maxExcludeFile))
+			setExcludesFile(t, folder, ".excludes")
+		}, noteExcludesFile},
 		"info/exclude linked out": {func(t *testing.T, folder string) {
 			info := filepath.Join(folder, ".git", "info")
 			if err := os.MkdirAll(info, 0o755); err != nil {
@@ -209,7 +221,18 @@ func TestAnExcludeFileOutsideTheWorkspaceIsNotRead(t *testing.T) {
 			tc.set(t, folder)
 			write(t, folder, "secret.txt", "not excluded\n")
 			var log bytes.Buffer
-			c, err := CommitAll(folder, "alpha", "chore: record", &log)
+			var c Commit
+			var err error
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				c, err = CommitAll(folder, "alpha", "chore: record", &log)
+			}()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("reading the exclude file blocked")
+			}
 			if err != nil || !c.Changed {
 				t.Fatalf("commit %+v %v", c, err)
 			}
