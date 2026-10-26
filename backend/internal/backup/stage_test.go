@@ -190,6 +190,30 @@ func TestTheRepositorysOwnExcludeFilesAreHonoured(t *testing.T) {
 			}
 			setExcludesFile(t, folder, ".excludes")
 		},
+		"info/exclude linked absolutely inside": func(t *testing.T, folder string) {
+			write(t, folder, "tools/excludes", "secret.txt\n")
+			info := filepath.Join(folder, ".git", "info", "exclude")
+			if err := os.MkdirAll(filepath.Dir(info), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.Remove(info)
+			if err := os.Symlink(filepath.Join(folder, "tools", "excludes"), info); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"excludesFile through a link, then ..": func(t *testing.T, folder string) {
+			// alias/.. is tools, where alias leads, not the workspace
+			// folder, which a lexical clean would give.
+			write(t, folder, "tools/excludes", "secret.txt\n")
+			write(t, folder, "excludes", "other.txt\n")
+			if err := os.MkdirAll(filepath.Join(folder, "tools", "deep"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("tools/deep", filepath.Join(folder, "alias")); err != nil {
+				t.Fatal(err)
+			}
+			setExcludesFile(t, folder, "alias/../excludes")
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			folder := committed(t, "alpha")
@@ -249,6 +273,19 @@ func TestAnExcludeFileOutsideTheWorkspaceIsNotRead(t *testing.T) {
 		"too large": {func(t *testing.T, folder string) {
 			write(t, folder, ".excludes", "secret.txt\n"+strings.Repeat("#\n", maxExcludeFile))
 			setExcludesFile(t, folder, ".excludes")
+		}, noteExcludesFile},
+		"swapped for a link out after it resolved": {func(t *testing.T, folder string) {
+			write(t, folder, ".excludes", "other.txt\n")
+			setExcludesFile(t, folder, ".excludes")
+			beforeExcludeOpen = func(resolved string) {
+				if err := os.Remove(resolved); err != nil {
+					t.Error(err)
+				}
+				if err := os.Symlink(outside, resolved); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { beforeExcludeOpen = func(string) {} })
 		}, noteExcludesFile},
 		"info/exclude linked out": {func(t *testing.T, folder string) {
 			info := filepath.Join(folder, ".git", "info")

@@ -35,8 +35,8 @@ const maxExcludeFile = 1 << 20
 // files is not used. They name no path: the repository's configuration
 // is written from inside the devcontainer.
 const (
-	noteExcludesFile = "the repository's core.excludesFile is not a file inside the workspace; it is not used"
-	noteInfoExclude  = "the repository's .git/info/exclude is not a file inside the workspace; it is not used"
+	noteExcludesFile = "the repository's core.excludesFile is not a regular file of at most 1 MiB inside the workspace; it is not used, and the files it names may be committed"
+	noteInfoExclude  = "the repository's .git/info/exclude is not a regular file of at most 1 MiB inside the workspace; it is not used, and the files it names may be committed"
 )
 
 // ignoreRules gives w the workspace's own ignore rules, lowest priority
@@ -44,31 +44,27 @@ const (
 // .git/info/exclude, then every .gitignore. Only the repository's
 // .git/config is read, never Menagerie's global or system Git
 // configuration. An exclude file is used only when it resolves, with its
-// symbolic links followed, to a regular file inside the workspace folder;
-// otherwise log gets a note and the file is skipped.
+// symbolic links followed, to a regular file of at most maxExcludeFile
+// inside the workspace folder; otherwise log gets a note and the file is
+// skipped, so the files it names may be committed.
 //
 // go-git's status reads the .gitignore files itself and adds w.Excludes
 // after them. Excludes ends with the .gitignore rules again, so they keep
 // their priority over the exclude files.
 func ignoreRules(repo *git.Repository, w *git.Worktree, folder string, log io.Writer) error {
-	root, err := os.OpenRoot(folder)
-	if err != nil {
-		return fmt.Errorf("open workspace folder: %w", err)
-	}
-	defer root.Close()
 	cfg, err := repo.Storer.Config()
 	if err != nil {
 		return fmt.Errorf("read repository configuration: %w", err)
 	}
 	var patterns []gitignore.Pattern
 	if name := cfg.Raw.Section("core").Option("excludesFile"); name != "" {
-		ps, ok := excludeFile(root, folder, name)
+		ps, ok := excludeFile(folder, name)
 		if !ok {
 			fmt.Fprintln(log, noteExcludesFile)
 		}
 		patterns = append(patterns, ps...)
 	}
-	ps, ok := excludeFile(root, folder, ".git/info/exclude")
+	ps, ok := excludeFile(folder, ".git/info/exclude")
 	if !ok {
 		fmt.Fprintln(log, noteInfoExclude)
 	}
@@ -81,22 +77,50 @@ func ignoreRules(repo *git.Repository, w *git.Worktree, folder string, log io.Wr
 	return nil
 }
 
+// beforeExcludeOpen runs between an exclude file's resolution and its
+// open, in tests.
+var beforeExcludeOpen = func(string) {}
+
 // excludeFile reads the patterns of the exclude file name, a path
 // relative to the workspace folder or an absolute one. A missing file has
 // no patterns, as in Git. ok is false when the file is not used: it is
-// outside the workspace, a symbolic link out of it, not a regular file, or
-// larger than maxExcludeFile.
-func excludeFile(root *os.Root, folder, name string) (patterns []gitignore.Pattern, ok bool) {
-	rel, inside := insideFolder(folder, name)
-	if !inside {
+// outside the workspace once its symbolic links resolve, not a regular
+// file, or larger than maxExcludeFile.
+//
+// The path resolves as the filesystem does, each link followed before a
+// ".." after it applies, so the file is the one Git reads. The resolved
+// file is then opened without following a final link. A link swapped in
+// above it between the two steps is not detected; the patterns are never
+// output, only used to leave files out of the commit.
+func excludeFile(folder, name string) (patterns []gitignore.Pattern, ok bool) {
+	// Git expands ~ and %( against a home or install folder, never the
+	// workspace.
+	if strings.HasPrefix(name, "~") || strings.HasPrefix(name, "%(") {
 		return nil, false
 	}
-	// os.Root follows symbolic links only while they stay inside the
-	// folder. O_NONBLOCK keeps a named pipe from blocking the open.
-	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	base, err := filepath.EvalSymlinks(folder)
+	if err != nil {
+		return nil, false
+	}
+	p := name
+	if !filepath.IsAbs(p) {
+		// Not filepath.Join, which would apply a ".." before the link
+		// ahead of it is followed.
+		p = base + string(filepath.Separator) + name
+	}
+	resolved, err := filepath.EvalSymlinks(p)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, true
 	}
+	if err != nil {
+		return nil, false
+	}
+	if rel, err := filepath.Rel(base, resolved); err != nil || !filepath.IsLocal(rel) {
+		return nil, false
+	}
+	beforeExcludeOpen(resolved)
+	// O_NONBLOCK keeps a named pipe from blocking the open.
+	f, err := os.OpenFile(resolved, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, false
 	}
@@ -118,29 +142,6 @@ func excludeFile(root *os.Root, folder, name string) (patterns []gitignore.Patte
 		}
 	}
 	return patterns, true
-}
-
-// insideFolder returns name relative to folder when it lies inside it. A
-// name that starts with ~ or %( is expanded by Git against a home or
-// install folder, never the workspace, so it is outside.
-func insideFolder(folder, name string) (string, bool) {
-	if strings.HasPrefix(name, "~") || strings.HasPrefix(name, "%(") {
-		return "", false
-	}
-	if !filepath.IsAbs(name) {
-		rel := filepath.Clean(name)
-		return rel, filepath.IsLocal(rel)
-	}
-	bases := []string{folder}
-	if resolved, err := filepath.EvalSymlinks(folder); err == nil {
-		bases = append(bases, resolved)
-	}
-	for _, base := range bases {
-		if rel, err := filepath.Rel(base, name); err == nil && filepath.IsLocal(rel) {
-			return rel, true
-		}
-	}
-	return "", false
 }
 
 // stage records paths in idx as git add --all would. A path that is a
