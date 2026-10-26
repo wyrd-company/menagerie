@@ -1,5 +1,6 @@
 //! JSON over HTTP/1.1 on a Unix socket. Each request runs its Toha work on a
-//! blocking worker and returns owned JSON.
+//! blocking worker, inside its own credential resolver scope, and returns
+//! owned JSON.
 use crate::Service;
 use crate::error::ServiceError;
 use axum::Router;
@@ -104,7 +105,13 @@ where
             ));
         }
     };
-    let result = tokio::task::spawn_blocking(move || operation(&service, request)).await;
+    // Every Toha fetch the operation makes, on this worker, asks the
+    // workspace service's credential route when an HTTPS remote challenges.
+    let result = tokio::task::spawn_blocking(move || {
+        let resolver = crate::credentials::resolver(&service.settings.hook_runner_socket);
+        toha::source::with_credential_resolver(resolver, || operation(&service, request))
+    })
+    .await;
     match result {
         Ok(Ok(reply)) => match serde_json::to_vec(&reply) {
             Ok(bytes) => json(StatusCode::OK, bytes),
