@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Records the README's demo, docs/assets/demo.gif, and the documentation's
-# screenshots in docs/assets, against a fresh acceptance fixture.
+# Records the README's demo, docs/user/assets/demo.gif, and the documentation's
+# screenshots in docs/user/assets, against a fresh acceptance fixture.
 #
 #   docs/demo/record.sh <scratch>
 #
@@ -12,8 +12,8 @@ scratch=$(realpath -m "$1")
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 out=$scratch/demo
 rm -rf "$out"
-mkdir -p "$out" "$repo/docs/assets"
-MENAGERIE_BROWSER_INFO="$scratch/info.json" MENAGERIE_DEMO_ASSETS="$repo/docs/assets" MENAGERIE_DEMO_OUTPUT="$out" \
+mkdir -p "$out" "$repo/docs/user/assets"
+MENAGERIE_BROWSER_INFO="$scratch/info.json" MENAGERIE_DEMO_ASSETS="$repo/docs/user/assets" MENAGERIE_DEMO_OUTPUT="$out" \
   pnpm --dir "$repo/web" exec playwright test -c playwright.demo.config.ts
 video=$(find "$out" -name '*.webm' | head -n 1)
 [ -n "$video" ] || { echo "the demo run recorded no video" >&2; exit 1; }
@@ -21,8 +21,8 @@ video=$(find "$out" -name '*.webm' | head -n 1)
 ffmpeg -loglevel error -y -i "$video" \
   -vf "fps=5,scale=720:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
   "$out/demo.gif"
-gifsicle -O3 --lossy=100 "$out/demo.gif" -o "$repo/docs/assets/demo.gif"
+gifsicle -O3 --lossy=100 "$out/demo.gif" -o "$repo/docs/user/assets/demo.gif"
 for shot in list create-interview upgrade-interview; do
-  magick "$repo/docs/assets/$shot.png" -strip -colors 256 "PNG8:$repo/docs/assets/$shot.png"
+  magick "$repo/docs/user/assets/$shot.png" -strip -colors 256 "PNG8:$repo/docs/user/assets/$shot.png"
 done
-ls -l "$repo/docs/assets"
+ls -l "$repo/docs/user/assets"

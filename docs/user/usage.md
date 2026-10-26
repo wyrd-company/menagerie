@@ -1,7 +1,7 @@
 ---
 title: Usage
 order: 4
-docs: true
+product: menagerie
 relationships:
   references:
     - workspace

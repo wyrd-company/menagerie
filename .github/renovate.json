@@ -28,7 +28,7 @@
       "description": "Menagerie's own released image, pinned in the install instructions and the deployment example",
       "managerFilePatterns": [
         "/^README\\.md$/",
-        "/^docs/docs\\.yml$/",
+        "/^docs/user/docs\\.yml$/",
         "/^deploy/compose\\.yml$/"
       ],
       "matchStrings": [

@@ -1,7 +1,8 @@
 ---
 title: Installation
 order: 2
-docs: true
+install: true
+product: menagerie
 relationships:
   references:
     - menagerie

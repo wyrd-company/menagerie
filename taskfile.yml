@@ -228,7 +228,7 @@ tasks:
       - web/test/integrated/acceptance.sh test '{{.STATE}}'
 
   demo:
-    desc: Record docs/assets/demo.gif and the documentation's screenshots against a fresh acceptance fixture (needs ffmpeg, gifsicle and ImageMagick)
+    desc: Record docs/user/assets/demo.gif and the documentation's screenshots against a fresh acceptance fixture (needs ffmpeg, gifsicle and ImageMagick)
     vars:
       STATE:
         sh: mkdir -p "{{.SCRATCH}}" && mktemp -d "{{.SCRATCH}}/demo.XXXXXX"
