@@ -102,7 +102,7 @@ func excludeFile(root *os.Root, folder, name string) (patterns []gitignore.Patte
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxExcludeFile {
+	if err != nil || !info.Mode().IsRegular() {
 		return nil, false
 	}
 	body, err := io.ReadAll(io.LimitReader(f, maxExcludeFile+1))

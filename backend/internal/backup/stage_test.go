@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/format/index"
 )
 
 // gitAdd stages paths through go-git, as someone working in the
@@ -106,6 +108,49 @@ func TestAnUpgradeCanReplaceAFileWithAFolder(t *testing.T) {
 	}
 	if pendingOf(t, folder, "alpha") {
 		t.Fatal("still pending after the upgrade commit")
+	}
+}
+
+func TestStagingRemovesTheEntriesAPathConflictsWith(t *testing.T) {
+	folder := t.TempDir()
+	write(t, folder, "was-file/child", "now a folder\n")
+	write(t, folder, "was-folder", "now a file\n")
+	root, err := os.OpenRoot(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	idx := &index.Index{Version: 2}
+	for _, name := range []string{"kept", "was-file", "was-folder/a", "was-folder/b/c"} {
+		idx.Add(name)
+	}
+	// Only the new paths are staged; the entries they replace leave too.
+	if err := stage(root, idx, []string{"was-file/child", "was-folder"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range idx.Entries {
+		names = append(names, e.Name)
+	}
+	sort.Strings(names)
+	if want := []string{"kept", "was-file/child", "was-folder"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("index %v, want %v", names, want)
+	}
+}
+
+func TestNothingBeyondASymbolicLinkIsStaged(t *testing.T) {
+	folder := committed(t, "alpha")
+	if err := os.Symlink("sub", filepath.Join(folder, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	out := Output{Reported: []string{"linked/kept.txt"}, Record: ".toha.json"}
+	c, err := CommitUpgrade(folder, "alpha", out, "Upgrade", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := strings.Join(treeOf(t, folder, c), " ")
+	if strings.Contains(files, "linked/") || !strings.Contains(files, "linked") {
+		t.Fatalf("tree %s", files)
 	}
 }
 

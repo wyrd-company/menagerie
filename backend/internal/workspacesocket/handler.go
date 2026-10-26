@@ -115,10 +115,10 @@ func (s *Sockets) handler(name string) http.Handler {
 			refuse(w, http.StatusBadRequest, Error{Kind: kind})
 			return
 		}
-		// The wait for the job has no deadline: a commit job may take
-		// minutes, and its job time limit governs it. A refused body keeps
-		// its deadline, so the server stops reading what is left of it.
-		_ = rc.SetReadDeadline(time.Time{})
+		// The wait for the job has no deadline: net/http clears the read
+		// deadline once the body has ended, and a commit job, which may
+		// take minutes, is governed by its job time limit. A refused body
+		// keeps its deadline, so the server stops reading what is left.
 		job, outcome, wait, err := s.start(name, message)
 		var busy *jobs.BusyError
 		switch {
