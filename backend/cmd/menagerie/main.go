@@ -95,7 +95,7 @@ func run(configPath string) error {
 		return err
 	}
 	runtime := devcontainer.New(docker, opts)
-	manager := jobs.NewManager(ctx)
+	manager := jobs.NewManager(ctx, jobs.Options{})
 	handler, err := newHandler(cfg, root, runtime, manager)
 	if err != nil {
 		return err

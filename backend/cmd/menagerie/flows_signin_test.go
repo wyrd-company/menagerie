@@ -58,7 +58,7 @@ func TestSignedInManagersAnswerInterviewsOfAnySize(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := jobs.NewManager(ctx)
+	manager := jobs.NewManager(ctx, jobs.Options{})
 	t.Cleanup(manager.Wait)
 	t.Cleanup(cancel)
 	var h http.Handler

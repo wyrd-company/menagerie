@@ -261,7 +261,7 @@ func TestSignInThroughPocketID(t *testing.T) {
 	}
 	rt := &recordingRuntime{release: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := jobs.NewManager(ctx)
+	manager := jobs.NewManager(ctx, jobs.Options{})
 	t.Cleanup(func() { close(rt.release); manager.Wait(); cancel() })
 	server := api.New(api.Options{Root: root, Status: rt, Jobs: manager, Operations: api.ContainerOperations(root, rt),
 		UI: fstest.MapFS{"index.html": {Data: []byte("ui-index")}}})

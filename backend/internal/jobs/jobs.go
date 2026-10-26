@@ -6,7 +6,9 @@
 
 // Package jobs runs workspace operations as in-memory jobs. A workspace has
 // at most one job at a time. Jobs, their events and their logs live only in
-// this process: a restart drops them. No timeout is applied to a job.
+// this process: a restart drops them. Optional time limits count a job's
+// running time: a job past a limit is cancelled and fails as timed-out.
+// Time spent waiting for answers is never counted.
 package jobs
 
 import (
@@ -85,6 +87,12 @@ type Snapshot struct {
 	FinishedAt  *time.Time `json:"finishedAt"`
 	LastEventID int64      `json:"lastEventId"`
 	Error       *Error     `json:"error"`
+	// Deadline is when the first applying limit ends; nil when no limit
+	// applies, while the job waits for answers, and once it has ended.
+	Deadline *time.Time `json:"deadline"`
+	// Limit is the limit that ends first; nil when none applies and once
+	// the job has ended.
+	Limit *Limit `json:"limit"`
 }
 
 // Runner performs a job's work. It runs on a goroutine owned by the
@@ -104,8 +112,10 @@ func (e *BusyError) Error() string {
 
 // Manager owns all jobs of the process.
 type Manager struct {
-	ctx context.Context
-	now func() time.Time
+	ctx       context.Context
+	now       func() time.Time
+	afterFunc func(time.Duration, func()) Timer
+	opts      Options
 
 	mu     sync.Mutex
 	active map[string]*Job
@@ -114,10 +124,18 @@ type Manager struct {
 	wg     sync.WaitGroup
 }
 
-// NewManager returns a Manager whose jobs run with ctx. Cancelling ctx is
-// the only way a running job is asked to stop (process shutdown).
-func NewManager(ctx context.Context) *Manager {
-	return &Manager{ctx: ctx, now: time.Now, active: map[string]*Job{}, byID: map[string]*Job{}}
+// NewManager returns a Manager whose jobs run with a context derived from
+// ctx. Cancelling ctx stops every job (process shutdown); a job past one of
+// opts.Limits is cancelled alone.
+func NewManager(ctx context.Context, opts Options) *Manager {
+	m := &Manager{ctx: ctx, now: opts.Now, afterFunc: opts.AfterFunc, opts: opts, active: map[string]*Job{}, byID: map[string]*Job{}}
+	if m.now == nil {
+		m.now = time.Now
+	}
+	if m.afterFunc == nil {
+		m.afterFunc = func(d time.Duration, f func()) Timer { return time.AfterFunc(d, f) }
+	}
+	return m
 }
 
 // Start acquires the workspace's job slot and runs runner. It returns a
@@ -129,6 +147,7 @@ func (m *Manager) Start(workspace, operation string, runner Runner) (*Job, error
 		m.mu.Unlock()
 		return nil, &BusyError{Workspace: workspace, ActiveJobID: current.id}
 	}
+	ctx, cancel := context.WithCancelCause(m.ctx)
 	job := &Job{
 		manager:   m,
 		id:        newID(),
@@ -137,6 +156,8 @@ func (m *Manager) Start(workspace, operation string, runner Runner) (*Job, error
 		state:     Running,
 		created:   m.now(),
 		changed:   make(chan struct{}),
+		cancel:    cancel,
+		jobLimit:  m.opts.Limits.forOperation(operation),
 	}
 	m.active[workspace] = job
 	m.byID[job.id] = job
@@ -144,13 +165,14 @@ func (m *Manager) Start(workspace, operation string, runner Runner) (*Job, error
 	m.wg.Add(1)
 	m.mu.Unlock()
 
-	job.appendEvent(EventState, stateData{State: Running})
-	go m.run(job, runner)
+	job.begin()
+	go m.run(ctx, job, runner)
 	return job, nil
 }
 
-func (m *Manager) run(job *Job, runner Runner) {
+func (m *Manager) run(ctx context.Context, job *Job, runner Runner) {
 	defer m.wg.Done()
+	defer job.cancel(nil)
 	run := &Run{job: job}
 	var err error
 	func() {
@@ -159,9 +181,15 @@ func (m *Manager) run(job *Job, runner Runner) {
 				err = &Failure{Kind: "internal-error", Err: fmt.Errorf("operation panicked: %v", p)}
 			}
 		}()
-		err = runner(m.ctx, run)
+		err = runner(ctx, run)
 	}()
 	run.flush()
+	// A job cancelled for time fails as timed-out whatever its runner
+	// returned after the cancel.
+	if timedOut := job.timedOutError(); timedOut != nil {
+		job.finish(Failed, timedOut)
+		return
+	}
 	switch {
 	case errors.Is(err, ErrEnded):
 		job.finish(Ended, nil)
@@ -229,6 +257,13 @@ type Job struct {
 	apply    json.RawMessage
 	events   []Event
 	changed  chan struct{}
+
+	cancel   context.CancelCauseFunc
+	jobLimit time.Duration
+	clock    clock
+	deadline *time.Time
+	limit    *Limit
+	timedOut *Error
 }
 
 // ID returns the job's identifier.
@@ -238,6 +273,10 @@ func (j *Job) ID() string { return j.id }
 func (j *Job) Snapshot() Snapshot {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.snapshotLocked()
+}
+
+func (j *Job) snapshotLocked() Snapshot {
 	return Snapshot{
 		JobID:       j.id,
 		Workspace:   j.workspace,
@@ -248,6 +287,8 @@ func (j *Job) Snapshot() Snapshot {
 		FinishedAt:  j.finished,
 		LastEventID: int64(len(j.events)),
 		Error:       j.err,
+		Deadline:    j.deadline,
+		Limit:       j.limit,
 	}
 }
 
@@ -268,8 +309,10 @@ func (j *Job) EventsAfter(after int64) ([]Event, bool, <-chan struct{}) {
 }
 
 type stateData struct {
-	State State  `json:"state"`
-	Phase string `json:"phase"`
+	State    State      `json:"state"`
+	Phase    string     `json:"phase"`
+	Deadline *time.Time `json:"deadline"`
+	Limit    *Limit     `json:"limit"`
 }
 
 type resultData struct {
@@ -294,16 +337,39 @@ func (j *Job) appendLocked(eventType string, raw json.RawMessage) {
 	j.changed = make(chan struct{})
 }
 
-// setState records a nonterminal state or phase change. It is ignored once
-// the job has ended.
-func (j *Job) setState(state State, phase string) {
+// begin publishes the first state event with the job's first deadline.
+func (j *Job) begin() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.clock.resume(j.created)
+	j.scheduleLocked(j.created)
+	j.appendStateLocked()
+}
+
+// setState records a nonterminal state or phase change. enter restarts the
+// phase's running time, as entering a phase does. It is ignored once the
+// job has ended.
+func (j *Job) setState(state State, phase string, enter bool) {
+	now := j.manager.now()
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.state.Terminal() {
 		return
 	}
+	j.clock.pause(now)
+	if enter {
+		j.clock.phase = 0
+	}
+	if state == Running {
+		j.clock.resume(now)
+	}
 	j.state, j.phase = state, phase
-	raw, _ := json.Marshal(stateData{State: state, Phase: phase})
+	j.scheduleLocked(now)
+	j.appendStateLocked()
+}
+
+func (j *Job) appendStateLocked() {
+	raw, _ := json.Marshal(stateData{State: j.state, Phase: j.phase, Deadline: j.deadline, Limit: j.limit})
 	j.appendLocked(EventState, raw)
 }
 
@@ -314,12 +380,14 @@ func (j *Job) finish(state State, jobErr *Error) {
 	m := j.manager
 	now := m.now()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	if j.state.Terminal() {
+		j.mu.Unlock()
+		m.mu.Unlock()
 		return
 	}
+	j.stopTimerLocked()
+	j.deadline, j.limit = nil, nil
 	raw, err := marshalCompact(resultData{State: state, Error: jobErr, Apply: j.apply})
 	if err != nil {
 		raw, _ = json.Marshal(resultData{State: state, Error: jobErr})
@@ -329,6 +397,12 @@ func (j *Job) finish(state State, jobErr *Error) {
 	}
 	j.state, j.err, j.finished = state, jobErr, &now
 	j.appendLocked(EventResult, raw)
+	snap := j.snapshotLocked()
+	j.mu.Unlock()
+	m.mu.Unlock()
+	if state == Failed && m.opts.Alerts != nil {
+		m.opts.Alerts.JobFailed(snap)
+	}
 }
 
 // marshalCompact encodes v without HTML escaping, so opaque payloads keep
