@@ -238,10 +238,9 @@ func (m *Minter) Repository(rawURL string) (Repository, bool) {
 		u.Fragment != "" || u.RawPath != "" || canonicalHost(u) != m.host {
 		return Repository{}, false
 	}
-	owner, name, ok := strings.Cut(strings.TrimPrefix(u.Path, "/"), "/")
-	if !ok || !strings.HasPrefix(u.Path, "/") {
-		return Repository{}, false
-	}
+	// A path without a second segment leaves name empty, which the name
+	// pattern refuses.
+	owner, name, _ := strings.Cut(strings.TrimPrefix(u.Path, "/"), "/")
 	name = strings.TrimSuffix(name, ".git")
 	if !ValidOwner(owner) || len(name) > 100 || !namePattern.MatchString(name) || name == "." || name == ".." {
 		return Repository{}, false
