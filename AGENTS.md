@@ -36,5 +36,6 @@ Use `task` verbs: `task --list`. `task check` is CI. The live suites
 
 Design and specifications: `docs/technical-designs/`, `docs/specifications/`,
 `docs/terms/`, `docs/risks/`. Public pages (everything under `docs/user/`,
-published to wyrd.foo through `docs/user/docs.yml`): `docs/user/*.md`.
+published to wyrd.foo through `docs/user/docs.yml` on release and docs tags,
+not on a push to `main`): `docs/user/*.md`.
 Deployment example: `deploy/`. Package notes: `web/README.md`, `template-service/README.md`.

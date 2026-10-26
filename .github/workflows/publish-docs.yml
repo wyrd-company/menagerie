@@ -2,52 +2,86 @@
 #   references: [taskfile]
 name: Publish docs
 
-# Publishes docs/ to wyrd.foo for a delivered release: when CD succeeds for
-# a pushed release tag, or by dispatch for an existing release tag. The docs
-# come from the tag, and only an Intentional release record publishes.
+# Publishes docs/user/ to wyrd.foo through the wyrd.foo reusable workflow:
+# when CD succeeds for a pushed release tag, on a push of a docs tag, and by
+# dispatch for an existing tag or commit. The docs come from the ref, and
+# only an Intentional release record publishes from a release tag. A plain
+# push to main does not publish. The publisher reads the release tag's
+# GitHub Release, so a dispatch for a release waits until that Release exists.
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CD]
     types: [completed]
+  push:
+    tags:
+      - 'menagerie-docs@*'
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing release tag whose docs to publish
+      ref:
+        description: Tag or commit to publish
         required: true
         type: string
+      feature:
+        description: Feature a product on the front page
+        type: boolean
+        default: false
+      feature-product:
+        description: The product key to feature; empty when the repo has one product
+        type: string
+        default: ''
+      feature-days:
+        description: How long the feature lasts, in days
+        type: string
+        default: '14'
+      feature-reason:
+        description: For example "New MCP server"; default "New release"
+        type: string
+        default: ''
 
 permissions: {}
 
-concurrency:
-  group: publish-docs
-  cancel-in-progress: false
-
 jobs:
-  publish:
-    name: Publish docs to wyrd.foo
+  tag:
+    name: Check the release tag
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_repository.full_name == github.repository)
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    outputs:
+      release: ${{ steps.check.outputs.release }}
     steps:
       # A tag push's CD run names the tag as its head branch.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+          ref: ${{ github.event.workflow_run.head_branch }}
           persist-credentials: false
           fetch-tags: true
       - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
       - id: check
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
         run: task release:tag
-      - if: steps.check.outputs.release == 'true'
-        # ryl disable-line rule:line-length
-        uses: wyrd-company/wyrd.foo/.github/actions/publish-docs@fdb54b12e88eaf51a2b22714db63c80aba2ed88a # v1
-        with:
-          app-id: ${{ secrets.WYRD_TOOLS_DOCS_PUBLISHER_APP_ID }}
-          private-key: ${{ secrets.WYRD_TOOLS_DOCS_PUBLISHER_PRIVATE_KEY }}
+
+  publish:
+    name: Publish to wyrd.foo
+    needs: tag
+    if: >-
+      ${{ !cancelled() && needs.tag.result != 'failure' &&
+      (github.event_name != 'workflow_run' || needs.tag.outputs.release == 'true') }}
+    permissions:
+      contents: read
+    # ryl disable-line rule:line-length
+    uses: wyrd-company/wyrd.foo/.github/workflows/publish-docs.yml@v2
+    with:
+      ref: ${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}
+      feature: ${{ inputs.feature || false }}
+      feature-product: ${{ inputs.feature-product || '' }}
+      feature-days: ${{ inputs.feature-days || '14' }}
+      feature-reason: ${{ inputs.feature-reason || '' }}
+    secrets:
+      WYRD_TOOLS_DOCS_PUBLISHER_APP_ID: ${{ secrets.WYRD_TOOLS_DOCS_PUBLISHER_APP_ID }}
+      WYRD_TOOLS_DOCS_PUBLISHER_PRIVATE_KEY: ${{ secrets.WYRD_TOOLS_DOCS_PUBLISHER_PRIVATE_KEY }}

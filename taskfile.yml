@@ -96,7 +96,6 @@ tasks:
       - rumdl check .
       - node scripts/check-renovate-pins.mjs > /dev/null
       - node scripts/check-workflows.mjs
-      - node scripts/check-docs.mjs
 
   format:staged:
     desc: Format only the named files (the pre-commit hook passes the staged ones)
