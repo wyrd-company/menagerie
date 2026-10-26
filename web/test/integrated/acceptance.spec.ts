@@ -1,8 +1,8 @@
 // The built image's failures and restart, on the workspaces the integrated
 // story left (see acceptance.sh). Each failure is produced where it starts:
 // the identity provider's groups, Toha's answer rules, initializeCommand,
-// the workspace repository, a template hook held on a release file, and a
-// restart of the container.
+// the workspace repository, a reviewed branch pushed to it, a template hook
+// held on a release file, and a restart of the container.
 import { expect, test, type Page } from "@playwright/test";
 import {
   backup,
@@ -161,6 +161,42 @@ test.describe("as a manager", () => {
     expect((await backup(page.request, "kept-space")).commits).toEqual(before.commits);
   });
 
+  test("a reviewed branch is applied, rebuilt and backed up", async () => {
+    // A pull request's head: one commit on top of the workspace branch.
+    await control(
+      page.request,
+      "POST",
+      "/backup/contribute?from=kept-space&branch=review/kept-space&path=reviewed.txt",
+      "reviewed\n",
+    );
+    const reviewed = (await backup(page.request, "review/kept-space")).commits[0]!;
+    const before = await containerFor(page.request, "kept-space");
+    await page.goto("/");
+    await entry(page, "kept-space").getByRole("button", { name: "Apply branch" }).click();
+    await entry(page, "kept-space")
+      .getByRole("textbox", { name: "Branch" })
+      .fill("review/kept-space");
+    await entry(page, "kept-space").getByRole("button", { name: "Apply", exact: true }).click();
+    await finished(page, /Apply branch to kept-space/);
+    await expect(console_(page).getByRole("log", { name: "Job log" })).toContainText(
+      `fetched branch review/kept-space at ${reviewed.hash}`,
+    );
+    await shot(page, "11a-apply-branch");
+    const file = (await control(
+      page.request,
+      "GET",
+      "/file?workspace=kept-space&path=reviewed.txt",
+    )) as { body: string };
+    expect(file.body).toBe("reviewed\n");
+    const branch = await backup(page.request, "kept-space");
+    expect(branch.commits.map((c) => c.hash)).toContain(reviewed.hash);
+    expect(branch.files["reviewed.txt"]).toBe("reviewed\n");
+    // The rebuild replaced the container.
+    const after = await containerFor(page.request, "kept-space");
+    expect(after?.state).toBe("running");
+    expect(after?.id).not.toBe(before?.id);
+  });
+
   test("a held job keeps its workspace busy while another workspace works", async () => {
     await page.goto("/");
     await page.getByRole("link", { name: "New workspace" }).first().click();
@@ -237,5 +273,7 @@ test.describe("as a manager", () => {
     await expect(console_(page).locator(".outcome")).toContainText("Completed.");
     const branch = await backup(page.request, "kept-space");
     expect(branch.files["result.txt"]).toBe("label: Kept project\nsize: small\nregion: north\n");
+    // The upgrade's backup kept the applied branch.
+    expect(branch.files["reviewed.txt"]).toBe("reviewed\n");
   });
 });

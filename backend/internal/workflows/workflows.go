@@ -10,7 +10,9 @@
 // interviews, initializes the workspace repository, generates, commits the
 // independent root of the workspace branch, backs it up and starts the
 // devcontainer. Upgrade backs up local changes to tracked files, interviews,
-// applies the merge, commits, backs up and rebuilds.
+// applies the merge, commits, backs up and rebuilds. Apply-branch fetches a
+// branch of the workspace repository, backs up every local change, brings
+// the branch into the workspace, backs up and rebuilds.
 package workflows
 
 import (
@@ -21,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
@@ -42,11 +45,15 @@ type Templates interface {
 	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
 }
 
-// Runtime starts and rebuilds devcontainers. *devcontainer.Runtime
-// satisfies it.
+// Runtime starts, stops and rebuilds devcontainers, reads their state, and
+// lists the running containers that mount a folder.
+// *devcontainer.Runtime satisfies it.
 type Runtime interface {
+	Status(ctx context.Context, folder string) (devcontainer.Status, error)
 	Start(ctx context.Context, folder string, p devcontainer.Progress) error
+	Stop(ctx context.Context, folder string, p devcontainer.Progress) error
 	Rebuild(ctx context.Context, folder string, p devcontainer.Progress) error
+	Mounting(ctx context.Context, folder string) ([]string, error)
 }
 
 // Options compose the workflows.
@@ -63,9 +70,13 @@ type Options struct {
 	Hooks *throwaway.HookRunner
 	// RunnerImage returns the runner image of a template's hooks.
 	RunnerImage func(ctx context.Context, templateID string) (string, error)
+	// RestartLimit bounds the start of a devcontainer an apply refused
+	// after stopping it; zero is DefaultRestartLimit.
+	RestartLimit time.Duration
 }
 
-// Workflows owns the create and upgrade operations and their interviews.
+// Workflows owns the create, upgrade and apply-branch operations, and the
+// interviews of the first two.
 type Workflows struct {
 	opts Options
 
@@ -78,11 +89,12 @@ func New(opts Options) *Workflows {
 	return &Workflows{opts: opts, interviews: map[string]*interview{}}
 }
 
-// Operations returns the create and upgrade operations.
+// Operations returns the create, upgrade and apply-branch operations.
 func (w *Workflows) Operations() api.Operations {
 	return api.Operations{
-		api.OperationCreate:  w.create,
-		api.OperationUpgrade: w.upgrade,
+		api.OperationCreate:      w.create,
+		api.OperationUpgrade:     w.upgrade,
+		api.OperationApplyBranch: w.applyBranch,
 	}
 }
 

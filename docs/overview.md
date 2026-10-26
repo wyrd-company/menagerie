@@ -25,6 +25,10 @@ it defines.
   operation is a job whose console shows its phases and log.
 - **Upgrade.** Move a workspace to a newer template version. Menagerie asks
   only the new questions, keeps local edits, and rebuilds the devcontainer.
+- **Apply a reviewed branch.** Bring a branch of the backup repository,
+  such as a reviewed pull request's head, into a workspace. Menagerie backs
+  the workspace up first, fast-forwards or merges file by file, refuses
+  anything that would not apply cleanly, and rebuilds the devcontainer.
 - **Back up.** Every workspace is a Git repository, pushed to its own branch
   in one backup repository after each change. Menagerie can also commit and
   back up changes on a schedule, and a devcontainer can ask for a commit of

@@ -115,7 +115,7 @@ func (i *Images) findOwn(ctx context.Context) (string, error) {
 	if i.Docker == nil {
 		return "", &ImageError{Err: Reason("no runner-image is configured and Menagerie has no Docker client to find its own image")}
 	}
-	candidates := containerIDs(i.mountInfo())
+	candidates := MountedContainerIDs(i.mountInfo())
 	byName := len(candidates) == 0
 	if byName {
 		hostname := i.Hostname
@@ -148,9 +148,10 @@ func (i *Images) mountInfo() string {
 
 var containerPath = regexp.MustCompile(`/containers/([0-9a-f]{64})/`)
 
-// containerIDs lists, once each, the container ids in the mount sources
-// of path.
-func containerIDs(path string) []string {
+// MountedContainerIDs lists, once each, the container ids in the mount
+// sources of path, a mountinfo file such as /proc/self/mountinfo: Docker
+// mounts a container's hostname and resolv.conf from its own folder.
+func MountedContainerIDs(path string) []string {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil

@@ -18,10 +18,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/wyrd-company/devcontainer-builder/pkg/builder"
@@ -94,6 +96,9 @@ type Options struct {
 	Containers throwaway.Containers
 	// RunnerImage returns the image initializeCommand runs in.
 	RunnerImage func(ctx context.Context) (string, error)
+	// Own lists Menagerie's own container ids, which Mounting leaves out:
+	// Menagerie mounts the workspace root.
+	Own []string
 	// WorkspaceSocket returns the host folder that holds the workspace's
 	// socket, creating the socket when it is missing. The folder is
 	// mounted read-only at WorkspaceSocketTarget on each rebuild and on
@@ -448,8 +453,17 @@ func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
 	host := r.dockerHost(p, anonymous)
 	info, err := host.Inspect(ctx, folder)
 	if errors.Is(err, hostdocker.ErrContainerNotFound) {
-		fmt.Fprintln(p.Log(""), "workspace has no container")
-		return nil
+		// A Compose project keeps its other services running without its
+		// primary; its project label still finds them.
+		err := r.composeHost(p, anonymous).Stop(ctx, folder)
+		if errors.Is(err, dockercompose.ErrProjectNotFound) {
+			fmt.Fprintln(p.Log(""), "workspace has no container")
+			return nil
+		}
+		if err == nil {
+			fmt.Fprintln(p.Log(""), "stopped the services left of the workspace's compose project")
+		}
+		return err
 	}
 	if err != nil {
 		return err
@@ -568,4 +582,44 @@ func shortID(id string) string {
 		return id[:12]
 	}
 	return id
+}
+
+// Mounting returns the short ids of the running containers, other than
+// Menagerie's own, with a bind mount whose source is folder, is inside it,
+// or contains it.
+func (r *Runtime) Mounting(ctx context.Context, folder string) ([]string, error) {
+	list, err := r.client.ContainerList(ctx, container.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return mounting(list, folder, r.opts.Own), nil
+}
+
+// mounting returns the short ids of the containers in list, other than
+// own, with a bind mount whose source is folder, is inside it, or
+// contains it.
+func mounting(list []container.Summary, folder string, own []string) []string {
+	skip := map[string]bool{}
+	for _, id := range own {
+		skip[id] = true
+	}
+	var ids []string
+	for _, c := range list {
+		if skip[c.ID] {
+			continue
+		}
+		for _, m := range c.Mounts {
+			if m.Type == mount.TypeBind && (within(m.Source, folder) || within(folder, m.Source)) {
+				ids = append(ids, shortID(c.ID))
+				break
+			}
+		}
+	}
+	return ids
+}
+
+// within reports whether p is folder or inside it.
+func within(p, folder string) bool {
+	rel, err := filepath.Rel(folder, p)
+	return err == nil && filepath.IsLocal(rel)
 }

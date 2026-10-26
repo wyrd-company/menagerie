@@ -304,11 +304,12 @@ func TestNewRefusesAnInvalidURLWithoutEchoingIt(t *testing.T) {
 func TestConsoleURL(t *testing.T) {
 	origin := "https://menagerie.example.test"
 	for op, want := range map[string]string{
-		"start":   origin + "/?job=id%2B1",
-		"stop":    origin + "/?job=id%2B1",
-		"rebuild": origin + "/?job=id%2B1",
-		"create":  origin + "/create?job=id%2B1",
-		"upgrade": origin + "/workspaces/a%20b/upgrade?job=id%2B1",
+		"start":        origin + "/?job=id%2B1",
+		"stop":         origin + "/?job=id%2B1",
+		"rebuild":      origin + "/?job=id%2B1",
+		"apply-branch": origin + "/?job=id%2B1",
+		"create":       origin + "/create?job=id%2B1",
+		"upgrade":      origin + "/workspaces/a%20b/upgrade?job=id%2B1",
 	} {
 		if got := ConsoleURL(origin, jobs.Snapshot{JobID: "id+1", Workspace: "a b", Operation: op}); got != want {
 			t.Errorf("%s: %s, want %s", op, got, want)

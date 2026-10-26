@@ -84,12 +84,14 @@ description: >-
   `waiting-for-answers` does not count, and no deadline applies while a job
   waits. Interviews keep no expiry. `default` limits every operation
   without its own limit; `operations` gives `start`, `stop`, `rebuild`,
-  `create`, `upgrade` or `commit` its own limit, which replaces `default`; `phases`
+  `create`, `upgrade`, `commit` or `apply-branch` its own limit, which
+  replaces `default`; `phases`
   limits each stay in a phase, counted from each entry into the phase
   (an answered interview enters `interview` again), inside any operation.
   The phase names are `read-definition`, `initialize-command`, `build`,
   `remove-container`, `up`, `stop`, `interview`, `initialize-repository`,
-  `generate`, `apply`, `commit`, `backup-local-changes` and `backup`.
+  `generate`, `fetch`, `plan`, `apply`, `commit`, `backup-local-changes`
+  and `backup`.
   Template hooks run inside `generate` and `apply`. A duration is positive
   whole hours, minutes and seconds in that order, such as `2h`, `45m` or
   `1h30m`. Unknown operation and phase keys are errors, and so is a key
@@ -106,7 +108,7 @@ description: >-
   "operation", "phase", "state", "error": {"kind", "message"} | null,
   "console"}`, where `console` is the browser address of the job's
   console: the origin of `oidc.redirect-url` followed by `/?job={id}` for
-  start, stop, rebuild and commit, `/create?job={id}` for create and
+  start, stop, rebuild, commit and apply-branch, `/create?job={id}` for create and
   `/workspaces/{name}/upgrade?job={id}` for upgrade. Alerts wait in one
   queue of 64 and one background sender posts them in the order they were
   raised, so a job's `job-long-running` alert is posted before its

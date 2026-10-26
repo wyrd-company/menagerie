@@ -20,12 +20,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	dockerclient "github.com/docker/docker/client"
@@ -687,5 +690,60 @@ func TestFeatureLockfilePublishedOnlyAfterSuccess(t *testing.T) {
 				t.Fatalf("lockfile after success: %q (%v)", got, err)
 			}
 		})
+	}
+}
+
+func TestStopReachesTheComposeProjectWithoutItsPrimary(t *testing.T) {
+	h := newHarness(t)
+	folder := h.workspace("compose-left", map[string]string{
+		".devcontainer/compose.yml":       composeFile,
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/data"}`,
+	})
+	h.mustRun(h.rt.Start, folder)
+	primary := h.status(folder)
+	project := h.inspect(primary.ContainerID).Config.Labels[dockercompose.LabelProject]
+	sidecar := h.service(project, "sidecar")
+	if err := h.client.ContainerRemove(h.ctx, primary.ContainerID, container.RemoveOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !h.inspect(sidecar).State.Running {
+		t.Fatal("the sidecar stopped with its primary")
+	}
+	h.mustRun(h.rt.Stop, folder)
+	if h.inspect(sidecar).State.Running {
+		t.Fatal("the sidecar still runs after the stop")
+	}
+}
+
+func TestMountingListsTheRunningContainersThatMountTheFolder(t *testing.T) {
+	h := newHarness(t)
+	folder := h.workspace("mounted", map[string]string{"file.txt": "x\n"})
+	run := func(source string) string {
+		created, err := h.client.ContainerCreate(h.ctx,
+			&container.Config{Image: baseImage, Cmd: []string{"sleep", "infinity"}, Labels: map[string]string{"menagerie.test.run": h.runID}},
+			&container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: source, Target: "/mnt"}}}, nil, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.client.ContainerStart(h.ctx, created.ID, container.StartOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		return created.ID[:12]
+	}
+	inside, around := run(folder), run(h.root)
+	run(t.TempDir())
+	stopped := run(folder)
+	if err := h.client.ContainerStop(h.ctx, stopped, container.StopOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.rt.Mounting(h.ctx, folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(got)
+	want := []string{inside, around}
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mounting %v, want %v", got, want)
 	}
 }

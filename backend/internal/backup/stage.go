@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -264,18 +263,21 @@ func removeEntries(idx *index.Index, match func(name string) bool) {
 	idx.Entries = kept
 }
 
-// validTreePath refuses a path Git does not record in a tree: an empty,
-// . or .. component, or a .git component in any letter case.
+// validTreePath refuses a path Menagerie does not record in a tree or
+// write to a workspace: an empty component, so also an absolute path, and
+// every path go-git's own worktree check refuses: a control character
+// such as a tab or a newline, a . or .. component, a backslash separator,
+// and .git in any spelling NTFS or HFS+ reads as .git, git~1 included.
+// go-git cannot read back a worktree or index that holds such a path.
 func validTreePath(p string) bool {
-	if p == "" || path.IsAbs(p) {
-		return false
-	}
 	for _, part := range strings.Split(p, "/") {
-		if part == "" || part == "." || part == ".." || strings.EqualFold(part, ".git") {
+		if part == "" {
 			return false
 		}
 	}
-	return true
+	// FindEntry checks the path before it looks it up in the empty tree.
+	_, err := (&object.Tree{}).FindEntry(p)
+	return errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound)
 }
 
 // matchesHead reports whether idx records exactly the files of the

@@ -46,6 +46,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 	git "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
@@ -218,6 +219,42 @@ templates:
 	<-done
 }
 
+// contribute clones branch from of the bare repository, writes body to rel,
+// commits it and pushes the commit to branch to.
+func contribute(bare, from, to, rel string, body []byte) error {
+	if from == "" || to == "" || rel == "" || !filepath.IsLocal(rel) {
+		return errors.New("from, branch and a relative path are required")
+	}
+	dir, err := os.MkdirTemp("", "contribute-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	repo, err := git.PlainClone(dir, false, &git.CloneOptions{URL: bare, ReferenceName: plumbing.NewBranchReferenceName(from), SingleBranch: true})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(rel)), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, rel), body, 0o644); err != nil {
+		return err
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return err
+	}
+	if _, err := wt.Add(filepath.ToSlash(rel)); err != nil {
+		return err
+	}
+	sig := &object.Signature{Name: "Contributor", Email: "contributor@example.invalid", When: time.Now()}
+	if _, err := wt.Commit("Change "+rel, &git.CommitOptions{Author: sig, Committer: sig}); err != nil {
+		return err
+	}
+	spec := gitconfig.RefSpec(fmt.Sprintf("+%s:%s", plumbing.NewBranchReferenceName(from), plumbing.NewBranchReferenceName(to)))
+	return repo.Push(&git.PushOptions{RefSpecs: []gitconfig.RefSpec{spec}})
+}
+
 // heldRelease is the file in its workspace folder that a held hook waits
 // for and then removes.
 const heldRelease = ".release"
@@ -354,6 +391,20 @@ func controlServer(t *testing.T, f controlFixture) http.Handler {
 	})
 	mux.HandleFunc("POST /backup/repair", func(w http.ResponseWriter, r *http.Request) {
 		if err := os.Rename(f.bare+".broken", f.bare); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+	// A commit on top of a backup branch, pushed to another branch as a
+	// pull request's author would: the body is the new content of path.
+	mux.HandleFunc("POST /backup/contribute", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			err = contribute(f.bare, q.Get("from"), q.Get("branch"), q.Get("path"), body)
+		}
+		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}

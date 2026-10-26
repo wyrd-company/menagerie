@@ -219,7 +219,9 @@ network. Keep these limits in place:
   [job time limits](configuration.md#job-time-limits) and an alert webhook
   to be told.
 - A backup is a force-push of the workspace's own branch. Commits pushed to
-  that branch from elsewhere are lost at the next backup.
+  that branch from elsewhere are lost at the next backup unless
+  [Apply branch](usage.md#apply-a-reviewed-branch) brings them in first;
+  propose changes on another branch and apply that.
 - With [workspace sockets](configuration.md#workspace-sockets), anything in
   a devcontainer can commit and back up its own workspace, and nothing
   more: the socket names no other workspace and its replies carry no
