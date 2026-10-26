@@ -16,8 +16,9 @@ import (
 // localEnvironment is one start or rebuild's view of Menagerie's own
 // environment. Values holds only the allowed variables: it is the
 // ${localEnv:...} source and Compose interpolation's environment. Process
-// is the initializeCommand environment: the allowed variables and nothing
-// else, so the command finds its programs on the runner image's own PATH.
+// is the initializeCommand environment: the allowed variables except PATH
+// and nothing else, so the command finds its programs on the runner
+// image's own PATH even when PATH is allowed.
 type localEnvironment struct {
 	values  map[string]string
 	process []string
@@ -34,8 +35,11 @@ func newLocalEnvironment(environ, allow []string) localEnvironment {
 		if !ok {
 			continue
 		}
-		if allowed[name] {
-			env.values[name] = value
+		if !allowed[name] {
+			continue
+		}
+		env.values[name] = value
+		if name != "PATH" {
 			env.process = append(env.process, pair)
 		}
 	}

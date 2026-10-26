@@ -95,7 +95,8 @@ list can be empty.
 
 Template hooks and `initializeCommand` run in throwaway containers, one per
 command. A container mounts only the workspace folder, at its own path, and
-runs as the owner of the workspace root on Docker's default bridge network.
+runs as the owner of the workspace root on Docker's default bridge network,
+unable to gain privileges through setuid programs.
 It cannot reach the Docker socket, the Wyrwood sockets or Menagerie's
 environment, and it is removed when its command ends.
 
@@ -165,8 +166,9 @@ digits and underscores, not starting with a digit, and each name once.
 - Compose interpolation of `${VAR}` in a workspace's Compose files sees only
   the listed variables.
 - `initializeCommand` gets only the listed variables, beside its runner
-  image's own environment; its `PATH` is the image's. `PATH` is readable
-  through `${localEnv:PATH}` only when it is listed.
+  image's own environment. Its `PATH` is always the image's: a listed
+  `PATH` is readable through `${localEnv:PATH}` but never reaches
+  `initializeCommand`.
 - `build.args` reach the build as written: devcontainer-builder does not
   substitute variables in them yet.
 

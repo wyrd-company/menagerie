@@ -154,8 +154,12 @@ description: >-
   workspace service revokes the token when the generate or apply request
   returns. A generate or apply without `hookToken`, or whose hook the
   runner refuses, fails that hook: the reply is `hook-io-failed`, and its
-  message names the runner's kind and message. No reply, error or log line
-  carries a captured stream. Toha's `requires` check resolves programs on
+  message names the runner's kind and message. A hook that runs and fails
+  is `hook-failed`, named by its position, its `id` when it has one and its
+  exit code, never by its program, arguments or working directory, which
+  can hold an earlier hook's captured output; `hook-io-failed` names the
+  hook the same way. No reply, error or log line carries a captured
+  stream. Toha's `requires` check resolves programs on
   this service's own `PATH`, which agrees with a hook's only when it runs
   in Menagerie's own image.
 

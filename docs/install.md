@@ -163,8 +163,8 @@ Git hosts, mount a known hosts file that also names them:
 Template hooks and `initializeCommand` run in throwaway containers on the
 host daemon, which need no extra mount or setting. By default they run
 Menagerie's own image, which Menagerie finds by inspecting its own
-container: by its hostname, Docker's default, or by the container id in
-its mounts. When it cannot, a job with a hook or an `initializeCommand`
+container: by the container id in its mounts or, when they name none, by
+its hostname, Docker's default. When it cannot, a job with a hook or an `initializeCommand`
 fails as `runner-image-unavailable`; set
 [`runner-image`](configuration.md#runner-images). Each container carries
 the label `menagerie.throwaway` and is removed when its command ends; any

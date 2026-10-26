@@ -126,10 +126,11 @@ description: >-
   the service runs it in a throwaway container: the workspace folder
   mounted read-write at its own path and nothing else, the hook's working
   directory under it, an empty environment beside the runner image's own,
-  the services' user and the default bridge network. A script hook's
-  template folder is copied into the container. The job console shows one
-  line naming the runner image, then the streams the hook does not capture,
-  each line prefixed `hook: `; captured streams go back to Toha only. The
+  the services' user, no new privileges and the default bridge network. A
+  script hook's template folder is copied into the container. The job
+  console shows one line naming the runner image, a line for an image
+  pull, then the streams the hook does not capture, each line prefixed
+  `hook: `; captured streams go back to Toha only. The
   runner image is the template entry's `runner-image`, else the global
   `runner-image`, else Menagerie's own image. When none can be found or
   pulled, the job fails as `runner-image-unavailable`, or as
@@ -231,8 +232,8 @@ description: >-
   containers of the global `runner-image`, else Menagerie's own image, as
   template hooks run: the workspace folder mounted at its own path and as
   working directory, and an environment of only the `local-env` variables
-  beside the runner image's own, its `PATH` included. A string runs through
-  `/bin/sh -c`, an array as given, and object members in parallel, each in
+  other than `PATH` beside the runner image's own, its `PATH` included. A
+  string runs through `/bin/sh -c`, an array as given, and object members in parallel, each in
   a container of its own with its output prefixed by its name. A failing
   command fails the job before any container changes; a missing runner
   image fails it as `runner-image-unavailable`. `start` then builds the definition

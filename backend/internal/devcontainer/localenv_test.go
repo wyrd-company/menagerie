@@ -25,7 +25,8 @@ func TestLocalEnvironmentKeepsOnlyAllowedVariables(t *testing.T) {
 	if env := newLocalEnvironment(environ, nil); len(env.values) != 0 || env.process == nil || len(env.process) != 0 {
 		t.Fatalf("nil allowlist: %v %q", env.values, env.process)
 	}
-	if env := newLocalEnvironment(environ, []string{"PATH"}); env.values["PATH"] != "/usr/bin:/bin" || len(env.process) != 1 {
+	// An allowed PATH substitutes but never replaces the image's.
+	if env := newLocalEnvironment(environ, []string{"PATH", "ALLOWED_VALUE"}); env.values["PATH"] != "/usr/bin:/bin" || !slices.Equal(env.process, []string{"ALLOWED_VALUE=a=b"}) {
 		t.Fatalf("allowed PATH: %v %q", env.values, env.process)
 	}
 }

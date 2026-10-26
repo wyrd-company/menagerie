@@ -139,16 +139,24 @@ proposed-design:
     socket and no Wyrwood socket is reachable. The environment holds only
     what the specification defines and the runner image's own variables,
     its `PATH` included. The container runs as the services' user, the owner
-    of the workspace root, on the default bridge network, without an SSH
-    agent. Its program runs as given, never through the image's entrypoint.
-    Every container carries Menagerie's labels, with the workspace root and
-    the job, and is force-removed when its command ends; the workspace
+    of the workspace root, with `no-new-privileges`, on the default bridge
+    network, without an SSH agent. Its program runs as given, never through
+    the image's entrypoint. Menagerie's own notes on a run, such as an image
+    pull, go to the job console, never into a stream a hook captures. Every
+    container carries Menagerie's labels, with the workspace root, the job
+    and a random id of its own, and is force-removed when its command ends.
+    A container's creation runs to the Engine's reply, which a cancellation
+    does not interrupt; a creation that fails is followed by a search for
+    its id label, so a lost reply leaves no container. The workspace
     service removes its leftovers when it starts. A cancelled job kills and
     removes its running containers before it ends.
   runner-images: >-
     A throwaway container runs the template entry's `runner-image`, else the
     global `runner-image`, else Menagerie's own image, which the workspace
-    service finds by inspecting its own container. `initializeCommand` has
+    service finds by inspecting its own container: the container its mounts
+    name, else, only when they name none, the container its hostname names
+    when that container carries the hostname. One search runs at a time and
+    each job stops waiting for it when the job ends. `initializeCommand` has
     no template entry and uses the global choice. A missing image is pulled
     with the registry credentials; when no image can be found or pulled, the
     job fails as `runner-image-unavailable`.
@@ -184,8 +192,9 @@ proposed-design:
     cannot copy Menagerie's environment into a devcontainer, a build or a
     Compose project. `${localEnv:...}` substitution and Compose
     interpolation see only the allowed variables, and `initializeCommand`
-    gets only them, with the runner image's own `PATH`. A refused reference
-    resolves as an unset variable does and is named in the job log.
+    gets only them, `PATH` excepted, so its `PATH` is always the runner
+    image's own. A refused reference resolves as an unset variable does and
+    is named in the job log.
   git-and-credentials: >-
     The workspace repository is a backup, not a synchronized copy. The local
     workspace is the source of truth; the workspace service uses go-git to

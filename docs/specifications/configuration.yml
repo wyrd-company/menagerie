@@ -32,7 +32,9 @@ description: >-
   template's hooks in its own `runner-image`, else the top-level one;
   `initializeCommand` in the top-level one. Absent, both use Menagerie's
   own image, which the workspace service finds by inspecting its own
-  container. A missing image is pulled with `registry-credentials`. The
+  container: the container its mounts name, else, only when they name
+  none, the container its hostname names when that container carries the
+  hostname. A missing image is pulled with `registry-credentials`. The
   template service ignores `runner-image`.
 
 
@@ -67,7 +69,9 @@ description: >-
   environment that a devcontainer definition may read through
   `${localEnv:NAME}` or `${env:NAME}`. Each entry matches
   `^[A-Za-z_][A-Za-z0-9_]*$` and appears once. Absent, a definition reads
-  no variable. The template service ignores this list.
+  no variable. The listed variables also reach `initializeCommand`, except
+  `PATH`, which is always the runner image's own. The template service
+  ignores this list.
 
 
   Optional `job-limits` limits the running time of jobs. A limit times
