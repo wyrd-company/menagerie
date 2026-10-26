@@ -273,6 +273,11 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 		}
 		dir = filepath.Join(dir, *req.Cwd)
 	}
+	// The Engine would create a missing working directory as root; a
+	// hook's working directory must exist, as it must for a process.
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return nil, refuse(http.StatusBadRequest, KindInvalidHook, "the hook's working directory is not a folder in the workspace folder")
+	}
 	// The hook stops when the template service hangs up or the grant is
 	// revoked, which the job's cancellation does.
 	ctx, cancel := context.WithCancel(reqCtx)
@@ -284,6 +289,9 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 	}
 	image, err := g.runnerImage(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, refuse(http.StatusConflict, KindHookCancelled, "the job was cancelled; the hook did not run")
+		}
 		g.recordImageFailure(err)
 		return nil, refuse(http.StatusServiceUnavailable, KindRunnerUnavailable, "%v", err)
 	}
@@ -301,11 +309,11 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 	if err != nil {
 		var imageErr *ImageError
 		switch {
+		case ctx.Err() != nil:
+			return nil, refuse(http.StatusConflict, KindHookCancelled, "the job was cancelled; the hook's container was removed")
 		case errors.As(err, &imageErr):
 			g.recordImageFailure(err)
 			return nil, refuse(http.StatusServiceUnavailable, KindRunnerUnavailable, "%v", err)
-		case ctx.Err() != nil:
-			return nil, refuse(http.StatusConflict, KindHookCancelled, "the job was cancelled; the hook's container was removed")
 		}
 		return nil, refuse(http.StatusInternalServerError, KindHookContainer, "the hook's container failed: %v", err)
 	}

@@ -150,6 +150,9 @@ func TestAHookRunsInItsJobsFolderImageAndConsole(t *testing.T) {
 		fmt.Fprint(c.Stderr, "err line\n")
 		return 3, nil
 	})
+	if err := os.MkdirAll(filepath.Join(f.folder, "sub/dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	r := f.post(f.request(map[string]any{"cwd": "sub/dir"}))
 	if r.status != http.StatusOK || r.body["exitCode"] != 3.0 || r.body["success"] != false || r.body["stdout"] != nil || r.body["stderr"] != nil {
 		t.Fatalf("reply %d %s", r.status, r.raw)
@@ -238,6 +241,7 @@ func TestInvalidHooksAreRefused(t *testing.T) {
 	f := newFixture(t, nil)
 	cases := map[string]map[string]any{
 		"parent cwd":         {"cwd": "../beta"},
+		"missing cwd":        {"cwd": "absent"},
 		"absolute cwd":       {"cwd": "/etc"},
 		"empty run":          {"program": map[string]any{"run": []string{}}},
 		"empty program name": {"program": map[string]any{"run": []string{""}}},
@@ -342,6 +346,30 @@ func TestJobCancellationStopsItsHooks(t *testing.T) {
 	}
 	if n := len(f.fake.ran()); n != 1 {
 		t.Fatalf("%d hooks ran", n)
+	}
+}
+
+// TestACancellationWhileTheImageIsChosenIsNotAnImageFailure cancels the
+// job while its runner image is looked up: the hook is cancelled, and no
+// image failure is recorded for the job.
+func TestACancellationWhileTheImageIsChosenIsNotAnImageFailure(t *testing.T) {
+	f := newFixture(t, nil)
+	f.grant.job.Image = func(ctx context.Context) (string, error) {
+		f.cancel()
+		<-ctx.Done()
+		return "", &ImageError{Err: ctx.Err()}
+	}
+	if r := f.post(f.request(nil)); r.status != http.StatusConflict || r.kind() != KindHookCancelled || f.grant.ImageFailure() != nil {
+		t.Fatalf("%d %s %v", r.status, r.raw, f.grant.ImageFailure())
+	}
+	var g *fixture
+	g = newFixture(t, func(ctx context.Context, _ Command) (int, error) {
+		g.cancel()
+		<-ctx.Done()
+		return -1, &ImageError{Image: "runner:sample", Err: errors.New("pull: cancelled")}
+	})
+	if r := g.post(g.request(nil)); r.status != http.StatusConflict || g.grant.ImageFailure() != nil {
+		t.Fatalf("cancelled pull: %d %s", r.status, r.raw)
 	}
 }
 
