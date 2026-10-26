@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting
 order: 5
-docs: true
+product: menagerie
 relationships:
   references:
     - workspace-api

@@ -1,5 +1,5 @@
 <!-- markdownlint-disable-next-line MD033 MD041 -->
-<img src="docs/assets/logo.svg" alt="" width="120" align="right" />
+<img src="docs/user/assets/logo.svg" alt="" width="120" align="right" />
 
 # Menagerie
 
@@ -21,10 +21,10 @@ builds and runs the devcontainers, and
 [Wyrwood](https://github.com/wyrd-company/wyrwood) gives Menagerie its SSH
 key and registry credentials.
 
-![Creating a workspace through its interview, then upgrading it](docs/assets/demo.gif)
+![Creating a workspace through its interview, then upgrading it](docs/user/assets/demo.gif)
 
 Documentation is at [wyrd.foo/docs/menagerie](https://wyrd.foo/docs/menagerie),
-published from [`docs/`](docs).
+published from [`docs/user/`](docs/user).
 
 ## Install
 
@@ -36,7 +36,7 @@ Menagerie is one container image for Linux hosts with Docker Engine, on
 | Container image | `docker pull ghcr.io/wyrd-company/menagerie:0.1.0` |
 | From source | `task build:image` (tags `menagerie:dev`) |
 
-[Installation](docs/install.md) covers the host, the identity provider and
+[Installation](docs/user/install.md) covers the host, the identity provider and
 the Wyrwood binding.
 
 ## Quickstart
