@@ -198,7 +198,9 @@ func TestAlertsArriveInTheOrderSent(t *testing.T) {
 }
 
 // TestAFullQueueDropsTheAlert holds the first delivery, fills the queue
-// behind it and sends one more, which is dropped with a log line.
+// behind it and sends one more, which is dropped with a log line. Every
+// wait has its own deadline, and teardown releases the held delivery
+// before it closes the webhook and the server.
 func TestAFullQueueDropsTheAlert(t *testing.T) {
 	arrived := make(chan struct{}, 1)
 	release := make(chan struct{})
@@ -214,20 +216,36 @@ func TestAFullQueueDropsTheAlert(t *testing.T) {
 		default:
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 	logs := &logLines{}
 	w := newWebhook(t, srv.URL+"/"+secret, logs, 0)
+	t.Cleanup(w.Close)
+	releaseHeld := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseHeld)
 	w.JobFailed(failedSnapshot())
-	<-arrived
-	for range QueueSize + 1 {
-		w.JobFailed(failedSnapshot())
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first alert did not arrive")
+	}
+	sent := make(chan struct{})
+	go func() {
+		defer close(sent)
+		for range QueueSize + 1 {
+			w.JobFailed(failedSnapshot())
+		}
+	}()
+	select {
+	case <-sent:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sending to a full queue blocked")
 	}
 	lines := logs.all()
 	want := fmt.Sprintf("menagerie: job-failed alert for job j1 dropped: %d alerts already wait", QueueSize)
 	if len(lines) != 1 || lines[0] != want {
 		t.Fatalf("log %q", lines)
 	}
-	close(release)
+	releaseHeld()
 	w.Close()
 	mu.Lock()
 	defer mu.Unlock()
