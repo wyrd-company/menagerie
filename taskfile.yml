@@ -177,7 +177,7 @@ tasks:
       - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/throwaway.test' -test.v -test.count=1 -test.timeout 10m
 
   test:openbao:
-    desc: Read registry credentials from a disposable OpenBao dev server (needs bao on PATH)
+    desc: Read registry credentials and sign GitHub App JWTs with a disposable OpenBao dev server (needs bao on PATH)
     cmds:
       - task: backend:test:openbao
 

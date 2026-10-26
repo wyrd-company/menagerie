@@ -52,7 +52,8 @@ proposed-design:
     upgrades to the workspace service over an internal API. Template hooks
     and `initializeCommand` run in throwaway containers that the workspace
     service starts. The container mounts the host Docker socket. Git access
-    goes through Wyrwood's SSH-agent socket. The workspace root is mounted at
+    goes through Wyrwood: its SSH-agent socket, or GitHub App installation
+    tokens signed through its vault socket. The workspace root is mounted at
     the same path on the host and in the container.
   terms: >-
     A workspace is a folder under the workspace root, generated from a Toha
@@ -383,17 +384,61 @@ proposed-design:
     init, commit and force-push the workspace branch, and never pulls it.
     It fetches only on Apply branch, and then only the named branch, into
     a private ref, through a remote it never writes to the workspace's Git
-    configuration. Template fetching belongs to Toha. Authentication uses the SSH
-    agent at Wyrwood's
-    `ssh-agent.sock`, mounted from the host consumer directory. The agent
-    offers one key, an OpenBao Transit key. When every approved template is
-    public, it is a deploy key with write access on the workspace
-    repository. When any template is private, it is the SSH key of a
-    machine user with write access on the workspace repository and read
-    access on the private template repositories. Toha fetches private
-    templates over SSH through the same agent; its git transport runs the
-    image's ssh client with `SSH_AUTH_SOCK` set to Wyrwood's socket. No key
-    or token is stored in the container.
+    configuration. Template fetching belongs to Toha. Every credential comes
+    through Wyrwood, chosen by URL; no key or token is stored in the
+    container. An SSH URL uses the SSH agent at Wyrwood's `ssh-agent.sock`,
+    mounted from the host consumer directory. The agent offers one key, an
+    OpenBao Transit key: a deploy key with write access on the workspace
+    repository when every template it must fetch is public, else the SSH
+    key of a machine user with write access on the workspace repository and
+    read access on the private template repositories. Toha fetches SSH
+    templates through the same agent; its git transport runs the image's
+    ssh client with `SSH_AUTH_SOCK` set to Wyrwood's socket.
+  github-app: >-
+    With `github-app` configured, an `https` URL on the App's server whose
+    path is `/{owner}/{repo}` or `/{owner}/{repo}.git`, with no user
+    information, query or fragment, uses a GitHub App installation token
+    instead. The workspace service is the only minter. It signs the App's
+    RS256 JWT, issued 60 seconds in the past and expiring 9 minutes after
+    now, with the App's private key, an RSA key in OpenBao's Transit engine,
+    through Wyrwood's `vault.sock` with no token of its own. It takes the
+    installation from configuration by owner, compared in lower case, or
+    asks GitHub for the repository's installation and remembers it until a
+    token request finds it gone. It exchanges the JWT for a token scoped to
+    that one repository and one contents permission: write for the
+    workspace repository, read for a template. Tokens stay in memory until
+    five minutes before they expire, and concurrent requests for one
+    repository and permission share one exchange. Requests are bounded by
+    the job's context only; the API client follows no redirect. Backups,
+    commits and Apply branch fetches send the token as HTTP basic
+    authentication with the user `x-access-token` and follow no redirect,
+    on the same origin or another: go-git picks its HTTP transport from a
+    process-wide registry and its client's redirect check is the only hook
+    before a hop is sent, so the workspace service installs a transport
+    whose check refuses every redirect of a transfer with credentials and
+    leaves others to go-git's own policy. The remote's text reaches the job
+    console line by line with the URL and the token, raw and in every
+    base64 form of its basic-authentication pair, redacted. The
+    template service asks for a template's token on the hook runner socket
+    (see credential-route). Every failure is a fixed reason, with at most a
+    status code: no error carries a token, a JWT, a signature, a URL, a
+    response body or a transport error's text. A push or fetch to a remote
+    that is not SSH or a local path, a URL go-git cannot read included,
+    reports a fixed reason for its credentials and its transfer instead of
+    go-git's text, which quotes the URL and the server's answer.
+  credential-route: >-
+    The hook runner socket also serves the template service's credential
+    route, `POST /v1/credentials/github` with the strict body `{"url"}`, an
+    `https` URL without user information. For a repository URL on the
+    GitHub App's server it answers 200 `{"username":"x-access-token",
+    "password"}` with a contents read token for that one repository. It
+    answers 404 `{"reason"}` when no `github-app` is configured or the URL is
+    any other, and the template service then keeps Toha's default
+    behaviour; 502 `{"reason"}` with the fixed reason when no token could be
+    minted; 400 `{"reason"}` for a body that is not one URL, and 405 for a
+    method other than POST. Any process that can open the socket, which
+    only the services' user can, gets read tokens for the repositories the
+    App's installations can read.
   authentication: >-
     Every UI request requires an OIDC session. Access requires membership in
     the `menagerie_managers` group claim. Every authenticated user is a
@@ -402,7 +447,8 @@ proposed-design:
     Configuration names the workspace root, the workspace repository, the
     approved template list with optional runner images, the OIDC issuer and
     client, the Wyrwood consumer directory, the registry credential secrets,
-    the default runner image, the commit schedule and the socket folder.
+    the default runner image, the commit schedule, the socket folder and the
+    GitHub App.
   deployment: >-
     The Menagerie container mounts the workspace root at the same path as on
     the host, the host Docker socket and the Wyrwood consumer directory,
@@ -412,8 +458,8 @@ proposed-design:
     bind source, and Menagerie's own image is their default image. It has a
     Docker restart policy, so it returns after a host restart. Its UI is
     not exposed to the public internet. Menagerie is bound to a Wyrwood policy
-    that grants only that one Transit key and read access to the registry
-    credential secrets.
+    that grants only the SSH Transit key, signing with the GitHub App's
+    Transit key, and read access to the registry credential secrets.
   dependencies: >-
     Toha exposes template resolution, fetching and caching, and the upgrade
     driver from its library, takes the hook runner from its caller, and

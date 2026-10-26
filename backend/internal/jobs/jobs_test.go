@@ -253,6 +253,32 @@ func TestLogWriterSplitsLinesAndFlushesTheTail(t *testing.T) {
 	}
 }
 
+// TestLogWriterEndsALineAtACarriageReturn: progress that a carriage return
+// ends is one event per update, and a carriage return and newline
+// together end one line, also when split across writes.
+func TestLogWriterEndsALineAtACarriageReturn(t *testing.T) {
+	m := NewManager(context.Background(), Options{})
+	job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
+		w := run.Log("backup: ")
+		fmt.Fprint(w, "remote: 10%\rremote: 20%\r")
+		fmt.Fprint(w, "\nremote: done\r\n\nnext\r")
+		fmt.Fprint(w, "last\n\nend\n")
+		return nil
+	})
+	waitEnded(t, job)
+	events, _, _ := job.EventsAfter(0)
+	var lines []string
+	for _, e := range events {
+		if e.Type == EventLog {
+			lines = append(lines, eventText(t, e))
+		}
+	}
+	want := "backup: remote: 10%|backup: remote: 20%|backup: remote: done|backup: |backup: next|backup: last|backup: |backup: end"
+	if got := strings.Join(lines, "|"); got != want {
+		t.Fatalf("lines %q", got)
+	}
+}
+
 func TestEventsAfterReplaysFromCursor(t *testing.T) {
 	m := NewManager(context.Background(), Options{})
 	job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {

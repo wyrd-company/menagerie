@@ -40,9 +40,9 @@ and jobs live in memory until Menagerie restarts.
 
 Menagerie runs as one container on a Linux host with Docker. It signs
 managers in through your OpenID Connect provider, and
-[Wyrwood](https://wyrd.foo/docs/wyrwood) gives it the SSH key for private
-templates and backups, and its registry credentials from OpenBao. The
-container holds no key or secret.
+[Wyrwood](https://wyrd.foo/docs/wyrwood) gives it the SSH key or the GitHub
+App key for private templates and backups, and its registry credentials
+from OpenBao. The container holds no key or secret.
 
 ![The workspace list](assets/list.png)
 

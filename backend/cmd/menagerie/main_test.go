@@ -98,7 +98,7 @@ func TestBackupsUseTheWyrwoodAgentSocket(t *testing.T) {
 			c.Close()
 		}
 	}()
-	remote := backupRemote(&config.Config{WyrwoodDirectory: dir, WorkspaceRepository: "git@example.invalid:sample/backups.git"})
+	remote := backupRemote(&config.Config{WyrwoodDirectory: dir, WorkspaceRepository: "git@example.invalid:sample/backups.git"}, nil)
 	if remote.URL != "git@example.invalid:sample/backups.git" {
 		t.Fatalf("url %s", remote.URL)
 	}
@@ -124,7 +124,7 @@ func TestServerServesCreateAndUpgrade(t *testing.T) {
 		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
 		TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")},
 	}
-	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
 	defer server.Close()
 	for _, tc := range []struct{ path, body, kind string }{
 		{"/api/jobs", `{"operation":"create","workspace":"a..b","templateId":"sample"}`, "invalid-workspace-name"},
@@ -182,7 +182,7 @@ func TestServerTakesInterviewAnswers(t *testing.T) {
 		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
 		TemplateService: config.TemplateService{Socket: socket},
 	}
-	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), manager, nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), manager, nil, nil))
 	defer server.Close()
 	resp, err := http.Post(server.URL+"/api/jobs", "application/json", strings.NewReader(`{"operation":"create","workspace":"alpha","templateId":"sample"}`))
 	if err != nil {
@@ -231,7 +231,7 @@ func TestServerServesTheEmbeddedUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
-	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
 	defer server.Close()
 	for path, want := range map[string]string{
 		"/":                         "ui-index",
