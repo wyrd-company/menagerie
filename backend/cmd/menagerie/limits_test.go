@@ -148,7 +148,7 @@ func TestJobOptionsCarryTheConfiguration(t *testing.T) {
 			Operations: config.OperationLimits{Rebuild: "1h", Upgrade: "30m"},
 			Phases:     map[string]config.Duration{"build": "45m"},
 		},
-		Alerts: &config.Alerts{Webhook: hook, LongRunning: "45m"},
+		Alerts: &config.Alerts{Webhook: config.WebhookURL(hook), LongRunning: "45m"},
 	}
 	opts, webhook, err = jobOptions(cfg)
 	if err != nil {

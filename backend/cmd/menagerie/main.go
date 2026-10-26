@@ -214,7 +214,7 @@ func jobOptions(cfg *config.Config) (jobs.Options, *alerts.Webhook, error) {
 	if err != nil {
 		return opts, nil, fmt.Errorf("oidc.redirect-url: %w", err)
 	}
-	webhook, err := alerts.New(alerts.Options{URL: cfg.Alerts.Webhook, Origin: redirect.Scheme + "://" + redirect.Host})
+	webhook, err := alerts.New(alerts.Options{URL: string(cfg.Alerts.Webhook), Origin: redirect.Scheme + "://" + redirect.Host})
 	if err != nil {
 		return opts, nil, err
 	}

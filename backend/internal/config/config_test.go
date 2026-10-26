@@ -135,13 +135,60 @@ func TestParseJobLimitsAndAlerts(t *testing.T) {
 }
 
 // TestInvalidWebhookIsNotEchoed keeps a webhook credential out of the
-// configuration error.
+// configuration error, whatever is wrong with the webhook.
 func TestInvalidWebhookIsNotEchoed(t *testing.T) {
-	for _, hook := range []string{"ftp://hooks.example.test/tok-0123456789", "https://hooks.example.test/%zztok-0123456789"} {
-		_, err := Parse([]byte(valid + "alerts:\n  webhook: " + hook + "\n"))
-		if err == nil || !strings.Contains(err.Error(), "alerts.webhook must be an http or https URL") || strings.Contains(err.Error(), "tok-0123456789") {
-			t.Fatalf("%s: %v", hook, err)
-		}
+	const secret = "tok-0123456789"
+	hook := "https://hooks.example.test/" + secret
+	cases := map[string]struct{ doc, want string }{
+		"int tag":     {"alerts:\n  webhook: !!int " + hook + "\n", "alerts.webhook must be an http or https URL"},
+		"bool tag":    {"alerts:\n  webhook: !!bool " + hook + "\n", "alerts.webhook must be an http or https URL"},
+		"mapping":     {"alerts:\n  webhook: {url: " + hook + "}\n", "alerts.webhook must be an http or https URL"},
+		"sequence":    {"alerts:\n  webhook: [" + hook + "]\n", "alerts.webhook must be an http or https URL"},
+		"scheme":      {"alerts:\n  webhook: ftp://hooks.example.test/" + secret + "\n", "alerts.webhook must be an http or https URL"},
+		"unparsable":  {"alerts:\n  webhook: https://hooks.example.test/%zz" + secret + "\n", "alerts.webhook must be an http or https URL"},
+		"no host":     {"alerts:\n  webhook: https:///" + secret + "\n", "alerts.webhook must be an http or https URL with a host"},
+		"empty":       {"alerts:\n  webhook: ''\n", "alerts.webhook is required"},
+		"null":        {"alerts:\n  webhook:\n", "alerts.webhook is required"},
+		"shared node": {"local-env: [&hook !!int " + hook + "]\nalerts:\n  webhook: *hook\n", "<alerts.webhook>"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(valid + tc.doc))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), secret) {
+				t.Fatalf("got %v, want %q without the credential", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestEmptyDurationsAreFoundThroughAliasesAndMerges gives an empty
+// duration through an alias or a merge key, which the decoder resolves.
+func TestEmptyDurationsAreFoundThroughAliasesAndMerges(t *testing.T) {
+	// Both anchored fields fall back to their defaults when empty.
+	const anchors = "listen: &empty ''\ntemplate-service:\n  socket: &null ~\n"
+	cases := map[string]struct{ doc, want string }{
+		"alias to empty default":   {"job-limits:\n  default: *empty\n", "job-limits.default must be a duration"},
+		"alias to null default":    {"job-limits:\n  default: *null\n", "job-limits.default must be a duration"},
+		"alias to empty phase":     {"job-limits:\n  phases:\n    build: *empty\n", "job-limits.phases.build must be a duration"},
+		"alias to null operation":  {"job-limits:\n  operations:\n    rebuild: *null\n", "job-limits.operations.rebuild must be a duration"},
+		"alias to empty threshold": {"alerts:\n  webhook: https://hooks.example.test\n  long-running: *empty\n", "alerts.long-running must be a duration"},
+		"merged default":           {"job-limits:\n  <<: {default: ''}\n", "job-limits.default must be a duration"},
+		"merged operation":         {"job-limits:\n  operations:\n    <<: {rebuild: ''}\n", "job-limits.operations.rebuild must be a duration"},
+		"merged null phase":        {"job-limits:\n  phases:\n    <<: [{build: ~}]\n", "job-limits.phases.build must be a duration"},
+		"merged threshold":         {"alerts:\n  <<: {long-running: ''}\n  webhook: https://hooks.example.test\n", "alerts.long-running must be a duration"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			doc := strings.Replace(valid, "workspace-root:", anchors+"workspace-root:", 1) + tc.doc
+			_, err := Parse([]byte(doc))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want %q", err, tc.want)
+			}
+		})
+	}
+	cfg, err := Parse([]byte(valid + "job-limits:\n  <<: {default: ''}\n  default: 2h\n"))
+	if err != nil || cfg.JobLimits.Default.Value() != 2*time.Hour {
+		t.Fatalf("a given key overrides a merged empty one: %v", err)
 	}
 }
 
