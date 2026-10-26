@@ -124,7 +124,7 @@ docker compose logs menagerie
 The log names the user the services run as, for example:
 
 ```text
-menagerie: services run as menagerie (uid 1000, gid 1000, groups 1000,999), the owner of /srv/menagerie/workspaces
+menagerie: services run as menagerie (uid 1000, gid 1000, groups 1000,998,999), the owner of /srv/menagerie/workspaces; the template service has groups 1000,998
 ```
 
 ### Who the services run as
@@ -137,8 +137,9 @@ remapped to the same uid so it can edit the workspace. If root owns the
 workspace root, the services run as root. When `workspace-root` or
 `wyrwood-directory` is a symbolic link, its target's owner and group count.
 
-The services' groups are the owner's group, the Docker socket's group and
-the Wyrwood consumer directory's group. For a non-root owner:
+The services' groups are the owner's group and the Wyrwood consumer
+directory's group; the workspace service also has the Docker socket's
+group. The template service never talks to Docker. For a non-root owner:
 
 - the Wyrwood binding needs an access group this user has;
 - `config.yml` must be readable by this user;
