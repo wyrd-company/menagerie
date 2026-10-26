@@ -101,7 +101,9 @@ The job console shows each phase:
    repository.
 2. `backup-local-changes` and `backup`: it commits every local change, as
    a [commit](#commit-from-inside-a-workspace) does, and backs the
-   workspace up.
+   workspace up. When the branch is the workspace's own, it commits but
+   does not push, and there is no `backup` phase here, so that the
+   branch's commits stay on the workspace repository.
 3. `apply`: when the branch extends the workspace's branch, the workspace
    fast-forwards to it. When both have changed, Menagerie merges them file
    by file and commits the merge as `Apply <branch> to workspace
@@ -118,15 +120,16 @@ The job fails, with nothing applied, when:
 | --- | --- |
 | `branch-not-found` | The workspace repository has no branch of that name. Nothing changed, local changes included. |
 | `fetch-failed` | The workspace repository could not be reached. Nothing changed. |
-| `not-applicable` | The branch cannot be applied cleanly. The console lists the paths, one `not applicable:` line each, and the message says why: both sides changed the same file, the branch and the workspace share no history (or more than one merge base), an untracked or ignored file, folder or link, or a nested repository, is where the branch writes, the change has a submodule or a path with a `.git` part, or a file changed after the backup. Local changes are committed and backed up. Rebase the branch on the workspace's branch, or move the files in the way, and apply again. |
+| `not-applicable` | The branch cannot be applied cleanly. The console lists the paths, one `not applicable:` line each, and the message says why: both sides changed the same file, the branch and the workspace share no history (or more than one merge base), an untracked or ignored file, folder or link, or a nested repository, is where the branch writes, the change has a submodule or a path with a `.git` part, or a file changed after the backup. Local changes are committed, and backed up unless the branch is the workspace's own. Rebase the branch on the workspace's branch, or move the files in the way, and apply again. |
 | `backup-failed` | The backup before or after the apply failed. The message says which; a failed backup after the apply leaves the applied files and does not rebuild. |
-| `apply-failed` | Writing the files failed partway. The branch did not move; the message names the backed-up commit to recover from by hand. |
+| `apply-failed` | Writing the files failed partway. The branch did not move; the message names the commit to recover from by hand. |
 
 A merge never writes conflict markers: a file both sides changed is
 `not-applicable`. The applied record `.toha.json` is merged like any other
-file. Apply a branch that is not the workspace's own: a backup replaces
-commits pushed to the workspace's own branch unless an apply brings them
-in first.
+file. Prefer a branch that is not the workspace's own. When an apply of
+the workspace's own branch is refused, the workspace repository keeps the
+pushed commits, and the message names the fetched commit, until the next
+backup of the workspace replaces them.
 
 ## Backups
 

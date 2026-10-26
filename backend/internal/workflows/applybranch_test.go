@@ -104,8 +104,12 @@ func TestApplyBranchBringsAPushedCommitIntoTheWorkspaceAndTheNextBackupKeepsIt(t
 	if snap.State != jobs.Succeeded {
 		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 	}
-	if want := []string{"fetch", "backup-local-changes", "backup", "apply", "backup", "rebuild"}; !reflect.DeepEqual(phases(job), want) {
+	// The workspace's own branch is pushed only after the apply.
+	if want := []string{"fetch", "backup-local-changes", "apply", "backup", "rebuild"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v, want %v", phases(job), want)
+	}
+	if !strings.Contains(logText(job), "own branch alpha is not pushed before the apply") {
+		t.Fatalf("log:\n%s", logText(job))
 	}
 	if body, _ := os.ReadFile(filepath.Join(folder, ".devcontainer", "devcontainer.json")); string(body) != `{"image":"alpine"}`+"\n" {
 		t.Fatalf("the folder has %q", body)
@@ -143,6 +147,9 @@ func TestApplyBranchBacksUpEveryLocalChangeAndMerges(t *testing.T) {
 	if snap.State != jobs.Succeeded {
 		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 	}
+	if want := []string{"fetch", "backup-local-changes", "backup", "apply", "backup", "rebuild"}; !reflect.DeepEqual(phases(job), want) {
+		t.Fatalf("phases %v, want %v", phases(job), want)
+	}
 	history := w.remoteHistory(t, "alpha")
 	merge, local := history[0], history[1]
 	if local.Message != "Back up local changes before applying review/devcontainer" || fileAt(t, local, "notes.txt") == "" {
@@ -167,11 +174,38 @@ func TestApplyingAnAppliedBranchChangesNothing(t *testing.T) {
 	if snap.State != jobs.Succeeded || !strings.Contains(logText(job), "is already applied") {
 		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 	}
-	if want := []string{"fetch", "backup-local-changes", "backup", "apply"}; !reflect.DeepEqual(phases(job), want) {
+	if want := []string{"fetch", "backup-local-changes", "apply"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v", phases(job))
 	}
 	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha"}) {
 		t.Fatalf("runtime %v", got)
+	}
+	w.fetchedRefGone(t, "alpha")
+}
+
+func TestARefusedApplyOfTheOwnBranchLeavesTheRemoteAsItWas(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	folder := filepath.Join(w.root, "alpha")
+	pushed := w.contribute(t, "alpha", "alpha", map[string]string{"local.txt": "first: reviewed\n"})
+	writeFile(t, folder, "local.txt", "first: operator\n")
+
+	job, snap := w.applyBranch(t, "alpha", "alpha")
+	if snap.State != jobs.Failed || snap.Error.Kind != KindNotApplicable {
+		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+	}
+	if !strings.Contains(snap.Error.Message, pushed.String()) {
+		t.Fatalf("the refusal does not name the fetched commit: %s", snap.Error.Message)
+	}
+	if history := w.remoteHistory(t, "alpha"); history[0].Hash != pushed {
+		t.Fatalf("the remote branch is at %s, want the pushed commit %s", history[0].Hash, pushed)
+	}
+	// The local change is committed, and waits for the next backup.
+	repo, _ := git.PlainOpen(folder)
+	head, _ := repo.Reference(plumbing.NewBranchReferenceName("alpha"), false)
+	local, _ := repo.CommitObject(head.Hash())
+	if local.Message != "Back up local changes before applying alpha" {
+		t.Fatalf("local branch at %q", local.Message)
 	}
 	w.fetchedRefGone(t, "alpha")
 }
@@ -278,8 +312,9 @@ func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 		}},
 		"missing branch": {KindBranchNotFound, func(t *testing.T, w *world, auth *countingAuth) string { return "absent" }},
 		"backup before the apply": {KindBackupFailed, func(t *testing.T, w *world, auth *countingAuth) string {
+			w.contribute(t, "alpha", "review/one", map[string]string{"new.txt": "new\n"})
 			auth.failAt = 2
-			return "alpha"
+			return "review/one"
 		}},
 		"not applicable": {KindNotApplicable, func(t *testing.T, w *world, auth *countingAuth) string {
 			w.contribute(t, "alpha", "review/one", map[string]string{"local.txt": "first: reviewed\n"})
@@ -301,7 +336,7 @@ func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 		}},
 		"backup after the apply": {KindBackupFailed, func(t *testing.T, w *world, auth *countingAuth) string {
 			w.contribute(t, "alpha", "alpha", map[string]string{"new.txt": "new\n"})
-			auth.failAt = 3
+			auth.failAt = 2
 			return "alpha"
 		}},
 		"rebuild": {"operation-failed", func(t *testing.T, w *world, auth *countingAuth) string {
@@ -329,8 +364,12 @@ func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 			if snap.State != jobs.Failed || snap.Error.Kind != c.kind {
 				t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 			}
-			if c.kind == KindApplyFailed && !strings.Contains(snap.Error.Message, "files written before the failure remain") {
-				t.Fatalf("an apply that failed while writing says %q", snap.Error.Message)
+			// The write failure applies the workspace's own branch, which
+			// is not pushed before the apply.
+			for _, want := range []string{"files written before the failure remain", "committed but not backed up as"} {
+				if c.kind == KindApplyFailed && !strings.Contains(snap.Error.Message, want) {
+					t.Fatalf("an apply that failed while writing says %q", snap.Error.Message)
+				}
 			}
 			all, _, _ := job.EventsAfter(0)
 			for _, e := range all {

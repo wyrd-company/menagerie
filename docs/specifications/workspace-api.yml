@@ -224,7 +224,10 @@ description: >-
   with nothing changed. In `backup-local-changes` the service commits every
   change as a `commit` job does, with the message `Back up local changes
   before applying <branch>`, and in `backup` force-pushes the branch; a
-  failure of either fails as `backup-failed` with nothing applied.
+  failure of either fails as `backup-failed` with nothing applied. When
+  `branch` is the workspace's own branch there is no `backup` phase before
+  the apply: the console says the branch is not pushed before the apply,
+  so a refused apply leaves the workspace repository as it was.
 
   In `apply`, H is the workspace branch's commit and T the fetched one.
   When T is H or an ancestor of H the job succeeds as already applied,
@@ -251,7 +254,7 @@ description: >-
   change empties. It records the result in the index and moves the branch
   last, only from H. A failure while writing fails as `apply-failed`: the
   files written before it remain, the branch stays at H, which is backed
-  up, and recovery is manual. A changed branch is then force-pushed in
+  up unless `branch` is the workspace's own, and recovery is manual. A changed branch is then force-pushed in
   `backup`, where a failure fails as `backup-failed` without a rebuild,
   and the devcontainer is rebuilt as after an upgrade, a failure failing
   with the container operations' kinds. The applied record `.toha.json`
@@ -482,7 +485,9 @@ validation-criteria: >-
   index and folder as they were. `go test ./backend/internal/workflows/`
   runs `apply-branch` through the API: a commit pushed on top of the
   workspace's branch is applied, rebuilt and kept by the next backup; a
-  local change is backed up and merged; refusals and request checks; and
+  local change is backed up and merged; a refused apply of the workspace's
+  own branch leaves the workspace repository as it was; refusals and
+  request checks; and
   every failure path, with a workspace repository address that carries a
   sentinel, has no event or error that names it. `go test -tags docker
   ./backend/internal/devcontainer/` also has a devcontainer commit a file

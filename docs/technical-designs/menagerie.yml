@@ -112,7 +112,11 @@ proposed-design:
     names the branch. The workspace service fetches only that branch into
     the private ref `refs/menagerie/apply`, deleted when the job ends; a
     missing branch changes nothing. It then commits every local change, as
-    the commit operation does, and backs the branch up. A branch already in
+    the commit operation does, and backs the branch up, except when the
+    named branch is the workspace's own: that push would replace the
+    commits about to be applied, so it waits for the push after the apply,
+    and a refused apply leaves the workspace repository as it was. A
+    branch already in
     the workspace branch's history changes nothing more. A branch that
     extends the workspace branch fast-forwards it. Otherwise the two merge
     file by file over their single merge base: a path changed on one side

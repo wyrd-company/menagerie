@@ -87,9 +87,17 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	} else {
 		fmt.Fprintf(run.Log(""), "no local changes; branch %s is at %s\n", a.name, before.Hash)
 	}
-	run.Phase("backup")
-	if err := push(ctx, a.w.opts.Remote, a.folder, a.name, run); err != nil {
-		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("backing up the workspace before applying %s failed; nothing was applied", a.branch)}
+	// The workspace's own branch is not pushed before the apply: the push
+	// would replace the commits about to be applied on the remote.
+	kept := "backed up"
+	if a.branch == a.name {
+		kept = "committed but not backed up"
+		fmt.Fprintf(run.Log(""), "the workspace's own branch %s is not pushed before the apply, so that its commits stay on the workspace repository\n", a.name)
+	} else {
+		run.Phase("backup")
+		if err := push(ctx, a.w.opts.Remote, a.folder, a.name, run); err != nil {
+			return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("backing up the workspace before applying %s failed; nothing was applied", a.branch)}
+		}
 	}
 
 	run.Phase("apply")
@@ -103,7 +111,7 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 		}
 		return &jobs.Failure{Kind: KindNotApplicable, Err: fmt.Errorf("branch %s at %s cannot be applied: %s; nothing was applied; the workspace branch is at %s", a.branch, fetched, refusal(refused), before.Hash)}
 	case errors.As(err, &failed):
-		return &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; files written before the failure remain in %s; the state before the apply is backed up as %s; recovery is manual", a.branch, failed, a.folder, before.Hash)}
+		return &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; files written before the failure remain in %s; the state before the apply is %s as %s; recovery is manual", a.branch, failed, a.folder, kept, before.Hash)}
 	case err != nil:
 		return &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; nothing was applied", a.branch, err)}
 	}

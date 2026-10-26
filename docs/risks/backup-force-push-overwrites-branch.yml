@@ -8,10 +8,11 @@ description: >-
   The local workspace is the source of truth and Menagerie force-pushes its
   branch. Commits pushed to a workspace branch from anywhere else survive
   only when Apply branch brings them into the workspace before its next
-  backup; otherwise that backup replaces them. Each apply-branch job
-  backs the workspace up before it applies, so commits pushed to the
-  workspace's own branch are kept only when that apply succeeds. A change
-  to a workspace therefore arrives on another branch: a pull request whose
+  backup; otherwise that backup replaces them. An apply of the workspace's
+  own branch commits local changes but does not push them before the
+  apply, so a refused apply leaves the workspace repository as it was; the
+  next backup of the workspace then replaces those commits. A change to a
+  workspace therefore arrives on another branch: a pull request whose
   base is the workspace branch, never merged on the forge. The manager
   applies the pull request's head branch; the backup after the apply
   pushes its commits to the workspace branch, and the forge marks the pull
