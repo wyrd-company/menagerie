@@ -158,7 +158,7 @@ func (r CommandRunner) exec(ctx context.Context, prefix string, argv ...string) 
 	}
 	code, err := r.Containers.Run(ctx, throwaway.Command{
 		Kind: throwaway.KindInitializeCommand, Job: r.Job, Image: r.Image,
-		Folder: r.Folder, Dir: r.Folder, Argv: argv, Env: env, Stdout: out, Stderr: out,
+		Folder: r.Folder, Dir: r.Folder, Argv: argv, Env: env, Stdout: out, Stderr: out, Log: out,
 	})
 	if err != nil {
 		return err

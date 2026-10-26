@@ -11,12 +11,15 @@
 // image's own, the services' user, and the default bridge network. Every
 // container carries Menagerie's labels and is removed when its command
 // ends or its context is cancelled; leftovers are removed when the
-// workspace service starts.
+// workspace service starts. No process in a container gains privileges
+// through setuid or file capabilities.
 package throwaway
 
 import (
 	"archive/tar"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -46,6 +49,9 @@ const (
 	LabelRoot = "menagerie.workspace-root"
 	// LabelJob is the id of the job the command belongs to.
 	LabelJob = "menagerie.job"
+	// LabelID is a random id of one container, so a container whose
+	// creation reply was lost can still be found and removed.
+	LabelID = "menagerie.throwaway.id"
 )
 
 // Kinds of throwaway containers.
@@ -78,6 +84,9 @@ type Command struct {
 	Copy string
 	// Stdout and Stderr receive the command's output. Nil discards it.
 	Stdout, Stderr io.Writer
+	// Log receives Menagerie's own notes on the run, such as an image
+	// pull, and never the command's output. Nil discards them.
+	Log io.Writer
 }
 
 // Containers runs commands in throwaway containers. *Docker satisfies it.
@@ -118,7 +127,8 @@ func NewDocker(client *dockerclient.Client, opts DockerOptions) *Docker {
 }
 
 // cleanupTimeout bounds the removal of a container after its command ends
-// or its context is cancelled.
+// or its context is cancelled, and the creation of a container, which a
+// cancellation does not interrupt.
 var cleanupTimeout = 30 * time.Second
 
 // ImageError reports that no runner image could be found or pulled.
@@ -142,19 +152,27 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 		return -1, errors.New("the command is empty")
 	}
 	stdout, stderr := orDiscard(c.Stdout), orDiscard(c.Stderr)
-	if err := d.ensureImage(ctx, c.Image, stderr); err != nil {
+	if err := d.ensureImage(ctx, c.Image, orDiscard(c.Log)); err != nil {
 		return -1, &ImageError{Image: c.Image, Err: err}
+	}
+	id, err := randomID()
+	if err != nil {
+		return -1, err
 	}
 	labels := map[string]string{}
 	for k, v := range d.opts.Labels {
 		labels[k] = v
 	}
-	labels[LabelKind], labels[LabelRoot], labels[LabelJob] = c.Kind, d.opts.Root, c.Job
+	labels[LabelKind], labels[LabelRoot], labels[LabelJob], labels[LabelID] = c.Kind, d.opts.Root, c.Job, id
 	env := c.Env
 	if env == nil {
 		env = []string{}
 	}
-	created, err := d.client.ContainerCreate(ctx, &container.Config{
+	// A cancellation that arrives while the Engine creates the container
+	// would lose its id, so the creation runs to its reply, bounded by
+	// cleanupTimeout, and a cancelled ctx removes the container after.
+	createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	created, err := d.client.ContainerCreate(createCtx, &container.Config{
 		Image: c.Image,
 		// The program is the entrypoint, so the image's own entrypoint and
 		// command never wrap or extend it.
@@ -167,10 +185,13 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 		AttachStdout: true,
 		AttachStderr: true,
 	}, &container.HostConfig{
-		Mounts: []mount.Mount{{Type: mount.TypeBind, Source: c.Folder, Target: c.Folder}},
+		Mounts:      []mount.Mount{{Type: mount.TypeBind, Source: c.Folder, Target: c.Folder}},
+		SecurityOpt: []string{"no-new-privileges"},
 	}, nil, nil, "")
+	cancelCreate()
 	if err != nil {
-		return -1, fmt.Errorf("create the container: %w", err)
+		// Without a reply the Engine may still have created it.
+		return -1, errors.Join(fmt.Errorf("create the container: %w", err), d.removeLabelled(ctx, id))
 	}
 	defer func() {
 		if rerr := d.remove(ctx, created.ID); rerr != nil {
@@ -229,6 +250,22 @@ func (d *Docker) remove(ctx context.Context, id string) error {
 		return fmt.Errorf("remove container %s: %w; Menagerie removes it when it next starts", shortID(id), err)
 	}
 	return nil
+}
+
+// removeLabelled force-removes every container carrying id as LabelID. It
+// outlives a cancelled ctx by at most cleanupTimeout.
+func (d *Docker) removeLabelled(ctx context.Context, id string) error {
+	listCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	list, err := d.client.ContainerList(listCtx, container.ListOptions{All: true, Filters: filters.NewArgs(filters.Arg("label", LabelID+"="+id))})
+	if err != nil {
+		return fmt.Errorf("look for the container whose creation failed: %w; Menagerie removes it when it next starts", err)
+	}
+	var errs []error
+	for _, c := range list {
+		errs = append(errs, d.remove(ctx, c.ID))
+	}
+	return errors.Join(errs...)
 }
 
 // ensureImage pulls ref when the Engine does not have it, as `docker run`
@@ -364,6 +401,14 @@ func (d *Docker) RemoveLeftovers(ctx context.Context) (int, error) {
 // owner of the workspace root.
 func ServiceUser() string {
 	return fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+}
+
+func randomID() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("container id: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
 }
 
 func orDiscard(w io.Writer) io.Writer {

@@ -37,8 +37,17 @@ type Images struct {
 	Hostname  func() (string, error)
 	MountInfo string
 
-	mu  sync.Mutex
-	own string
+	mu     sync.Mutex
+	own    string
+	search *ownSearch
+}
+
+// ownSearch is one search for Menagerie's own image, which every caller
+// waiting for it shares.
+type ownSearch struct {
+	done  chan struct{}
+	image string
+	err   error
 }
 
 // ForTemplate is the runner image of a template's hooks.
@@ -58,41 +67,75 @@ func (i *Images) ForWorkspace(ctx context.Context) (string, error) {
 	return i.ownImage(ctx)
 }
 
-// ownImage is the image id of Menagerie's own container, found once: by
-// its hostname, Docker's default for a container, else by the container
-// id in the paths Docker mounts /etc/hostname and /etc/resolv.conf from.
-// A failed search is not remembered, so a later job searches again.
+// ownImage is the image id of Menagerie's own container, found once. A
+// failed search is not remembered, so a later job searches again. One
+// search runs at a time, bounded by cleanupTimeout and shared by every
+// caller; each caller stops waiting when its ctx ends.
 func (i *Images) ownImage(ctx context.Context) (string, error) {
 	i.mu.Lock()
-	defer i.mu.Unlock()
 	if i.own != "" {
+		defer i.mu.Unlock()
 		return i.own, nil
 	}
+	s := i.search
+	if s == nil {
+		s = &ownSearch{done: make(chan struct{})}
+		i.search = s
+		go i.find(s)
+	}
+	i.mu.Unlock()
+	select {
+	case <-s.done:
+		return s.image, s.err
+	case <-ctx.Done():
+		return "", context.Cause(ctx)
+	}
+}
+
+// find runs one search and publishes its outcome.
+func (i *Images) find(s *ownSearch) {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	s.image, s.err = i.findOwn(ctx)
+	i.mu.Lock()
+	if s.err == nil {
+		i.own = s.image
+	}
+	i.search = nil
+	i.mu.Unlock()
+	close(s.done)
+}
+
+// findOwn finds Menagerie's own container by the container ids in the
+// paths Docker mounts /etc/hostname and /etc/resolv.conf from. Only when
+// those name no container does it fall back to the hostname, Docker's
+// default for a container, and then only to a container that carries
+// that hostname: any container can take a matching name or hostname,
+// but only Menagerie's own is mounted into it.
+func (i *Images) findOwn(ctx context.Context) (string, error) {
 	if i.Docker == nil {
 		return "", &ImageError{Err: errors.New("no runner-image is configured and Menagerie has no Docker client to find its own image")}
 	}
-	hostname := i.Hostname
-	if hostname == nil {
-		hostname = os.Hostname
+	candidates := containerIDs(i.mountInfo())
+	byName := len(candidates) == 0
+	if byName {
+		hostname := i.Hostname
+		if hostname == nil {
+			hostname = os.Hostname
+		}
+		if name, err := hostname(); err == nil && name != "" {
+			candidates = []string{name}
+		}
 	}
-	var candidates []string
-	name, nameErr := hostname()
-	if nameErr == nil && name != "" {
-		candidates = append(candidates, name)
-	}
-	candidates = append(candidates, containerIDs(i.mountInfo())...)
 	for _, id := range candidates {
 		info, err := i.Docker.ContainerInspect(ctx, id)
-		if err != nil || info.Config == nil || info.Image == "" {
+		if err != nil || info.ContainerJSONBase == nil || info.Config == nil || info.Image == "" {
 			continue
 		}
-		// A container found by name is ours only when it carries our
-		// hostname.
-		if id == name && info.Config.Hostname != name {
+		if byName && info.Config.Hostname != id {
 			continue
 		}
-		i.own = info.Image
-		return i.own, nil
+		return info.Image, nil
 	}
 	return "", &ImageError{Err: errors.New("no runner-image is configured and Menagerie could not find its own container to use its image; set runner-image")}
 }

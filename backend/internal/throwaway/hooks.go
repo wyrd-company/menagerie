@@ -297,7 +297,7 @@ func (h *HookRunner) run(reqCtx context.Context, req *hookRequest) (*hookReply, 
 	}
 	console := g.job.Log("hook: ")
 	var stdout, stderr bytes.Buffer
-	cmd := Command{Kind: KindHook, Job: g.job.ID, Image: image, Folder: g.job.Folder, Dir: dir, Argv: argv, Env: []string{}, Copy: copyRoot, Stdout: console, Stderr: console}
+	cmd := Command{Kind: KindHook, Job: g.job.ID, Image: image, Folder: g.job.Folder, Dir: dir, Argv: argv, Env: []string{}, Copy: copyRoot, Stdout: console, Stderr: console, Log: g.job.Log("")}
 	if req.Capture.Stdout {
 		cmd.Stdout = &stdout
 	}

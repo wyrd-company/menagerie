@@ -202,11 +202,12 @@ func agentSocket(t *testing.T) string {
 }
 
 // probe reports, one line each, what a confined command must not reach:
-// the Docker socket, the agent socket at $1, SSH_AUTH_SOCK and any
-// MENAGERIE variable. It then writes into its working directory.
+// the Docker socket, the agent socket at $1, SSH_AUTH_SOCK, any MENAGERIE
+// variable and new privileges. It then writes into its working directory.
 const probe = `for p in /var/run/docker.sock /run/docker.sock "$1"; do [ -e "$p" ] && echo "reachable $p"; done
 [ -n "${SSH_AUTH_SOCK:-}" ] && echo "SSH_AUTH_SOCK is set"
 env | grep MENAGERIE && echo "Menagerie's environment"
+grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status || echo "new privileges allowed"
 env > env.txt
 id -u > uid.txt
 echo written > written.txt
@@ -215,8 +216,9 @@ exit 4`
 
 // TestAHookCannotReachDockerTheAgentOrMenageriesEnvironment is the done-when
 // test of template hooks: a hook that looks for the Docker socket, the
-// ssh-agent socket and Menagerie's environment finds none of them, while it
-// still writes into the workspace folder as the services' user.
+// ssh-agent socket and Menagerie's environment finds none of them and
+// cannot gain privileges, while it still writes into the workspace folder
+// as the services' user.
 func TestAHookCannotReachDockerTheAgentOrMenageriesEnvironment(t *testing.T) {
 	h := newHarness(t)
 	agent := agentSocket(t)
