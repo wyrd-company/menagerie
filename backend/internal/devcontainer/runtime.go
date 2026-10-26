@@ -21,6 +21,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/docker/docker/api/types/mount"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/wyrd-company/devcontainer-builder/pkg/builder"
 	"github.com/wyrd-company/devcontainer-builder/pkg/buildkit"
@@ -43,6 +44,16 @@ const (
 	StateRunning     = "running"
 	StateStopped     = "stopped"
 	StateNoContainer = "no-container"
+)
+
+// The workspace socket in a workspace's container: the socket folder's
+// folder of the workspace is mounted read-only at WorkspaceSocketTarget,
+// and WorkspaceSocketEnv names the socket in it.
+const (
+	WorkspaceSocketTarget = "/run/menagerie"
+	WorkspaceSocketName   = "workspace.sock"
+	WorkspaceSocketEnv    = "MENAGERIE_WORKSPACE_SOCKET"
+	WorkspaceSocketPath   = WorkspaceSocketTarget + "/" + WorkspaceSocketName
 )
 
 // Status is a workspace's container state.
@@ -82,6 +93,11 @@ type Options struct {
 	Containers throwaway.Containers
 	// RunnerImage returns the image initializeCommand runs in.
 	RunnerImage func(ctx context.Context) (string, error)
+	// WorkspaceSocket returns the host folder that holds the workspace's
+	// socket, creating the socket when it is missing. The folder is
+	// mounted read-only at WorkspaceSocketTarget on each start and
+	// rebuild. Nil mounts nothing.
+	WorkspaceSocket func(folder string) (string, error)
 }
 
 // Runtime operates workspace devcontainers on one Docker Engine.
@@ -144,6 +160,10 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 		fmt.Fprintf(p.Log(""), "localEnv %s is not in local-env; it resolves to its default value\n", name)
 	}
 	env := local.values
+	socket, err := r.workspaceSocket(dc, folder, p)
+	if err != nil {
+		return err
+	}
 	if err := r.initialize(ctx, dc, folder, local.process, env, p); err != nil {
 		return err
 	}
@@ -153,7 +173,7 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
-	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx)}
+	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx), socket: socket}
 	switch dc.Mode() {
 	case spec.ModeSingle:
 		err = r.upSingle(ctx, op, replace)
@@ -179,6 +199,36 @@ type operation struct {
 	p      Progress
 	lock   *features.LockfileState
 	auth   RegistryAuth
+	// socket is the host folder mounted at WorkspaceSocketTarget; empty
+	// mounts none.
+	socket string
+}
+
+// workspaceSocket ensures the workspace's socket and returns the folder to
+// mount, or "" for none. The container's environment names the socket
+// unless the definition sets that name itself; the definition on disk is
+// not changed. Compose reads a mount as comma-separated fields with
+// surrounding spaces trimmed, so a folder it would misread is not
+// mounted.
+func (r *Runtime) workspaceSocket(dc *spec.DevContainer, folder string, p Progress) (string, error) {
+	if r.opts.WorkspaceSocket == nil {
+		return "", nil
+	}
+	source, err := r.opts.WorkspaceSocket(folder)
+	if err != nil {
+		return "", err
+	}
+	if dc.Mode() == spec.ModeCompose && (strings.Contains(source, ",") || strings.TrimSpace(source) != source) {
+		fmt.Fprintln(p.Log(""), "the workspace socket is not mounted: Compose cannot mount a folder whose name holds a comma or ends in a space")
+		return "", nil
+	}
+	if _, set := dc.ContainerEnv[WorkspaceSocketEnv]; !set {
+		if dc.ContainerEnv == nil {
+			dc.ContainerEnv = map[string]any{}
+		}
+		dc.ContainerEnv[WorkspaceSocketEnv] = WorkspaceSocketPath
+	}
+	return source, nil
 }
 
 // featureLockfile reads the definition's feature lockfile snapshot, as
@@ -263,6 +313,9 @@ func (r *Runtime) upSingle(ctx context.Context, op *operation, replace bool) err
 	if built != nil {
 		req.Features = built.Features
 	}
+	if op.socket != "" {
+		req.Mounts = append(req.Mounts, mount.Mount{Type: mount.TypeBind, Source: op.socket, Target: WorkspaceSocketTarget, ReadOnly: true})
+	}
 	res, err := r.dockerHost(p, op.auth).Up(ctx, req)
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
@@ -294,6 +347,9 @@ func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) er
 	}
 	if primary.BuildResult != nil {
 		req.Features = primary.BuildResult.Features
+	}
+	if op.socket != "" {
+		req.Mounts = append(req.Mounts, "type=bind,source="+op.socket+",target="+WorkspaceSocketTarget+",readonly")
 	}
 	res, err := r.composeHost(p, op.auth).Up(ctx, req)
 	if err != nil {

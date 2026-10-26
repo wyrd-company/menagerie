@@ -163,6 +163,76 @@ func CommitTracked(folder, workspace, message string) (Commit, error) {
 	return commit(repo, w, message, true, nil)
 }
 
+// CommitAll commits every change of the workspace on its branch, as
+// git add --all followed by a commit would: untracked, modified and
+// deleted files, and whatever is already staged. Untracked paths the
+// workspace's ignore rules exclude stay untracked, and anything inside a
+// nested Git repository stays unstaged. Nothing to commit is Changed
+// false.
+func CommitAll(folder, workspace, message string, log io.Writer) (Commit, error) {
+	c, err := changes(folder, workspace)
+	if err != nil {
+		return Commit{}, err
+	}
+	for _, p := range c.paths {
+		fmt.Fprintf(log, "staged: %s\n", p)
+	}
+	return commit(c.repo, c.w, message, false, c.paths)
+}
+
+// Pending reports whether CommitAll would commit anything. It changes
+// nothing.
+func Pending(folder, workspace string) (bool, error) {
+	c, err := changes(folder, workspace)
+	if err != nil {
+		return false, err
+	}
+	return len(c.paths) > 0 || c.indexed, nil
+}
+
+// workspaceChanges are the changes CommitAll commits.
+type workspaceChanges struct {
+	repo *git.Repository
+	w    *git.Worktree
+	// paths are the untracked, modified and deleted paths outside a nested
+	// repository, sorted. The status leaves out untracked paths the
+	// ignore rules exclude.
+	paths []string
+	// indexed is true when the index already differs from the branch.
+	indexed bool
+}
+
+func changes(folder, workspace string) (workspaceChanges, error) {
+	repo, branch, err := open(folder, workspace)
+	if err != nil {
+		return workspaceChanges{}, err
+	}
+	if err := onBranch(repo, branch); err != nil {
+		return workspaceChanges{}, err
+	}
+	w, err := repo.Worktree()
+	if err != nil {
+		return workspaceChanges{}, err
+	}
+	status, err := w.Status()
+	if err != nil {
+		return workspaceChanges{}, fmt.Errorf("read workspace status: %w", err)
+	}
+	nested := nestedRepositories{folder: folder, known: map[string]bool{}}
+	c := workspaceChanges{repo: repo, w: w}
+	for p, s := range status {
+		if s.Staging != git.Unmodified && s.Staging != git.Untracked {
+			c.indexed = true
+		}
+		changed := s.Worktree == git.Untracked || s.Worktree == git.Modified || s.Worktree == git.Deleted
+		if changed && !nested.contains(p) {
+			c.paths = append(c.paths, p)
+		}
+	}
+	sort.Strings(c.paths)
+	return c, nil
+}
+
 func open(folder, workspace string) (*git.Repository, plumbing.ReferenceName, error) {
 	branch, err := Branch(workspace)
 	if err != nil {

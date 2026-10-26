@@ -368,3 +368,18 @@ func TestACancelledCommandsTargetIsNotCopiedBack(t *testing.T) {
 		t.Fatalf("left %v", left)
 	}
 }
+
+// TestAFoldersCommandMountsOnlyItsFolder pins the one mount of a throwaway
+// container: its job's folder at its own path. Nothing else of the host,
+// such as the workspace socket folder, is ever mounted into one.
+func TestAFoldersCommandMountsOnlyItsFolder(t *testing.T) {
+	e, client := newEngine(t)
+	c := sample(t)
+	if code, err := NewDocker(client, DockerOptions{Root: "/srv"}).Run(context.Background(), c); err != nil || code != 0 {
+		t.Fatalf("run %d %v", code, err)
+	}
+	mounts := e.creates[0].HostConfig.Mounts
+	if len(mounts) != 1 || mounts[0].Type != "bind" || mounts[0].Source != c.Folder || mounts[0].Target != c.Folder || len(e.creates[0].HostConfig.Binds) != 0 {
+		t.Fatalf("mounts %+v binds %v", mounts, e.creates[0].HostConfig.Binds)
+	}
+}

@@ -210,6 +210,9 @@
             },
             "upgrade": {
               "$ref": "#/$defs/duration"
+            },
+            "commit": {
+              "$ref": "#/$defs/duration"
             }
           }
         },
@@ -255,6 +258,46 @@
         "long-running": {
           "$ref": "#/$defs/duration",
           "description": "Running time after which one job-long-running alert is sent for a job."
+        }
+      }
+    },
+    "auto-commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Commits and backs up every workspace that has changes and no unfinished job, on a schedule, with the message chore(menagerie): automatic commit. A busy workspace is skipped until the next sweep. Absent, no commit is scheduled.",
+      "required": [
+        "every"
+      ],
+      "properties": {
+        "every": {
+          "$ref": "#/$defs/duration",
+          "description": "Time between two sweeps of the workspace root; the first is one interval after start-up."
+        }
+      }
+    },
+    "workspace-socket": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Gives each workspace's devcontainer a socket at /run/menagerie/workspace.sock that commits and backs up its own workspace, and the workspace-commit client beside it. Absent, no socket.",
+      "required": [
+        "folder"
+      ],
+      "properties": {
+        "folder": {
+          "type": "string",
+          "description": "Absolute folder, at the same path on the host and in Menagerie's container, owned by the services' user. It holds one folder per workspace, mounted read-only into that workspace's devcontainer. Neither inside nor containing the workspace root, the Wyrwood directory or the candidate folder; no comma."
+        },
+        "min-interval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/duration"
+            },
+            {
+              "const": "0"
+            }
+          ],
+          "default": "1m",
+          "description": "Shortest time between two accepted commits of a workspace through its socket; 0 for none."
         }
       }
     }

@@ -18,6 +18,7 @@ const operationLabel: Record<string, string> = {
   start: "starting",
   stop: "stopping",
   rebuild: "rebuilding",
+  commit: "committing",
 };
 
 function useFleet() {
