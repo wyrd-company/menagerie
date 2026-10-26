@@ -124,7 +124,7 @@ func TestServerServesCreateAndUpgrade(t *testing.T) {
 		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
 		TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")},
 	}
-	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background())))
+	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{})))
 	defer server.Close()
 	for _, tc := range []struct{ path, body, kind string }{
 		{"/api/jobs", `{"operation":"create","workspace":"a..b","templateId":"sample"}`, "invalid-workspace-name"},
@@ -174,7 +174,7 @@ func TestServerTakesInterviewAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := jobs.NewManager(ctx)
+	manager := jobs.NewManager(ctx, jobs.Options{})
 	defer manager.Wait()
 	defer cancel()
 	cfg := &config.Config{
@@ -231,7 +231,7 @@ func TestServerServesTheEmbeddedUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
-	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background())))
+	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{})))
 	defer server.Close()
 	for path, want := range map[string]string{
 		"/":                         "ui-index",

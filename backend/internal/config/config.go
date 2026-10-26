@@ -12,14 +12,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/wyrd-company/menagerie/backend/internal/alerts"
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
+	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 )
 
@@ -59,6 +64,89 @@ type Config struct {
 	// devcontainer definition may read through ${localEnv:NAME}. Absent,
 	// a definition reads none.
 	LocalEnv []string `yaml:"local-env"`
+	// JobLimits limits the running time of jobs. Absent, no job has a
+	// limit.
+	JobLimits *JobLimits `yaml:"job-limits"`
+	// Alerts names the webhook told about failed and long-running jobs.
+	// Absent, no alert is sent.
+	Alerts *Alerts `yaml:"alerts"`
+}
+
+// Duration is a positive time span of whole hours, minutes and seconds,
+// such as 2h, 45m or 1h30m. Empty is an absent field: a field given with
+// no value is an error (see givenEmpty).
+type Duration string
+
+// durationPattern is the form of a Duration: units h, m and s, in that
+// order, each at most once.
+var durationPattern = regexp.MustCompile(`^([0-9]+h([0-9]+m)?([0-9]+s)?|[0-9]+m([0-9]+s)?|[0-9]+s)$`)
+
+// Value is the duration; zero when empty.
+func (d Duration) Value() time.Duration {
+	v, _ := time.ParseDuration(string(d))
+	return v
+}
+
+func (d Duration) validate(field string) error {
+	if d == "" {
+		return nil
+	}
+	if !durationPattern.MatchString(string(d)) {
+		return fmt.Errorf("%s must be whole hours, minutes and seconds, such as 2h, 45m or 1h30m", field)
+	}
+	if v, err := time.ParseDuration(string(d)); err != nil || v <= 0 {
+		return fmt.Errorf("%s must be a positive duration such as 45m", field)
+	}
+	return nil
+}
+
+// JobLimits are the time limits on a job's running time. Time in
+// waiting-for-answers does not count.
+type JobLimits struct {
+	// Default limits every operation without its own limit.
+	Default Duration `yaml:"default"`
+	// Operations limits jobs by operation.
+	Operations OperationLimits `yaml:"operations"`
+	// Phases limits each stay in a phase, keyed by a name in jobs.Phases.
+	Phases map[string]Duration `yaml:"phases"`
+}
+
+// OperationLimits is one optional limit per operation.
+type OperationLimits struct {
+	Start   Duration `yaml:"start"`
+	Stop    Duration `yaml:"stop"`
+	Rebuild Duration `yaml:"rebuild"`
+	Create  Duration `yaml:"create"`
+	Upgrade Duration `yaml:"upgrade"`
+}
+
+// ByName maps each operation name to its limit, empty included.
+func (o OperationLimits) ByName() map[string]Duration {
+	return map[string]Duration{"start": o.Start, "stop": o.Stop, "rebuild": o.Rebuild, "create": o.Create, "upgrade": o.Upgrade}
+}
+
+// Alerts names the webhook that receives job alerts.
+type Alerts struct {
+	// Webhook is the http or https URL alerts are posted to. It can carry
+	// a credential and is never logged.
+	Webhook WebhookURL `yaml:"webhook"`
+	// LongRunning, when given, sends one alert for a job whose running
+	// time passes it.
+	LongRunning Duration `yaml:"long-running"`
+}
+
+// WebhookURL is the alert webhook URL. It can carry a credential, so no
+// configuration error names its value.
+type WebhookURL string
+
+// UnmarshalYAML accepts a string and refuses any other node with a fixed
+// message.
+func (w *WebhookURL) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
+		return fieldError("alerts.webhook must be an http or https URL")
+	}
+	*w = WebhookURL(n.Value)
+	return nil
 }
 
 // Template is one approved template.
@@ -126,7 +214,9 @@ func Load(path string) (*Config, error) {
 }
 
 // Parse decodes and validates a configuration document. Unknown fields are
-// errors, so a misspelled key cannot silently fall back to a default.
+// errors, so a misspelled key cannot silently fall back to a default. No
+// error names the value of a duration or of the alerts webhook URL: an
+// anchor can share the webhook's node with any field.
 func Parse(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -135,17 +225,75 @@ func Parse(data []byte) (*Config, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, errors.New("document is empty")
 		}
-		return nil, err
+		return nil, decodeError(data, err)
 	}
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("expected a single YAML document")
 	}
 	cfg.applyDefaults()
-	if err := cfg.validate(); err != nil {
+	if err := errors.Join(append(givenEmpty(data), cfg.validate())...); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// durationNodes holds the node given for each duration field, with merge
+// keys applied by the decoder. A node of kind zero is a field not given.
+type durationNodes struct {
+	JobLimits *struct {
+		Default    yaml.Node            `yaml:"default"`
+		Operations map[string]yaml.Node `yaml:"operations"`
+		Phases     map[string]yaml.Node `yaml:"phases"`
+	} `yaml:"job-limits"`
+	Alerts *struct {
+		LongRunning yaml.Node `yaml:"long-running"`
+	} `yaml:"alerts"`
+}
+
+// givenEmpty reports the duration fields given with no value, such as
+// "rebuild:", `default: ""` or an alias of an empty value. They decode as
+// if absent, which would drop a limit or fall back to another without a
+// word, so the nodes the decoder chose for them tell them apart.
+func givenEmpty(data []byte) []error {
+	var doc durationNodes
+	if yaml.Unmarshal(data, &doc) != nil {
+		return nil
+	}
+	var errs []error
+	check := func(field string, n *yaml.Node) {
+		n = resolved(n)
+		if n.Kind == yaml.ScalarNode && (n.ShortTag() == "!!null" || n.Value == "") {
+			errs = append(errs, fmt.Errorf("%s must be a duration", field))
+		}
+	}
+	if l := doc.JobLimits; l != nil {
+		check("job-limits.default", &l.Default)
+		for _, group := range []struct {
+			name  string
+			nodes map[string]yaml.Node
+		}{{"operations", l.Operations}, {"phases", l.Phases}} {
+			for _, name := range slices.Sorted(maps.Keys(group.nodes)) {
+				n := group.nodes[name]
+				if !keyPattern.MatchString(name) {
+					continue
+				}
+				check("job-limits."+group.name+"."+name, &n)
+			}
+		}
+	}
+	if a := doc.Alerts; a != nil {
+		check("alerts.long-running", &a.LongRunning)
+	}
+	return errs
+}
+
+// resolved follows aliases to the node they name.
+func resolved(n *yaml.Node) *yaml.Node {
+	for n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
+	return n
 }
 
 func (c *Config) applyDefaults() {
@@ -218,6 +366,12 @@ func (c *Config) validate() error {
 	if c.RegistryCredentials != nil {
 		errs = append(errs, c.RegistryCredentials.validate()...)
 	}
+	if c.JobLimits != nil {
+		errs = append(errs, c.JobLimits.validate()...)
+	}
+	if c.Alerts != nil {
+		errs = append(errs, c.Alerts.validate()...)
+	}
 	names := map[string]int{}
 	for i, name := range c.LocalEnv {
 		if !envNamePattern.MatchString(name) {
@@ -229,6 +383,46 @@ func (c *Config) validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (l *JobLimits) validate() []error {
+	var errs []error
+	if err := l.Default.validate("job-limits.default"); err != nil {
+		errs = append(errs, err)
+	}
+	ops := l.Operations.ByName()
+	for _, name := range slices.Sorted(maps.Keys(ops)) {
+		if err := ops[name].validate("job-limits.operations." + name); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(l.Phases)) {
+		if !slices.Contains(jobs.Phases, name) {
+			key := "job-limits.phases." + name
+			if !keyPattern.MatchString(name) {
+				key = "a key of job-limits.phases"
+			}
+			errs = append(errs, fmt.Errorf("%s is not a phase; phases are %s", key, strings.Join(jobs.Phases, ", ")))
+			continue
+		}
+		if err := l.Phases[name].validate("job-limits.phases." + name); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+func (a *Alerts) validate() []error {
+	var errs []error
+	if a.Webhook == "" {
+		errs = append(errs, errors.New("alerts.webhook is required"))
+	} else if err := alerts.ValidURL(string(a.Webhook)); err != nil {
+		errs = append(errs, fmt.Errorf("alerts.webhook %w", err))
+	}
+	if err := a.LongRunning.validate("alerts.long-running"); err != nil {
+		errs = append(errs, err)
+	}
+	return errs
 }
 
 func (r *RegistryCredentials) validate() []error {

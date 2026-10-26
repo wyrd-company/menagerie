@@ -85,3 +85,11 @@ Menagerie lists it like any other folder.
 Start runs `initializeCommand` before it starts the container, as rebuild
 does. When `initializeCommand` fails, the job fails with
 `initialize-command-failed` and the container stays stopped.
+
+## Time limits
+
+The job console shows how long a job has run. When the configuration sets
+[job time limits](configuration.md#job-time-limits), it also shows the
+limit that ends first and the time left; while a job waits for your
+answers the limit pauses. A job past its limit fails with `timed-out`, and
+the message names the phase and the limit.

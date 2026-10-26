@@ -182,7 +182,7 @@ templates:
 	}
 	t.Cleanup(func() { docker.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := jobs.NewManager(ctx)
+	manager := jobs.NewManager(ctx, jobs.Options{})
 	handler, err := newHandler(cfg, root, devcontainer.New(docker, devcontainer.Options{}), manager)
 	if err != nil {
 		t.Fatal(err)

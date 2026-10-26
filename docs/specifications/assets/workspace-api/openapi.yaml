@@ -278,7 +278,7 @@ components:
       enum: [running, waiting-for-answers, succeeded, failed, ended]
     Job:
       type: object
-      required: [jobId, workspace, operation, state, phase, createdAt, finishedAt, lastEventId, error]
+      required: [jobId, workspace, operation, state, phase, createdAt, finishedAt, lastEventId, error, deadline, limit]
       additionalProperties: false
       properties:
         jobId:
@@ -304,6 +304,31 @@ components:
           oneOf:
             - type: "null"
             - $ref: "#/components/schemas/JobError"
+        deadline:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When the limit that ends first passes. Null when no limit
+            applies, while the job waits for answers, and once it has
+            ended.
+        limit:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/JobLimit"
+    JobLimit:
+      type: object
+      required: [seconds, scope]
+      additionalProperties: false
+      description: >-
+        The time limit that ends first: the job's own (its operation's, else
+        the default) or its current phase's. Limits count running time only.
+      properties:
+        seconds:
+          type: number
+          exclusiveMinimum: 0
+        scope:
+          type: string
+          enum: [job, phase]
     JobError:
       type: object
       required: [kind, message]
@@ -312,6 +337,7 @@ components:
         kind:
           type: string
           examples:
+            - timed-out
             - operation-failed
             - initialize-command-failed
             - registry-credentials-unavailable
@@ -328,12 +354,19 @@ components:
           type: string
     StateEvent:
       type: object
-      required: [state, phase]
+      required: [state, phase, deadline, limit]
       properties:
         state:
           $ref: "#/components/schemas/JobState"
         phase:
           type: string
+        deadline:
+          type: [string, "null"]
+          format: date-time
+        limit:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/JobLimit"
     LogEvent:
       type: object
       required: [text]
