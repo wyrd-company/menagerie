@@ -213,8 +213,9 @@ description: >-
   `.git/info/exclude` and the file its repository's own
   `core.excludesFile` names; Menagerie's own Git configuration is never
   read. An exclude file that does not resolve, through symbolic links, to
-  a regular file inside the workspace folder is skipped, and the job
-  console notes it without its path. In the `commit` phase it commits on
+  a regular file of at most 1 MiB inside the workspace folder is skipped,
+  and the job console notes it without its path; the files it excludes
+  can then be committed. In the `commit` phase it commits on
   the workspace branch, as Menagerie, when the staged index differs from
   the branch's commit; in the
   `backup` phase it force-pushes the branch, also when nothing changed. A
@@ -240,7 +241,10 @@ description: >-
   and on each start that creates the container or reuses one that has the
   mount. A start that reuses a container created without the mount leaves
   out the mount and the variable, so the container is not recreated, and
-  the job log notes that the socket attaches at the next rebuild. A Compose
+  the job log notes that the socket attaches at the next rebuild. A start
+  that recreates such a container for another reason, such as a changed
+  `containerEnv`, creates it without the socket too, and the job log says
+  that the socket attaches at the next rebuild. A Compose
   workspace whose socket folder path holds a comma or ends in a space gets
   no mount, and the job log says so. The socket serves the one workspace
   it was created for and speaks HTTP/1.1 JSON, defined by
@@ -254,8 +258,8 @@ description: >-
   client that disconnects does not cancel the job. When Menagerie shuts
   down while a request waits, it answers 503 `{"error":{"kind":
   "shutting-down","jobId"}}`, with `jobId` when the request had started a
-  job, and a request that arrives during shutdown gets the same without
-  `jobId`. Each workspace's socket has at most 32 connections at once and
+  job, and a request that arrives, or finishes its body, during shutdown
+  gets the same without `jobId` and starts no job. Each workspace's socket has at most 32 connections at once and
   the process 256; a connection over either is closed when accepted. The
   request header and the body each have 10 seconds, and an idle
   connection is closed after 60; the wait for the job has none, as the

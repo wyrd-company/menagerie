@@ -255,8 +255,10 @@ up. A workspace with a job in progress is skipped until the next check.
 Files the workspace's ignore rules exclude, and repositories cloned inside
 it, are not committed. The ignore rules are the workspace's `.gitignore`
 files, its `.git/info/exclude`, and the file its repository's own
-`core.excludesFile` names when that file is inside the workspace folder;
-an exclude file elsewhere is skipped, with a note in the job's console.
+`core.excludesFile` names when that file is a regular file of at most
+1 MiB inside the workspace folder, with symbolic links resolved. Any other
+exclude file, elsewhere or larger, is skipped with a note in the job's
+console, and the files it excludes can be committed.
 Menagerie's own Git configuration does not apply. Without `auto-commit`
 nothing is committed on a schedule.
 
@@ -273,8 +275,10 @@ The socket only knows its own workspace, and needs no token.
   host and in Menagerie's container, like the workspace root. It must exist
   before Menagerie starts and belong to the owner of the workspace root,
   the user the services run as; Menagerie sets its mode to 0700. It must
-  not hold a comma, and must be neither inside nor around the workspace
-  root, the Wyrwood directory or the candidate folder.
+  not hold a comma, no part of its path may be a symbolic link, and it
+  must be neither inside nor around the workspace root, the Wyrwood
+  directory or the candidate folder. The workspace root is also compared
+  with its symbolic links resolved.
 - `min-interval` is the shortest time between two commits of one workspace
   through its socket, `1m` by default; `0` allows any number. A request
   that comes sooner is refused with the time to wait, so a loop in a
@@ -283,8 +287,10 @@ The socket only knows its own workspace, and needs no token.
 A devcontainer gets the socket when its container is created or rebuilt.
 A start keeps a container that was created without the socket as it is,
 so it is not recreated, and the job's console notes that the socket
-attaches at the next rebuild. A Compose workspace gets the socket on its
-primary service only.
+attaches at the next rebuild. A start that recreates the container for
+another reason, such as a changed `containerEnv`, also creates it without
+the socket, and the console says so; the socket attaches at the next
+rebuild. A Compose workspace gets the socket on its primary service only.
 
 Each workspace's socket takes at most 32 connections at once, and all
 sockets together 256. A request has 10 seconds for its header and 10 for

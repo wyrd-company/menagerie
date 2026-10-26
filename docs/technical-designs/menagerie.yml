@@ -134,8 +134,9 @@ proposed-design:
     `.git/config`, never its own Git configuration, and the repository's
     configuration is written from inside the devcontainer, so an exclude
     file is used only when it resolves, through symbolic links, to a
-    regular file inside the workspace folder; otherwise the job console
-    gets a fixed note, without the path, and the file is skipped. When the
+    regular file of at most 1 MiB inside the workspace folder; otherwise
+    the job console gets a fixed note, without the path, and the file is
+    skipped, so the files it excludes can be committed. When the
     staged index differs from the branch's commit, it commits on the
     workspace branch as Menagerie. Its `backup` phase force-pushes the
     branch as every backup does, also when nothing changed, so a backup
@@ -158,8 +159,12 @@ proposed-design:
     devcontainer reaches at `/run/menagerie/workspace.sock`, the only
     Menagerie endpoint inside a devcontainer. The socket folder is mounted
     at the same path on the host and in Menagerie's container, belongs to
-    the services' user and has mode 0700. It holds a folder per workspace,
-    mode 0755, with `workspace.sock`, mode 0666, and
+    the services' user and has mode 0700. No part of its path may be a
+    symbolic link, so the host's bind source is the folder Menagerie
+    checks, and start-up refuses a socket folder inside the workspace root
+    or around it, compared with the root's symbolic links resolved, so no
+    workspace's container reaches another's socket. It holds a folder
+    per workspace, mode 0755, with `workspace.sock`, mode 0666, and
     `bin/workspace-commit`, the static client copied from Menagerie's
     image. Each rebuild, and each start that creates the container or
     reuses one that already has the mount, of a single container or a
@@ -170,7 +175,11 @@ proposed-design:
     mount leaves out the mount and the variable, because adding them
     changes the configuration devcontainer-builder compares and Compose
     would recreate the primary; the job console notes that the socket
-    attaches at the next rebuild. The folder is mounted,
+    attaches at the next rebuild. devcontainer-builder offers no way to
+    learn before Up whether it will recreate the container, so a start
+    whose definition changed in another way still recreates it, without
+    the socket, and the console says the socket attaches at the next
+    rebuild. The folder is mounted,
     not the socket, so a socket that a restarted Menagerie re-creates is
     reached through the same mount. The workspace service creates a
     listener for every workspace at start-up, and before each start or
@@ -186,7 +195,11 @@ proposed-design:
     state, commit, whether it changed and was pushed, and the error kind.
     A client that goes away does not cancel the job. When Menagerie shuts
     down, a request waiting for its job is answered 503 `shutting-down`
-    with the job's id, and the client exits as for a retry. Each
+    with the job's id, and the client exits as for a retry. A request is
+    admitted under the same lock that shutdown takes to begin, so no job
+    starts once shutdown has begun; such a request is answered
+    `shutting-down` without an id. A commit job whose context has already
+    ended stops before its commit phase and writes nothing. Each
     workspace's socket takes at most 32 connections at once and the
     process 256; a connection over either bound is closed as soon as it is
     accepted. A request's header and its body each have 10 seconds and an

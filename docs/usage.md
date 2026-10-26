@@ -113,7 +113,9 @@ with its whole log. The exit status says what happened:
 A container gets the socket when it is created or rebuilt, so a workspace
 whose container was created before sockets were configured needs one
 **Rebuild**; a **Start** keeps that container as it is, and its console
-says the socket attaches at the next rebuild. A restart of
+says the socket attaches at the next rebuild. A **Start** that recreates
+the container for a changed definition also leaves the socket out until
+the next rebuild. A restart of
 Menagerie does not: the socket comes back in the same mounted folder.
 `MENAGERIE_WORKSPACE_SOCKET` names the socket inside the devcontainer.
 
