@@ -261,9 +261,16 @@ func TestImageOperatorWorkspace(t *testing.T) {
 	gitRun(t, repo, "add", "-A")
 	gitRun(t, repo, "commit", "-q", "-m", "v2")
 	gitRun(t, repo, "tag", "v2")
-	// The operator owns the workspace root and the templates, as on a host.
+	// The workspace socket folder, mounted at its own path with tmp.
+	socketDir := filepath.Join(base, "sockets")
+	if err := os.Mkdir(socketDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The operator owns the workspace root, the socket folder and the
+	// templates, as on a host.
 	chownTree(t, filepath.Join(base, "templates"))
 	chownTree(t, rootDir)
+	chownTree(t, socketDir)
 
 	// The workspace repository and the agent: the agent's folder and socket
 	// belong to an access group, as Wyrwood's do.
@@ -301,7 +308,9 @@ oidc:
 templates:
   - {id: sample-kit-v1, name: "Sample kit, version 1", address: 'file://%s@v1'}
   - {id: sample-kit-v2, name: "Sample kit, version 2", address: 'file://%s@v2'}
-`, port, rootDir, host.URL("backups.git"), agentDir, p.url, client["id"], site+auth.CallbackPath, repo, repo))
+workspace-socket:
+  folder: %s
+`, port, rootDir, host.URL("backups.git"), agentDir, p.url, client["id"], site+auth.CallbackPath, repo, repo, socketDir))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -441,6 +450,33 @@ templates:
 		tip, _ := backups.CommitObject(ref.Hash())
 		if tip == nil || tip.NumParents() != 1 {
 			t.Errorf("the backup branch's upgrade commit: %v", tip)
+		}
+	})
+
+	t.Run("the devcontainer user commits and backs up through the workspace socket", func(t *testing.T) {
+		c.t = t
+		if out := c.mustExec("stat", "-c", "%a %u", socketDir); out != fmt.Sprintf("700 %d", operatorUID) {
+			t.Errorf("socket folder %q", out)
+		}
+		out, code := devcontainerExec(t, c, folder, `echo inside > inside.txt && test "$MENAGERIE_WORKSPACE_SOCKET" = /run/menagerie/workspace.sock && /run/menagerie/bin/workspace-commit -m "chore: commit from inside"`)
+		if code != 0 || !strings.Contains(out, "backed up: pushed") {
+			t.Fatalf("workspace-commit exited %d: %q\n%s", code, out, c.logs(time.Time{}))
+		}
+		backups, _ := git.PlainOpen(filepath.Join(host.Dir, "backups.git"))
+		ref, err := backups.Reference(plumbing.NewBranchReferenceName("alpha"), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tip, _ := backups.CommitObject(ref.Hash())
+		if f, err := tip.File("inside.txt"); err != nil || tip.Message != "chore: commit from inside" {
+			t.Fatalf("backup tip %q: %v %v", tip.Message, f, err)
+		}
+		// The default minimum interval refuses a second commit at once.
+		if out, code := devcontainerExec(t, c, folder, "/run/menagerie/bin/workspace-commit again"); code != 3 || !strings.Contains(out, "retry in") {
+			t.Errorf("a second commit exited %d: %q", code, out)
+		}
+		if others := notOperatorOwned(t, folder); len(others) > 0 {
+			t.Errorf("paths the operator does not own: %v", others)
 		}
 	})
 

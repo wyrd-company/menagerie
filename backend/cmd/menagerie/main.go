@@ -110,7 +110,11 @@ func run(configPath string) error {
 	}
 	manager := jobs.NewManager(ctx, jobOpts)
 	commitJobs := commits.New(commits.Options{Root: root, Remote: backupRemote(cfg), Jobs: manager})
-	sockets, err := workspaceSockets(ctx, cfg, root, commitJobs, &opts)
+	client, err := clientPath()
+	if err != nil {
+		return err
+	}
+	sockets, err := workspaceSockets(ctx, cfg, root, commitJobs, client, &opts)
 	if err != nil {
 		return err
 	}
@@ -159,18 +163,15 @@ func run(configPath string) error {
 	return nil
 }
 
-// workspaceSockets opens the socket folder, when one is configured, gives
-// the devcontainer runtime its mount, and creates the socket of every
-// workspace under root. A workspace whose socket fails is logged; it gets
-// its socket, or fails, at its next start or rebuild.
-func workspaceSockets(ctx context.Context, cfg *config.Config, root *workspace.Root, starter workspacesocket.Starter, opts *devcontainer.Options) (*workspacesocket.Sockets, error) {
+// workspaceSockets opens the socket folder, when one is configured, with
+// the client at the path client, gives the devcontainer runtime its mount,
+// and creates the socket of every workspace under root. A workspace whose
+// socket fails is logged; it gets its socket, or fails, at its next start
+// or rebuild.
+func workspaceSockets(ctx context.Context, cfg *config.Config, root *workspace.Root, starter workspacesocket.Starter, client string, opts *devcontainer.Options) (*workspacesocket.Sockets, error) {
 	c := cfg.WorkspaceSocket
 	if c == nil {
 		return nil, nil
-	}
-	client, err := clientPath()
-	if err != nil {
-		return nil, err
 	}
 	sockets, err := workspacesocket.Open(workspacesocket.Options{
 		Folder:      c.Folder,
