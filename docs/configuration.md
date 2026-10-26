@@ -96,7 +96,10 @@ list can be empty.
 Template hooks and `initializeCommand` run in throwaway containers, one per
 command. A container mounts only the workspace folder, at its own path, and
 runs as the owner of the workspace root on Docker's default bridge network,
-unable to gain privileges through setuid programs.
+unable to gain privileges through setuid programs. An upgrade's hooks mount
+nothing: they run in a copy of Toha's candidate, the upgraded checkout
+Toha merges into the workspace afterwards, so they never write to the
+workspace folder themselves.
 It cannot reach the Docker socket, the Wyrwood sockets or Menagerie's
 environment, and it is removed when its command ends.
 
@@ -242,3 +245,10 @@ default. When you change either, set `MENAGERIE_HEALTH_URL` or
 `MENAGERIE_TEMPLATE_SOCKET` in the container's environment to match, so the
 health check asks the right place. A changed socket must be in a folder only
 the services' user can enter.
+
+`template-service.candidate-folder` is the template service's temporary
+folder, `/var/lib/menagerie/candidates` by default, where Toha builds an
+upgrade's candidate. Menagerie runs an upgrade's hooks only against a
+folder inside it. It must be an absolute folder other than `/`, neither
+inside `workspace-root` nor containing it, and only the services' user may
+enter it; the template service creates it when it is missing.

@@ -65,8 +65,11 @@ The answers are kept in the workspace, in `.toha.json`.
 **Begin upgrade**. Menagerie first commits any local changes and backs the
 workspace up, so the state before the upgrade is on its branch. Then it asks
 only the questions the new version adds; earlier answers come from
-`.toha.json`. Toha merges the new version into the files, keeping your
-edits, and Menagerie commits, backs up and rebuilds the devcontainer.
+`.toha.json`. Toha applies the new version to a separate checkout of the
+workspace and runs the template's hooks there, each in a throwaway
+container that sees only that checkout; then it merges the result into
+the files, keeping your edits, and Menagerie commits, backs up and
+rebuilds the devcontainer.
 
 When the new version and a local edit change the same lines, the upgrade
 writes conflict markers, commits and backs them up, and stops before the

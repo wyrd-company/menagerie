@@ -122,20 +122,28 @@ description: >-
 
   Template hooks. Each generate or apply carries a new hook token, which
   the service grants until that request returns. The template service
-  sends each hook to the service's hook runner socket with the token, and
-  the service runs it in a throwaway container: the workspace folder
-  mounted read-write at its own path and nothing else, the hook's working
-  directory under it, an empty environment beside the runner image's own,
-  the services' user, no new privileges and the default bridge network. A
-  script hook's template folder is copied into the container. The job
-  console shows one line naming the runner image, a line for an image
-  pull, then the streams the hook does not capture, each line prefixed
-  `hook: `; captured streams go back to Toha only. The
-  runner image is the template entry's `runner-image`, else the global
-  `runner-image`, else Menagerie's own image. When none can be found or
-  pulled, the job fails as `runner-image-unavailable`, or as
-  `registry-credentials-unavailable` when the pull's credentials could not
-  be read.
+  sends each hook to the service's hook runner socket with the token and
+  Toha's target, and the service runs it in a throwaway container: for a
+  create's generate, the workspace folder mounted read-write at its own
+  path and nothing else; for an upgrade's apply, Toha's candidate copied
+  in at its own path, no mount, and the candidate copied back when the
+  hook exits, so Toha merges what the hook wrote and the hook itself never
+  writes to the workspace folder. A create's token admits only the
+  workspace folder and folders in it, an upgrade's only a folder inside
+  `template-service.candidate-folder`. The hook's working directory is
+  under its target, with an empty environment beside the runner image's
+  own, the services' user, no new privileges and the default bridge
+  network. A script hook's template folder is copied into the container.
+  The job console shows one line naming the runner image, a line for an
+  image pull, then the streams the hook does not capture, each line
+  prefixed `hook: `; captured streams go back to Toha only. A hook that
+  found no runner image, or whose container failed, adds a console line
+  that names the runner image, the stage that failed and the Engine
+  error's class. The runner image is the template entry's `runner-image`,
+  else the global `runner-image`, else Menagerie's own image. When none
+  can be found or pulled, the job fails as `runner-image-unavailable`, or
+  as `registry-credentials-unavailable` when the pull's credentials could
+  not be read.
 
 
   Create. After the interview completes the service creates the workspace
@@ -283,10 +291,14 @@ validation-criteria: >-
   covering waiting, single answers, flow ends, failures and slot release;
   `go test ./backend/internal/backup/` pushes through an isolated SSH server
   and agent; `go test -tags templateservice ./backend/internal/workflows/`
-  runs create and upgrade against the real template service. `go test
+  runs create and upgrade against the real template service, with an
+  upgrade whose hook changes a tracked file's content that only Toha's
+  merge brings into the workspace folder. `go test
   ./backend/internal/throwaway/` covers the hook runner: token refusal and
-  revocation, folder and working directory checks, linked working
-  directories, captured streams that never reach the console, exit codes,
+  revocation, folder, candidate and working directory checks, each token
+  kind refusing the other kind's target, linked working directories, a
+  candidate copied in and back and never mounted, a copy back that refuses
+  unsafe entries and never writes through a link, captured streams that never reach the console, exit codes,
   cancellation that waits for the container's removal, runner image
   choice, and a captured value carried through every failure, the fake
   Engine's failure at each container stage included, that reaches no
@@ -297,7 +309,9 @@ validation-criteria: >-
   real Docker Engine, and checks that a hook and an `initializeCommand`
   that look for the Docker socket, the SSH agent and Menagerie's
   environment find none, while they still write into the workspace folder;
-  that a script hook runs from its copied template; that a revoked hook
+  that a script hook runs from its copied template; that an upgrade's
+  hook changes only its candidate, which then holds exactly what it left;
+  that a revoked hook
   leaves no container and stops writing; that the Engine's failure to start
   a hook named by a captured value, and a working directory linked out of
   the folder, reach no refusal or console line; and that start-up removes

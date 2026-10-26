@@ -121,6 +121,12 @@
           "pattern": "^/",
           "default": "/run/menagerie/hook-runner.sock",
           "description": "Unix socket on which the workspace service runs the template service's hooks in throwaway containers. Differs from socket."
+        },
+        "candidate-folder": {
+          "type": "string",
+          "pattern": "^/",
+          "default": "/var/lib/menagerie/candidates",
+          "description": "The template service's temporary folder, where Toha builds an upgrade's candidate. The workspace service runs an upgrade's hooks only against a folder inside it. Absolute and clean, not /, and neither inside workspace-root nor containing it."
         }
       }
     },

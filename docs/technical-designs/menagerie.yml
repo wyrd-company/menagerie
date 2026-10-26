@@ -135,8 +135,9 @@ proposed-design:
     Each template hook and each `initializeCommand` runs in its own
     throwaway container that the workspace service creates through the
     Docker library. The workspace folder is bind-mounted read-write at its
-    own path, which is the host path; nothing else is mounted, so no Docker
-    socket and no Wyrwood socket is reachable. The environment holds only
+    own path, which is the host path, except for an upgrade's hook, which
+    gets no mount at all: its candidate is copied in instead. Nothing else
+    is mounted, so no Docker socket and no Wyrwood socket is reachable. The environment holds only
     what the specification defines and the runner image's own variables,
     its `PATH` included. The container runs as the services' user, the owner
     of the workspace root, with `no-new-privileges`, on the default bridge
@@ -162,24 +163,46 @@ proposed-design:
     job fails as `runner-image-unavailable`.
   template-hooks: >-
     Toha runs a generate's or apply's hooks through the template service's
-    hook runner, which sends each hook to the workspace service over the
-    hook runner socket, a private Unix socket in the same folder as the
-    template service's socket. Each generate or apply request carries a
-    random token that the workspace service grants for that request alone
-    and maps to the job's context, workspace folder, runner image and
-    console; an unknown or revoked token is refused. The hook runs in a
-    throwaway container with an empty environment, in its target-relative
-    working directory, resolved with symbolic links followed; one that is
-    missing or resolves outside the workspace folder is refused before any
-    container exists. A script hook's template folder is copied into the
-    container at its own path before it starts. Streams the hook captures
+    hook runner, which sends each hook with Toha's target to the workspace
+    service over the hook runner socket, a private Unix socket in the same
+    folder as the template service's socket. Each generate or apply request
+    carries a random token that the workspace service grants for that
+    request alone and maps to the job's context, workspace folder, runner
+    image, console and kind of target; an unknown or revoked token is
+    refused. A generate's target is the workspace folder, or a folder inside
+    it, and its hooks run in the mounted folder. An upgrade's target is
+    Toha's candidate: Toha checks out the workspace's `HEAD` into a
+    temporary folder, applies the new version and runs its hooks there,
+    then merges the result into the workspace. The template service's
+    temporary folder is the candidate folder, which both services read from
+    configuration and which is private to the services' user; an upgrade's
+    token admits only a folder inside it, named by its own path without a
+    symbolic link and never the workspace folder, and a generate's token
+    admits no candidate. The candidate is not a host path, so the workspace
+    service copies it into the container at its own path, without mounting
+    the workspace folder. When the hook exits, with any exit code, the
+    service copies the candidate back out and makes the candidate on disk
+    match it exactly, links as links and entries owned by the services'
+    user; a cancelled hook's candidate is not copied back. The copy back
+    extracts into a fresh folder beside the candidate, opens every path
+    without following a symbolic link, refuses an absolute name, a `..`, a
+    name outside the candidate and any entry other than a folder, a file
+    or a link, and then swaps the folder in, so a refused copy leaves the
+    candidate as it was. The hook runs in a throwaway container with an
+    empty environment, in its target-relative working directory, resolved
+    with symbolic links followed; one that is missing or resolves outside
+    its target is refused before any container exists. A script hook's
+    template folder is copied into the container at its own path before it
+    starts. Streams the hook captures
     return to Toha and never reach a log or an error; the others go to the
     job console. A captured value can reach any value Toha renders after
     the hook ran, so no error carries a rendered value: the template
     service builds every generate and apply refusal from a fixed message
     per error variant, and the workspace service reports a failed throwaway
     container by its stage and the Engine error's class, never by the
-    Engine's message. When the job is cancelled or its request ends, the token is
+    Engine's message. For a hook, that report goes to the job console,
+    with the runner image when no image was found; the template service
+    hears only the refusal's kind. When the job is cancelled or its request ends, the token is
     revoked and the hook's container killed and removed before the job ends,
     so no hook writes to the folder afterwards. Toha's `requires` check
     resolves programs on the template service's `PATH`, which agrees with a

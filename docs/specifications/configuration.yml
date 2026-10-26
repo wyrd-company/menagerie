@@ -12,8 +12,8 @@ description: >-
 
   It names the workspace root, the workspace repository, the Wyrwood
   consumer directory, the approved template list, the OIDC issuer and client,
-  the HTTP listen address, the template service socket and the hook runner
-  socket. `workspace-root`
+  the HTTP listen address, the template service socket, the hook runner
+  socket and the candidate folder. `workspace-root`
   and `wyrwood-directory` are absolute paths; the workspace root is used as
   written (cleaned, not symlink-resolved) because container labels carry
   the path the host daemon sees, and it is never `/`. Each template has a
@@ -23,7 +23,12 @@ description: >-
   `/run/menagerie/template.sock`, hook runner socket
   `template-service.hook-runner-socket` `/run/menagerie/hook-runner.sock`,
   an absolute path other than the template service socket, on which the
-  workspace service runs the template service's hooks.
+  workspace service runs the template service's hooks, candidate folder
+  `template-service.candidate-folder` `/var/lib/menagerie/candidates`, an
+  absolute clean folder other than `/` that is neither inside
+  `workspace-root` nor contains it: the template service's temporary
+  folder, where Toha builds an upgrade's candidate, and the only folder in
+  which the workspace service runs an upgrade's hooks.
 
 
   Optional `runner-image`, at the top level and on a template, is a Docker

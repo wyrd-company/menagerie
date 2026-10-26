@@ -10,10 +10,15 @@ description: >-
   client, with JSON over HTTP/1.1 on the Unix socket named by
   `template-service.socket` in the Menagerie configuration. It reads that
   file (`-config`, default `/etc/menagerie/config.yml`) only for
-  `workspace-root`, `templates`, `template-service.socket` and
-  `template-service.hook-runner-socket`, with the workspace service's rules
+  `workspace-root`, `templates`, `template-service.socket`,
+  `template-service.hook-runner-socket` and
+  `template-service.candidate-folder`, with the workspace service's rules
   for them, and ignores its other members. The service starts no process:
-  the workspace service runs every template hook. Toha's
+  the workspace service runs every template hook. The candidate folder,
+  default `/var/lib/menagerie/candidates`, is the service's temporary
+  folder: the service creates it when it is missing, private to its user,
+  and every temporary folder Toha makes is inside it, an upgrade's
+  candidate included. Toha's
   configuration, registry, cache and state live under the folder named by
   `-data`, default `/var/lib/menagerie/toha`, with the session key
   `session-key`: 32 random bytes, readable only by the service, written on
@@ -129,33 +134,45 @@ description: >-
   default `/run/menagerie/hook-runner.sock`, which the workspace service
   listens on, open to the services' user only. The request is
   `{"token","target","program","cwd","templateRoot","capture"}`: `token`
-  is the request's `hookToken`; `target` is the workspace folder as
-  configured, the workspace root joined with `workspace`; `program` is
+  is the request's `hookToken`; `target` is Toha's target with its
+  symbolic links resolved: for a generate, the workspace folder; for an
+  upgrade's apply, Toha's candidate, a folder inside the candidate folder
+  where Toha applies the new version before it merges the result into the
+  workspace; `program` is
   `{"run": [argv]}` or `{"script": {"path","args"}}`, a file of the
   template; `cwd` is the hook's target-relative working directory or
   `null`; `templateRoot` is the template's folder in Toha's cache; and
   `capture` is `{"stdout","stderr"}`, the streams the hook declares. The
-  workspace service resolves the working directory under the workspace
-  folder with symbolic links followed and runs the hook in a throwaway
-  container in the folder it resolves to, the program as given, with an
-  empty environment; a script's template folder is copied into the
-  container at its own path first. A run hook answers 200 with
+  workspace service resolves the working directory under the target with
+  symbolic links followed and runs the hook in a throwaway container in
+  the folder it resolves to, the program as given, with an empty
+  environment; a script's template folder is copied into the container at
+  its own path first. A generate's target is mounted. An upgrade's
+  candidate is copied in, the workspace folder is not mounted, and when
+  the hook exits the candidate is copied back so it holds exactly what the
+  hook left. A run hook answers 200 with
   `{"exitCode","success","stdout","stderr"}`, where a captured stream holds
   its raw bytes in base64 and an uncaptured one is `null` and went to the
   job console. Any other answer is `{"error":{"kind","message"}}` with
   one of the hook runner's kinds: `malformed-request` and `invalid-hook`,
   status 400, for a request that is not a hook, a working directory that
-  is missing, not a folder, or outside the folder once its symbolic links
+  is missing, not a folder, or outside the target once its symbolic links
   are followed, or a script outside its template;
   `hook-token-refused`, status 403, for an unknown or revoked token or a
-  `target` that is not the token's job's folder; `hook-cancelled`, status
+  `target` the token does not admit: a generate's token admits its job's
+  workspace folder and the folders inside it, an apply's token only a
+  folder inside the candidate folder, named without a symbolic link, never
+  the workspace folder; `hook-cancelled`, status
   409, when the job was cancelled, its container then killed and removed;
   `runner-image-unavailable`, status 503, when no runner image could be
   found or pulled; `hook-container-failed`, status 500, when the Engine
-  failed. A refusal's message is a fixed sentence: a failed container is
-  named by its stage (pull, create, copy, attach, start, wait, remove) and
-  the Engine error's class, never by the Engine's message, which can name
-  the program or its working directory. The
+  failed or the candidate could not be copied back. A refusal's message is
+  a fixed sentence. The job console names the failure: the runner image,
+  and a failed container's stage (inspect, pull, create, copy, attach,
+  start, wait, copy-back, remove) and the Engine error's class, or
+  `unsafe-entry` for a copy back that held an entry the copy refuses, never
+  the Engine's message, which can name the program or its working
+  directory. The
   workspace service revokes the token when the generate or apply request
   returns. A generate or apply without `hookToken`, or whose hook the
   runner refuses, fails that hook: the reply is `hook-io-failed`, and its
