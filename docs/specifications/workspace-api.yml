@@ -74,6 +74,9 @@ description: >-
   45m limit` or `the job passed its 2h limit in the build phase`, whatever
   the cancelled work returns. The slot is released when the work returns,
   never before, so work that ignores cancellation keeps its workspace busy.
+  The template service does not stop a template fetch, generate or apply
+  when its request is cancelled, so its hooks can still write to the folder
+  after a timed-out create or upgrade has ended.
   Stopping Menagerie also cancels jobs, which fail with their own error,
   not `timed-out`. A timed-out create keeps its folder, as every failed
   create does, for manual recovery. A timed-out build or up can leave a
