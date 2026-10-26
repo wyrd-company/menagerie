@@ -75,7 +75,7 @@ jobs:
     permissions:
       contents: read
     # ryl disable-line rule:line-length
-    uses: wyrd-company/wyrd.foo/.github/workflows/publish-docs.yml@v2
+    uses: wyrd-company/wyrd.foo/.github/workflows/publish-docs.yml@33d4bf27186a70d4f096d57a8e1b7d80a1fb6836 # 2.0.0
     with:
       ref: ${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}
       feature: ${{ inputs.feature || false }}
