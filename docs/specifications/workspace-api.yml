@@ -53,12 +53,35 @@ description: >-
   `initialize-command`, `build`, `remove-container`, `up`, `stop`,
   `interview`, `initialize-repository`, `generate`, `apply`, `commit`,
   `backup-local-changes` or `backup`. A failed job carries `error.kind`:
-  `initialize-command-failed`, `registry-credentials-unavailable`,
+  `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `operation-failed` or `internal-error`, and for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
   `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
   or `backup-failed`. Its message says what was written and what recovery
-  is needed. No timeout is applied to a job.
+  is needed.
+
+
+  Time limits are configured in `job-limits` and are optional; without
+  them a job runs until it ends. A job's limit is its operation's limit,
+  else the default; a phase limit counts from each entry into the phase,
+  an answered interview's return to `interview` included. Limits count
+  running time only. A limit times Menagerie's work, never the manager
+  answering an interview: time in `waiting-for-answers` does not count, no
+  deadline applies while a job waits, and interviews keep no expiry. When a
+  limit passes, the service writes one log line and cancels the job's
+  work; the job ends `failed` with `error.kind` `timed-out` and a message
+  that names the phase and the limit, such as `the build phase passed its
+  45m limit` or `the job passed its 2h limit in the build phase`, whatever
+  the cancelled work returns. The slot is released when the work returns,
+  never before, so work that ignores cancellation keeps its workspace busy.
+  Stopping Menagerie also cancels jobs, which fail with their own error,
+  not `timed-out`. A timed-out create keeps its folder, as every failed
+  create does, for manual recovery. A timed-out build or up can leave a
+  half-created container: a later start reuses or starts it and a rebuild
+  removes it. A job's `deadline` is when the limit that ends first passes,
+  null when no limit applies, while the job waits and once it has ended;
+  `limit` is that limit, `{seconds, scope}` with scope `job` or `phase`,
+  null when none applies and once the job has ended.
 
 
   Interview operations. A create names a workspace that is a legal Git
@@ -143,7 +166,7 @@ description: >-
 
   `GET /api/jobs/{id}/events` streams the job's events as Server-Sent Events.
   Event ids are the job's sequence numbers from 1. `state` carries
-  `{state, phase}`, `log` carries one output line `{text}`, and `result`
+  `{state, phase, deadline, limit}`, `log` carries one output line `{text}`, and `result`
   carries `{state, error}` and ends the stream. An operation can add event
   types with opaque JSON data, such as `interview`; the service compacts
   each payload to one line without changing its text, numbers included, and
@@ -208,7 +231,12 @@ description: >-
 validation-criteria: >-
   `go test ./backend/internal/api/` checks that the routes the server
   registers equal the OpenAPI paths and methods, and exercises each response
-  and error contract with a held runtime. `go test
+  and error contract with a held runtime. `go test ./backend/internal/jobs/`
+  drives time limits with a manual clock: job, operation and phase limits,
+  the pause while waiting, the slot held until cancelled work returns, and
+  shutdown that is not a timeout; `go test ./backend/cmd/menagerie/` runs a
+  start whose `initializeCommand` hangs past a 100 ms phase limit through
+  the composed server and receives its `job-failed` alert. `go test
   ./backend/internal/workflows/` runs create and upgrade through the API
   with a held template service and a real local workspace repository,
   covering waiting, single answers, flow ends, failures and slot release;
