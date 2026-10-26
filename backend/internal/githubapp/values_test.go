@@ -141,6 +141,14 @@ func TestNoFailureCarriesAValue(t *testing.T) {
 			}
 			return world{minter: m, values: []string{strings.TrimPrefix(s.URL, "https://"), "x509"}}
 		},
+		"signer failed": func(t *testing.T) world {
+			g := newGitHub(t, newClock())
+			m, err := New(Options{AppID: sampleAppID, Signer: failingSigner{}, Installations: installed, Server: g.server.URL, Client: g.server.Client()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return world{minter: m}
+		},
 		"GitHub context ended": func(t *testing.T) world {
 			w := github(t, installed, status(http.StatusCreated))
 			w.ctx = ended
@@ -185,4 +193,11 @@ func TestNoFailureCarriesAValue(t *testing.T) {
 			}
 		})
 	}
+}
+
+// failingSigner fails with an error whose text carries a sentinel.
+type failingSigner struct{}
+
+func (failingSigner) Sign(context.Context, []byte) ([]byte, error) {
+	return nil, errors.New("signer said " + sentinelBody)
 }

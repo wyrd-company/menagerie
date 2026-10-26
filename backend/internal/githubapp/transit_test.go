@@ -63,6 +63,7 @@ func TestTransitReasons(t *testing.T) {
 		{"missing key", statusAnswer(http.StatusBadRequest, `{"errors":["signing key not found"]}`), "OpenBao answered status 400 to the signing request"},
 		{"no prefix", statusAnswer(http.StatusOK, `{"data":{"signature":"AAAA"}}`), "OpenBao returned a malformed signature"},
 		{"bad base64", statusAnswer(http.StatusOK, `{"data":{"signature":"vault:v1:!!"}}`), "OpenBao returned a malformed signature"},
+		{"partly base64", statusAnswer(http.StatusOK, `{"data":{"signature":"vault:v1:AAAA!!"}}`), "OpenBao returned a malformed signature"},
 		{"empty", statusAnswer(http.StatusOK, `{"data":{"signature":"vault:v1:"}}`), "OpenBao returned a malformed signature"},
 		{"not JSON", statusAnswer(http.StatusOK, `signature`), "OpenBao returned a malformed signature"},
 	}

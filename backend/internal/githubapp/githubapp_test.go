@@ -162,6 +162,7 @@ func TestATokenThatExpiresWithinFiveMinutesIsNotCached(t *testing.T) {
 func TestConcurrentCallersShareOneRequest(t *testing.T) {
 	g := newGitHub(t, newClock())
 	g.gate = make(chan struct{})
+	release := openGate(t, g)
 	m, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation})
 	const callers = 8
 	var wg sync.WaitGroup
@@ -178,7 +179,7 @@ func TestConcurrentCallersShareOneRequest(t *testing.T) {
 		t.Error("a second token request arrived while the first was held")
 	case <-time.After(200 * time.Millisecond):
 	}
-	close(g.gate)
+	release()
 	wg.Wait()
 	for i := range callers {
 		if errs[i] != nil || tokens[i] != tokens[0] {
@@ -190,9 +191,19 @@ func TestConcurrentCallersShareOneRequest(t *testing.T) {
 	}
 }
 
+// openGate closes g's gate once, at the latest when the test ends, so a
+// failing test never leaves the fake holding a request.
+func openGate(t *testing.T, g *fakeGitHub) func() {
+	var once sync.Once
+	open := func() { once.Do(func() { close(g.gate) }) }
+	t.Cleanup(open)
+	return open
+}
+
 func TestAWaiterRetriesWhenTheCallItWaitedForEndedWithItsCaller(t *testing.T) {
 	g := newGitHub(t, newClock())
 	g.gate = make(chan struct{})
+	release := openGate(t, g)
 	m, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation})
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	leader := make(chan error, 1)
@@ -212,7 +223,7 @@ func TestAWaiterRetriesWhenTheCallItWaitedForEndedWithItsCaller(t *testing.T) {
 	if err := <-leader; !errors.Is(err, context.Canceled) {
 		t.Fatalf("leader %v", err)
 	}
-	close(g.gate)
+	release()
 	if err := <-waiter; err != nil {
 		t.Fatalf("waiter %v", err)
 	}
@@ -221,15 +232,26 @@ func TestAWaiterRetriesWhenTheCallItWaitedForEndedWithItsCaller(t *testing.T) {
 func TestAWaiterWhoseContextEndsStopsWaiting(t *testing.T) {
 	g := newGitHub(t, newClock())
 	g.gate = make(chan struct{})
-	defer close(g.gate)
+	openGate(t, g)
 	m, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation})
 	go func() { _, _ = m.Token(context.Background(), sampleRepo, Write) }()
 	<-g.arrived
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	var e *Error
-	if _, err := m.Token(ctx, sampleRepo, Write); !errors.As(err, &e) || e.Reason != reasonEnded || !errors.Is(err, context.Canceled) {
-		t.Fatalf("waiter %v", err)
+	waiter := make(chan error, 1)
+	go func() {
+		_, err := m.Token(ctx, sampleRepo, Write)
+		waiter <- err
+	}()
+	select {
+	case err := <-waiter:
+		var e *Error
+		if !errors.As(err, &e) || e.Reason != reasonEnded || !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiter %v", err)
+		}
+	// Test-only bound: an ended waiter answers at once.
+	case <-time.After(5 * time.Second):
+		t.Fatal("a waiter whose context ended kept waiting")
 	}
 }
 
@@ -274,6 +296,9 @@ func TestRepositoryAcceptsOnlyRepositoryURLsOnTheServer(t *testing.T) {
 		"https://github.com//sample-repo",
 		"https://github.com/example-org/.git",
 		"https://github.com/example-org/..",
+		"https://github.com/example-org/.",
+		"https://github.com/example-org/sample%20repo",
+		"https://github.com/example-org/sample@repo",
 		"https://github.com/example-org/%2e%2e",
 		"https://github.com/example%2Dorg/sample-repo",
 		"https://github.com/-org/sample-repo",
@@ -385,3 +410,49 @@ func TestSigningInputClaims(t *testing.T) {
 }
 
 func b64(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+// TestGitHubAnswersHaveFixedReasons maps each answer of the installation
+// lookup and the token request to its reason.
+func TestGitHubAnswersHaveFixedReasons(t *testing.T) {
+	expiry := `"expires_at":"2030-01-01T00:00:00Z"`
+	cases := []struct {
+		name      string
+		installed bool
+		status    int
+		body      string
+		reason    string
+	}{
+		{"lookup 401", false, http.StatusUnauthorized, `{}`, reasonJWTRefused},
+		{"lookup 404", false, http.StatusNotFound, `{}`, "the App is not installed for the repository"},
+		{"lookup 500", false, http.StatusInternalServerError, `{}`, "GitHub answered status 500 to the installation lookup"},
+		{"lookup without id", false, http.StatusOK, `{"id":0}`, reasonMalformed},
+		{"lookup not JSON", false, http.StatusOK, `id`, reasonMalformed},
+		{"token 401", true, http.StatusUnauthorized, `{}`, reasonJWTRefused},
+		{"token 403", true, http.StatusForbidden, `{}`, "GitHub refused the token: the App lacks the permission"},
+		{"token 404", true, http.StatusNotFound, `{}`, reasonInstallationNotFound},
+		{"token 422", true, http.StatusUnprocessableEntity, `{}`, "GitHub refused the token: the repository is not in the installation, or the permission is not granted"},
+		{"token 200", true, http.StatusOK, `{"token":"t",` + expiry + `}`, "GitHub answered status 200 to the token request"},
+		{"token without token", true, http.StatusCreated, `{` + expiry + `}`, reasonMalformed},
+		{"token without expiry", true, http.StatusCreated, `{"token":"t"}`, reasonMalformed},
+		{"token not JSON", true, http.StatusCreated, `token`, reasonMalformed},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g := newGitHub(t, newClock())
+			g.answer = func(w http.ResponseWriter, _ *http.Request) bool {
+				w.WriteHeader(c.status)
+				_, _ = w.Write([]byte(c.body))
+				return true
+			}
+			var installations map[string]int64
+			if c.installed {
+				installations = map[string]int64{"example-org": sampleInstallation}
+			}
+			m, _ := g.minter(t, installations)
+			var e *Error
+			if _, err := m.Token(context.Background(), sampleRepo, Write); !errors.As(err, &e) || e.Reason != c.reason {
+				t.Fatalf("%v, want %q", err, c.reason)
+			}
+		})
+	}
+}

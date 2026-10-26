@@ -104,9 +104,8 @@ func signature(body io.Reader) ([]byte, error) {
 		} `json:"data"`
 	}
 	malformed := &Error{Reason: "OpenBao returned a malformed signature"}
-	if json.NewDecoder(body).Decode(&doc) != nil {
-		return nil, malformed
-	}
+	// A body that is not JSON leaves doc empty.
+	_ = json.NewDecoder(body).Decode(&doc)
 	prefix := signaturePrefix.FindString(doc.Data.Signature)
 	if prefix == "" {
 		return nil, malformed

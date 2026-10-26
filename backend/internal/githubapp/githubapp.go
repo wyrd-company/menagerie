@@ -192,7 +192,7 @@ func ValidServer(server string) error {
 func origin(server string) (host, api string, err error) {
 	u, perr := url.Parse(server)
 	if perr != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || u.User != nil ||
-		(u.Path != "" && u.Path != "/") || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+		(u.Path != "" && u.Path != "/") || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return "", "", errors.New("must be an https URL with a host and no user information, path, query or fragment")
 	}
 	if p := u.Port(); p != "" {
@@ -235,7 +235,7 @@ func ValidOwner(owner string) bool { return len(owner) <= 100 && ownerPattern.Ma
 func (m *Minter) Repository(rawURL string) (Repository, bool) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.ForceQuery ||
-		u.Fragment != "" || u.Opaque != "" || u.RawPath != "" || canonicalHost(u) != m.host {
+		u.Fragment != "" || u.RawPath != "" || canonicalHost(u) != m.host {
 		return Repository{}, false
 	}
 	owner, name, ok := strings.Cut(strings.TrimPrefix(u.Path, "/"), "/")
@@ -290,7 +290,8 @@ func (m *Minter) cached(key tokenKey) (string, bool) {
 }
 
 // store caches token until refreshBefore its expiry, and drops the
-// entries that are due for a refresh.
+// entries that are due for a refresh. A token that is already due is
+// stored too; cached never returns it.
 func (m *Minter) store(key tokenKey, token string, expires time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -300,9 +301,7 @@ func (m *Minter) store(key tokenKey, token string, expires time.Time) {
 			delete(m.tokens, k)
 		}
 	}
-	if refreshAt := expires.Add(-refreshBefore); now.Before(refreshAt) {
-		m.tokens[key] = cachedToken{token: token, refreshAt: refreshAt}
-	}
+	m.tokens[key] = cachedToken{token: token, refreshAt: expires.Add(-refreshBefore)}
 }
 
 // installation is the installation configured for repo's owner, else the
@@ -396,7 +395,9 @@ func (m *Minter) lookup(ctx context.Context, jwt string, repo Repository) (int64
 	var doc struct {
 		ID int64 `json:"id"`
 	}
-	if json.Unmarshal(body, &doc) != nil || doc.ID <= 0 {
+	// A body that is not JSON leaves doc empty.
+	_ = json.Unmarshal(body, &doc)
+	if doc.ID <= 0 {
 		return 0, &Error{Reason: reasonMalformed}
 	}
 	return doc.ID, nil
@@ -434,7 +435,9 @@ func (m *Minter) mint(ctx context.Context, installation int64, repo Repository, 
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	if json.Unmarshal(body, &doc) != nil || doc.Token == "" || doc.ExpiresAt.IsZero() {
+	// A body that is not JSON leaves doc empty.
+	_ = json.Unmarshal(body, &doc)
+	if doc.Token == "" || doc.ExpiresAt.IsZero() {
 		return "", time.Time{}, &Error{Reason: reasonMalformed}
 	}
 	return doc.Token, doc.ExpiresAt, nil

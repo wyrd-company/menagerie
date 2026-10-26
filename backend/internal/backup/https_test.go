@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -267,6 +268,20 @@ func TestATokenNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	for _, a := range seen {
 		if a != "" {
 			t.Fatalf("the other origin received %q", a)
+		}
+	}
+}
+
+// TestSSHAndLocalFailuresKeepGoGitsText: only remotes other than SSH and
+// local paths get fixed reasons.
+func TestSSHAndLocalFailuresKeepGoGitsText(t *testing.T) {
+	folder := committedWorkspace(t)
+	f := backuptest.New(t)
+	for _, url := range []string{filepath.Join(t.TempDir(), "absent.git"), f.URL("absent.git")} {
+		_, err := (&Remote{URL: url, Auth: AgentAuth(f.AgentPath, f.KnownHosts)}).Push(context.Background(), folder, "alpha", nil)
+		var te *TransportError
+		if err == nil || errors.As(err, &te) {
+			t.Fatalf("%s: %v", url, err)
 		}
 	}
 }

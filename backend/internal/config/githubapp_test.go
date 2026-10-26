@@ -47,7 +47,7 @@ func TestGitHubAppErrorsNameNoValue(t *testing.T) {
 		{"owner shape", app(base + "  installations:\n    " + marker + "_x: 1\n"), "github-app.installations has a key that is not a GitHub account name"},
 		{"installation zero", app(base + "  installations:\n    example-org: 0\n"), "github-app.installations has an installation id that is not a positive integer"},
 		{"installation text", app(base + "  installations:\n    example-org: " + marker + "\n"), "github-app.installations"},
-		{"owner twice", app(base + "  installations:\n    " + marker + ": 1\n    V4LUE-MARKER: 2\n"), "github-app.installations names one account twice"},
+		{"owner twice", app(base + "  installations:\n    V4lue-Marker: 1\n    V4LUE-MARKER: 2\n"), "github-app.installations names one account twice"},
 		{"unknown field", app(base + "  private-key: " + marker + "\n"), "github-app has no field private-key"},
 	}
 	for _, tc := range cases {
