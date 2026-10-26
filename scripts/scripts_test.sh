@@ -104,6 +104,23 @@ git_test -C "$r" commit -q -m "test: a second fixture intent"
 expect "a second release tags only its own version" 0 'released 0\.2\.0 at [0-9a-f]{40}; tags: 0\.2\.0$' \
   env RELEASE_PLAN="$scratch/second.json" "$r/scripts/release.sh" release
 
+# A release whose only intent is for the docs unit tags the docs unit and no
+# image version: CD has nothing to deliver.
+d=$scratch/docsonly
+clone_at_head "$d"
+git -C "$d" ls-files -z '.intentional/intents/*.md' | xargs -r -0 git -C "$d" rm -q
+(cd "$d" && intentional add --release-unit menagerie-docs:patch --message "A docs fixture change." >/dev/null)
+git -C "$d" add .intentional/intents
+git_test -C "$d" commit -q -m "test: a docs-only fixture intent"
+expect "the rehearsal of a docs-only release finds no tag for CD" 0 'a docs-only release: CD has no tag to deliver' "$d/scripts/release.sh" rehearse
+git -C "$d" switch -q -c main
+expect "a docs-only release tags the docs unit and its baseline" 0 'released menagerie-docs 0\.0\.1 at [0-9a-f]{40}; tags: 0\.0\.0 menagerie-docs@0\.0\.1$' \
+  env RELEASE_PLAN="$scratch/docsonly.json" "$d/scripts/release.sh" release
+docs_release=$(git -C "$d" rev-parse HEAD)
+expect "the docs tag is on the docs-only release commit" 0 "^$docs_release$" git -C "$d" rev-parse 'menagerie-docs@0.0.1^{commit}'
+expect "a docs-only release makes no image tag" 0 '^0\.0\.0$' git -C "$d" tag --list '[0-9]*.[0-9]*.[0-9]*'
+expect "the rehearsal after a docs-only release finds nothing to release" 0 'nothing to release' "$d/scripts/release.sh" rehearse
+
 # release-tag.sh: which tags cd.yml delivers.
 t=$scratch/tags
 git init -q "$t"
