@@ -19,6 +19,7 @@ import (
 )
 
 type schemaNode struct {
+	Type          string                 `json:"type"`
 	Properties    map[string]*schemaNode `json:"properties"`
 	Items         *schemaNode            `json:"items"`
 	Required      []string               `json:"required"`
@@ -161,5 +162,10 @@ func TestLimitKeysAgreeWithJobs(t *testing.T) {
 
 	if got := root.Defs["duration"].Pattern; got != durationPattern.String() {
 		t.Errorf("schema duration pattern %s, parser %s", got, durationPattern)
+	}
+	// The parser refuses a duration given with no value; so does the
+	// schema, by type (null) and pattern (empty).
+	if got := root.Defs["duration"].Type; got != "string" || durationPattern.MatchString("") {
+		t.Errorf("schema duration type %q or pattern accepts an empty value", got)
 	}
 }

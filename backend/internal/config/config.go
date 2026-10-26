@@ -73,7 +73,8 @@ type Config struct {
 }
 
 // Duration is a positive time span of whole hours, minutes and seconds,
-// such as 2h, 45m or 1h30m. Empty is no duration.
+// such as 2h, 45m or 1h30m. Empty is an absent field: a field given with
+// no value is an error (see emptyDurations).
 type Duration string
 
 // durationPattern is the form of a Duration: units h, m and s, in that
@@ -215,10 +216,55 @@ func Parse(data []byte) (*Config, error) {
 		return nil, errors.New("expected a single YAML document")
 	}
 	cfg.applyDefaults()
-	if err := cfg.validate(); err != nil {
+	if err := errors.Join(append(emptyDurations(data), cfg.validate())...); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// emptyDurations reports the duration fields given with no value, such as
+// "rebuild:" or `default: ""`. They decode as if absent, which would drop
+// a limit or fall back to another without a word, so only the document's
+// nodes can tell them apart.
+func emptyDurations(data []byte) []error {
+	var doc yaml.Node
+	if yaml.Unmarshal(data, &doc) != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	var errs []error
+	check := func(field string, n *yaml.Node) {
+		if n != nil && n.Kind == yaml.ScalarNode && (n.ShortTag() == "!!null" || n.Value == "") {
+			errs = append(errs, fmt.Errorf("%s must be a duration", field))
+		}
+	}
+	root := doc.Content[0]
+	if limits := mappingValue(root, "job-limits"); limits != nil {
+		check("job-limits.default", mappingValue(limits, "default"))
+		for _, group := range []string{"operations", "phases"} {
+			if m := mappingValue(limits, group); m != nil && m.Kind == yaml.MappingNode {
+				for i := 0; i+1 < len(m.Content); i += 2 {
+					check("job-limits."+group+"."+m.Content[i].Value, m.Content[i+1])
+				}
+			}
+		}
+	}
+	if a := mappingValue(root, "alerts"); a != nil {
+		check("alerts.long-running", mappingValue(a, "long-running"))
+	}
+	return errs
+}
+
+// mappingValue returns the value of key in mapping node n, or nil.
+func mappingValue(n *yaml.Node, key string) *yaml.Node {
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func (c *Config) applyDefaults() {
@@ -326,10 +372,7 @@ func (l *JobLimits) validate() []error {
 			errs = append(errs, fmt.Errorf("job-limits.phases.%s is not a phase; phases are %s", name, strings.Join(jobs.Phases, ", ")))
 			continue
 		}
-		field := "job-limits.phases." + name
-		if l.Phases[name] == "" {
-			errs = append(errs, fmt.Errorf("%s must be a duration", field))
-		} else if err := l.Phases[name].validate(field); err != nil {
+		if err := l.Phases[name].validate("job-limits.phases." + name); err != nil {
 			errs = append(errs, err)
 		}
 	}
