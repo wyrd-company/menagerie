@@ -35,6 +35,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workflows"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 	"github.com/wyrd-company/menagerie/web"
@@ -97,7 +98,13 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
+	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
 	runtime := devcontainer.New(docker, opts)
+	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks)
+	if err != nil {
+		return err
+	}
+	defer stopHooks()
 	jobOpts, webhook, err := jobOptions(cfg)
 	if err != nil {
 		return err
@@ -107,7 +114,7 @@ func run(configPath string) error {
 		defer webhook.Close()
 	}
 	manager := jobs.NewManager(ctx, jobOpts)
-	handler, err := newHandler(cfg, root, runtime, manager)
+	handler, err := newHandler(cfg, root, runtime, manager, parts.hooks, parts.images)
 	if err != nil {
 		return err
 	}
@@ -123,6 +130,8 @@ func run(configPath string) error {
 	select {
 	case err := <-errc:
 		return err
+	case err := <-hookErrors:
+		return err
 	case <-ctx.Done():
 	}
 	// Event streams end with the base context, so shutdown completes once
@@ -134,10 +143,58 @@ func run(configPath string) error {
 	return nil
 }
 
+// containers are the parts that run template hooks and initializeCommand
+// in throwaway containers.
+type containers struct {
+	docker *throwaway.Docker
+	images *throwaway.Images
+	hooks  *throwaway.HookRunner
+}
+
+// throwawayContainers composes the throwaway containers on docker, as the
+// services' user, with the configured runner images, removes the ones a
+// previous run left, and gives the devcontainer runtime options their
+// initializeCommand runner.
+func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspace.Root, docker *dockerclient.Client, opts *devcontainer.Options) containers {
+	images := runnerImages(cfg, docker)
+	runner := throwaway.NewDocker(docker, throwaway.DockerOptions{
+		Root:        root.Path(),
+		User:        throwaway.ServiceUser(),
+		Credentials: pullCredentials(opts.Credentials),
+	})
+	if n, err := runner.RemoveLeftovers(ctx); err != nil {
+		log.Printf("menagerie: removing leftover throwaway containers: %v", err)
+	} else if n > 0 {
+		log.Printf("menagerie: removed %d leftover throwaway containers", n)
+	}
+	opts.Containers, opts.RunnerImage = runner, images.ForWorkspace
+	return containers{docker: runner, images: images, hooks: throwaway.NewHookRunner(runner)}
+}
+
+// serveHooks serves hooks on the hook runner socket at path until stop,
+// which also removes the socket. errs receives a serving failure.
+func serveHooks(ctx context.Context, path string, hooks *throwaway.HookRunner) (errs <-chan error, stop func(), err error) {
+	listener, err := throwaway.ListenHookRunner(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hook runner socket: %w", err)
+	}
+	server := &http.Server{Handler: hooks, BaseContext: func(net.Listener) context.Context { return ctx }}
+	failed := make(chan error, 1)
+	go func() {
+		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+			failed <- fmt.Errorf("hook runner socket: %w", err)
+		}
+	}()
+	return failed, func() {
+		_ = server.Close()
+		_ = os.Remove(path)
+	}, nil
+}
+
 // newHandler is the workspace service's whole HTTP surface: the workspace
 // API behind manager sign-in.
-func newHandler(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager) (http.Handler, error) {
-	return signedIn(newServer(cfg, root, runtime, manager), cfg.OIDC)
+func newHandler(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) (http.Handler, error) {
+	return signedIn(newServer(cfg, root, runtime, manager, hooks, images), cfg.OIDC)
 }
 
 // signedIn serves server behind manager sign-in: the sign-in routes are
@@ -153,19 +210,27 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 
 // newServer composes the workspace API: the container operations, create
 // and upgrade with their interviews, and the web UI embedded at build time.
-func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager) *api.Server {
+// Template hooks run through hooks in the template's runner image; nil
+// hooks refuse every hook.
+func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) *api.Server {
 	approved := make([]api.Template, 0, len(cfg.Templates))
 	ids := make(map[string]bool, len(cfg.Templates))
 	for _, t := range cfg.Templates {
 		approved = append(approved, api.Template{ID: t.ID, Name: t.Name})
 		ids[t.ID] = true
 	}
+	var image func(context.Context, string) (string, error)
+	if images != nil {
+		image = images.ForTemplate
+	}
 	flows := workflows.New(workflows.Options{
-		Root:      root,
-		Templates: templates.New(cfg.TemplateService.Socket),
-		Approved:  ids,
-		Remote:    backupRemote(cfg),
-		Runtime:   runtime,
+		Root:        root,
+		Templates:   templates.New(cfg.TemplateService.Socket),
+		Approved:    ids,
+		Remote:      backupRemote(cfg),
+		Runtime:     runtime,
+		Hooks:       hooks,
+		RunnerImage: image,
 	})
 	operations := api.ContainerOperations(root, runtime)
 	for name, op := range flows.Operations() {
@@ -222,9 +287,32 @@ func jobOptions(cfg *config.Config) (jobs.Options, *alerts.Webhook, error) {
 	return opts, webhook, nil
 }
 
-// registryCredentials returns the per-operation registry credential source:
-// OpenBao read through the Wyrwood vault socket for the configured
-// registries, anonymous for every other registry.
+// runnerImages chooses the throwaway containers' images: each template's
+// runner-image, else the global one, else Menagerie's own image.
+func runnerImages(cfg *config.Config, docker throwaway.Inspector) *throwaway.Images {
+	byTemplate := map[string]string{}
+	for _, t := range cfg.Templates {
+		if t.RunnerImage != "" {
+			byTemplate[t.ID] = t.RunnerImage
+		}
+	}
+	return &throwaway.Images{Default: cfg.RunnerImage, Templates: byTemplate, Docker: docker}
+}
+
+// pullCredentials gives runner image pulls the credential source of the
+// devcontainer operations.
+func pullCredentials(source func(context.Context) devcontainer.RegistryAuth) func(context.Context) throwaway.RegistryAuth {
+	if source == nil {
+		return nil
+	}
+	return func(ctx context.Context) throwaway.RegistryAuth {
+		if auth := source(ctx); auth != nil {
+			return auth
+		}
+		return nil
+	}
+}
+
 // runtimeOptions configures the devcontainer runtime: registry
 // credentials, and the local-env allowlist over Menagerie's environment.
 func runtimeOptions(cfg *config.Config) (devcontainer.Options, error) {
@@ -235,6 +323,9 @@ func runtimeOptions(cfg *config.Config) (devcontainer.Options, error) {
 	return devcontainer.Options{Credentials: credentials, LocalEnv: cfg.LocalEnv}, nil
 }
 
+// registryCredentials returns the per-operation registry credential source:
+// OpenBao read through the Wyrwood vault socket for the configured
+// registries, anonymous for every other registry.
 func registryCredentials(cfg *config.Config) (func(context.Context) devcontainer.RegistryAuth, error) {
 	rc := cfg.RegistryCredentials
 	if rc == nil {

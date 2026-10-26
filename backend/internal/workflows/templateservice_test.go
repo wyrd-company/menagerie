@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -35,6 +36,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -90,7 +92,39 @@ type accept struct {
 	flows              *Workflows
 }
 
+// localContainers stands in for throwaway containers without Docker: it
+// runs each hook as a local process in its working directory, with its
+// environment and PATH.
+type localContainers struct{}
+
+func (localContainers) Run(ctx context.Context, c throwaway.Command) (int, error) {
+	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = c.Dir, append(c.Env, "PATH="+os.Getenv("PATH")), c.Stdout, c.Stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && ctx.Err() == nil {
+		return exit.ExitCode(), nil
+	}
+	if err != nil {
+		return -1, err
+	}
+	return 0, nil
+}
+
 func newAccept(t *testing.T, runtime Runtime) *accept {
+	t.Helper()
+	return newAcceptWith(t, runtime, acceptOptions{containers: localContainers{}, image: "runner:local"})
+}
+
+// acceptOptions run the template's hooks through containers in image,
+// under limits.
+type acceptOptions struct {
+	containers throwaway.Containers
+	image      string
+	limits     jobs.Limits
+}
+
+func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	t.Helper()
 	bin := os.Getenv("MENAGERIE_TEMPLATE_SERVICE")
 	if bin == "" {
@@ -114,6 +148,7 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 	gitCLI(t, a.repo, "tag", "v2")
 	for name, template := range map[string]string{
 		"broken": "name: broken\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - run: [sh, -c, 'exit 3']\n",
+		"hangs":  "name: hangs\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - run: [sh, -c, 'while :; do date >> ticks.txt; sleep 0.1; done']\n",
 		"flows":  "name: flows\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\n  - flow: stop\n    when: label == 'stop'\n  - {id: second, type: text, prompt: Second, required: true}\n",
 	} {
 		dir := filepath.Join(base, "templates", name)
@@ -138,11 +173,20 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	socket := filepath.Join(sockDir, "template.sock")
+	hookSocket := filepath.Join(sockDir, "hook-runner.sock")
+	hooks := throwaway.NewHookRunner(opts.containers)
+	hookListener, err := throwaway.ListenHookRunner(hookSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hookServer := &http.Server{Handler: hooks}
+	go func() { _ = hookServer.Serve(hookListener) }()
+	t.Cleanup(func() { _ = hookServer.Close() })
 	t2 := filepath.Join(base, "templates")
-	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s}\ntemplates:\n"+
+	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s, hook-runner-socket: %s}\ntemplates:\n"+
 		"  - {id: sample-v1, name: Sample, address: 'file://%s@v1'}\n  - {id: sample-v2, name: Sample, address: 'file://%s@v2'}\n"+
-		"  - {id: broken, name: Broken, address: 'file://%s/broken'}\n  - {id: flows, name: Flows, address: 'file://%s/flows'}\n",
-		a.root, a.host.URL("backups.git"), socket, a.repo, a.repo, t2, t2)
+		"  - {id: broken, name: Broken, address: 'file://%s/broken'}\n  - {id: flows, name: Flows, address: 'file://%s/flows'}\n  - {id: hangs, name: Hangs, address: 'file://%s/hangs'}\n",
+		a.root, a.host.URL("backups.git"), socket, hookSocket, a.repo, a.repo, t2, t2, t2)
 	writeFile(t, base, "config.yml", config)
 	startService(t, bin, filepath.Join(base, "config.yml"), filepath.Join(base, "data"), socket)
 
@@ -151,13 +195,17 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.manager = jobs.NewManager(ctx, jobs.Options{})
+	a.manager = jobs.NewManager(ctx, jobs.Options{Limits: opts.limits})
 	flows := New(Options{
 		Root:      root,
 		Templates: templates.New(socket),
-		Approved:  map[string]bool{"sample-v1": true, "sample-v2": true, "broken": true, "flows": true},
+		Approved:  map[string]bool{"sample-v1": true, "sample-v2": true, "broken": true, "flows": true, "hangs": true},
 		Remote:    &backup.Remote{URL: a.host.URL("backups.git"), Auth: backup.AgentAuth(a.host.AgentPath)},
 		Runtime:   runtime,
+		Hooks:     hooks,
+		RunnerImage: func(context.Context, string) (string, error) {
+			return opts.image, nil
+		},
 	})
 	a.flows = flows
 	a.http = httptest.NewServer(api.New(api.Options{Root: root, Jobs: a.manager, Operations: flows.Operations(), Interviews: flows}))

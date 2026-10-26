@@ -76,7 +76,7 @@ async fn equivalent_numbers_keep_their_value_through_the_session_and_record() {
         &world.socket,
         "/v1/workspaces/generate",
         format!(
-            r#"{{"workspace":"alpha","target":"{}","templateId":"sample-v1","session":{}}}"#,
+            r#"{{"workspace":"alpha","target":"{}","templateId":"sample-v1","hookToken":"{HOOK_TOKEN}","session":{}}}"#,
             target.display(),
             String::from_utf8(done.session_bytes()).unwrap()
         )

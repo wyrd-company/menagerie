@@ -54,9 +54,14 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	run.Phase("generate")
-	applied, err := t.Generate(ctx, sel, reply.Session)
+	grant, err := c.w.grantHooks(ctx, run, c.folder, c.template)
 	if err != nil {
-		return &jobs.Failure{Kind: KindGenerationFailed, Err: fmt.Errorf("%s; %s", generationError(err), c.recovery("holds the files written before the failure and no applied record"))}
+		return fmt.Errorf("%w; %s", err, c.recovery("holds only the initialized repository"))
+	}
+	applied, err := t.Generate(ctx, sel, reply.Session, grant.token())
+	grant.revoke()
+	if err != nil {
+		return &jobs.Failure{Kind: grant.kind(KindGenerationFailed), Err: fmt.Errorf("%s; %s", generationError(err), c.recovery("holds the files written before the failure and no applied record"))}
 	}
 	if err := run.SetApply(applied.Raw); err != nil {
 		return err

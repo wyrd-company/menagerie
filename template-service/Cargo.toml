@@ -15,6 +15,9 @@ path = "src/main.rs"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 base64 = "0.22"
 gix = { version = "0.87.1", default-features = false }
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
 indexmap = "2.14.2"
 jiff = "0.2.38"
 ring = "0.17"
@@ -27,7 +30,4 @@ toha = { git = "https://github.com/wyrd-company/toha", rev = "161f1d6f61c033ff28
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "macros", "signal", "fs"] }
 
 [dev-dependencies]
-http-body-util = "0.1.5"
-hyper = { version = "1.12.0", features = ["client", "http1"] }
-hyper-util = { version = "0.1.21", features = ["tokio"] }
 tempfile = "3.27.0"

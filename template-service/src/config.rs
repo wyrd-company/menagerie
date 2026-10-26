@@ -1,25 +1,29 @@
 //! The template service's settings, read from Menagerie's shared configuration file.
 //!
 //! The workspace service owns the file's full schema and strict validation. This
-//! service reads only the members it uses: `workspace-root`, `templates` and
-//! `template-service.socket`, with the workspace service's rules for each:
-//! the root is cleaned lexically and never `/`, an empty socket takes the
-//! default, template ids are unique. Other members are ignored here. Toha's
+//! service reads only the members it uses: `workspace-root`, `templates`,
+//! `template-service.socket` and `template-service.hook-runner-socket`, with
+//! the workspace service's rules for each: the root is cleaned lexically and
+//! never `/`, an empty socket takes the default, template ids are unique. Other members are ignored here. Toha's
 //! storage folder is this service's own `-data` flag, not a configuration key.
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 
 pub const DEFAULT_CONFIG: &str = "/etc/menagerie/config.yml";
 pub const DEFAULT_SOCKET: &str = "/run/menagerie/template.sock";
+pub const DEFAULT_HOOK_RUNNER_SOCKET: &str = "/run/menagerie/hook-runner.sock";
 pub const DEFAULT_DATA: &str = "/var/lib/menagerie/toha";
 
 /// One approved template: its configuration id, display name and Toha address.
+/// Its `runner-image` belongs to the workspace service, which runs the hooks.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovedTemplate {
     pub id: String,
     pub name: String,
     pub address: String,
+    #[serde(rename = "runner-image", default)]
+    pub runner_image: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +32,8 @@ pub struct Settings {
     pub workspace_root: PathBuf,
     pub templates: Vec<ApprovedTemplate>,
     pub socket: PathBuf,
+    /// The workspace service's hook runner, which runs every hook.
+    pub hook_runner_socket: PathBuf,
     /// Absolute folder holding Toha's configuration, registry, cache and state.
     pub data: PathBuf,
 }
@@ -45,6 +51,8 @@ struct File {
 #[derive(Deserialize)]
 struct Service {
     socket: Option<String>,
+    #[serde(rename = "hook-runner-socket")]
+    hook_runner_socket: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -91,17 +99,16 @@ impl Settings {
                     "workspace-root {root:?} must be an absolute folder other than /"
                 ))
             })?;
-        let socket = match file.template_service.and_then(|s| s.socket) {
-            Some(socket) if !socket.is_empty() => {
-                if !Path::new(&socket).is_absolute() {
-                    return Err(ConfigError::Invalid(format!(
-                        "template-service.socket {socket:?} must be absolute"
-                    )));
-                }
-                PathBuf::from(socket)
-            }
-            _ => PathBuf::from(DEFAULT_SOCKET),
+        let (socket, hook_runner_socket) = match file.template_service {
+            Some(s) => (s.socket, s.hook_runner_socket),
+            None => (None, None),
         };
+        let socket = socket_path(socket, "template-service.socket", DEFAULT_SOCKET)?;
+        let hook_runner_socket = socket_path(
+            hook_runner_socket,
+            "template-service.hook-runner-socket",
+            DEFAULT_HOOK_RUNNER_SOCKET,
+        )?;
         let data = clean_absolute(&data.to_string_lossy()).ok_or_else(|| {
             ConfigError::Invalid(format!("data folder {} must be absolute", data.display()))
         })?;
@@ -130,12 +137,28 @@ impl Settings {
             workspace_root,
             templates: file.templates,
             socket,
+            hook_runner_socket,
             data,
         })
     }
 
     pub fn template(&self, id: &str) -> Option<&ApprovedTemplate> {
         self.templates.iter().find(|t| t.id == id)
+    }
+}
+
+/// A configured socket path, absolute; absent or empty takes `default`.
+fn socket_path(value: Option<String>, key: &str, default: &str) -> Result<PathBuf, ConfigError> {
+    match value {
+        Some(socket) if !socket.is_empty() => {
+            if !Path::new(&socket).is_absolute() {
+                return Err(ConfigError::Invalid(format!(
+                    "{key} {socket:?} must be absolute"
+                )));
+            }
+            Ok(PathBuf::from(socket))
+        }
+        _ => Ok(PathBuf::from(default)),
     }
 }
 
@@ -185,6 +208,10 @@ mod tests {
         assert_eq!(settings.workspace_root, PathBuf::from("/srv/spaces"));
         assert_eq!(settings.socket, PathBuf::from(DEFAULT_SOCKET));
         assert_eq!(
+            settings.hook_runner_socket,
+            PathBuf::from(DEFAULT_HOOK_RUNNER_SOCKET)
+        );
+        assert_eq!(
             settings.template("sample-one").unwrap().address,
             "https://example.invalid/t"
         );
@@ -205,6 +232,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(settings.socket, PathBuf::from(DEFAULT_SOCKET));
+        let settings = Settings::parse(
+            "workspace-root: /srv\ntemplate-service: {hook-runner-socket: /run/sample/h.sock}\ntemplates: [{id: a, name: n, address: a, runner-image: 'alpine:3.22'}]\n",
+            Path::new(DATA),
+        )
+        .unwrap();
+        assert_eq!(
+            settings.hook_runner_socket.as_os_str(),
+            "/run/sample/h.sock"
+        );
+        assert_eq!(settings.socket, PathBuf::from(DEFAULT_SOCKET));
     }
 
     #[test]
@@ -217,6 +254,10 @@ mod tests {
             (
                 "workspace-root: /srv\ntemplate-service: {socket: rel.sock}\n",
                 "must be absolute",
+            ),
+            (
+                "workspace-root: /srv\ntemplate-service: {hook-runner-socket: rel.sock}\n",
+                "template-service.hook-runner-socket \"rel.sock\" must be absolute",
             ),
             (
                 "workspace-root: /srv\ntemplates: [{id: Bad, name: n, address: a}]\n",

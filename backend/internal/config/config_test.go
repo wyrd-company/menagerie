@@ -343,3 +343,28 @@ func TestParseRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestParseRunnerImages(t *testing.T) {
+	cfg, err := Parse([]byte(valid))
+	if err != nil || cfg.RunnerImage != "" || cfg.Templates[0].RunnerImage != "" || cfg.TemplateService.HookRunnerSocket != DefaultHookRunnerSocket {
+		t.Fatalf("absent: %+v %v", cfg, err)
+	}
+	doc := valid + "    runner-image: ghcr.io/example/runner:1\nrunner-image: alpine:3.22\ntemplate-service: {hook-runner-socket: /run/sample/hooks.sock}\n"
+	cfg, err = Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RunnerImage != "alpine:3.22" || cfg.Templates[0].RunnerImage != "ghcr.io/example/runner:1" || cfg.TemplateService.HookRunnerSocket != "/run/sample/hooks.sock" {
+		t.Fatalf("parsed %+v %+v", cfg.Templates[0], cfg.TemplateService)
+	}
+	for doc, want := range map[string]string{
+		valid + "runner-image: 'Not An Image'\n":                                         "runner-image must be an image reference",
+		valid + "    runner-image: 'bad image'\n":                                        "templates[0].runner-image must be an image reference",
+		valid + "template-service: {hook-runner-socket: hooks.sock}\n":                   "template-service.hook-runner-socket must be an absolute path",
+		valid + "template-service: {hook-runner-socket: /run/menagerie/template.sock}\n": "must differ from template-service.socket",
+	} {
+		if _, err := Parse([]byte(doc)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: got %v, want %q", doc, err, want)
+		}
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -78,10 +80,19 @@ func newHarness(t *testing.T) *harness {
 	}
 	ctx := context.Background()
 	root := t.TempDir()
-	h := &harness{t: t, ctx: ctx, client: client, rt: devcontainer.New(client, devcontainer.Options{}), root: root, runID: filepath.Base(filepath.Dir(root)) + "-" + filepath.Base(root)}
+	h := &harness{t: t, ctx: ctx, client: client, root: root, runID: filepath.Base(filepath.Dir(root)) + "-" + filepath.Base(root)}
+	h.rt = devcontainer.New(client, h.options(devcontainer.Options{}))
 	t.Cleanup(h.cleanup)
 	ensureImage(t, h, baseImage)
 	return h
+}
+
+// options runs initializeCommand in throwaway containers of baseImage that
+// carry the test's run label.
+func (h *harness) options(opts devcontainer.Options) devcontainer.Options {
+	opts.Containers = throwaway.NewDocker(h.client, throwaway.DockerOptions{Root: h.root, User: throwaway.ServiceUser(), Labels: map[string]string{"menagerie.test.run": h.runID}})
+	opts.RunnerImage = func(context.Context) (string, error) { return baseImage, nil }
+	return opts
 }
 
 // cleanup removes only resources marked by this test's root or run label.
@@ -346,7 +357,7 @@ func TestLocalEnvReadsOnlyAllowedVariables(t *testing.T) {
 	h := newHarness(t)
 	t.Setenv("MENAGERIE_TEST_ALLOWED", "allowed-value")
 	t.Setenv("MENAGERIE_TEST_SECRET", "secret-value")
-	rt := devcontainer.New(h.client, devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}})
+	rt := devcontainer.New(h.client, h.options(devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}}))
 	folder := h.workspace("env-space", map[string]string{
 		".devcontainer/devcontainer.json": `{
   "image": "` + baseImage + `",
@@ -380,7 +391,7 @@ func TestLocalEnvReadsOnlyAllowedVariables(t *testing.T) {
 		}
 	}
 	initEnv, _ := os.ReadFile(filepath.Join(folder, "init-env"))
-	if !strings.Contains(string(initEnv), "MENAGERIE_TEST_ALLOWED=allowed-value") || !strings.Contains(string(initEnv), "PATH=") || strings.Contains(string(initEnv), "secret-value") {
+	if !strings.Contains(string(initEnv), "MENAGERIE_TEST_ALLOWED=allowed-value") || !strings.Contains(string(initEnv), "\n"+imagePath(t, h)+"\n") || strings.Contains(string(initEnv), "secret-value") {
 		t.Errorf("initializeCommand environment:\n%s", initEnv)
 	}
 	if arg, _ := os.ReadFile(filepath.Join(folder, "init-arg")); strings.TrimSpace(string(arg)) != "" {
@@ -391,6 +402,83 @@ func TestLocalEnvReadsOnlyAllowedVariables(t *testing.T) {
 	}
 	if strings.Contains(log.String(), "MENAGERIE_TEST_ALLOWED is not") {
 		t.Errorf("job log notes the allowed variable:\n%s", log.String())
+	}
+}
+
+// imagePath is baseImage's own PATH variable, PATH=...
+func imagePath(t *testing.T, h *harness) string {
+	t.Helper()
+	info, err := h.client.ImageInspect(h.ctx, baseImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range info.Config.Env {
+		if strings.HasPrefix(pair, "PATH=") {
+			return pair
+		}
+	}
+	t.Fatalf("%s has no PATH", baseImage)
+	return ""
+}
+
+// initializeProbe reports, one line each, what initializeCommand must not
+// reach: the Docker socket, the agent socket at $AGENT_PATH substituted
+// in, SSH_AUTH_SOCK and the variables local-env does not allow. It fails
+// when it found any, and writes into the workspace folder.
+const initializeProbe = `found=$(for p in /var/run/docker.sock /run/docker.sock "$1"; do [ -e "$p" ] && echo "reachable $p"; done
+[ -n "${SSH_AUTH_SOCK:-}" ] && echo "SSH_AUTH_SOCK is set"
+env | grep MENAGERIE_TEST_SECRET)
+env > init-env
+echo written > init-written
+[ -z "$found" ] || { echo "$found" > init-found; exit 1; }`
+
+// TestInitializeCommandCannotReachDockerTheAgentOrMenageriesEnvironment is
+// the done-when test of initializeCommand: in each of its parallel
+// containers it finds no Docker socket, no ssh-agent socket and no
+// Menagerie variable beyond local-env, while it still writes into the
+// workspace folder.
+func TestInitializeCommandCannotReachDockerTheAgentOrMenageriesEnvironment(t *testing.T) {
+	h := newHarness(t)
+	dir, err := os.MkdirTemp("", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	agent := filepath.Join(dir, "ssh-agent.sock")
+	l, err := net.Listen("unix", agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	t.Setenv("SSH_AUTH_SOCK", agent)
+	t.Setenv("MENAGERIE_TEST_SECRET", "secret-value")
+	t.Setenv("MENAGERIE_TEST_ALLOWED", "allowed-value")
+	rt := devcontainer.New(h.client, h.options(devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}}))
+	probe, _ := json.Marshal([]string{"/bin/sh", "-c", initializeProbe, "sh", agent})
+	folder := h.workspace("init-space", map[string]string{
+		".devcontainer/devcontainer.json": `{"image": "` + baseImage + `", "initializeCommand": {"probe": ` + string(probe) + `, "write": "echo parallel > init-parallel"}}`,
+	})
+	if err := rt.Start(h.ctx, folder, &logProgress{t: t}); err != nil {
+		found, _ := os.ReadFile(filepath.Join(folder, "init-found"))
+		t.Fatalf("start: %v\n%s", err, found)
+	}
+	initEnv, _ := os.ReadFile(filepath.Join(folder, "init-env"))
+	for _, unwanted := range []string{"secret-value", "SSH_AUTH_SOCK", "DOCKER_HOST", "TMPDIR="} {
+		if strings.Contains(string(initEnv), unwanted) {
+			t.Errorf("initializeCommand environment holds %q:\n%s", unwanted, initEnv)
+		}
+	}
+	if !strings.Contains(string(initEnv), "MENAGERIE_TEST_ALLOWED=allowed-value") || !strings.Contains(string(initEnv), imagePath(t, h)) {
+		t.Errorf("initializeCommand environment:\n%s", initEnv)
+	}
+	for file, want := range map[string]string{"init-written": "written\n", "init-parallel": "parallel\n"} {
+		if got, err := os.ReadFile(filepath.Join(folder, file)); err != nil || string(got) != want {
+			t.Errorf("%s %q %v", file, got, err)
+		}
+	}
+	left, err := h.client.ContainerList(h.ctx, container.ListOptions{All: true, Filters: filters.NewArgs(filters.Arg("label", throwaway.LabelKind+"="+throwaway.KindInitializeCommand), filters.Arg("label", throwaway.LabelRoot+"="+h.root))})
+	if err != nil || len(left) != 0 {
+		t.Fatalf("%d initializeCommand containers remain: %v", len(left), err)
 	}
 }
 

@@ -4,6 +4,7 @@ use crate::Service;
 use crate::api::{AnswerRequest, ApplyReply, ApplyRequest, InterviewReply, Outcome, StartRequest};
 use crate::checks::{self, Operation};
 use crate::error::ServiceError;
+use crate::hooks::CallbackRunner;
 use crate::host::{self, ProcessEnvironment};
 use crate::reply;
 use crate::seal::{self, Binding};
@@ -138,7 +139,11 @@ pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, 
             force: false,
             trusted: true,
         },
-        &toha::hook::ProcessRunner,
+        &CallbackRunner {
+            socket: &service.settings.hook_runner_socket,
+            folder: &selected.folder,
+            token: request.hook_token.as_deref(),
+        },
         None,
         &mut |_| {},
     )?;

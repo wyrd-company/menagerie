@@ -8,13 +8,16 @@ const SPECIFICATION: &str = concat!(
 );
 
 /// Dashed string literals in the source that are not error kinds.
-const NOT_KINDS: [&str; 6] = [
+const NOT_KINDS: [&str; 9] = [
+    "hook-runner-socket",
     "kebab-case",
     "lower-case",
     "not-previewed",
+    "runner-image",
     "session-key",
     "template-service",
     "workspace-root",
+    "workspace-service",
 ];
 
 fn description() -> String {

@@ -5,6 +5,7 @@ use crate::Service;
 use crate::api::{AnswerRequest, ApplyReply, ApplyRequest, InterviewReply, StartRequest};
 use crate::checks::{self, Operation};
 use crate::error::ServiceError;
+use crate::hooks::CallbackRunner;
 use crate::host::{self, ProcessEnvironment};
 use crate::reply;
 use crate::seal::{self, Binding};
@@ -119,7 +120,12 @@ pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, Ser
     let mut environment = environment(service, &config, &registry, &mut source);
     let session = resume(service, record, &selected.target, &mut environment)?;
     let done = reply::completed(session.state()?)?;
-    let (merged, report) = session.apply(&done, false, &toha::hook::ProcessRunner, None)?;
+    let runner = CallbackRunner {
+        socket: &service.settings.hook_runner_socket,
+        folder: &selected.folder,
+        token: request.hook_token.as_deref(),
+    };
+    let (merged, report) = session.apply(&done, false, &runner, None)?;
     Ok(reply::merged(merged, report))
 }
 

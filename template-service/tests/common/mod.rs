@@ -120,6 +120,8 @@ fn flows_template(dir: &Path, hook: &str) {
 
 /// Template repositories, a workspace root and the service settings.
 pub struct World {
+    /// The workspace service's hook runner, as this test plays it.
+    pub hooks: HookHost,
     pub temp: tempfile::TempDir,
     pub root: PathBuf,
     pub workspaces: PathBuf,
@@ -198,6 +200,7 @@ impl World {
         std::fs::create_dir_all(&workspaces).unwrap();
         let data = root.join("data");
         let socket = root.join("run/template.sock");
+        let hook_socket = root.join("run/hook-runner.sock");
         let config = root.join("config.yml");
         let s = sample.display();
         let t = root.join("templates");
@@ -206,14 +209,17 @@ impl World {
             &root,
             "config.yml",
             format!(
-                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n  - {{id: fork, name: Fork, address: 'file://{f}'}}\n  - {{id: dotted-v1, name: Dotted, address: 'file://{t}/dotted.git@v1'}}\n  - {{id: dotted-v2, name: Dotted, address: 'file://{t}/dotted.git@v2'}}\n  - {{id: dotted-main, name: Dotted, address: 'file://{t}/dotted.git'}}\n",
+                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}, hook-runner-socket: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n  - {{id: fork, name: Fork, address: 'file://{f}'}}\n  - {{id: dotted-v1, name: Dotted, address: 'file://{t}/dotted.git@v1'}}\n  - {{id: dotted-v2, name: Dotted, address: 'file://{t}/dotted.git@v2'}}\n  - {{id: dotted-main, name: Dotted, address: 'file://{t}/dotted.git'}}\n",
                 workspaces.display(),
                 socket.display(),
+                hook_socket.display(),
                 v1 = v1,
                 f = fork.display(),
             ),
         );
+        let hooks = HookHost::start(&hook_socket);
         Self {
+            hooks,
             temp,
             root,
             workspaces,
@@ -343,8 +349,167 @@ impl Running {
     }
 
     pub async fn post(&self, path: &str, body: &Value) -> Reply {
-        post_bytes(&self.socket, path, serde_json::to_vec(body).unwrap()).await
+        post_bytes(&self.socket, path, body_of(path, body)).await
     }
+}
+
+/// The token the workspace service grants a generate or apply in these tests.
+pub const HOOK_TOKEN: &str = "0123456789abcdef";
+
+/// A request body as the workspace service sends it: a generate or apply
+/// carries the hook token unless the test gave `hookToken` itself.
+pub fn body_of(path: &str, body: &Value) -> Vec<u8> {
+    let mut body = body.clone();
+    if matches!(path, "/v1/workspaces/generate" | "/v1/upgrades/apply")
+        && let Some(members) = body.as_object_mut()
+        && !members.contains_key("hookToken")
+    {
+        members.insert("hookToken".into(), json!(HOOK_TOKEN));
+    }
+    serde_json::to_vec(&body).unwrap()
+}
+
+/// The workspace service's hook runner for these tests: it accepts
+/// `HOOK_TOKEN` only and runs each hook as a local process in its folder,
+/// with only `PATH` in its environment, where Menagerie runs a throwaway
+/// container. It records every request it accepts.
+pub struct HookHost {
+    pub socket: PathBuf,
+    pub calls: Arc<std::sync::Mutex<Vec<Value>>>,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HookHost {
+    pub fn start(socket: &Path) -> Self {
+        std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let (ready, listening) = std::sync::mpsc::channel();
+        let path = socket.to_owned();
+        let recorded = calls.clone();
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let listener = tokio::net::UnixListener::bind(&path).unwrap();
+                ready.send(()).unwrap();
+                let app = axum::Router::new().route(
+                    menagerie_template_service::hooks::HOOK_PATH,
+                    axum::routing::post(move |body: axum::body::Bytes| {
+                        let recorded = recorded.clone();
+                        async move {
+                            tokio::task::spawn_blocking(move || run_hook(&recorded, &body))
+                                .await
+                                .unwrap()
+                        }
+                    }),
+                );
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = stopped.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+        });
+        listening.recv().unwrap();
+        Self {
+            socket: socket.to_owned(),
+            calls,
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+
+    pub fn calls(&self) -> Vec<Value> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl Drop for HookHost {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn run_hook(
+    recorded: &std::sync::Mutex<Vec<Value>>,
+    body: &[u8],
+) -> (
+    axum::http::StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    Vec<u8>,
+) {
+    use axum::http::StatusCode;
+    use base64::Engine;
+    let reply = |status: StatusCode, body: Value| {
+        (
+            status,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            serde_json::to_vec(&body).unwrap(),
+        )
+    };
+    let request: Value = serde_json::from_slice(body).unwrap();
+    if request["token"] != HOOK_TOKEN {
+        return reply(
+            StatusCode::FORBIDDEN,
+            json!({"error": {"kind": "hook-token-refused", "message": "the hook token is unknown or revoked"}}),
+        );
+    }
+    recorded.lock().unwrap().push(request.clone());
+    let argv: Vec<String> = match (&request["program"]["run"], &request["program"]["script"]) {
+        (Value::Array(argv), Value::Null) => argv
+            .iter()
+            .map(|v| v.as_str().unwrap().to_owned())
+            .collect(),
+        (Value::Null, script) => std::iter::once(script["path"].as_str().unwrap().to_owned())
+            .chain(
+                script["args"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_owned()),
+            )
+            .collect(),
+        _ => panic!("program {}", request["program"]),
+    };
+    let mut dir = PathBuf::from(request["target"].as_str().unwrap());
+    if let Some(cwd) = request["cwd"].as_str() {
+        dir.push(cwd);
+    }
+    let output = Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .output()
+        .unwrap();
+    let stream = |captured: &Value, bytes: &[u8]| {
+        if captured.as_bool().unwrap() {
+            json!(base64::engine::general_purpose::STANDARD.encode(bytes))
+        } else {
+            Value::Null
+        }
+    };
+    let code = output.status.code().unwrap_or(-1);
+    reply(
+        StatusCode::OK,
+        json!({
+            "exitCode": code,
+            "success": code == 0,
+            "stdout": stream(&request["capture"]["stdout"], &output.stdout),
+            "stderr": stream(&request["capture"]["stderr"], &output.stderr),
+        }),
+    )
 }
 
 #[derive(Debug)]

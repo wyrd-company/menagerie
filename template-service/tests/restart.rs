@@ -39,7 +39,7 @@ async fn an_interview_continues_after_the_service_restarts() {
     let generated = post_bytes(
         &world.socket,
         "/v1/workspaces/generate",
-        serde_json::to_vec(&generate).unwrap(),
+        body_of("/v1/workspaces/generate", &generate),
     )
     .await;
     assert_eq!(generated.json["outcome"], "written", "{}", generated.json);

@@ -142,17 +142,23 @@ func TestApplyOutcomesAreTyped(t *testing.T) {
 	}
 	for _, tc := range cases {
 		f.answer(200, tc.reply)
-		for path, apply := range map[string]func(context.Context, Selector, json.RawMessage) (*Applied, error){
+		for path, apply := range map[string]func(context.Context, Selector, json.RawMessage, string) (*Applied, error){
 			"/v1/workspaces/generate": c.Generate,
 			"/v1/upgrades/apply":      c.ApplyUpgrade,
 		} {
-			applied, err := apply(context.Background(), sel, json.RawMessage(session))
+			applied, err := apply(context.Background(), sel, json.RawMessage(session), "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			got, body := f.last()
 			if got != path || body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","templateId":"sample","session":`+session+"}\n" {
 				t.Fatalf("%s %s", got, body)
+			}
+			if _, err := apply(context.Background(), sel, json.RawMessage(session), "0a1b"); err != nil {
+				t.Fatal(err)
+			}
+			if _, body := f.last(); body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","templateId":"sample","session":`+session+`,"hookToken":"0a1b"}`+"\n" {
+				t.Fatalf("with a hook token: %s", body)
 			}
 			if applied.Outcome != tc.outcome || applied.Outcome.Wrote() != tc.wrote || string(applied.Raw) != tc.reply {
 				t.Fatalf("%+v", applied)
@@ -164,7 +170,7 @@ func TestApplyOutcomesAreTyped(t *testing.T) {
 func TestRefusalsKeepTheirKindAndPaths(t *testing.T) {
 	f := newFake(t)
 	f.answer(422, `{"error":{"kind":"hook-failed","message":"hook exited 3","paths":["out.txt"],"warnings":["w"]}}`)
-	_, err := New(f.socket).Generate(context.Background(), sel, json.RawMessage(session))
+	_, err := New(f.socket).Generate(context.Background(), sel, json.RawMessage(session), "")
 	var refusal *Error
 	if !errors.As(err, &refusal) {
 		t.Fatalf("error %T %v", err, err)
@@ -179,7 +185,7 @@ func TestMalformedRepliesAreUnavailable(t *testing.T) {
 	c := New(f.socket)
 	interview := func() error { _, err := c.StartInterview(context.Background(), sel); return err }
 	apply := func() error {
-		_, err := c.ApplyUpgrade(context.Background(), sel, json.RawMessage(session))
+		_, err := c.ApplyUpgrade(context.Background(), sel, json.RawMessage(session), "")
 		return err
 	}
 	cases := []struct {

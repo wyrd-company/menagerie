@@ -13,6 +13,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -88,17 +89,28 @@ func ContainerOperations(root *workspace.Root, rt ContainerRuntime) Operations {
 	}
 }
 
+// Job error kinds of the container operations.
+const (
+	KindInitializeCommandFailed        = "initialize-command-failed"
+	KindRegistryCredentialsUnavailable = "registry-credentials-unavailable"
+	KindRunnerImageUnavailable         = "runner-image-unavailable"
+)
+
 // ContainerFailure names the job error kind of a container operation
-// failure: initialize-command-failed, registry-credentials-unavailable, or
-// the default operation-failed.
+// failure: registry-credentials-unavailable, runner-image-unavailable,
+// initialize-command-failed, or the default operation-failed.
 func ContainerFailure(err error) error {
-	var initErr *devcontainer.InitializeError
-	if errors.As(err, &initErr) {
-		return &jobs.Failure{Kind: "initialize-command-failed", Err: err}
-	}
 	var credErr *registrycreds.Error
 	if errors.As(err, &credErr) {
-		return &jobs.Failure{Kind: "registry-credentials-unavailable", Err: err}
+		return &jobs.Failure{Kind: KindRegistryCredentialsUnavailable, Err: err}
+	}
+	var imageErr *throwaway.ImageError
+	if errors.As(err, &imageErr) {
+		return &jobs.Failure{Kind: KindRunnerImageUnavailable, Err: err}
+	}
+	var initErr *devcontainer.InitializeError
+	if errors.As(err, &initErr) {
+		return &jobs.Failure{Kind: KindInitializeCommandFailed, Err: err}
 	}
 	return err
 }
