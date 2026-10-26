@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,18 +115,28 @@ func TestWorkspaceSocketStartUpErrorsNameNoPath(t *testing.T) {
 	var opts devcontainer.Options
 	_, err = workspaceSockets(context.Background(), &config.Config{WorkspaceSocket: &config.WorkspaceSocket{Folder: filepath.Join(dir, "missing")}}, root, starter, client, &opts)
 	clean("missing folder", err)
-	folder, err := os.MkdirTemp("", "ws")
+	// Socket paths are short: a Unix socket address has about 100 bytes.
+	folder, err := os.MkdirTemp("", sentinel)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(folder) })
+	if err := os.Mkdir(filepath.Join(dir, "root", "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	_, err = workspaceSockets(context.Background(), &config.Config{WorkspaceSocket: &config.WorkspaceSocket{Folder: folder}}, root, starter, filepath.Join(dir, "missing-client"), &opts)
 	clean("missing client", err)
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
 	sockets, err := workspaceSockets(context.Background(), &config.Config{WorkspaceSocket: &config.WorkspaceSocket{Folder: folder}}, root, starter, client, &opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sockets.Close()
+	if !strings.Contains(logged.String(), "workspace sockets are open") || strings.Contains(logged.String(), sentinel) {
+		t.Errorf("start-up logged %q", logged.String())
+	}
 	_, err = opts.WorkspaceSocket(filepath.Join(dir, "elsewhere", "alpha"))
 	clean("folder outside the root", err)
 }

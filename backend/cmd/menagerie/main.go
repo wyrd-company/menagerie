@@ -174,11 +174,12 @@ func workspaceSockets(ctx context.Context, cfg *config.Config, root *workspace.R
 		return nil, nil
 	}
 	sockets, err := workspacesocket.Open(workspacesocket.Options{
-		Folder:      c.Folder,
-		MinInterval: c.MinIntervalValue(),
-		Client:      client,
-		Commits:     starter,
-		Context:     ctx,
+		Folder:        c.Folder,
+		WorkspaceRoot: root.Path(),
+		MinInterval:   c.MinIntervalValue(),
+		Client:        client,
+		Commits:       starter,
+		Context:       ctx,
 	})
 	if err != nil {
 		return nil, err
@@ -200,7 +201,7 @@ func workspaceSockets(ctx context.Context, cfg *config.Config, root *workspace.R
 			log.Printf("menagerie: %v", err)
 		}
 	}
-	log.Printf("menagerie: workspace sockets in %s", c.Folder)
+	log.Print("menagerie: workspace sockets are open")
 	return sockets, nil
 }
 

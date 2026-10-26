@@ -80,8 +80,13 @@ type Starter interface {
 // Options configure the sockets.
 type Options struct {
 	// Folder is the socket folder, at the same path on the host and in
-	// Menagerie's container.
+	// Menagerie's container. No part of its path may be a symbolic link,
+	// so the host's bind source is the path itself.
 	Folder string
+	// WorkspaceRoot is the folder of the workspaces. The socket folder
+	// must be neither inside it nor contain it once symbolic links
+	// resolve. Empty skips the check.
+	WorkspaceRoot string
 	// MinInterval is the shortest time between two accepted commits of a
 	// workspace. Zero accepts every one.
 	MinInterval time.Duration
@@ -124,8 +129,8 @@ type listener struct {
 }
 
 // Open checks the socket folder and reads the client. The folder must be
-// a folder of this process's user, not a symbolic link; its mode is set
-// to 0700.
+// a folder of this process's user with no symbolic link in its path, and
+// apart from the workspace root; its mode is set to 0700.
 func Open(opts Options) (*Sockets, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -148,6 +153,9 @@ func Open(opts Options) (*Sockets, error) {
 	if err := s.ownFolder(opts.Folder, 0o700, false); err != nil {
 		return nil, fmt.Errorf("workspace-socket.folder %w", err)
 	}
+	if err := apart(opts.Folder, opts.WorkspaceRoot); err != nil {
+		return nil, fmt.Errorf("workspace-socket.folder %w", err)
+	}
 	client, err := os.ReadFile(opts.Client)
 	if err != nil {
 		return nil, errors.New("the workspace socket client beside the menagerie executable cannot be read")
@@ -162,7 +170,45 @@ var (
 	errNotOurs  = errors.New("must be a folder of the services' user, not a symbolic link")
 	errMissing  = errors.New("must exist")
 	errUnusable = errors.New("cannot be read, created or given its mode")
+	// errLinkInPath and errOverlap refuse a socket folder.
+	errLinkInPath = errors.New("must have no symbolic link in its path")
+	errOverlap    = errors.New("must be neither inside the workspace root nor contain it, with symbolic links resolved")
 )
+
+// apart checks that no part of folder's path is a symbolic link, and
+// that folder is neither inside root nor contains it once root's links
+// resolve. A link in the path would make the host's bind source another
+// folder than the one checked here, and a socket folder inside a
+// workspace would let that workspace's container reach other
+// workspaces' sockets.
+func apart(folder, root string) error {
+	for p := folder; p != filepath.Dir(p); p = filepath.Dir(p) {
+		info, err := os.Lstat(p)
+		if err != nil {
+			return errUnusable
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errLinkInPath
+		}
+	}
+	if root == "" {
+		return nil
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return errors.New("cannot be compared with the workspace root, which cannot be resolved")
+	}
+	if within(resolved, folder) || within(folder, resolved) {
+		return errOverlap
+	}
+	return nil
+}
+
+// within reports whether path is root or inside it.
+func within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && (rel == "." || filepath.IsLocal(rel))
+}
 
 // ownFolder checks that path is a folder of s's user, creating it with
 // mode when create is set and it is missing, and sets its mode.

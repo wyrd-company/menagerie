@@ -100,11 +100,12 @@ func newFixture(t *testing.T, opts ...option) *fixture {
 		t.Fatal(err)
 	}
 	o := Options{
-		Folder:      folder,
-		MinInterval: time.Minute,
-		Client:      clientPath,
-		Commits:     commits.New(commits.Options{Root: root, Remote: f.remote, Jobs: f.jobs}),
-		Now:         f.clock.Now,
+		Folder:        folder,
+		WorkspaceRoot: root.Path(),
+		MinInterval:   time.Minute,
+		Client:        clientPath,
+		Commits:       commits.New(commits.Options{Root: root, Remote: f.remote, Jobs: f.jobs}),
+		Now:           f.clock.Now,
 	}
 	for _, opt := range opts {
 		opt(&o)
@@ -652,5 +653,65 @@ func TestOpenRefusesAFolderThatIsNotOurs(t *testing.T) {
 	}
 	if _, err := Open(Options{Folder: dir, Client: filepath.Join(dir, "missing")}); err == nil {
 		t.Error("a missing client accepted")
+	}
+}
+
+// TestOpenRefusesALinkInThePathOrAnOverlapWithTheWorkspaceRoot checks the
+// socket folder's path itself, not only its last part: a link above it
+// makes the host mount another folder, and a workspace root reached
+// through a link can still hold the socket folder or sit inside it.
+func TestOpenRefusesALinkInThePathOrAnOverlapWithTheWorkspaceRoot(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), sentinel)
+	mkdir := func(rel string) string {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	link := func(rel, target string) string {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.Symlink(target, p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	linked := mkdir("real")
+	mkdir("real/sockets")
+	alias := link("alias", linked)
+	// The workspace root is reached through a link; the socket folder is
+	// inside the folder it names, in a workspace.
+	rootInside := mkdir("root-a")
+	mkdir("root-a/alpha/sockets")
+	rootInsideLink := link("root-a-link", rootInside)
+	// The socket folder holds the folder a linked workspace root names.
+	mkdir("outer/root-b")
+	rootContainedLink := link("root-b-link", filepath.Join(dir, "outer", "root-b"))
+	client := filepath.Join(dir, ClientName)
+	if err := os.WriteFile(client, []byte("sample client\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for label, c := range map[string]struct{ folder, root, want string }{
+		"link above the folder":     {filepath.Join(alias, "sockets"), "", "workspace-socket.folder must have no symbolic link in its path"},
+		"inside the resolved root":  {filepath.Join(rootInside, "alpha", "sockets"), rootInsideLink, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
+		"holds the resolved root":   {filepath.Join(dir, "outer"), rootContainedLink, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
+		"is the resolved root":      {rootInside, rootInsideLink, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
+		"apart from the root, kept": {filepath.Join(linked, "sockets"), rootInsideLink, ""},
+	} {
+		t.Run(label, func(t *testing.T) {
+			s, err := Open(Options{Folder: c.folder, WorkspaceRoot: c.root, Client: client})
+			if c.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.Close()
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("%v, want %q without the path", err, c.want)
+			}
+		})
 	}
 }
