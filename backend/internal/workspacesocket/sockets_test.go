@@ -338,7 +338,11 @@ func (f *fixture) hold(name string) (string, func()) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return job.ID(), func() { close(release) }
+	var once sync.Once
+	stop := func() { once.Do(func() { close(release) }) }
+	// A test that fails before it releases the job still ends.
+	f.t.Cleanup(stop)
+	return job.ID(), stop
 }
 
 func TestABusyWorkspaceIsRefusedAndNotCounted(t *testing.T) {
@@ -376,7 +380,8 @@ func TestMessagesAndRequestsAreChecked(t *testing.T) {
 		{"unknown field", `{"message":"x","workspace":"beta"}`, KindInvalidRequest},
 		{"two documents", `{"message":"x"}{"message":"y"}`, KindInvalidRequest},
 		{"not JSON", `message=x`, KindInvalidRequest},
-		{"too large", `{"message":"x","pad":"` + strings.Repeat(" ", maxBody) + `"}`, KindInvalidRequest},
+		// Valid but for its size: only the body's bound refuses it.
+		{"too large", `{"message":"x"}` + strings.Repeat(" ", maxBody), KindInvalidRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

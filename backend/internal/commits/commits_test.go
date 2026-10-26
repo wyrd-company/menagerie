@@ -245,6 +245,8 @@ func hold(t *testing.T, f *fixture, name string) func() {
 		t.Fatal(err)
 	}
 	var once sync.Once
+	// A test that fails before it releases the job still ends.
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
 	return func() {
 		once.Do(func() { close(release) })
 		wait(t, job)
@@ -285,6 +287,10 @@ func TestASweepCommitsOnlyIdleWorkspacesWithChanges(t *testing.T) {
 		}
 	}
 	release()
+	// A commit queued for the busy workspace would start as soon as its job
+	// ended; give it the time to show.
+	time.Sleep(100 * time.Millisecond)
+	f.jobs.Wait()
 
 	// The busy workspace was skipped, not queued, and its check changed
 	// nothing.

@@ -278,8 +278,9 @@ func TestTheScheduleCommitsAWorkspaceLeftDirty(t *testing.T) {
 func TestAComposePrimaryGetsTheSocket(t *testing.T) {
 	f := newSocketFixture(t)
 	folder := f.workspace(t, "compose-socket", map[string]string{
-		".devcontainer/compose.yml":       composeFile,
-		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/data"}`,
+		".devcontainer/compose.yml": composeFile,
+		// The definition's own name for the socket wins.
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/data", "containerEnv": {"MENAGERIE_WORKSPACE_SOCKET": "/run/menagerie/./workspace.sock"}}`,
 	})
 	f.h.mustRun(f.rt.Start, folder)
 	id := f.h.status(folder).ContainerID
@@ -287,7 +288,7 @@ func TestAComposePrimaryGetsTheSocket(t *testing.T) {
 	if m := socketMount(t, info); m.RW || m.Source != filepath.Join(f.folder, "compose-socket") {
 		t.Fatalf("socket mount %+v", m)
 	}
-	if got := envValue(info, devcontainer.WorkspaceSocketEnv); got != devcontainer.WorkspaceSocketPath {
+	if got := envValue(info, devcontainer.WorkspaceSocketEnv); got != "/run/menagerie/./workspace.sock" {
 		t.Fatalf("%s=%q", devcontainer.WorkspaceSocketEnv, got)
 	}
 	project := info.Config.Labels["com.docker.compose.project"]
