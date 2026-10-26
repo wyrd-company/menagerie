@@ -53,9 +53,50 @@ description: >-
   `${localEnv:NAME}` or `${env:NAME}`. Each entry matches
   `^[A-Za-z_][A-Za-z0-9_]*$` and appears once. Absent, a definition reads
   no variable. The template service ignores this list.
+
+
+  Optional `job-limits` limits the running time of jobs. A limit times
+  Menagerie's work, never the manager answering an interview: time in
+  `waiting-for-answers` does not count, and no deadline applies while a job
+  waits. Interviews keep no expiry. `default` limits every operation
+  without its own limit; `operations` gives `start`, `stop`, `rebuild`,
+  `create` or `upgrade` its own limit, which replaces `default`; `phases`
+  limits each stay in a phase, counted from each entry into the phase
+  (an answered interview enters `interview` again), inside any operation.
+  The phase names are `read-definition`, `initialize-command`, `build`,
+  `remove-container`, `up`, `stop`, `interview`, `initialize-repository`,
+  `generate`, `apply`, `commit`, `backup-local-changes` and `backup`.
+  Template hooks run inside `generate` and `apply`. A duration is positive
+  whole hours, minutes and seconds in that order, such as `2h`, `45m` or
+  `1h30m`. Unknown operation and phase keys are errors. Absent, no job has
+  a limit. The workspace API describes what a job past a limit does.
+
+
+  Optional `alerts` names a `webhook`, an http or https URL with a host,
+  that receives one JSON POST for each job that ends `failed`, timed-out
+  jobs included. With `long-running`, a duration, it also receives one
+  alert when a job's running time passes it. The body is
+  `{"event": "job-failed" | "job-long-running", "jobId", "workspace",
+  "operation", "phase", "state", "error": {"kind", "message"} | null,
+  "console"}`, where `console` is the browser address of the job's
+  console: the origin of `oidc.redirect-url` followed by `/?job={id}` for
+  start, stop and rebuild, `/create?job={id}` for create and
+  `/workspaces/{name}/upgrade?job={id}` for upgrade. Delivery runs in the
+  background, never delays or fails a job, and makes one attempt with a
+  10 second time limit; a redirect is not followed. An error or a non-2xx
+  answer writes one line to the service log. The URL can carry a
+  credential, so it never appears in a log, an event, an error or an API
+  response. Ended and succeeded jobs send nothing. `webhook` is required
+  in the section.
 validation-criteria: >-
   `go test ./backend/internal/config/` parses a valid document, applies the
   defaults, rejects each invalid field, and checks that the schema's keys
   equal the keys the parser accepts and that its default scopes equal the
-  scopes the workspace service requests. `go test ./backend/cmd/menagerie/`
-  checks that `local-env` reaches the devcontainer runtime.
+  scopes the workspace service requests, that the schema's phase keys and
+  the phase names above equal the phases the jobs package names, that its
+  operation keys equal the API's operations and that its duration pattern
+  is the parser's. `go test ./backend/internal/alerts/` checks the alert
+  body, console links and that no delivery failure logs the URL.
+  `go test ./backend/cmd/menagerie/` checks that `local-env` reaches the
+  devcontainer runtime and that `job-limits` and `alerts` reach the jobs
+  manager.

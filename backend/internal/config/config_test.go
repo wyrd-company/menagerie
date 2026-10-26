@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const valid = `
@@ -98,6 +99,52 @@ func TestParseLocalEnv(t *testing.T) {
 	}
 }
 
+const limitsAndAlerts = `
+job-limits:
+  default: 2h
+  operations:
+    rebuild: 1h30m
+  phases:
+    initialize-command: 10m
+    build: 45m
+alerts:
+  webhook: https://hooks.example.test/menagerie/tok-0123456789
+  long-running: 45s
+`
+
+func TestParseJobLimitsAndAlerts(t *testing.T) {
+	cfg, err := Parse([]byte(valid))
+	if err != nil || cfg.JobLimits != nil || cfg.Alerts != nil {
+		t.Fatalf("absent sections: %+v %+v %v", cfg.JobLimits, cfg.Alerts, err)
+	}
+	cfg, err = Parse([]byte(valid + limitsAndAlerts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := cfg.JobLimits
+	if l.Default.Value() != 2*time.Hour || l.Operations.Rebuild.Value() != 90*time.Minute || l.Operations.Start.Value() != 0 ||
+		l.Phases["build"].Value() != 45*time.Minute || len(l.Phases) != 2 {
+		t.Fatalf("limits %+v", l)
+	}
+	if cfg.Alerts.Webhook != "https://hooks.example.test/menagerie/tok-0123456789" || cfg.Alerts.LongRunning.Value() != 45*time.Second {
+		t.Fatalf("alerts %+v", cfg.Alerts)
+	}
+	if _, err := Parse([]byte(valid + "alerts:\n  webhook: http://hooks.example.test\n")); err != nil {
+		t.Fatalf("webhook without long-running: %v", err)
+	}
+}
+
+// TestInvalidWebhookIsNotEchoed keeps a webhook credential out of the
+// configuration error.
+func TestInvalidWebhookIsNotEchoed(t *testing.T) {
+	for _, hook := range []string{"ftp://hooks.example.test/tok-0123456789", "https://hooks.example.test/%zztok-0123456789"} {
+		_, err := Parse([]byte(valid + "alerts:\n  webhook: " + hook + "\n"))
+		if err == nil || !strings.Contains(err.Error(), "alerts.webhook must be an http or https URL") || strings.Contains(err.Error(), "tok-0123456789") {
+			t.Fatalf("%s: %v", hook, err)
+		}
+	}
+}
+
 func TestParseRejects(t *testing.T) {
 	cases := []struct {
 		name, doc, want string
@@ -135,6 +182,20 @@ func TestParseRejects(t *testing.T) {
 		{"local-env name", valid + "local-env: [TZ, 1LANG]\n", "local-env[1] must be a variable name"},
 		{"local-env with value", valid + "local-env: [TZ=UTC]\n", "local-env[0] must be a variable name"},
 		{"duplicate local-env", valid + "local-env: [TZ, LANG, TZ]\n", "local-env[2] names TZ, as local-env[0] does"},
+		{"limit units", valid + "job-limits:\n  default: 90ms\n", `job-limits.default "90ms" must be whole hours, minutes and seconds`},
+		{"limit fraction", valid + "job-limits:\n  default: 1.5h\n", `job-limits.default "1.5h" must be whole hours`},
+		{"limit number", valid + "job-limits:\n  default: 45\n", `job-limits.default "45" must be whole hours`},
+		{"limit order", valid + "job-limits:\n  default: 5m1h\n", `job-limits.default "5m1h" must be whole hours`},
+		{"zero limit", valid + "job-limits:\n  default: 0s\n", `job-limits.default "0s" must be positive`},
+		{"operation limit", valid + "job-limits:\n  operations:\n    stop: 1d\n", `job-limits.operations.stop "1d" must be whole hours`},
+		{"unknown operation", valid + "job-limits:\n  operations:\n    deploy: 1h\n", "field deploy not found"},
+		{"unknown phase", valid + "job-limits:\n  phases:\n    hook: 1h\n", "job-limits.phases.hook is not a phase; phases are read-definition"},
+		{"empty phase limit", valid + "job-limits:\n  phases:\n    build:\n", "job-limits.phases.build must be a duration"},
+		{"phase limit", valid + "job-limits:\n  phases:\n    build: 0m\n", `job-limits.phases.build "0m" must be positive`},
+		{"unknown limit field", valid + "job-limits:\n  maximum: 1h\n", "field maximum not found"},
+		{"long-running without webhook", valid + "alerts:\n  long-running: 45m\n", "alerts.webhook is required"},
+		{"long-running units", valid + "alerts:\n  webhook: https://hooks.example.test\n  long-running: 2d\n", `alerts.long-running "2d" must be whole hours`},
+		{"webhook host", valid + "alerts:\n  webhook: https:///hook\n", "alerts.webhook must be an http or https URL with a host"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

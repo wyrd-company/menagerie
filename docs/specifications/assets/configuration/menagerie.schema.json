@@ -161,6 +161,89 @@
           }
         }
       }
+    },
+    "job-limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Limits on a job's running time. Time waiting for answers does not count. A job past a limit is cancelled and fails as timed-out. Absent, no job has a limit.",
+      "properties": {
+        "default": {
+          "$ref": "#/$defs/duration",
+          "description": "Limit of every operation without its own."
+        },
+        "operations": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Limit per operation; it replaces default.",
+          "properties": {
+            "start": {
+              "$ref": "#/$defs/duration"
+            },
+            "stop": {
+              "$ref": "#/$defs/duration"
+            },
+            "rebuild": {
+              "$ref": "#/$defs/duration"
+            },
+            "create": {
+              "$ref": "#/$defs/duration"
+            },
+            "upgrade": {
+              "$ref": "#/$defs/duration"
+            }
+          }
+        },
+        "phases": {
+          "type": "object",
+          "description": "Limit per phase, counted from each entry into the phase, inside any operation. Template hooks run inside generate and apply.",
+          "propertyNames": {
+            "enum": [
+              "read-definition",
+              "initialize-command",
+              "build",
+              "remove-container",
+              "up",
+              "stop",
+              "interview",
+              "initialize-repository",
+              "generate",
+              "apply",
+              "commit",
+              "backup-local-changes",
+              "backup"
+            ]
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/duration"
+          }
+        }
+      }
+    },
+    "alerts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "webhook"
+      ],
+      "description": "Webhook told about failed and long-running jobs with one JSON POST each. Absent, no alert is sent.",
+      "properties": {
+        "webhook": {
+          "type": "string",
+          "pattern": "^https?://[^/?#]",
+          "description": "http or https URL alerts are posted to. It can carry a credential and is never logged."
+        },
+        "long-running": {
+          "$ref": "#/$defs/duration",
+          "description": "Running time after which one job-long-running alert is sent for a job."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "duration": {
+      "type": "string",
+      "pattern": "^([0-9]+h([0-9]+m)?([0-9]+s)?|[0-9]+m([0-9]+s)?|[0-9]+s)$",
+      "description": "Positive duration of whole hours, minutes and seconds, such as 2h, 45m or 1h30m."
     }
   }
 }

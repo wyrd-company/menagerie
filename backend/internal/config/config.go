@@ -12,14 +12,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/wyrd-company/menagerie/backend/internal/alerts"
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
+	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 )
 
@@ -59,6 +64,74 @@ type Config struct {
 	// devcontainer definition may read through ${localEnv:NAME}. Absent,
 	// a definition reads none.
 	LocalEnv []string `yaml:"local-env"`
+	// JobLimits limits the running time of jobs. Absent, no job has a
+	// limit.
+	JobLimits *JobLimits `yaml:"job-limits"`
+	// Alerts names the webhook told about failed and long-running jobs.
+	// Absent, no alert is sent.
+	Alerts *Alerts `yaml:"alerts"`
+}
+
+// Duration is a positive time span of whole hours, minutes and seconds,
+// such as 2h, 45m or 1h30m. Empty is no duration.
+type Duration string
+
+// durationPattern is the form of a Duration: units h, m and s, in that
+// order, each at most once.
+var durationPattern = regexp.MustCompile(`^([0-9]+h([0-9]+m)?([0-9]+s)?|[0-9]+m([0-9]+s)?|[0-9]+s)$`)
+
+// Value is the duration; zero when empty.
+func (d Duration) Value() time.Duration {
+	v, _ := time.ParseDuration(string(d))
+	return v
+}
+
+func (d Duration) validate(field string) error {
+	if d == "" {
+		return nil
+	}
+	if !durationPattern.MatchString(string(d)) {
+		return fmt.Errorf("%s %q must be whole hours, minutes and seconds, such as 2h, 45m or 1h30m", field, string(d))
+	}
+	if v, err := time.ParseDuration(string(d)); err != nil || v <= 0 {
+		return fmt.Errorf("%s %q must be positive", field, string(d))
+	}
+	return nil
+}
+
+// JobLimits are the time limits on a job's running time. Time in
+// waiting-for-answers does not count.
+type JobLimits struct {
+	// Default limits every operation without its own limit.
+	Default Duration `yaml:"default"`
+	// Operations limits jobs by operation.
+	Operations OperationLimits `yaml:"operations"`
+	// Phases limits each stay in a phase, keyed by a name in jobs.Phases.
+	Phases map[string]Duration `yaml:"phases"`
+}
+
+// OperationLimits is one optional limit per operation.
+type OperationLimits struct {
+	Start   Duration `yaml:"start"`
+	Stop    Duration `yaml:"stop"`
+	Rebuild Duration `yaml:"rebuild"`
+	Create  Duration `yaml:"create"`
+	Upgrade Duration `yaml:"upgrade"`
+}
+
+// ByName maps each operation name to its limit, empty included.
+func (o OperationLimits) ByName() map[string]Duration {
+	return map[string]Duration{"start": o.Start, "stop": o.Stop, "rebuild": o.Rebuild, "create": o.Create, "upgrade": o.Upgrade}
+}
+
+// Alerts names the webhook that receives job alerts.
+type Alerts struct {
+	// Webhook is the http or https URL alerts are posted to. It can carry
+	// a credential and is never logged.
+	Webhook string `yaml:"webhook"`
+	// LongRunning, when given, sends one alert for a job whose running
+	// time passes it.
+	LongRunning Duration `yaml:"long-running"`
 }
 
 // Template is one approved template.
@@ -218,6 +291,12 @@ func (c *Config) validate() error {
 	if c.RegistryCredentials != nil {
 		errs = append(errs, c.RegistryCredentials.validate()...)
 	}
+	if c.JobLimits != nil {
+		errs = append(errs, c.JobLimits.validate()...)
+	}
+	if c.Alerts != nil {
+		errs = append(errs, c.Alerts.validate()...)
+	}
 	names := map[string]int{}
 	for i, name := range c.LocalEnv {
 		if !envNamePattern.MatchString(name) {
@@ -229,6 +308,45 @@ func (c *Config) validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (l *JobLimits) validate() []error {
+	var errs []error
+	if err := l.Default.validate("job-limits.default"); err != nil {
+		errs = append(errs, err)
+	}
+	ops := l.Operations.ByName()
+	for _, name := range slices.Sorted(maps.Keys(ops)) {
+		if err := ops[name].validate("job-limits.operations." + name); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(l.Phases)) {
+		if !slices.Contains(jobs.Phases, name) {
+			errs = append(errs, fmt.Errorf("job-limits.phases.%s is not a phase; phases are %s", name, strings.Join(jobs.Phases, ", ")))
+			continue
+		}
+		field := "job-limits.phases." + name
+		if l.Phases[name] == "" {
+			errs = append(errs, fmt.Errorf("%s must be a duration", field))
+		} else if err := l.Phases[name].validate(field); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+func (a *Alerts) validate() []error {
+	var errs []error
+	if a.Webhook == "" {
+		errs = append(errs, errors.New("alerts.webhook is required"))
+	} else if err := alerts.ValidURL(a.Webhook); err != nil {
+		errs = append(errs, fmt.Errorf("alerts.webhook %w", err))
+	}
+	if err := a.LongRunning.validate("alerts.long-running"); err != nil {
+		errs = append(errs, err)
+	}
+	return errs
 }
 
 func (r *RegistryCredentials) validate() []error {
