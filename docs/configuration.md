@@ -174,14 +174,17 @@ of the reasons in [Troubleshooting](troubleshooting.md#registry-credentials).
 ## GitHub App
 
 With `github-app`, Menagerie authenticates to GitHub with a GitHub App's
-installation tokens. A token is used only for an `https` URL on the App's
-server whose path is `/<owner>/<repository>` or `/<owner>/<repository>.git`,
-with no user information, query or fragment:
+installation tokens, for repositories on the App's server whose path is
+`/<owner>/<repository>` or `/<owner>/<repository>.git`:
 
-- backups to such a `workspace-repository`, with `contents: write` on that
-  repository;
-- template fetches over `https` from such a repository, with
-  `contents: read` on it.
+- Backups, with `contents: write` on the repository, when
+  `workspace-repository` is such an `https` URL with no user information,
+  query or fragment. A `workspace-repository` with a user name gets no
+  token and no other credential.
+- Template fetches, with `contents: read` on the repository, from every
+  `https` address of such a repository. A user name in the address does
+  not opt out: the template service asks for the token by the address
+  without it, and the fetch sends the token in its place.
 
 Every other URL keeps its own authentication: SSH URLs use the Wyrwood
 agent, and Menagerie gives other `https` URLs no credential. Both can be
@@ -197,8 +200,11 @@ and templates on another host over SSH.
 
 Install the App on the backup repository with Contents read and write, and
 on each private template repository with Contents read. Import its private
-key into OpenBao's Transit engine as an RSA key; the Wyrwood policy grants
-`update` on `transit/sign/<transit-key>/sha2-256`. Menagerie signs the App's
+key into OpenBao's Transit engine as an RSA key, as
+[Installation](install.md#github-app) shows; the Wyrwood policy grants
+`update` on `transit/sign/<transit-key>/sha2-256`. For a `server` whose
+certificate a private authority signed, see
+[Git hosts](install.md#git-hosts). Menagerie signs the App's
 JWT through Wyrwood's `vault.sock`, sending no token, and exchanges it for a
 token that covers one repository and one permission. Tokens stay in
 Menagerie's memory until five minutes before they expire; nothing is written

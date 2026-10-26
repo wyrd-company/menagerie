@@ -205,6 +205,68 @@ description: >-
   in memory for the one fetch and never writes it to disk.
 
 
+  Every request runs its Toha work on one worker thread inside one Toha
+  credential resolver scope, so every fetch of that request, and only that
+  request, can ask the route. This service asks only when an `https`
+  remote asks for credentials, once for each challenge, with the URL
+  `https://host[:port]/path`. The default port 443 is left out, and the path
+  is percent-encoded outside the unreserved characters and `/`. The URL
+  never carries user information, so a template address with a user name
+  is asked for as the same repository without it: a user name does not opt
+  out of the App, and the fetch sends the route's credential instead of
+  it. The route's own rule, which refuses a URL with user information,
+  applies to its direct callers. A 200 is the
+  fetch's credential. A 404 leaves the challenge to Toha's default
+  behaviour. A 502 fails the fetch with the prefix
+  `GitHub App credentials are unavailable: ` and the route's reason, when
+  that reason is one line of at most 200 bytes, and with
+  `the token could not be minted` otherwise. Any other
+  status, a malformed answer or an unreachable socket fails the fetch with
+  a fixed reason of this service, after the same prefix. A failed fetch is
+  a template refusal such as `template-resolve-failed`, whose message is
+  that reason where the flow reports Toha's message.
+
+
+  The request's resolver keeps every credential it handed out. When a
+  request fails after the resolver handed out at least one credential, its
+  refusal carries no text from Toha, gix or the remote, which can hold the
+  credential in forms no redaction can list: the `message` is a fixed
+  sentence for the `kind`, and `warnings` are dropped. `paths`,
+  `locations` and `questions` stay. The sentences:
+  `template-resolve-failed`, "the template could not be fetched; the Git
+  host refused or failed the request"; `template-not-found`, "the template
+  was not found on the Git host"; `template-stale-revision`, "the
+  template's approved revision is stale"; `template-ambiguous`, "the
+  template's name is ambiguous"; `template-refresh-failed`, "the
+  template's catalog entry could not be updated from the Git host";
+  `template-cache-conflict`, "Toha's cache entry for the template does not
+  hold the recorded commit from its source"; `update-refused`, "the upgrade
+  could not read the template from the Git host"; `merge-base-failed`, "the
+  workspace's recorded template revision could not be fetched from the Git
+  host"; `merge-failed`, "the upgrade could not be merged"; `apply-failed`,
+  "the template could not be applied; the workspace repository or its
+  remote could not be read"; any other kind, "the template operation failed
+  after GitHub App credentials were supplied". A request that handed out no
+  credential keeps its full message, the route's reason or this service's
+  own credential reason included. As a second defence, every reply of a
+  route, successes included, passes one boundary that replaces each
+  written form of the handed-out credentials with `<redacted>`: the
+  password; the `username:password` pair and the password in base64 and
+  base64url, padded and unpadded; and each of those Rust-escaped,
+  JSON-escaped and as a decimal byte list. Matches may overlap; every byte
+  a match covers is removed, and each run of covered bytes becomes one
+  `<redacted>`. The service writes no log line for a request.
+
+
+  When the workspace service's request ends before its reply, because the
+  job was cancelled or reached its time limit, the request's credential
+  requests end with it: one in flight loses its connection, and the fetch
+  fails with `GitHub App credentials are unavailable: the operation ended
+  before credentials arrived`; no later one is sent. Toha's own network
+  reads and local work for that request are not interrupted and run until
+  they return.
+
+
   Apply replies. Generate and apply answer 200 with `{"outcome","files",
   "recordPath","messages","hooks","conflicts"}`. `outcome` is `written`,
   `conflicted`, `already-current`, `needs-trust` or `planned`; only
@@ -276,7 +338,19 @@ validation-criteria: >-
   replies, none of which puts a stream or a reply's text in an error; the
   unit tests in `src/error.rs` drive a captured value through every apply
   error that can carry one, alone and wrapped as generate and apply
-  return it, and find it in no refusal;
+  return it, and find it in no refusal; the unit tests in
+  `src/credentials.rs` cover the credential request's URL and every answer
+  of the route, and find a granted token in no refusal or `Debug` output;
+  `tests/credentials.rs` fetches a private template over TLS with the
+  route's token through create and generate, also from an address with a
+  user name, leaves the challenge to Toha on a 404, fails with the route's
+  reason on a 502, runs two creates at once that each fetch with their own
+  repository's token, replies with only the fixed sentence when a remote
+  echoes the credential, also as overlapping copies, keeps Toha's message
+  when no credential was handed out, and ends the credential request and its worker of
+  each caller that goes away, without leaving a thread; `go test -tags
+  templateservice ./backend/internal/workflows/` ends the credential
+  request of a create whose job reaches its time limit;
   `tests/numbers.rs` covers number values through the session and the
   applied record; `tests/revisions.rs` covers admitted revisions for
   fixed and moving addresses, installed branches and tags;

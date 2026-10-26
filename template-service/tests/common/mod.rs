@@ -136,6 +136,11 @@ pub struct World {
 
 impl World {
     pub fn new() -> Self {
+        Self::with_templates(&[])
+    }
+
+    /// A world whose approved list also has `templates`, as `(id, address)`.
+    pub fn with_templates(templates: &[(&str, &str)]) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let sample = root.join("templates/sample");
@@ -209,13 +214,19 @@ impl World {
             &root,
             "config.yml",
             format!(
-                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}, hook-runner-socket: {}, candidate-folder: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n  - {{id: fork, name: Fork, address: 'file://{f}'}}\n  - {{id: dotted-v1, name: Dotted, address: 'file://{t}/dotted.git@v1'}}\n  - {{id: dotted-v2, name: Dotted, address: 'file://{t}/dotted.git@v2'}}\n  - {{id: dotted-main, name: Dotted, address: 'file://{t}/dotted.git'}}\n",
+                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}, hook-runner-socket: {}, candidate-folder: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n  - {{id: fork, name: Fork, address: 'file://{f}'}}\n  - {{id: dotted-v1, name: Dotted, address: 'file://{t}/dotted.git@v1'}}\n  - {{id: dotted-v2, name: Dotted, address: 'file://{t}/dotted.git@v2'}}\n  - {{id: dotted-main, name: Dotted, address: 'file://{t}/dotted.git'}}\n{extra}",
                 workspaces.display(),
                 socket.display(),
                 hook_socket.display(),
                 root.join("candidates").display(),
                 v1 = v1,
                 f = fork.display(),
+                extra = templates
+                    .iter()
+                    .map(|(id, address)| format!(
+                        "  - {{id: {id}, name: {id}, address: '{address}'}}\n"
+                    ))
+                    .collect::<String>(),
             ),
         );
         let hooks = HookHost::start(&hook_socket);
@@ -370,13 +381,21 @@ pub fn body_of(path: &str, body: &Value) -> Vec<u8> {
     serde_json::to_vec(&body).unwrap()
 }
 
+/// What the credential route answers for a URL: a status and a body.
+pub type CredentialAnswer = Arc<dyn Fn(&str) -> (u16, Value) + Send + Sync>;
+
 /// The workspace service's hook runner for these tests: it accepts
 /// `HOOK_TOKEN` only and runs each hook as a local process in its folder,
 /// with only `PATH` in its environment, where Menagerie runs a throwaway
-/// container. It records every request it accepts.
+/// container. It records every request it accepts. Its credential route
+/// records each URL and answers as `answer_credentials` set, by default as
+/// the workspace service without a GitHub App does.
 pub struct HookHost {
     pub socket: PathBuf,
     pub calls: Arc<std::sync::Mutex<Vec<Value>>>,
+    credential_urls: Arc<std::sync::Mutex<Vec<String>>>,
+    credential_answer: Arc<std::sync::Mutex<CredentialAnswer>>,
+    hold: Arc<Hold>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -389,6 +408,13 @@ impl HookHost {
         let (ready, listening) = std::sync::mpsc::channel();
         let path = socket.to_owned();
         let recorded = calls.clone();
+        let credential_urls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let no_app: CredentialAnswer =
+            Arc::new(|_: &str| (404, json!({"reason": "no GitHub App is configured"})));
+        let credential_answer = Arc::new(std::sync::Mutex::new(no_app));
+        let (urls, answer) = (credential_urls.clone(), credential_answer.clone());
+        let hold = Arc::new(Hold::default());
+        let holding = hold.clone();
         let thread = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -398,17 +424,39 @@ impl HookHost {
             runtime.block_on(async move {
                 let listener = tokio::net::UnixListener::bind(&path).unwrap();
                 ready.send(()).unwrap();
-                let app = axum::Router::new().route(
-                    menagerie_template_service::hooks::HOOK_PATH,
-                    axum::routing::post(move |body: axum::body::Bytes| {
-                        let recorded = recorded.clone();
-                        async move {
-                            tokio::task::spawn_blocking(move || run_hook(&recorded, &body))
-                                .await
-                                .unwrap()
-                        }
-                    }),
-                );
+                let app = axum::Router::new()
+                    .route(
+                        menagerie_template_service::hooks::HOOK_PATH,
+                        axum::routing::post(move |body: axum::body::Bytes| {
+                            let recorded = recorded.clone();
+                            async move {
+                                tokio::task::spawn_blocking(move || run_hook(&recorded, &body))
+                                    .await
+                                    .unwrap()
+                            }
+                        }),
+                    )
+                    .route(
+                        menagerie_template_service::credentials::CREDENTIAL_PATH,
+                        axum::routing::post(move |body: axum::body::Bytes| {
+                            let request: Value = serde_json::from_slice(&body).unwrap();
+                            let url = request["url"].as_str().unwrap().to_owned();
+                            urls.lock().unwrap().push(url.clone());
+                            let respond = answer.lock().unwrap().clone();
+                            let (status, reply) = respond(&url);
+                            let holding = holding.clone();
+                            async move {
+                                if holding.on.load(std::sync::atomic::Ordering::SeqCst) {
+                                    holding.wait().await;
+                                }
+                                (
+                                    axum::http::StatusCode::from_u16(status).unwrap(),
+                                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                                    serde_json::to_vec(&reply).unwrap(),
+                                )
+                            }
+                        }),
+                    );
                 axum::serve(listener, app)
                     .with_graceful_shutdown(async {
                         let _ = stopped.await;
@@ -421,6 +469,9 @@ impl HookHost {
         Self {
             socket: socket.to_owned(),
             calls,
+            credential_urls,
+            credential_answer,
+            hold,
             stop: Some(stop),
             thread: Some(thread),
         }
@@ -429,10 +480,71 @@ impl HookHost {
     pub fn calls(&self) -> Vec<Value> {
         self.calls.lock().unwrap().clone()
     }
+
+    /// Answer the credential route with `answer` from now on.
+    pub fn answer_credentials(
+        &self,
+        answer: impl Fn(&str) -> (u16, Value) + Send + Sync + 'static,
+    ) {
+        *self.credential_answer.lock().unwrap() = Arc::new(answer);
+    }
+
+    /// Whether every credential request from now on is held until its
+    /// caller closes the connection.
+    pub fn hold_credentials(&self, on: bool) {
+        self.hold.on.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many credential requests were held.
+    pub fn held(&self) -> usize {
+        self.hold.held.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// How many held credential requests ended because their caller closed
+    /// the connection.
+    pub fn released(&self) -> usize {
+        self.hold.released.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The URL of every credential request, in order.
+    pub fn credential_urls(&self) -> Vec<String> {
+        self.credential_urls.lock().unwrap().clone()
+    }
+}
+
+/// Held credential requests: each waits until its connection closes, or
+/// until the host stops.
+#[derive(Default)]
+pub struct Hold {
+    on: std::sync::atomic::AtomicBool,
+    held: std::sync::atomic::AtomicUsize,
+    released: std::sync::atomic::AtomicUsize,
+    stopping: tokio::sync::Notify,
+}
+
+impl Hold {
+    async fn wait(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        /// Counts the request released when the server drops it, which it
+        /// does when the caller closes the connection.
+        struct Released<'a>(&'a Hold);
+        impl Drop for Released<'_> {
+            fn drop(&mut self) {
+                self.0.released.fetch_add(1, SeqCst);
+            }
+        }
+        let stopping = self.stopping.notified();
+        self.held.fetch_add(1, SeqCst);
+        let released = Released(self);
+        stopping.await;
+        // Stopping the host is not a caller closing the connection.
+        std::mem::forget(released);
+    }
 }
 
 impl Drop for HookHost {
     fn drop(&mut self) {
+        self.hold.stopping.notify_waiters();
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }

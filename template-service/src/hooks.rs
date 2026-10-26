@@ -146,7 +146,7 @@ impl HookRunner for CallbackRunner<'_> {
             .build()
             .map_err(|_| failure("the hook runner's client could not start"))?;
         let (status, reply) = runtime
-            .block_on(post(self.socket, body))
+            .block_on(post(self.socket, HOOK_PATH, body))
             .map_err(|_| failure("the workspace service's hook runner is unreachable"))?;
         if status != 200 {
             return Err(failure(match serde_json::from_slice::<Refusal>(&reply) {
@@ -199,15 +199,19 @@ fn stream(
     }
 }
 
-/// POST `body` to the hook runner and read the whole reply. The reply
-/// waits as long as the hook runs; the workspace service ends it when the
-/// job's limit or its cancellation stops the hook.
-async fn post(socket: &Path, body: Vec<u8>) -> Result<(u16, Bytes), Box<dyn std::error::Error>> {
+/// POST `body` to `path` on the hook runner socket and read the whole
+/// reply. A hook's reply waits as long as the hook runs; the workspace
+/// service ends it when the job's limit or its cancellation stops the hook.
+pub(crate) async fn post(
+    socket: &Path,
+    path: &str,
+    body: Vec<u8>,
+) -> Result<(u16, Bytes), Box<dyn std::error::Error>> {
     let stream = tokio::net::UnixStream::connect(socket).await?;
     let (mut sender, connection) =
         hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
     tokio::spawn(connection);
-    let request = hyper::Request::post(HOOK_PATH)
+    let request = hyper::Request::post(path)
         .header(hyper::header::HOST, "workspace-service")
         .header(hyper::header::CONTENT_TYPE, "application/json")
         .body(Full::new(Bytes::from(body)))?;
@@ -221,87 +225,28 @@ async fn post(socket: &Path, body: Vec<u8>) -> Result<(u16, Bytes), Box<dyn std:
 mod tests {
     use super::*;
     use serde_json::{Value, json};
-    use std::sync::{Arc, Mutex};
     use toha::plan::TargetPath;
     use toha::template::Capture as Captured;
 
+    use crate::scripted::Scripted;
+
     /// A hook runner that answers every request with `status` and `reply`
     /// and keeps the requests.
-    struct Scripted {
-        socket: std::path::PathBuf,
-        requests: Arc<Mutex<Vec<Value>>>,
-        _dir: tempfile::TempDir,
-        stop: Option<tokio::sync::oneshot::Sender<()>>,
-        thread: Option<std::thread::JoinHandle<()>>,
+    fn scripted(status: u16, reply: Value) -> Scripted {
+        Scripted::start(HOOK_PATH, status, serde_json::to_vec(&reply).unwrap())
     }
 
-    impl Scripted {
-        fn start(status: u16, reply: Value) -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            let socket = dir.path().join("hook-runner.sock");
-            let requests = Arc::new(Mutex::new(Vec::new()));
-            let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-            let (ready, listening) = std::sync::mpsc::channel();
-            let (path, kept) = (socket.clone(), requests.clone());
-            let thread = std::thread::spawn(move || {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-                runtime.block_on(async move {
-                    let listener = tokio::net::UnixListener::bind(&path).unwrap();
-                    ready.send(()).unwrap();
-                    let app = axum::Router::new().route(
-                        HOOK_PATH,
-                        axum::routing::post(move |body: axum::body::Bytes| {
-                            kept.lock()
-                                .unwrap()
-                                .push(serde_json::from_slice(&body).unwrap());
-                            let reply = reply.clone();
-                            async move {
-                                (
-                                    axum::http::StatusCode::from_u16(status).unwrap(),
-                                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                                    serde_json::to_vec(&reply).unwrap(),
-                                )
-                            }
-                        }),
-                    );
-                    axum::serve(listener, app)
-                        .with_graceful_shutdown(async {
-                            let _ = stopped.await;
-                        })
-                        .await
-                        .unwrap();
-                });
-            });
-            listening.recv().unwrap();
-            Self {
-                socket,
-                requests,
-                _dir: dir,
-                stop: Some(stop),
-                thread: Some(thread),
-            }
-        }
+    trait Run {
+        fn run(&self, hook: &PlannedHook, token: Option<&str>) -> Result<HookOutcome, HookError>;
+    }
 
+    impl Run for Scripted {
         fn run(&self, hook: &PlannedHook, token: Option<&str>) -> Result<HookOutcome, HookError> {
             CallbackRunner {
                 socket: &self.socket,
                 token,
             }
             .run(hook, Path::new("/real/spaces/alpha"))
-        }
-
-        fn requests(&self) -> Vec<Value> {
-            self.requests.lock().unwrap().clone()
-        }
-    }
-
-    impl Drop for Scripted {
-        fn drop(&mut self) {
-            let _ = self.stop.take().unwrap().send(());
-            let _ = self.thread.take().unwrap().join();
         }
     }
 
@@ -329,7 +274,7 @@ mod tests {
 
     #[test]
     fn a_hook_is_sent_with_its_grant_target_and_capture() {
-        let runner = Scripted::start(
+        let runner = scripted(
             200,
             json!({"exitCode": 3, "success": false, "stdout": SECRET, "stderr": null}),
         );
@@ -365,7 +310,7 @@ mod tests {
             },
             Captured::default(),
         );
-        let runner = Scripted::start(
+        let runner = scripted(
             200,
             json!({"exitCode": 0, "success": true, "stdout": null, "stderr": null}),
         );
@@ -379,7 +324,7 @@ mod tests {
 
     #[test]
     fn without_a_token_no_hook_is_sent() {
-        let runner = Scripted::start(
+        let runner = scripted(
             200,
             json!({"exitCode": 0, "success": true, "stdout": null, "stderr": null}),
         );
@@ -392,7 +337,7 @@ mod tests {
 
     #[test]
     fn a_refusal_names_a_reason_chosen_by_its_kind_and_never_its_text() {
-        let runner = Scripted::start(
+        let runner = scripted(
             403,
             json!({"error": {"kind": "hook-token-refused", "message": "secret refusal text"}}),
         );
@@ -404,7 +349,7 @@ mod tests {
             "the workspace service refused its hook token"
         );
         assert_eq!(error.to_string(), reason(&error));
-        let runner = Scripted::start(502, json!(["secret reply body"]));
+        let runner = scripted(502, json!(["secret reply body"]));
         let error = runner
             .run(&run_hook(Captured::default()), Some("token-1"))
             .unwrap_err();
@@ -450,7 +395,7 @@ mod tests {
                 json!({"exitCode": 0, "success": true, "stdout": null, "stderr": null, "extra": SECRET}),
             ),
         ] {
-            let runner = Scripted::start(200, reply.clone());
+            let runner = scripted(200, reply.clone());
             let error = runner.run(&run_hook(capture), Some("token-1")).unwrap_err();
             let text = format!("{error} {error:?}");
             assert!(

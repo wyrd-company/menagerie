@@ -3,7 +3,7 @@
 # topology, with a real Wyrwood agent.
 #
 #   acceptance.sh up <scratch>       start an owned daemon, build the image and the suites
-#   acceptance.sh suite <scratch>    run TestImageWyrwood on that daemon
+#   acceptance.sh suite <scratch>    run TestImageWyrwood and TestImageWyrwoodGitHubApp on that daemon
 #   acceptance.sh fixture <scratch>  start TestAcceptanceFixture and wait until it is ready
 #   acceptance.sh test <scratch>     run the acceptance Playwright project against it
 #   acceptance.sh down <scratch>     stop the fixture and remove the owned daemon
@@ -74,7 +74,7 @@ case "$cmd" in
   suite)
     mapfile -t env < <(suite_env)
     "$isolated" run "$state" "${env[@]}" "$state/acceptance.test" \
-      -test.run '^TestImageWyrwood$' -test.v -test.count=1 -test.timeout 20m 2>&1 | tee "$scratch/logs/suite.log"
+      -test.run '^TestImageWyrwood(GitHubApp)?$' -test.v -test.count=1 -test.timeout 20m 2>&1 | tee "$scratch/logs/suite.log"
     ;;
   fixture)
     mapfile -t env < <(suite_env)
