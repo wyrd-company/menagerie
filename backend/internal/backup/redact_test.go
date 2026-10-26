@@ -33,8 +33,8 @@ func (b *lockedBuffer) String() string {
 
 func TestTheRedactorReplacesValuesSplitAcrossWrites(t *testing.T) {
 	const url = "https://git.example.invalid/" + sentinelRemote + ".git"
-	text := "remote: rejected " + sampleToken + " for " + url + "\rremote: 50%\r\nremote: kept text\nend " + sampleToken
-	want := "remote: rejected [redacted] for [redacted]\rremote: 50%\r\nremote: kept text\nend [redacted]"
+	text := "remote: rejected " + sampleToken + " for " + url + "\rremote: 50%\r\nremote: kept text\ntwice " + sampleToken + sampleToken + "\nend " + sampleToken
+	want := "remote: rejected [redacted] for [redacted]\rremote: 50%\r\nremote: kept text\ntwice [redacted][redacted]\nend [redacted]"
 	for split := 0; split <= len(text); split++ {
 		var out bytes.Buffer
 		r := newRedactor(&out, sampleToken, url)
@@ -54,6 +54,9 @@ func TestTheRedactorReplacesValuesSplitAcrossWrites(t *testing.T) {
 		_, _ = r.Write([]byte{text[i]})
 		if i == strings.Index(text, "\r") && !strings.HasSuffix(out.String(), "\r") {
 			t.Fatalf("a line ending at \\r was held back: %q", out.String())
+		}
+		if i == strings.Index(text, "kept text\n")+len("kept text") && !strings.HasSuffix(out.String(), "kept text\n") {
+			t.Fatalf("a line ending at \\n was held back: %q", out.String())
 		}
 	}
 	_ = r.Close()
@@ -76,6 +79,15 @@ func TestTheRedactorBoundsALineWithoutAnEnd(t *testing.T) {
 	_ = r.Close()
 	if got := out.String(); strings.Contains(got, sampleToken) || got != long+redacted+strings.Repeat("y", maxLine) {
 		t.Fatalf("long line: %d bytes, token kept %t", len(got), strings.Contains(got, sampleToken))
+	}
+	// One write past the bound whose token ends just short of its end: the
+	// part written first would cut the token.
+	out.Reset()
+	r = newRedactor(&out, sampleToken)
+	_, _ = r.Write([]byte(strings.Repeat("x", maxLine) + sampleToken + "zz"))
+	_ = r.Close()
+	if got := out.String(); got != strings.Repeat("x", maxLine)+redacted+"zz" {
+		t.Fatalf("a token across the written part: token kept %t", strings.Contains(got, sampleToken))
 	}
 }
 

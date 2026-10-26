@@ -94,7 +94,8 @@ func transportFailure(ctx context.Context, url string, err error) error {
 	}
 	var status *githttp.Err
 	if errors.As(err, &status) && status.Response != nil {
-		if code := status.Response.StatusCode; code >= 300 && code < 400 {
+		// A 2xx answer is no error, so below 400 is a redirect.
+		if code := status.Response.StatusCode; code < 400 {
 			return &TransportError{Reason: "the workspace repository answered with a redirect; set workspace-repository to its current address"}
 		}
 		return &TransportError{Reason: fmt.Sprintf("the workspace repository answered status %d", status.Response.StatusCode)}
