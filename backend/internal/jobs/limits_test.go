@@ -20,6 +20,9 @@ type fakeClock struct {
 	mu     sync.Mutex
 	now    time.Time
 	timers []*fakeTimer
+	// lateStop makes Stop too late to stop a timer, as when a real timer
+	// has fired and its call waits for the job's lock.
+	lateStop bool
 }
 
 type fakeTimer struct {
@@ -33,7 +36,9 @@ func (t *fakeTimer) Stop() bool {
 	t.clock.mu.Lock()
 	defer t.clock.mu.Unlock()
 	was := !t.stopped
-	t.stopped = true
+	if !t.clock.lateStop {
+		t.stopped = true
+	}
 	return was
 }
 
@@ -131,6 +136,30 @@ func (s steps) do(f func(*Run)) {
 	<-done
 }
 
+// awaitEnd is waitEnded with a bound, so a job that a limit fails to end
+// fails the test instead of hanging it.
+func awaitEnd(t *testing.T, job *Job) Snapshot {
+	t.Helper()
+	ended := make(chan Snapshot, 1)
+	go func() {
+		for {
+			_, done, changed := job.EventsAfter(0)
+			if done {
+				ended <- job.Snapshot()
+				return
+			}
+			<-changed
+		}
+	}()
+	select {
+	case snap := <-ended:
+		return snap
+	case <-time.After(10 * time.Second):
+		t.Fatalf("job %s did not end: %+v", job.ID(), job.Snapshot())
+		return Snapshot{}
+	}
+}
+
 func waitPhase(t *testing.T, job *Job, phase string) {
 	t.Helper()
 	waitFor(t, job, func(e Event) bool {
@@ -162,7 +191,7 @@ func TestPhaseLimitCancelsTheJobAndFreesTheWorkspace(t *testing.T) {
 		t.Fatalf("ended before its limit: %+v", s)
 	}
 	clock.Advance(time.Minute)
-	snap = waitEnded(t, job)
+	snap = awaitEnd(t, job)
 	want := Error{Kind: KindTimedOut, Message: "the build phase passed its 45m limit"}
 	if snap.State != Failed || snap.Error == nil || *snap.Error != want {
 		t.Fatalf("snapshot %+v error %+v", snap, snap.Error)
@@ -188,7 +217,7 @@ func TestPhaseLimitCancelsTheJobAndFreesTheWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workspace not freed: %v", err)
 	}
-	waitEnded(t, next)
+	awaitEnd(t, next)
 }
 
 func TestJobLimitNamesThePhaseAndFollowsTheOperation(t *testing.T) {
@@ -210,7 +239,7 @@ func TestJobLimitNamesThePhaseAndFollowsTheOperation(t *testing.T) {
 		t.Fatalf("start limit %+v", l)
 	}
 	clock.Advance(time.Hour)
-	snap := waitEnded(t, rebuild)
+	snap := awaitEnd(t, rebuild)
 	if snap.Error == nil || snap.Error.Kind != KindTimedOut || snap.Error.Message != "the job passed its 1h limit in the build phase" {
 		t.Fatalf("rebuild %+v %+v", snap, snap.Error)
 	}
@@ -218,7 +247,7 @@ func TestJobLimitNamesThePhaseAndFollowsTheOperation(t *testing.T) {
 		t.Fatalf("start ended with the rebuild limit: %+v", s)
 	}
 	clock.Advance(time.Hour)
-	if snap := waitEnded(t, start); snap.Error == nil || snap.Error.Message != "the job passed its 2h limit in the build phase" {
+	if snap := awaitEnd(t, start); snap.Error == nil || snap.Error.Message != "the job passed its 2h limit in the build phase" {
 		t.Fatalf("start %+v %+v", snap, snap.Error)
 	}
 }
@@ -269,7 +298,7 @@ func TestWaitingPausesEveryLimit(t *testing.T) {
 		t.Fatalf("ended after nine running minutes: %+v %+v", s, s.Error)
 	}
 	clock.Advance(time.Minute)
-	snap = waitEnded(t, job)
+	snap = awaitEnd(t, job)
 	if snap.Error == nil || snap.Error.Message != "the job passed its 10m limit in the interview phase" {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
@@ -292,7 +321,7 @@ func TestPhaseLimitCountsFromEachEntry(t *testing.T) {
 		t.Fatalf("phase limit not restarted: %+v %+v", s, s.Error)
 	}
 	clock.Advance(time.Minute)
-	if snap := waitEnded(t, job); snap.Error == nil || snap.Error.Message != "the interview phase passed its 10m limit" {
+	if snap := awaitEnd(t, job); snap.Error == nil || snap.Error.Message != "the interview phase passed its 10m limit" {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
 }
@@ -300,6 +329,35 @@ func TestPhaseLimitCountsFromEachEntry(t *testing.T) {
 // TestTimedOutRunnerHoldsTheSlotUntilItReturns covers a runner that ignores
 // its cancelled context: the job stays unfinished and the workspace busy
 // until it returns, and its success is still reported as timed-out.
+// TestALateTickChangesNothing lets every superseded timer fire: each
+// rereads the clock, and none cancels the job twice.
+func TestALateTickChangesNothing(t *testing.T) {
+	clock := newFakeClock()
+	clock.lateStop = true
+	m, _ := limitedManager(context.Background(), clock, Options{Limits: Limits{Phases: map[string]time.Duration{"build": 10 * time.Minute}}})
+	steps := make(steps)
+	job, _ := m.Start("alpha", "start", steps.serve)
+	steps.do(func(run *Run) { run.Phase("build") })
+	clock.Advance(5 * time.Minute)
+	steps.do(func(run *Run) { run.Phase("build") })
+	clock.Advance(5 * time.Minute)
+	if s := job.Snapshot(); s.State != Running {
+		t.Fatalf("a superseded timer ended the job: %+v %+v", s, s.Error)
+	}
+	clock.Advance(5 * time.Minute)
+	awaitEnd(t, job)
+	events, _, _ := job.EventsAfter(0)
+	cancels := 0
+	for _, e := range events {
+		if e.Type == EventLog {
+			cancels++
+		}
+	}
+	if cancels != 1 {
+		t.Fatalf("%d cancel lines", cancels)
+	}
+}
+
 func TestTimedOutRunnerHoldsTheSlotUntilItReturns(t *testing.T) {
 	clock := newFakeClock()
 	m, _ := limitedManager(context.Background(), clock, Options{Limits: Limits{Default: time.Minute}})
@@ -320,7 +378,7 @@ func TestTimedOutRunnerHoldsTheSlotUntilItReturns(t *testing.T) {
 		t.Fatalf("second job beside an abandoned runner: %v", err)
 	}
 	close(release)
-	if snap := waitEnded(t, job); snap.State != Failed || snap.Error.Kind != KindTimedOut || snap.Error.Message != "the job passed its 1m limit in the up phase" {
+	if snap := awaitEnd(t, job); snap.State != Failed || snap.Error.Kind != KindTimedOut || snap.Error.Message != "the job passed its 1m limit in the up phase" {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
 }
@@ -339,7 +397,7 @@ func TestShutdownIsNotATimeout(t *testing.T) {
 	cancel()
 	clock.Advance(time.Hour)
 	close(release)
-	if snap := waitEnded(t, job); snap.State != Failed || snap.Error.Kind != "operation-failed" {
+	if snap := awaitEnd(t, job); snap.State != Failed || snap.Error.Kind != "operation-failed" {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
 }
@@ -353,7 +411,7 @@ func TestOnlyFailedJobsAlert(t *testing.T) {
 		func(context.Context, *Run) error { return errors.New("boom") },
 	} {
 		job, _ := m.Start("alpha", "start", runner)
-		if snap := waitEnded(t, job); i == 2 && snap.State != Failed {
+		if snap := awaitEnd(t, job); i == 2 && snap.State != Failed {
 			t.Fatalf("%+v", snap)
 		}
 	}
@@ -382,7 +440,7 @@ func TestNoLimitMeansNoDeadline(t *testing.T) {
 		t.Fatalf("state event %s", events[0].Data)
 	}
 	close(release)
-	waitEnded(t, job)
+	awaitEnd(t, job)
 }
 
 func TestFormatLimit(t *testing.T) {

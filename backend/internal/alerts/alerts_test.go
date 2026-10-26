@@ -135,7 +135,13 @@ func TestDeliveryFailuresAreLoggedWithoutTheURL(t *testing.T) {
 			logs := &logLines{}
 			w := newWebhook(t, tc.target, logs, 200*time.Millisecond)
 			w.JobFailed(failedSnapshot())
-			w.Close()
+			closed := make(chan struct{})
+			go func() { w.Close(); close(closed) }()
+			select {
+			case <-closed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("a delivery outlived its time limit")
+			}
 			lines := logs.all()
 			if len(lines) != 1 || !strings.Contains(lines[0], tc.want) || !strings.Contains(lines[0], "job-failed alert for job j1") {
 				t.Fatalf("log %q", lines)
