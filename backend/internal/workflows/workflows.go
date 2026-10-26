@@ -10,7 +10,9 @@
 // interviews, initializes the workspace repository, generates, commits the
 // independent root of the workspace branch, backs it up and starts the
 // devcontainer. Upgrade backs up local changes to tracked files, interviews,
-// applies the merge, commits, backs up and rebuilds.
+// applies the merge, commits, backs up and rebuilds. Apply-branch fetches a
+// branch of the workspace repository, backs up every local change, brings
+// the branch into the workspace, backs up and rebuilds.
 package workflows
 
 import (
@@ -65,7 +67,8 @@ type Options struct {
 	RunnerImage func(ctx context.Context, templateID string) (string, error)
 }
 
-// Workflows owns the create and upgrade operations and their interviews.
+// Workflows owns the create, upgrade and apply-branch operations, and the
+// interviews of the first two.
 type Workflows struct {
 	opts Options
 
@@ -78,11 +81,12 @@ func New(opts Options) *Workflows {
 	return &Workflows{opts: opts, interviews: map[string]*interview{}}
 }
 
-// Operations returns the create and upgrade operations.
+// Operations returns the create, upgrade and apply-branch operations.
 func (w *Workflows) Operations() api.Operations {
 	return api.Operations{
-		api.OperationCreate:  w.create,
-		api.OperationUpgrade: w.upgrade,
+		api.OperationCreate:      w.create,
+		api.OperationUpgrade:     w.upgrade,
+		api.OperationApplyBranch: w.applyBranch,
 	}
 }
 

@@ -22,6 +22,9 @@ type JobRequest struct {
 	Operation  string `json:"operation"`
 	Workspace  string `json:"workspace"`
 	TemplateID string `json:"templateId,omitempty"`
+	// Branch names the branch of the workspace repository that
+	// apply-branch applies.
+	Branch string `json:"branch,omitempty"`
 }
 
 // RequestError rejects a job request before a job exists.
@@ -57,6 +60,10 @@ const (
 
 // OperationCommit commits a workspace's changes and backs its branch up.
 const OperationCommit = "commit"
+
+// OperationApplyBranch brings a branch of the workspace repository into a
+// workspace and rebuilds its devcontainer.
+const OperationApplyBranch = "apply-branch"
 
 // ContainerRuntime runs container operations on a workspace folder.
 // *devcontainer.Runtime satisfies it.
