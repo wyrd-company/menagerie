@@ -15,8 +15,8 @@ description: >-
   configuration, registry, cache and state live under the folder named by
   `-data`, default `/var/lib/menagerie/toha`, with the session key
   `session-key`: 32 random bytes, readable only by the service, written on
-  the first start and read on every later one. A key file of another length
-  stops the start. On start it replaces a socket file left by an ended
+  the first start and read on every later one. A key file of another
+  length, or one its group or others may read, stops the start. On start it replaces a socket file left by an ended
   process and refuses a live socket or another file. It keeps no state
   between requests.
 

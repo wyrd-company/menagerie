@@ -29,44 +29,62 @@ impl SessionKey {
     }
 
     /// Read the key file in `data`, or create it with fresh random bytes when
-    /// it does not exist. A concurrent start that creates it first wins; a
-    /// file of the wrong length is refused.
+    /// it does not exist. A concurrent start that creates it first wins. A
+    /// key file of the wrong length, or one its group or others may read, is
+    /// refused.
     pub fn load_or_create(data: &Path) -> std::io::Result<Self> {
         std::fs::create_dir_all(data)?;
         let path = data.join(KEY_FILE);
-        match std::fs::read(&path) {
-            Ok(bytes) => return Self::from_file(&bytes, &path),
+        match Self::read(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
+            loaded => return loaded,
         }
         let mut bytes = [0u8; KEY_LEN];
-        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes)
-            .map_err(|_| std::io::Error::other("no random bytes for the session key"))?;
-        // Write a private file under a unique name, then link it into place:
+        let mut tag = [0u8; 16];
+        let random = ring::rand::SystemRandom::new();
+        for buffer in [&mut bytes[..], &mut tag[..]] {
+            ring::rand::SecureRandom::fill(&random, buffer)
+                .map_err(|_| std::io::Error::other("no random bytes for the session key"))?;
+        }
+        // Write a private file under a random name, then link it into place:
         // the key file appears whole or not at all, and never replaces another.
-        let staged = data.join(format!("{KEY_FILE}.{}", std::process::id()));
-        let written = (|| {
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&staged)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            std::fs::hard_link(&staged, &path)
-        })();
+        let staged = data.join(format!("{KEY_FILE}.{}", URL_SAFE_NO_PAD.encode(tag)));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&staged)?;
+        let linked = file
+            .write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .and_then(|()| std::fs::hard_link(&staged, &path));
+        drop(file);
         let _ = std::fs::remove_file(&staged);
-        match written {
+        match linked {
             Ok(()) => Ok(Self::new(&bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                Self::from_file(&std::fs::read(&path)?, &path)
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Self::read(&path),
             Err(e) => Err(e),
         }
     }
 
-    fn from_file(bytes: &[u8], path: &Path) -> std::io::Result<Self> {
-        let bytes: &[u8; KEY_LEN] = bytes.try_into().map_err(|_| {
+    fn read(path: &Path) -> std::io::Result<Self> {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        let file = std::fs::File::open(path)?;
+        let mode = file.metadata()?.permissions().mode();
+        if mode & 0o077 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "{}: a session key must be readable only by its owner (mode {:o}); chmod 600 it",
+                    path.display(),
+                    mode & 0o777
+                ),
+            ));
+        }
+        let mut bytes = Vec::with_capacity(KEY_LEN);
+        file.take(KEY_LEN as u64 + 1).read_to_end(&mut bytes)?;
+        let bytes: &[u8; KEY_LEN] = bytes.as_slice().try_into().map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("{}: a session key is {KEY_LEN} bytes", path.display()),
@@ -295,11 +313,50 @@ mod tests {
         );
     }
 
+    fn write_key(folder: &Path, bytes: &[u8], mode: u32) {
+        let path = folder.join(KEY_FILE);
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
     #[test]
     fn a_key_file_of_the_wrong_length_is_refused() {
         let data = tempfile::tempdir().unwrap();
-        std::fs::write(data.path().join(KEY_FILE), b"short").unwrap();
-        let error = SessionKey::load_or_create(data.path()).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        for bytes in [&b"short"[..], &[0; KEY_LEN + 1][..]] {
+            write_key(data.path(), bytes, 0o600);
+            let error = SessionKey::load_or_create(data.path()).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        }
+    }
+
+    #[test]
+    fn a_key_file_others_may_read_is_refused() {
+        let data = tempfile::tempdir().unwrap();
+        for mode in [0o640, 0o604, 0o644] {
+            write_key(data.path(), &[7; KEY_LEN], mode);
+            let error = SessionKey::load_or_create(data.path()).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "{mode:o}"
+            );
+        }
+        write_key(data.path(), &[7; KEY_LEN], 0o400);
+        SessionKey::load_or_create(data.path()).unwrap();
+    }
+
+    #[test]
+    fn a_staged_file_left_by_an_earlier_start_does_not_block_creation() {
+        let data = tempfile::tempdir().unwrap();
+        let leftover = data
+            .path()
+            .join(format!("{KEY_FILE}.{}", std::process::id()));
+        std::fs::write(&leftover, b"partial").unwrap();
+        SessionKey::load_or_create(data.path()).unwrap();
+        assert_eq!(
+            std::fs::metadata(data.path().join(KEY_FILE)).unwrap().len(),
+            KEY_LEN as u64
+        );
+        assert!(leftover.exists(), "another start's staged file was removed");
     }
 }
