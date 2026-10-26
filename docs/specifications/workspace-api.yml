@@ -259,17 +259,31 @@ description: >-
 
   A plan refused in `plan` leaves the devcontainer as it was. Otherwise,
   so that nothing in the devcontainer writes to the folder while the
-  apply does, the service stops it in `stop` as a `stop` job does,
-  Compose included; a failed stop fails with the container operations'
-  kinds and nothing applied. It then commits again in
+  apply does, the service records whether the devcontainer runs and stops
+  it in `stop` as a `stop` job does: for Compose, every service of the
+  workspace's Compose project, found by its project label, also when the
+  primary service's container is gone. A failed state read or stop fails
+  with the container operations' kinds and nothing applied. It then
+  commits again in
   `backup-local-changes` what the devcontainer wrote before it stopped;
   when that changed the branch it pushes it in `backup`, with the same
-  rule for the workspace's own branch, and plans again in `plan`. When
-  that commit or push fails, the second plan refuses, or the folder
-  checks of `apply` refuse, nothing is applied and the service starts the
-  devcontainer again as a `start` job does; when that start fails, the
-  job fails with the start's failure and the console keeps the refusal.
-  An already applied branch never stops the devcontainer.
+  rule for the workspace's own branch, and plans again in `plan`. Right
+  before it writes, `apply` lists the running containers through the
+  Docker library and refuses as `not-applicable`, with the reason "a
+  running container mounts the workspace folder", when any but
+  Menagerie's own has a bind mount whose source is the workspace folder,
+  is inside it, or contains it; the console names each such container by
+  its short id. When the second commit or push fails, the second plan
+  refuses, the mount check refuses, or the folder checks of `apply`
+  refuse, nothing is applied and the devcontainer returns to its state
+  before the job: one that ran is started again as a `start` job does,
+  within the `start` operation's time limit, else 10 minutes, and even
+  when the job was cancelled; one that did not run stays stopped. When
+  that start fails, the console says so, the job fails with the start's
+  failure, and the console keeps the refusal. Every exit after the stop
+  that leaves the devcontainer stopped, a time limit included, writes
+  the console line "the devcontainer is stopped; start or rebuild it". An
+  already applied branch never stops the devcontainer.
 
   The service changes the folder through descriptors: each folder is
   opened beneath the workspace with no symbolic link in any component, and

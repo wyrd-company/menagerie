@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
@@ -61,6 +63,9 @@ type applying struct {
 	name   string
 	folder string
 	branch string
+	// running is whether the devcontainer ran before the apply stopped
+	// it; stopped is whether the apply has left it stopped.
+	running, stopped bool
 }
 
 func (a *applying) run(ctx context.Context, run *jobs.Run) error {
@@ -106,8 +111,22 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 
 	// Nothing in the devcontainer writes to the folder while the apply
 	// does. What it wrote before it stopped is committed, and the merge is
-	// planned again on top of it.
+	// planned again on top of it. A refusal returns the devcontainer to
+	// its state before the stop.
+	status, err := a.w.opts.Runtime.Status(ctx, a.folder)
+	if err != nil {
+		return api.ContainerFailure(fmt.Errorf("reading the devcontainer's state failed: %w; nothing was applied", err))
+	}
+	a.running = status.State == devcontainer.StateRunning
 	run.Phase("stop")
+	a.stopped = true
+	// Written as a console line, so it stays when a time limit replaces
+	// the job's error.
+	defer func() {
+		if a.stopped {
+			fmt.Fprintln(run.Log(""), StoppedNotice)
+		}
+	}()
 	if err := a.w.opts.Runtime.Stop(ctx, a.folder, run); err != nil {
 		return api.ContainerFailure(fmt.Errorf("the devcontainer did not stop: %w; nothing was applied", err))
 	}
@@ -127,6 +146,9 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 		kept = "committed but not backed up"
 	}
 	run.Phase("apply")
+	if failure := a.unmounted(ctx, run); failure != nil {
+		return a.resume(ctx, run, failure)
+	}
 	applied, err := plan.Write(a.folder, run.Log("apply: "))
 	var refused *backup.NotApplicableError
 	var failed *backup.ApplyError
@@ -147,7 +169,34 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	if err := a.w.opts.Runtime.Rebuild(ctx, a.folder, run); err != nil {
 		return api.ContainerFailure(fmt.Errorf("branch %s was applied and backed up as %s, but the devcontainer did not rebuild: %w", a.branch, applied.Hash, err))
 	}
+	a.stopped = false
 	return nil
+}
+
+// StoppedNotice is the console line of every apply-branch exit that
+// leaves the devcontainer stopped.
+const StoppedNotice = "the devcontainer is stopped; start or rebuild it"
+
+// MountedReason refuses an apply while another container can write to
+// the workspace folder.
+const MountedReason = "a running container mounts the workspace folder"
+
+// unmounted refuses the apply while a running container other than
+// Menagerie's own has a bind mount of the workspace folder, of a path
+// inside it, or of a folder that contains it. The console names each by
+// its short id.
+func (a *applying) unmounted(ctx context.Context, run *jobs.Run) error {
+	ids, err := a.w.opts.Runtime.Mounting(ctx, a.folder)
+	if err != nil {
+		return &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("listing the running containers failed: %w; nothing was applied", err)}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	for _, id := range ids {
+		fmt.Fprintf(run.Log(""), "running container %s mounts the workspace folder\n", id)
+	}
+	return &jobs.Failure{Kind: KindNotApplicable, Err: fmt.Errorf("branch %s cannot be applied: %s; nothing was applied", a.branch, MountedReason)}
 }
 
 // backUp commits every local change and, unless the branch to apply is
@@ -207,13 +256,31 @@ func (a *applying) refusal(run *jobs.Run, refused *backup.NotApplicableError, fe
 // When the start fails, the start's failure is the job's error and
 // failure's message stays in the console.
 func (a *applying) resume(ctx context.Context, run *jobs.Run, failure error) error {
+	if !a.running {
+		fmt.Fprintln(run.Log(""), "nothing was applied; the devcontainer was not running before the apply, so it stays stopped")
+		return failure
+	}
 	fmt.Fprintln(run.Log(""), "nothing was applied; starting the devcontainer again")
-	if err := a.w.opts.Runtime.Start(ctx, a.folder, run); err != nil {
+	// The start runs even after the job was cancelled, within its own
+	// bound.
+	limit := a.w.opts.RestartLimit
+	if limit <= 0 {
+		limit = DefaultRestartLimit
+	}
+	start, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
+	defer cancel()
+	if err := a.w.opts.Runtime.Start(start, a.folder, run); err != nil {
+		fmt.Fprintf(run.Log(""), "starting the devcontainer again failed: %v\n", err)
 		fmt.Fprintln(run.Log(""), failure)
 		return api.ContainerFailure(fmt.Errorf("nothing was applied, and the devcontainer did not start again: %w", err))
 	}
+	a.stopped = false
 	return failure
 }
+
+// DefaultRestartLimit bounds the start after a refusal when the start
+// operation has no time limit.
+const DefaultRestartLimit = 10 * time.Minute
 
 // refusal describes a refused apply for the job's error.
 func refusal(e *backup.NotApplicableError) string {

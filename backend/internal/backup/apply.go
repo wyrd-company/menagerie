@@ -642,13 +642,11 @@ func writeFolder(w *workspaceFolder, objects storer.EncodedObjectStorer, moved [
 		temps[path.Join(path.Dir(m.path), m.temp)] = true
 	}
 	gone := map[string]bool{}
-	drop := func(dir, name string) bool {
-		key := path.Join(dir, name)
-		gone[key] = temps[key]
-		return temps[key]
-	}
+	drop := func(dir, name string) bool { return temps[path.Join(dir, name)] }
+	// Only an unlink that succeeded makes a moved-aside file gone.
+	dropped := func(dir, name string) { gone[path.Join(dir, name)] = true }
 	written := map[string]fileStat{}
-	err := writeFiles(w, objects, paths, result, drop, written, log)
+	err := writeFiles(w, objects, paths, result, drop, dropped, written, log)
 	if err == nil {
 		err = removeAside(w, moved, gone, result, log)
 	}
@@ -685,7 +683,7 @@ func removeAside(w *workspaceFolder, moved []movedAside, gone map[string]bool, r
 
 // writeFiles writes the result's files of paths and records their stat
 // data in written.
-func writeFiles(w *workspaceFolder, objects storer.EncodedObjectStorer, paths []string, result map[string]entry, drop func(dir, name string) bool, written map[string]fileStat, log io.Writer) error {
+func writeFiles(w *workspaceFolder, objects storer.EncodedObjectStorer, paths []string, result map[string]entry, drop func(dir, name string) bool, dropped func(dir, name string), written map[string]fileStat, log io.Writer) error {
 	for _, p := range paths {
 		e := result[p]
 		if !e.present() {
@@ -697,7 +695,7 @@ func writeFiles(w *workspaceFolder, objects storer.EncodedObjectStorer, paths []
 			}
 		}
 		if w.isFolder(p) {
-			if err := w.removeFolder(p, drop); err != nil {
+			if err := w.removeFolder(p, drop, dropped); err != nil {
 				return fmt.Errorf("write %s: %w", p, err)
 			}
 		}

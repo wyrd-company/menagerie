@@ -184,6 +184,32 @@ type fakeRuntime struct {
 	fail   error
 	failOn map[string]error
 	onStop func()
+	// state is the devcontainer's state before a stop, running when
+	// empty; mounting are the containers Mounting reports.
+	state    string
+	mounting []string
+	// startWaits and rebuildWaits make a start or a rebuild wait for its
+	// context to end, or for released to close.
+	startWaits, rebuildWaits bool
+	released                 chan struct{}
+}
+
+func (r *fakeRuntime) Status(context.Context, string) (devcontainer.Status, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.failOn["status"]; err != nil {
+		return devcontainer.Status{}, err
+	}
+	if r.state == "" {
+		return devcontainer.Status{State: devcontainer.StateRunning}, nil
+	}
+	return devcontainer.Status{State: r.state}, nil
+}
+
+func (r *fakeRuntime) Mounting(context.Context, string) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.mounting, r.failOn["mounting"]
 }
 
 func (r *fakeRuntime) do(op, folder string, p devcontainer.Progress) error {
@@ -202,11 +228,33 @@ func (r *fakeRuntime) Stop(_ context.Context, folder string, p devcontainer.Prog
 	}
 	return r.do("stop", folder, p)
 }
-func (r *fakeRuntime) Start(_ context.Context, folder string, p devcontainer.Progress) error {
+
+// Start fails, as the runtime does, once its context has ended.
+func (r *fakeRuntime) Start(ctx context.Context, folder string, p devcontainer.Progress) error {
+	r.mu.Lock()
+	waits := r.startWaits
+	r.mu.Unlock()
+	if waits {
+		select {
+		case <-ctx.Done():
+		case <-r.released:
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return r.do("up", folder, p)
 }
-func (r *fakeRuntime) Rebuild(_ context.Context, folder string, p devcontainer.Progress) error {
-	return r.do("rebuild", folder, p)
+func (r *fakeRuntime) Rebuild(ctx context.Context, folder string, p devcontainer.Progress) error {
+	r.mu.Lock()
+	waits := r.rebuildWaits
+	r.mu.Unlock()
+	err := r.do("rebuild", folder, p)
+	if waits {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return err
 }
 func (r *fakeRuntime) seen() []string {
 	r.mu.Lock()
@@ -224,11 +272,16 @@ type world struct {
 	manager *jobs.Manager
 	flows   *Workflows
 	http    *httptest.Server
+	// cancel ends the context of every job, as Menagerie's shutdown does.
+	cancel context.CancelFunc
 }
 
-func newWorld(t *testing.T) *world {
+func newWorld(t *testing.T) *world { return newWorldWith(t, jobs.Options{}) }
+
+// newWorldWith is newWorld with jobs options, such as time limits.
+func newWorldWith(t *testing.T, opts jobs.Options) *world {
 	t.Helper()
-	w := &world{root: t.TempDir(), remote: filepath.Join(t.TempDir(), "backups.git"), tmpl: defaultTemplates(t), rt: &fakeRuntime{}}
+	w := &world{root: t.TempDir(), remote: filepath.Join(t.TempDir(), "backups.git"), tmpl: defaultTemplates(t), rt: &fakeRuntime{released: make(chan struct{})}}
 	if _, err := git.PlainInit(w.remote, true); err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +290,8 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w.manager = jobs.NewManager(ctx, jobs.Options{})
+	w.cancel = cancel
+	w.manager = jobs.NewManager(ctx, opts)
 	w.flows = New(Options{
 		Root:      root,
 		Templates: w.tmpl,
@@ -252,6 +306,8 @@ func newWorld(t *testing.T) *world {
 	// then Wait lets every runner return.
 	t.Cleanup(w.manager.Wait)
 	t.Cleanup(cancel)
+	// A start still waiting when the test ends returns, so Wait ends.
+	t.Cleanup(func() { close(w.rt.released) })
 	return w
 }
 

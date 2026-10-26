@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
@@ -44,12 +45,15 @@ type Templates interface {
 	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
 }
 
-// Runtime starts, stops and rebuilds devcontainers. *devcontainer.Runtime
-// satisfies it.
+// Runtime starts, stops and rebuilds devcontainers, reads their state, and
+// lists the running containers that mount a folder.
+// *devcontainer.Runtime satisfies it.
 type Runtime interface {
+	Status(ctx context.Context, folder string) (devcontainer.Status, error)
 	Start(ctx context.Context, folder string, p devcontainer.Progress) error
 	Stop(ctx context.Context, folder string, p devcontainer.Progress) error
 	Rebuild(ctx context.Context, folder string, p devcontainer.Progress) error
+	Mounting(ctx context.Context, folder string) ([]string, error)
 }
 
 // Options compose the workflows.
@@ -66,6 +70,9 @@ type Options struct {
 	Hooks *throwaway.HookRunner
 	// RunnerImage returns the runner image of a template's hooks.
 	RunnerImage func(ctx context.Context, templateID string) (string, error)
+	// RestartLimit bounds the start of a devcontainer an apply refused
+	// after stopping it; zero is DefaultRestartLimit.
+	RestartLimit time.Duration
 }
 
 // Workflows owns the create, upgrade and apply-branch operations, and the

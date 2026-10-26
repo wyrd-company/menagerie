@@ -1002,12 +1002,13 @@ func TestTheIndexKeepsTheStatOfWhatTheApplyWrote(t *testing.T) {
 	f := newApplyFixture(t)
 	f.remoteCommit(t, "alpha", map[string]*file{"result.txt": regular("label: reviewed\n")}, f.head(t))
 	// A writer after the write and before the index update: same size,
-	// another time.
+	// and a time before the index is written, so go-git trusts matching
+	// stat data and compares content only when the stat data differs.
 	beforeIndex = func() {
 		p := filepath.Join(f.folder, "result.txt")
 		write(t, f.folder, "result.txt", "label: REVIEWED\n")
-		later := time.Now().Add(time.Hour)
-		if err := os.Chtimes(p, later, later); err != nil {
+		earlier := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(p, earlier, earlier); err != nil {
 			t.Error(err)
 		}
 	}
@@ -1064,5 +1065,27 @@ func TestAPlanIsNotWrittenOnceTheBranchMoved(t *testing.T) {
 	_, err = plan.Write(f.folder, &f.log)
 	if na := refused(t, err, before, f.state(t)); !strings.Contains(na.Reason, "moved") {
 		t.Fatal(na.Reason)
+	}
+}
+
+func TestAMovedAsideFileThatCannotBeRemovedIsNamed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes files from a read-only folder")
+	}
+	f := newApplyFixture(t)
+	f.remoteCommit(t, "alpha", map[string]*file{"sub/kept.txt": nil, "sub": regular("now a file\n")}, f.head(t))
+	sub := filepath.Join(f.folder, "sub")
+	// The folder in the way, holding the moved-aside kept.txt, becomes
+	// read-only, so the moved-aside file cannot be removed.
+	afterMoveAside = func() {
+		if err := os.Chmod(sub, 0o555); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { afterMoveAside = func() {}; _ = os.Chmod(sub, 0o755) })
+	_, err := f.apply(t, "alpha")
+	var failed *ApplyError
+	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "keep a temporary name: sub/kept.txt at sub/.menagerie-apply-") {
+		t.Fatalf("got %v", err)
 	}
 }

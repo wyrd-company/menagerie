@@ -22,6 +22,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 )
 
@@ -542,5 +543,157 @@ func TestAStopThatFailsAppliesNothing(t *testing.T) {
 	}
 	if want := []string{"fetch", "backup-local-changes", "backup", "plan", "stop"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v", phases(job))
+	}
+}
+
+// endsWithin waits for job, failing the test when it has not ended
+// within limit instead of hanging it.
+func endsWithin(t *testing.T, job *jobs.Job, limit time.Duration) jobs.Snapshot {
+	t.Helper()
+	done := make(chan jobs.Snapshot, 1)
+	go func() { done <- waitEnded(t, job) }()
+	select {
+	case snap := <-done:
+		return snap
+	case <-time.After(limit):
+		t.Fatal("the job did not end")
+		return jobs.Snapshot{}
+	}
+}
+
+// startApply starts an apply-branch job and returns it.
+func (w *world) startApply(t *testing.T, name, branch string) *jobs.Job {
+	t.Helper()
+	status, body := w.do(t, http.MethodPost, "/api/jobs", fmt.Sprintf(`{"operation":"apply-branch","workspace":%q,"branch":%q}`, name, branch))
+	if status != http.StatusAccepted {
+		t.Fatalf("start apply-branch: %d %s", status, body)
+	}
+	var snap jobs.Snapshot
+	_ = json.Unmarshal([]byte(body), &snap)
+	job, _ := w.manager.Get(snap.JobID)
+	return job
+}
+
+func TestARunningContainerThatMountsTheWorkspaceRefusesTheApply(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	w.contribute(t, "alpha", "review/one", map[string]string{"x.txt": "x\n"})
+	w.rt.mounting = []string{"0123456789ab"}
+	job, snap := w.applyBranch(t, "alpha", "review/one")
+	if snap.State != jobs.Failed || snap.Error.Kind != KindNotApplicable || !strings.Contains(snap.Error.Message, MountedReason) {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if !strings.Contains(logText(job), "running container 0123456789ab mounts the workspace folder") {
+		t.Fatalf("log:\n%s", logText(job))
+	}
+	if _, err := os.Stat(filepath.Join(w.root, "alpha", "x.txt")); err == nil {
+		t.Fatal("the apply wrote while a container mounted the folder")
+	}
+	// The devcontainer ran before the apply, so it runs again.
+	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "stop alpha", "up alpha"}) {
+		t.Fatalf("runtime %v", got)
+	}
+	if strings.Contains(logText(job), StoppedNotice) {
+		t.Fatal("the devcontainer runs again, but the console says it is stopped")
+	}
+}
+
+func TestARefusalLeavesAStoppedDevcontainerStopped(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	w.contribute(t, "alpha", "review/one", map[string]string{"x.txt": "x\n"})
+	w.rt.state = devcontainer.StateStopped
+	w.rt.mounting = []string{"0123456789ab"}
+	job, _ := w.applyBranch(t, "alpha", "review/one")
+	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "stop alpha"}) {
+		t.Fatalf("runtime %v", got)
+	}
+	if !strings.Contains(logText(job), "stays stopped") || !strings.Contains(logText(job), StoppedNotice) {
+		t.Fatalf("log:\n%s", logText(job))
+	}
+}
+
+func TestTheStartAfterARefusalOutlivesACancelledJob(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	w.contribute(t, "alpha", "review/one", map[string]string{"x.txt": "x\n"})
+	w.rt.mounting = []string{"0123456789ab"}
+	// Menagerie shuts down while the devcontainer stops.
+	w.rt.onStop = w.cancel
+	snap := endsWithin(t, w.startApply(t, "alpha", "review/one"), 10*time.Second)
+	if snap.Error == nil || snap.Error.Kind != KindNotApplicable {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "stop alpha", "up alpha"}) {
+		t.Fatalf("runtime %v", got)
+	}
+}
+
+func TestTheStartAfterARefusalHasItsOwnBound(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	w.contribute(t, "alpha", "review/one", map[string]string{"x.txt": "x\n"})
+	w.rt.mounting = []string{"0123456789ab"}
+	w.rt.startWaits = true
+	w.flows.opts.RestartLimit = 50 * time.Millisecond
+	job := w.startApply(t, "alpha", "review/one")
+	snap := endsWithin(t, job, 10*time.Second)
+	if snap.Error == nil || snap.Error.Kind != "operation-failed" || !strings.Contains(logText(job), "starting the devcontainer again failed") {
+		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+	}
+	if !strings.Contains(logText(job), StoppedNotice) || !strings.Contains(logText(job), MountedReason) {
+		t.Fatalf("log:\n%s", logText(job))
+	}
+}
+
+func TestEveryExitThatLeavesTheDevcontainerStoppedSaysSo(t *testing.T) {
+	t.Run("a backup after the apply that fails", func(t *testing.T) {
+		w := newWorld(t)
+		w.createWorkspace(t, "alpha")
+		w.contribute(t, "alpha", "alpha", map[string]string{"x.txt": "x\n"})
+		auth := &countingAuth{failAt: 2}
+		w.flows.opts.Remote.Auth = auth.auth
+		job, snap := w.applyBranch(t, "alpha", "alpha")
+		if snap.Error == nil || snap.Error.Kind != KindBackupFailed || !strings.Contains(logText(job), StoppedNotice) {
+			t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+		}
+	})
+	t.Run("a time limit in the rebuild", func(t *testing.T) {
+		w := newWorldWith(t, jobs.Options{Limits: jobs.Limits{Phases: map[string]time.Duration{"rebuild": 50 * time.Millisecond}}})
+		w.createWorkspace(t, "alpha")
+		w.contribute(t, "alpha", "alpha", map[string]string{"x.txt": "x\n"})
+		w.rt.rebuildWaits = true
+		job := w.startApply(t, "alpha", "alpha")
+		snap := endsWithin(t, job, 10*time.Second)
+		if snap.Error == nil || snap.Error.Kind != "timed-out" || !strings.Contains(logText(job), StoppedNotice) {
+			t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+		}
+	})
+	t.Run("not a rebuilt one", func(t *testing.T) {
+		w := newWorld(t)
+		w.createWorkspace(t, "alpha")
+		w.contribute(t, "alpha", "alpha", map[string]string{"x.txt": "x\n"})
+		job, snap := w.applyBranch(t, "alpha", "alpha")
+		if snap.State != jobs.Succeeded || strings.Contains(logText(job), StoppedNotice) {
+			t.Fatalf("%+v\n%s", snap, logText(job))
+		}
+	})
+}
+
+func TestAnUnreadableStateOrMountListAppliesNothing(t *testing.T) {
+	for op, kind := range map[string]string{"status": "operation-failed", "mounting": KindApplyFailed} {
+		t.Run(op, func(t *testing.T) {
+			w := newWorld(t)
+			w.createWorkspace(t, "alpha")
+			w.contribute(t, "alpha", "review/one", map[string]string{"x.txt": "x\n"})
+			w.rt.failOn = map[string]error{op: errors.New("the engine did not answer")}
+			job, snap := w.applyBranch(t, "alpha", "review/one")
+			if snap.Error == nil || snap.Error.Kind != kind || !strings.Contains(snap.Error.Message, "nothing was applied") {
+				t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+			}
+			if _, err := os.Stat(filepath.Join(w.root, "alpha", "x.txt")); err == nil {
+				t.Fatal("the apply wrote")
+			}
+		})
 	}
 }

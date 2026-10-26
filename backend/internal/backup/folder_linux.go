@@ -109,8 +109,9 @@ func (w *workspaceFolder) rmdir(rel string) error {
 }
 
 // removeFolder removes the folder rel, the folders below it and the files
-// in them that drop names, and fails on anything else below rel.
-func (w *workspaceFolder) removeFolder(rel string, drop func(dir, name string) bool) error {
+// in them that drop names, telling dropped of each file it removed, and
+// fails on anything else below rel.
+func (w *workspaceFolder) removeFolder(rel string, drop func(dir, name string) bool, dropped func(dir, name string)) error {
 	fd, err := w.dir(rel)
 	if err != nil {
 		return err
@@ -124,13 +125,14 @@ func (w *workspaceFolder) removeFolder(rel string, drop func(dir, name string) b
 	for _, e := range entries {
 		switch {
 		case e.IsDir():
-			if err := w.removeFolder(rel+"/"+e.Name(), drop); err != nil {
+			if err := w.removeFolder(rel+"/"+e.Name(), drop, dropped); err != nil {
 				return err
 			}
 		case drop(rel, e.Name()):
 			if err := w.unlink(rel+"/"+e.Name(), e.Name()); err != nil {
 				return err
 			}
+			dropped(rel, e.Name())
 		default:
 			return fmt.Errorf("%s is not empty", rel)
 		}

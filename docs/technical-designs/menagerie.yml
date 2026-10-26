@@ -131,9 +131,14 @@ proposed-design:
     untracked or ignored file, folder or link, or inside a nested
     repository. The merge is planned in memory first, and a plan that
     cannot apply leaves the devcontainer running. Otherwise the
-    devcontainer stops, so that nothing writes to the folder while the
-    apply does; what it wrote before it stopped is committed and the merge
-    planned again, and any refusal from there on starts it again. As a
+    devcontainer stops, with every service of its Compose project, so
+    that nothing writes to the folder while the apply does; what it wrote
+    before it stopped is committed and the merge planned again. Right
+    before writing, the apply refuses while another running container
+    mounts the workspace folder, a path inside it, or a folder that
+    contains it. A refusal from the stop on returns the devcontainer to
+    its state before the job, and a job that leaves it stopped says so in
+    its console. As a
     second defence the apply changes the folder through descriptors that
     never follow a symbolic link in any component, moves the files it
     replaces or removes to temporary names in their folders, and checks

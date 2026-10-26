@@ -109,15 +109,20 @@ The job console shows each phase:
    to it. When both have changed, Menagerie merges them file by file and
    commits the merge as `Apply <branch> to workspace <workspace>`. A plan
    that cannot apply fails here and leaves the devcontainer running.
-4. `stop`: the devcontainer stops, so that nothing writes to the
-   workspace while the apply does. What it wrote before it stopped is
-   committed (and backed up, for another branch than the workspace's own),
-   and the plan is made again.
-5. `apply`: Menagerie writes only the files that change.
+4. `stop`: the devcontainer stops, with every service of its Compose
+   project, so that nothing writes to the workspace while the apply does.
+   What it wrote before it stopped is committed (and backed up, for
+   another branch than the workspace's own), and the plan is made again.
+5. `apply`: Menagerie refuses while another running container mounts the
+   workspace folder (the console names it by its short id), then writes
+   only the files that change.
 6. `backup`, then the rebuild of the devcontainer.
 
-When the apply is refused after the stop, nothing is applied and
-Menagerie starts the devcontainer again.
+When the apply is refused after the stop, nothing is applied and the
+devcontainer returns to its state before the job: Menagerie starts it
+again if it was running. Whenever a job leaves the devcontainer stopped,
+its console ends with "the devcontainer is stopped; start or rebuild
+it".
 
 The backup after the apply pushes the branch's commits to the workspace's
 branch, and the forge marks the pull request merged. A branch already in
