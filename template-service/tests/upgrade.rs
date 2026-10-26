@@ -41,7 +41,7 @@ async fn an_upgrade_asks_only_the_new_question_and_keeps_local_edits() {
         start.json["document"]["context"]["commit"],
         world.v2.as_str()
     );
-    let admitted = &start.json["session"]["submissions"][0]["catalog"];
+    let admitted = &start.record()["submissions"][0]["catalog"];
     assert_eq!(
         admitted["title"], "second",
         "the fresh document was not admitted"

@@ -55,7 +55,7 @@ async fn equivalent_numbers_keep_their_value_through_the_session_and_record() {
     )
     .await;
     assert_eq!(done.json["state"], "completed", "{}", done.json);
-    let catalog = &done.json["session"]["submissions"][0]["catalog"];
+    let catalog = &done.record()["submissions"][0]["catalog"];
     assert_eq!(catalog["size"].as_f64(), Some(100.0));
     assert_eq!(catalog["ratio"].as_f64(), Some(1.5));
 
@@ -123,7 +123,7 @@ async fn a_tampered_session_number_is_refused_before_any_write() {
     );
     assert_eq!(
         refused.json["error"]["locations"],
-        json!(["/session/submissions/0/catalog/size"])
+        json!(["/session/record/submissions/0/catalog/size"])
     );
     assert_eq!(
         entries(&folder),

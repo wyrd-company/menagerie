@@ -3100,12 +3100,14 @@ name = "menagerie-template-service"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "base64",
  "gix 0.87.1",
  "http-body-util",
  "hyper",
  "hyper-util",
  "indexmap",
  "jiff",
+ "ring",
  "rustix",
  "serde",
  "serde_json",

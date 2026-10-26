@@ -4,8 +4,10 @@ The template service is Menagerie's Rust service. It embeds
 [Toha](https://github.com/wyrd-company/toha) as a library and serves create
 interviews, workspace generation and upgrades to the workspace service. It uses
 JSON over HTTP on a private Unix socket. It keeps no state between requests:
-each request carries Toha's whole interview session. The service rebuilds the
-interview from that session, so an interview continues after a restart.
+each request carries Toha's whole interview session, signed with the key in
+`session-key` under the data folder. The service refuses a session it did not
+sign for that workspace, template and flow, and rebuilds the interview from a
+session it did, so an interview continues after a restart.
 
 The API is specified in
 [`docs/specifications/template-service-api.yml`](../docs/specifications/template-service-api.yml).

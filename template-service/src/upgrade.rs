@@ -7,6 +7,7 @@ use crate::checks::{self, Operation};
 use crate::error::ServiceError;
 use crate::host::{self, ProcessEnvironment};
 use crate::reply;
+use crate::seal::{self, Binding};
 use toha::RawAnswers;
 use toha::staging::{CanonicalTarget, StagedRecord};
 use toha::updates::{self, Environment, PrepareMode, UpdateBase, UpdateSession};
@@ -63,13 +64,19 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
     )
     .map_err(|e| ServiceError::from(e).with_warnings(warnings.clone()))?;
     let state = session.state()?;
-    reply::interview(&session.record, &selected.target, state, warnings)
+    let sealed = seal::seal(
+        &service.key,
+        Binding::new(Operation::Upgrade, &request.workspace, &request.template_id),
+        &session.record,
+    )?;
+    reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }
 
 /// Rebuild the upgrade session and submit one batch.
 pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
-    let record = checks::session(request.session)?;
+    let binding = Binding::new(Operation::Upgrade, &request.workspace, &request.template_id);
+    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, _) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;
@@ -88,13 +95,15 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     let warnings = session.prepared.warnings.clone();
     reply::asking(&session.state()?)?;
     let state = session.answer(answers)?;
-    reply::interview(&session.record, &selected.target, state, warnings)
+    let sealed = seal::seal(&service.key, binding, &session.record)?;
+    reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }
 
 /// Rebuild a completed upgrade session and merge it into the workspace.
 pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
-    let record = checks::session(request.session)?;
+    let binding = Binding::new(Operation::Upgrade, &request.workspace, &request.template_id);
+    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, _) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;

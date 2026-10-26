@@ -1,4 +1,4 @@
-use menagerie_template_service::{Service, config, server};
+use menagerie_template_service::{Service, config, seal, server};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -39,7 +39,14 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let service = Service::new(settings);
+    let key = match seal::SessionKey::load_or_create(&settings.data) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("template service: {}: {e}", settings.data.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let service = Service::new(settings, key);
     if let Err(e) = service.host.prepare() {
         eprintln!("template service: {}: {e}", service.settings.data.display());
         return ExitCode::FAILURE;

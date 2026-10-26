@@ -8,10 +8,11 @@ const SPECIFICATION: &str = concat!(
 );
 
 /// Dashed string literals in the source that are not error kinds.
-const NOT_KINDS: [&str; 5] = [
+const NOT_KINDS: [&str; 6] = [
     "kebab-case",
     "lower-case",
     "not-previewed",
+    "session-key",
     "template-service",
     "workspace-root",
 ];
