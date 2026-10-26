@@ -4,11 +4,15 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // entry is one archive entry.
@@ -103,8 +107,7 @@ func mode(t *testing.T, path string) fs.FileMode {
 }
 
 // TestACopyBackMakesTheFolderMatchTheArchive replaces a folder: changed,
-// added and removed entries, modes, links kept as links and hard links as
-// copies.
+// added and removed entries, modes, and links and hard links kept as links.
 func TestACopyBackMakesTheFolderMatchTheArchive(t *testing.T) {
 	folder := filepath.Join(t.TempDir(), "target")
 	writeTree(t, folder, map[string]string{"changed.txt": "v1\n", "removed.txt": "x", "old/inner.txt": "x"})
@@ -115,7 +118,7 @@ func TestACopyBackMakesTheFolderMatchTheArchive(t *testing.T) {
 		{name: "target/sub/added.txt", mode: 0o4644, body: "added\n"},
 		{name: "target/link", kind: tar.TypeSymlink, link: "../outside"},
 		{name: "target/twin.txt", kind: tar.TypeLink, link: "target/changed.txt"},
-	})))
+	})), io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,21 +144,25 @@ func TestACopyBackMakesTheFolderMatchTheArchive(t *testing.T) {
 func TestUnsafeArchiveEntriesAreRefused(t *testing.T) {
 	root := entry{name: "target/", mode: 0o755, dir: true}
 	for name, bad := range map[string]entry{
-		"absolute":            {name: "/etc/sample.txt", body: "x"},
-		"parent":              {name: "target/../escaped.txt", body: "x"},
-		"dot":                 {name: "target/./x.txt", body: "x"},
-		"empty component":     {name: "target//x.txt", body: "x"},
-		"another folder":      {name: "other/x.txt", body: "x"},
-		"fifo":                {name: "target/pipe", kind: tar.TypeFifo},
-		"device":              {name: "target/dev", kind: tar.TypeChar},
-		"hard link outside":   {name: "target/twin", kind: tar.TypeLink, link: "../x"},
-		"hard link to folder": {name: "target/twin", kind: tar.TypeLink, link: "target"},
+		"absolute":                   {name: "/etc/sample.txt", body: "x"},
+		"parent":                     {name: "target/../escaped.txt", body: "x"},
+		"dot":                        {name: "target/./x.txt", body: "x"},
+		"empty component":            {name: "target//x.txt", body: "x"},
+		"another folder":             {name: "other/x.txt", body: "x"},
+		"fifo":                       {name: "target/pipe", kind: tar.TypeFifo},
+		"device":                     {name: "target/dev", kind: tar.TypeChar},
+		"hard link outside":          {name: "target/twin", kind: tar.TypeLink, link: "../x"},
+		"hard link to folder":        {name: "target/twin", kind: tar.TypeLink, link: "target"},
+		"hard link to a link":        {name: "target/twin", kind: tar.TypeLink, link: "target/link"},
+		"hard link to a later entry": {name: "target/twin", kind: tar.TypeLink, link: "target/later.txt"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			base := t.TempDir()
 			folder := filepath.Join(base, "target")
 			writeTree(t, folder, map[string]string{"kept.txt": "kept\n"})
-			err := ReplaceFolder(folder, bytes.NewReader(archive(t, []entry{root, bad})))
+			link := entry{name: "target/link", kind: tar.TypeSymlink, link: filepath.Join(base, "outside.txt")}
+			later := entry{name: "target/later.txt", body: "x"}
+			err := ReplaceFolder(folder, bytes.NewReader(archive(t, []entry{root, link, bad, later})), io.Discard)
 			if !errors.Is(err, ErrUnsafeEntry) {
 				t.Fatalf("error %v, want ErrUnsafeEntry", err)
 			}
@@ -169,7 +176,7 @@ func TestUnsafeArchiveEntriesAreRefused(t *testing.T) {
 	}
 	folder := filepath.Join(t.TempDir(), "target")
 	writeTree(t, folder, nil)
-	if err := ReplaceFolder(folder, bytes.NewReader(archive(t, []entry{{name: "target", body: "x"}}))); !errors.Is(err, ErrUnsafeEntry) {
+	if err := ReplaceFolder(folder, bytes.NewReader(archive(t, []entry{{name: "target", body: "x"}})), io.Discard); !errors.Is(err, ErrUnsafeEntry) {
 		t.Fatalf("a file as the folder: %v", err)
 	}
 }
@@ -191,7 +198,7 @@ func TestACopyBackNeverWritesThroughALink(t *testing.T) {
 			folder := filepath.Join(t.TempDir(), "target")
 			writeTree(t, folder, map[string]string{"kept.txt": "kept\n"})
 			all := append([]entry{{name: "target/", mode: 0o755, dir: true}}, entries...)
-			if err := ReplaceFolder(folder, bytes.NewReader(archive(t, all))); err == nil {
+			if err := ReplaceFolder(folder, bytes.NewReader(archive(t, all)), io.Discard); err == nil {
 				t.Fatal("the copy wrote through a link")
 			}
 			if got := readTree(t, outside); !reflect.DeepEqual(got, map[string]string{"file.txt": "outside\n"}) {
@@ -201,5 +208,70 @@ func TestACopyBackNeverWritesThroughALink(t *testing.T) {
 				t.Fatalf("a failed copy changed the folder: %v", got)
 			}
 		})
+	}
+}
+
+// TestHardLinksStayOneFile copies back one file with many hard links: the
+// folder holds one inode with every link, not a copy per link.
+func TestHardLinksStayOneFile(t *testing.T) {
+	folder := filepath.Join(t.TempDir(), "target")
+	writeTree(t, folder, nil)
+	const links = 40
+	entries := []entry{{name: "target/", mode: 0o755, dir: true}, {name: "target/data.bin", mode: 0o644, body: "sample\n"}}
+	for i := range links {
+		entries = append(entries, entry{name: fmt.Sprintf("target/link-%d", i), kind: tar.TypeLink, link: "target/data.bin"})
+	}
+	if err := ReplaceFolder(folder, bytes.NewReader(archive(t, entries)), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var first unix.Stat_t
+	if err := unix.Lstat(filepath.Join(folder, "data.bin"), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Nlink != links+1 {
+		t.Fatalf("link count %d, want %d", first.Nlink, links+1)
+	}
+	for i := range links {
+		var st unix.Stat_t
+		if err := unix.Lstat(filepath.Join(folder, fmt.Sprintf("link-%d", i)), &st); err != nil {
+			t.Fatal(err)
+		}
+		if st.Ino != first.Ino {
+			t.Fatalf("link-%d is inode %d, want %d", i, st.Ino, first.Ino)
+		}
+	}
+}
+
+// TestACopyBackRemovesAReadOnlyOldTree copies back twice where the hook
+// left a read-only folder with contents: the second copy removes the old
+// tree completely and adds no note.
+func TestACopyBackRemovesAReadOnlyOldTree(t *testing.T) {
+	base := t.TempDir()
+	folder := filepath.Join(base, "target")
+	writeTree(t, folder, map[string]string{"kept.txt": "kept\n"})
+	t.Cleanup(func() { _ = removeTree(folder) })
+	tree := archive(t, []entry{
+		{name: "target/", mode: 0o555, dir: true},
+		{name: "target/locked/", mode: 0o555, dir: true},
+		{name: "target/locked/inner/", mode: 0o555, dir: true},
+		{name: "target/locked/inner/file.txt", mode: 0o444, body: "x"},
+	})
+	for round := range 2 {
+		var log bytes.Buffer
+		if err := ReplaceFolder(folder, bytes.NewReader(tree), &log); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		if log.Len() != 0 {
+			t.Fatalf("round %d noted %q", round, log.String())
+		}
+		entries, err := os.ReadDir(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if e.Name() != "target" {
+				t.Fatalf("round %d left %s beside the folder", round, e.Name())
+			}
+		}
 	}
 }

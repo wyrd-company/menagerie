@@ -8,6 +8,7 @@ package throwaway
 import (
 	"archive/tar"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -25,22 +26,79 @@ var ErrUnsafeEntry = errors.New("unsafe archive entry")
 // ReplaceFolder makes folder hold exactly the tree in archive, the Engine's
 // copy of a folder with folder's base name: added, changed and removed
 // entries, permission bits (setuid, setgid and sticky bits dropped), and
-// symbolic links as links. It extracts into a fresh sibling folder,
-// opening every path component without following a symbolic link, and
-// then swaps that folder in, so a refused or failed archive leaves folder
-// as it was. Entries belong to this process's user. No error names an
-// entry.
-func ReplaceFolder(folder string, archive io.Reader) error {
+// symbolic links and hard links as links. It extracts into a fresh
+// sibling folder, opening every path component without following a
+// symbolic link, and then swaps that folder in, so a refused or failed
+// archive leaves folder as it was. Entries belong to this process's user.
+// The old tree is removed after the swap; a tree that cannot be removed
+// completely adds a note to log and does not fail the replacement. No
+// error or note names an entry.
+func ReplaceFolder(folder string, archive io.Reader, log io.Writer) (err error) {
 	fresh, err := os.MkdirTemp(filepath.Dir(folder), ".menagerie-copy-")
 	if err != nil {
 		return err
 	}
 	// After the swap, fresh holds the old tree.
-	defer os.RemoveAll(fresh)
+	defer func() {
+		if removeTree(fresh) != nil {
+			fmt.Fprintln(log, "a hook's previous candidate copy could not be removed completely")
+		}
+	}()
 	if err := extract(fresh, filepath.Base(folder), archive); err != nil {
 		return err
 	}
 	return swap(fresh, folder)
+}
+
+// removeTree removes folder and everything beneath it without following a
+// symbolic link. Each folder gets its owner's read, write and search
+// permission before its entries are removed, so a read-only folder is
+// removed too. It removes what it can and returns every failure.
+func removeTree(folder string) error {
+	parent, err := unix.Open(filepath.Dir(folder), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(parent)
+	return removeAt(parent, filepath.Base(folder))
+}
+
+// removeAt removes the entry name in the folder dir and, for a folder,
+// everything beneath it.
+func removeAt(dir int, name string) error {
+	err := unix.Unlinkat(dir, name, 0)
+	if err == nil || errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if !errors.Is(err, unix.EISDIR) && !errors.Is(err, unix.EPERM) {
+		return err
+	}
+	fd, err := unix.Openat(dir, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		errs = append(errs, err)
+	} else if err := unix.Fchmod(fd, st.Mode&0o7777|0o700); err != nil {
+		errs = append(errs, err)
+	}
+	f := os.NewFile(uintptr(fd), name)
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	for _, n := range names {
+		if err := removeAt(fd, n); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	f.Close()
+	if err := unix.Unlinkat(dir, name, unix.AT_REMOVEDIR); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 // swap exchanges the folders fresh and folder. Where the filesystem cannot
@@ -76,6 +134,9 @@ func extract(root, base string, archive io.Reader) error {
 	// Folder modes are set last, deepest first, so a read-only folder is
 	// still written into.
 	var modes []folderMode
+	// files holds the regular files written so far, which a hard link may
+	// name.
+	files := map[string]bool{}
 	tr := tar.NewReader(archive)
 	for {
 		hdr, err := tr.Next()
@@ -107,17 +168,19 @@ func extract(root, base string, archive io.Reader) error {
 			err = inParent(rootFD, rel, func(dir int, name string) error {
 				return writeFile(dir, name, perm, tr)
 			})
+			files[rel] = true
 		case tar.TypeSymlink:
 			err = inParent(rootFD, rel, func(dir int, name string) error {
 				return unix.Symlinkat(hdr.Linkname, dir, name)
 			})
 		case tar.TypeLink:
-			// A hard link becomes its own copy of an entry already written.
+			// A hard link stays a link to a regular file already written.
 			source, ok := entryPath(hdr.Linkname, base)
-			if !ok || source == "" {
+			if !ok || !files[source] {
 				return ErrUnsafeEntry
 			}
-			err = copyEntry(rootFD, source, rel)
+			err = linkEntry(rootFD, source, rel)
+			files[rel] = true
 		default:
 			return ErrUnsafeEntry
 		}
@@ -191,29 +254,13 @@ func writeFile(dir int, name string, perm uint32, r io.Reader) error {
 	return f.Close()
 }
 
-// copyEntry writes a copy of the regular file source as rel.
-func copyEntry(rootFD int, source, rel string) error {
-	var src *os.File
-	var perm uint32
-	err := inParent(rootFD, source, func(dir int, name string) error {
-		fd, err := unix.Openat(dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		if err != nil {
-			return err
-		}
-		var st unix.Stat_t
-		if err := unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
-			unix.Close(fd)
-			return ErrUnsafeEntry
-		}
-		src, perm = os.NewFile(uintptr(fd), name), st.Mode&0o777
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	return inParent(rootFD, rel, func(dir int, name string) error {
-		return writeFile(dir, name, perm, src)
+// linkEntry makes rel a hard link to source, both beneath rootFD.
+func linkEntry(rootFD int, source, rel string) error {
+	return inParent(rootFD, source, func(srcDir int, srcName string) error {
+		return inParent(rootFD, rel, func(dir int, name string) error {
+			// Without AT_SYMLINK_FOLLOW, a link is never followed.
+			return unix.Linkat(srcDir, srcName, dir, name, 0)
+		})
 	})
 }
 

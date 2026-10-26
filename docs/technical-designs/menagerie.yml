@@ -182,13 +182,17 @@ proposed-design:
     service copies it into the container at its own path, without mounting
     the workspace folder. When the hook exits, with any exit code, the
     service copies the candidate back out and makes the candidate on disk
-    match it exactly, links as links and entries owned by the services'
-    user; a cancelled hook's candidate is not copied back. The copy back
-    extracts into a fresh folder beside the candidate, opens every path
-    without following a symbolic link, refuses an absolute name, a `..`, a
-    name outside the candidate and any entry other than a folder, a file
-    or a link, and then swaps the folder in, so a refused copy leaves the
-    candidate as it was. The hook runs in a throwaway container with an
+    match it exactly, symbolic and hard links as links and entries owned
+    by the services' user; a cancelled hook's candidate is not copied
+    back. The copy back extracts into a fresh folder beside the candidate,
+    opens every path without following a symbolic link, refuses an
+    absolute name, a `..`, a name outside the candidate, a hard link to
+    anything but a file it already wrote, and any entry other than a
+    folder, a file or a link, and then swaps the folder in, so a refused
+    copy leaves the candidate as it was. The old candidate is then
+    removed, read-only folders included; one that cannot be removed
+    completely adds a note to the job console and does not fail the hook.
+    The hook runs in a throwaway container with an
     empty environment, in its target-relative working directory, resolved
     with symbolic links followed; one that is missing or resolves outside
     its target is refused before any container exists. A script hook's

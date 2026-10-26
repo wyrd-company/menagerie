@@ -16,7 +16,10 @@ description: >-
   they reach neither the Docker socket nor the Wyrwood sockets nor
   Menagerie's environment. They still reach the network, and a hook can
   still change its workspace's definition, which its devcontainer then
-  gets as asked. A body-inspecting Docker proxy reduces this exposure
+  gets as asked. The copy back of an upgrade hook's candidate checks the
+  candidate by its path, so a process running as the services' user can
+  redirect the swap by replacing a folder above the candidate in between;
+  that user already holds the Docker socket. A body-inspecting Docker proxy reduces this exposure
   further.
 categories:
   - security

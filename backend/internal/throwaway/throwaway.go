@@ -348,7 +348,7 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 			return -1, fmt.Errorf("cancelled: %w", context.Cause(ctx))
 		}
 		if c.Target != "" {
-			if err := d.copyBack(ctx, created.ID, c.Target); err != nil {
+			if err := d.copyBack(ctx, created.ID, c.Target, orDiscard(c.Log)); err != nil {
 				return -1, err
 			}
 		}
@@ -439,14 +439,15 @@ func (d *Docker) copyFolder(ctx context.Context, id, folder string) error {
 }
 
 // copyBack makes target on disk hold exactly the container's copy of it:
-// added, changed and removed entries, modes, and symbolic links as links.
-func (d *Docker) copyBack(ctx context.Context, id, target string) error {
+// added, changed and removed entries, modes, and symbolic and hard links as
+// links. A note on an old copy left behind goes to log.
+func (d *Docker) copyBack(ctx context.Context, id, target string, log io.Writer) error {
 	rc, _, err := d.client.CopyFromContainer(ctx, id, target)
 	if err != nil {
 		return failed(StageCopyBack, err, id)
 	}
 	defer rc.Close()
-	if err := ReplaceFolder(target, rc); err != nil {
+	if err := ReplaceFolder(target, rc, log); err != nil {
 		cls := "io"
 		if errors.Is(err, ErrUnsafeEntry) {
 			cls = "unsafe-entry"
