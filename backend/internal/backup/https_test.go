@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -237,38 +238,79 @@ func TestHTTPSFailuresHaveFixedReasons(t *testing.T) {
 	}
 }
 
-// TestATokenNeverFollowsARedirectToAnotherOrigin: the repository's host
-// redirects to another origin, which must see no credential.
-func TestATokenNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
-	var mu sync.Mutex
-	var seen []string
-	elsewhere := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		seen = append(seen, r.Header.Get("Authorization"))
-		mu.Unlock()
-		http.NotFound(w, r)
-	}))
-	t.Cleanup(elsewhere.Close)
-	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, elsewhere.URL+r.URL.RequestURI(), http.StatusFound)
-	}))
-	t.Cleanup(origin.Close)
-	// One client trusts both: httptest TLS servers share a certificate.
-	backuptest.Trust(t, origin)
+// redirectReason is the fixed reason of a refused redirect.
+const redirectReason = "the workspace repository answered with a redirect; set workspace-repository to its current address"
+
+// TestATokenNeverFollowsARedirect: a push and a fetch with a token are
+// refused at the first redirect, to another repository on the same origin
+// or to another origin, and the target receives nothing.
+func TestATokenNeverFollowsARedirect(t *testing.T) {
 	folder := committedWorkspace(t)
-	remote := &Remote{URL: origin.URL + "/r.git", Auth: TokenAuth(&fakeTokens{prefix: origin.URL, token: sampleToken}, nil)}
-	if _, err := remote.Push(context.Background(), folder, "alpha", nil); err == nil {
-		t.Fatal("push through a redirect to another origin succeeded")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(seen) == 0 {
-		t.Fatal("the redirect was not followed; the test proves nothing")
-	}
-	for _, a := range seen {
-		if a != "" {
-			t.Fatalf("the other origin received %q", a)
+	for _, sameOrigin := range []bool{true, false} {
+		for _, op := range []string{"push", "fetch"} {
+			t.Run(fmt.Sprintf("%s same origin %t", op, sameOrigin), func(t *testing.T) {
+				host := backuptest.NewHTTPS(t, t.TempDir(), "x-access-token", sampleToken)
+				bare(t, host.Dir, "target/other.git")
+				var mu sync.Mutex
+				var reached []string
+				elsewhere := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					mu.Lock()
+					reached = append(reached, r.Header.Get("Authorization"))
+					mu.Unlock()
+					http.NotFound(w, r)
+				}))
+				t.Cleanup(elsewhere.Close)
+				target := host.Server.URL
+				if !sameOrigin {
+					target = elsewhere.URL
+				}
+				host.Handle = func(w http.ResponseWriter, r *http.Request) bool {
+					if rest, ok := strings.CutPrefix(r.URL.RequestURI(), "/source/repo.git"); ok {
+						http.Redirect(w, r, target+"/target/other.git"+rest, http.StatusFound)
+						return true
+					}
+					mu.Lock()
+					reached = append(reached, r.Header.Get("Authorization"))
+					mu.Unlock()
+					return false
+				}
+				remote := &Remote{URL: host.URL("source/repo.git"), Auth: TokenAuth(&fakeTokens{prefix: host.Server.URL, token: sampleToken}, nil)}
+				var err error
+				if op == "push" {
+					_, err = remote.Push(context.Background(), folder, "alpha", nil)
+				} else {
+					_, err = remote.Fetch(context.Background(), folder, "alpha", "alpha", nil)
+				}
+				var te *TransportError
+				if !errors.As(err, &te) || te.Reason != redirectReason {
+					t.Fatalf("%s through a redirect: %v", op, err)
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if len(reached) != 0 {
+					t.Fatalf("the redirect's target received %d requests", len(reached))
+				}
+			})
 		}
+	}
+}
+
+// TestAPushWithoutCredentialsKeepsGoGitsRedirectPolicy: only a transfer
+// with credentials refuses redirects.
+func TestAPushWithoutCredentialsKeepsGoGitsRedirectPolicy(t *testing.T) {
+	host := backuptest.NewHTTPS(t, t.TempDir(), "x-access-token", sampleToken)
+	var followed bool
+	host.Handle = func(w http.ResponseWriter, r *http.Request) bool {
+		if rest, ok := strings.CutPrefix(r.URL.RequestURI(), "/source/repo.git"); ok {
+			http.Redirect(w, r, host.Server.URL+"/target/other.git"+rest, http.StatusFound)
+			return true
+		}
+		followed = true
+		return false
+	}
+	folder := committedWorkspace(t)
+	if _, err := (&Remote{URL: host.URL("source/repo.git")}).Push(context.Background(), folder, "alpha", nil); err == nil || !followed {
+		t.Fatalf("anonymous push: %v, redirect followed %t", err, followed)
 	}
 }
 
@@ -283,5 +325,63 @@ func TestSSHAndLocalFailuresKeepGoGitsText(t *testing.T) {
 		if err == nil || errors.As(err, &te) {
 			t.Fatalf("%s: %v", url, err)
 		}
+	}
+}
+
+// TestMalformedURLsNameNoValue: a URL go-git cannot read fails with a
+// fixed reason, whether the credentials or the transfer reads it first.
+func TestMalformedURLsNameNoValue(t *testing.T) {
+	folder := committedWorkspace(t)
+	agent := AgentAuth(filepath.Join(t.TempDir(), "absent.sock"))
+	for _, url := range []string{
+		"https://git.example.invalid/owner/" + sentinelRemote + "%zz",
+		"https://git.example.invalid:" + sentinelRemote + "/owner/repo.git",
+		"https://[" + sentinelRemote + "/owner/repo.git",
+	} {
+		for name, auth := range map[string]Auth{
+			"token or agent": TokenAuth(&fakeTokens{prefix: "https://elsewhere.example.invalid/", token: sampleToken}, agent),
+			"none":           nil,
+		} {
+			remote := &Remote{URL: url, Auth: auth}
+			_, pushErr := remote.Push(context.Background(), folder, "alpha", nil)
+			_, fetchErr := remote.Fetch(context.Background(), folder, "alpha", "alpha", nil)
+			for op, err := range map[string]error{"push": pushErr, "fetch": fetchErr} {
+				var te *TransportError
+				if !errors.As(err, &te) || te.Reason != "the workspace repository address is not a valid Git URL" || strings.Contains(err.Error(), sentinelRemote) {
+					t.Errorf("%s %s with %s: %v", op, url, name, err)
+				}
+			}
+		}
+	}
+}
+
+// TestCredentialFailuresKeepTheAppsReasonAndNameNoValue: the token
+// source's own reason is kept; any other credential failure of a URL that
+// is not SSH or local is a fixed reason.
+func TestCredentialFailuresKeepTheAppsReasonAndNameNoValue(t *testing.T) {
+	folder := committedWorkspace(t)
+	url := "https://git.example.invalid/owner/" + sentinelRemote + ".git"
+	appReason := "GitHub App credentials are unavailable: GitHub could not be reached"
+	_, err := (&Remote{URL: url, Auth: TokenAuth(&fakeTokens{prefix: url, err: errors.New(appReason)}, nil)}).Push(context.Background(), folder, "alpha", nil)
+	var ce *CredentialsError
+	if !errors.As(err, &ce) || err.Error() != "workspace repository credentials: "+appReason {
+		t.Fatalf("token source failure: %v", err)
+	}
+	failing := func(_ context.Context, u string) (transport.AuthMethod, func(), error) {
+		return nil, nil, errors.New("no credentials for " + u)
+	}
+	_, err = (&Remote{URL: url, Auth: failing}).Push(context.Background(), folder, "alpha", nil)
+	var te *TransportError
+	if !errors.As(err, &te) || te.Reason != "the workspace repository's credentials could not be prepared" {
+		t.Fatalf("other credential failure: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = (&Remote{URL: url, Auth: failing}).Fetch(ctx, folder, "alpha", "alpha", nil); !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), sentinelRemote) {
+		t.Fatalf("ended credential failure: %v", err)
+	}
+	// SSH keeps its text.
+	if _, err = (&Remote{URL: "git@example.invalid:o/r.git", Auth: failing}).Push(context.Background(), folder, "alpha", nil); err == nil || !strings.Contains(err.Error(), "no credentials for git@example.invalid") {
+		t.Fatalf("ssh credential failure: %v", err)
 	}
 }

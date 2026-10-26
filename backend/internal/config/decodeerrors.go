@@ -36,6 +36,12 @@ var (
 	keyPattern    = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 )
 
+// vocabularyMaps are the mappings whose keys are names the document
+// defines, such as phase names, and so may be named in a diagnostic. The
+// keys of every other mapping are data, such as account names: an entry
+// is named by its mapping's field alone.
+var vocabularyMaps = map[string]bool{"job-limits.phases": true}
+
 // decodeError turns an error of the YAML decoder into a diagnostic of a
 // line, a field and what the field expects. The decoder's own text quotes
 // values, and an anchor can share the webhook URL's node with any field,
@@ -155,7 +161,10 @@ func (x *fieldIndex) walkMapping(n *yaml.Node, t reflect.Type, path string, dept
 			continue
 		}
 		child := name
-		if path != "" {
+		switch {
+		case t.Kind() == reflect.Map && !vocabularyMaps[path]:
+			child = path
+		case path != "":
 			child = path + "." + name
 		}
 		x.walk(v, field, child, depth+1)

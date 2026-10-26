@@ -47,3 +47,34 @@ func TestABackupRefusedOverHTTPSNamesNeitherTheRepositoryNorTheToken(t *testing.
 		}
 	}
 }
+
+// TestABackupToAMalformedURLNamesNoValue: the URL go-git cannot read
+// reaches the job's error only as a fixed reason.
+func TestABackupToAMalformedURLNamesNoValue(t *testing.T) {
+	f := newFixture(t)
+	agent := backup.AgentAuth("/nonexistent/ssh-agent.sock")
+	remote := &backup.Remote{URL: "https://git.example.invalid/owner/" + sentinel + "%zz"}
+	// The token source serves no malformed URL, as the GitHub App does.
+	remote.Auth = backup.TokenAuth(servesNothing{}, agent)
+	f.commits = New(Options{Root: f.root, Remote: remote, Jobs: f.jobs})
+	folder := f.workspace(t, "alpha")
+	write(t, folder, "new.txt", "new\n")
+	job, _, err := f.commits.Start("alpha", "chore: x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := wait(t, job)
+	if snap.State != jobs.Failed || snap.Error.Kind != KindBackupFailed || !strings.Contains(snap.Error.Message, "not a valid Git URL") {
+		t.Fatalf("job %+v %+v", snap, snap.Error)
+	}
+	all, _, _ := job.EventsAfter(0)
+	for _, e := range all {
+		if strings.Contains(string(e.Data), sentinel) {
+			t.Fatalf("event %s names the repository: %s", e.Type, e.Data)
+		}
+	}
+}
+
+type servesNothing struct{ refusedTokens }
+
+func (servesNothing) Serves(string) bool { return false }

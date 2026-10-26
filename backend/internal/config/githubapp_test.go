@@ -66,3 +66,26 @@ func TestGitHubAppErrorsNameNoValue(t *testing.T) {
 		})
 	}
 }
+
+// TestDecodingErrorsNameNoMapKeyThatIsData: an installation's owner is
+// data, so a decoding error names the installations field and the type,
+// never the owner; phase names are the document's own and stay named.
+func TestDecodingErrorsNameNoMapKeyThatIsData(t *testing.T) {
+	const owner = "sentinel-owner"
+	app := valid + "github-app:\n  app-id: 1\n  transit-key: k\n  installations:\n"
+	for _, doc := range []string{
+		app + "    " + owner + ": invalid\n",
+		app + "    " + owner + ": [1]\n",
+		app + "    " + owner + ": {a: 1}\n",
+		valid + "github-app: {app-id: 1, transit-key: k, installations: {" + owner + ": x}}\n",
+	} {
+		_, err := Parse([]byte(doc))
+		if err == nil || !strings.Contains(err.Error(), "github-app.installations must be a whole number") || strings.Contains(err.Error(), owner) {
+			t.Errorf("%q: %v", doc, err)
+		}
+	}
+	_, err := Parse([]byte(valid + "job-limits:\n  phases:\n    build: [1h]\n"))
+	if err == nil || !strings.Contains(err.Error(), "job-limits.phases.build must be a duration") {
+		t.Errorf("phase: %v", err)
+	}
+}

@@ -8,6 +8,7 @@ package backup
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,8 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"golang.org/x/crypto/ssh/agent"
+
+	"github.com/wyrd-company/menagerie/backend/internal/backup/gitclient"
 )
 
 // AgentSocketName is the SSH agent socket's name in the Wyrwood consumer
@@ -52,15 +55,12 @@ func (r *Remote) Push(ctx context.Context, folder, workspace string, progress io
 	if _, err := repo.Reference(branch, false); err != nil {
 		return false, fmt.Errorf("workspace branch %s has no commit: %w", branch.Short(), err)
 	}
-	var auth transport.AuthMethod
-	if r.Auth != nil {
-		var release func()
-		auth, release, err = r.Auth(ctx, r.URL)
-		if err != nil {
-			return false, err
-		}
-		defer release()
+	s, err := r.open(ctx, progress)
+	if err != nil {
+		return false, err
 	}
+	defer s.close()
+	ctx, auth, progress := s.ctx, s.auth, s.progress
 	remote := git.NewRemote(repo.Storer, &config.RemoteConfig{Name: remoteName, URLs: []string{r.URL}})
 	err = remote.PushContext(ctx, &git.PushOptions{
 		RemoteName: remoteName,
@@ -90,8 +90,8 @@ type Tokens interface {
 // TokenAuth authenticates pushes and fetches to a URL tokens serves with
 // HTTP basic authentication, the token as the password; every other URL
 // gets the credentials of otherwise. A token is only ever sent to a URL
-// tokens serves, and go-git drops it on a redirect that leaves the URL's
-// origin or downgrades to http.
+// tokens serves, and a push or fetch with HTTP credentials follows no
+// redirect.
 func TokenAuth(tokens Tokens, otherwise Auth) Auth {
 	return func(ctx context.Context, url string) (transport.AuthMethod, func(), error) {
 		if !tokens.Serves(url) {
@@ -102,7 +102,7 @@ func TokenAuth(tokens Tokens, otherwise Auth) Auth {
 		}
 		username, token, err := tokens.Token(ctx, url)
 		if err != nil {
-			return nil, nil, fmt.Errorf("workspace repository credentials: %w", err)
+			return nil, nil, &CredentialsError{cause: err}
 		}
 		return &githttp.BasicAuth{Username: username, Password: token}, func() {}, nil
 	}
@@ -144,4 +144,55 @@ func AgentAuth(socket string, knownHosts ...string) Auth {
 		}
 		return auth, func() { _ = conn.Close() }, nil
 	}
+}
+
+// CredentialsError reports that tokens had no credentials for the
+// workspace repository. Its text is the Tokens error's, which names no
+// token and no URL.
+type CredentialsError struct{ cause error }
+
+func (e *CredentialsError) Error() string {
+	return "workspace repository credentials: " + e.cause.Error()
+}
+
+// Unwrap returns the Tokens error.
+func (e *CredentialsError) Unwrap() error { return e.cause }
+
+// transfer is what one push or fetch uses: its context, credentials and
+// progress writer.
+type transfer struct {
+	ctx      context.Context
+	auth     transport.AuthMethod
+	progress io.WriteCloser
+	release  func()
+}
+
+// open gets the transfer's credentials and wraps progress so that the
+// remote's text names neither the repository URL nor a token. A transfer
+// with HTTP credentials follows no redirect, so they never reach a
+// redirect's target.
+func (r *Remote) open(ctx context.Context, progress io.Writer) (*transfer, error) {
+	t := &transfer{ctx: ctx, release: func() {}}
+	if r.Auth != nil {
+		auth, release, err := r.Auth(ctx, r.URL)
+		if err != nil {
+			return nil, credentialFailure(ctx, r.URL, err)
+		}
+		t.auth, t.release = auth, release
+	}
+	values := []string{r.URL}
+	if _, ok := t.auth.(githttp.AuthMethod); ok {
+		t.ctx = gitclient.WithoutRedirects(ctx)
+	}
+	if basic, ok := t.auth.(*githttp.BasicAuth); ok {
+		values = append(values, basic.Password, base64.StdEncoding.EncodeToString([]byte(basic.Username+":"+basic.Password)))
+	}
+	t.progress = newRedactor(progress, values...)
+	return t, nil
+}
+
+// close writes the progress text left and releases the credentials.
+func (t *transfer) close() {
+	_ = t.progress.Close()
+	t.release()
 }

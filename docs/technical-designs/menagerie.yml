@@ -411,14 +411,20 @@ proposed-design:
     repository and permission share one exchange. Requests are bounded by
     the job's context only; the API client follows no redirect. Backups,
     commits and Apply branch fetches send the token as HTTP basic
-    authentication with the user `x-access-token`, and go-git drops it on a
-    redirect that leaves the repository's origin or downgrades to http. The
+    authentication with the user `x-access-token` and follow no redirect,
+    on the same origin or another: go-git picks its HTTP transport from a
+    process-wide registry and its client's redirect check is the only hook
+    before a hop is sent, so the workspace service installs a transport
+    whose check refuses every redirect of a transfer with credentials and
+    leaves others to go-git's own policy. The remote's text reaches the job
+    console line by line with the URL and the token redacted. The
     template service asks for a template's token on the hook runner socket
     (see credential-route). Every failure is a fixed reason, with at most a
     status code: no error carries a token, a JWT, a signature, a URL, a
-    response body or a transport error's text. A push or fetch to an `https`
-    remote reports a fixed reason instead of go-git's text, which quotes the
-    URL and the server's answer.
+    response body or a transport error's text. A push or fetch to a remote
+    that is not SSH or a local path, a URL go-git cannot read included,
+    reports a fixed reason for its credentials and its transfer instead of
+    go-git's text, which quotes the URL and the server's answer.
   credential-route: >-
     The hook runner socket also serves the template service's credential
     route, `POST /v1/credentials/github` with the strict body `{"url"}`, an

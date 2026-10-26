@@ -202,8 +202,11 @@ key into OpenBao's Transit engine as an RSA key; the Wyrwood policy grants
 JWT through Wyrwood's `vault.sock`, sending no token, and exchanges it for a
 token that covers one repository and one permission. Tokens stay in
 Menagerie's memory until five minutes before they expire; nothing is written
-to disk. A failure names a fixed reason, never a token, a URL or GitHub's
-answer.
+to disk. A push or fetch with a token follows no redirect: set
+`workspace-repository` to the repository's current address. A failure names
+a fixed reason, never a token, a URL or GitHub's answer, and the job console
+shows the remote's own text with the URL and the token replaced by
+`[redacted]`.
 
 ## Local environment
 

@@ -80,11 +80,20 @@ the App's JWT, a URL and GitHub's or OpenBao's response text never appear.
 | the operation ended before GitHub answered, or before OpenBao answered | The job ended first, for example at a restart or a time limit. |
 
 A push or fetch over `https` names a fixed reason too:
-`the workspace repository did not accept the credentials`,
-`the workspace repository denied access`,
-`the workspace repository was not found`,
-`the workspace repository answered status N`, or
-`the workspace repository could not be reached or refused the transfer`.
+
+| Reason | What to check |
+| --- | --- |
+| the workspace repository did not accept the credentials | The App's installation and permissions. |
+| the workspace repository denied access | The App has Contents read and write. |
+| the workspace repository was not found | `workspace-repository`. |
+| the workspace repository answered status N | The server's status for that code. |
+| the workspace repository answered with a redirect; set workspace-repository to its current address | The repository moved: give its current address. |
+| the workspace repository address is not a valid Git URL | `workspace-repository`. |
+| the workspace repository's credentials could not be prepared | The credential source for that URL. |
+| the workspace repository could not be reached or refused the transfer | Network access, and the remote's text in the job console. |
+
+The job console shows the remote's own text, such as a hook's rejection,
+with the URL and the token replaced by `[redacted]`.
 
 ## Requests the API refuses
 

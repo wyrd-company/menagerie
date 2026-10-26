@@ -31,14 +31,47 @@ func (e *TransportError) Error() string { return e.Reason }
 // transfer.
 func (e *TransportError) Unwrap() error { return e.kind }
 
+// keepsText reports whether url is an SSH URL or a local path, whose
+// failures keep go-git's text. It is false for a URL go-git cannot read.
+func keepsText(url string) bool {
+	endpoint, err := transport.NewEndpoint(url)
+	return err == nil && (endpoint.Protocol == "ssh" || endpoint.Protocol == "file")
+}
+
+// fixedFailure is the *TransportError for an ended context or a URL go-git
+// cannot read, or nil.
+func fixedFailure(ctx context.Context, url string) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return &TransportError{Reason: "the operation ended before the workspace repository answered", kind: cerr}
+	}
+	if _, err := transport.NewEndpoint(url); err != nil {
+		return &TransportError{Reason: "the workspace repository address is not a valid Git URL"}
+	}
+	return nil
+}
+
+// credentialFailure is err, from getting the credentials of url. For any
+// URL that is not SSH or a local path it is a *TransportError instead,
+// except a *CredentialsError, whose text names no value.
+func credentialFailure(ctx context.Context, url string, err error) error {
+	var credentials *CredentialsError
+	if keepsText(url) || errors.As(err, &credentials) {
+		return err
+	}
+	if fixed := fixedFailure(ctx, url); fixed != nil {
+		return fixed
+	}
+	return &TransportError{Reason: "the workspace repository's credentials could not be prepared"}
+}
+
 // transportFailure is err, from a push or fetch to url. For any URL that
 // is not SSH or a local path it is a *TransportError instead.
 func transportFailure(ctx context.Context, url string, err error) error {
-	if endpoint, perr := transport.NewEndpoint(url); perr == nil && (endpoint.Protocol == "ssh" || endpoint.Protocol == "file") {
+	if keepsText(url) {
 		return err
 	}
-	if cerr := ctx.Err(); cerr != nil {
-		return &TransportError{Reason: "the operation ended before the workspace repository answered", kind: cerr}
+	if fixed := fixedFailure(ctx, url); fixed != nil {
+		return fixed
 	}
 	for _, k := range []struct {
 		kind   error
@@ -61,6 +94,9 @@ func transportFailure(ctx context.Context, url string, err error) error {
 	}
 	var status *githttp.Err
 	if errors.As(err, &status) && status.Response != nil {
+		if code := status.Response.StatusCode; code >= 300 && code < 400 {
+			return &TransportError{Reason: "the workspace repository answered with a redirect; set workspace-repository to its current address"}
+		}
 		return &TransportError{Reason: fmt.Sprintf("the workspace repository answered status %d", status.Response.StatusCode)}
 	}
 	return &TransportError{Reason: "the workspace repository could not be reached or refused the transfer"}
