@@ -25,7 +25,10 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -33,10 +36,10 @@ import (
 type Templates interface {
 	StartInterview(ctx context.Context, s templates.Selector) (*templates.Reply, error)
 	AnswerInterview(ctx context.Context, s templates.Selector, session, submission json.RawMessage) (*templates.Reply, error)
-	Generate(ctx context.Context, s templates.Selector, session json.RawMessage) (*templates.Applied, error)
+	Generate(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
 	StartUpgrade(ctx context.Context, s templates.Selector) (*templates.Reply, error)
 	AnswerUpgrade(ctx context.Context, s templates.Selector, session, submission json.RawMessage) (*templates.Reply, error)
-	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage) (*templates.Applied, error)
+	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
 }
 
 // Runtime starts and rebuilds devcontainers. *devcontainer.Runtime
@@ -55,6 +58,11 @@ type Options struct {
 	// Remote is the workspace repository backups are pushed to.
 	Remote  *backup.Remote
 	Runtime Runtime
+	// Hooks runs the template service's hooks in throwaway containers.
+	// Nil refuses every hook.
+	Hooks *throwaway.HookRunner
+	// RunnerImage returns the runner image of a template's hooks.
+	RunnerImage func(ctx context.Context, templateID string) (string, error)
 }
 
 // Workflows owns the create and upgrade operations and their interviews.
@@ -135,4 +143,63 @@ func (w *Workflows) upgrade(req api.JobRequest) (jobsRunner, error) {
 
 func (w *Workflows) selector(name, folder, template string) templates.Selector {
 	return templates.Selector{Workspace: name, Target: folder, TemplateID: template}
+}
+
+// hooks is the hook grant of one generate or apply request. Its zero
+// value grants nothing, so the template service refuses every hook.
+type hooks struct{ grant *throwaway.HookGrant }
+
+// grantHooks lets the template service run the template's hooks against
+// targets of kind, for the job's folder, in its runner image and console,
+// until revoke. The hooks stop when ctx, the job's, is cancelled.
+func (w *Workflows) grantHooks(ctx context.Context, run *jobs.Run, folder, template string, kind throwaway.TargetKind) (hooks, error) {
+	if w.opts.Hooks == nil {
+		return hooks{}, nil
+	}
+	image := w.opts.RunnerImage
+	grant, err := w.opts.Hooks.Grant(ctx, throwaway.HookJob{
+		ID:     run.JobID(),
+		Folder: folder,
+		Target: kind,
+		Image: func(ctx context.Context) (string, error) {
+			if image == nil {
+				return "", &throwaway.ImageError{Err: throwaway.Reason("no runner image is configured")}
+			}
+			return image(ctx, template)
+		},
+		Log: run.Log,
+	})
+	return hooks{grant}, err
+}
+
+func (h hooks) token() string {
+	if h.grant == nil {
+		return ""
+	}
+	return h.grant.Token()
+}
+
+// revoke refuses the token and waits for the hooks still running, so no
+// hook writes to the folder after the job's template step.
+func (h hooks) revoke() {
+	if h.grant != nil {
+		h.grant.Revoke()
+	}
+}
+
+// kind is the job error kind of a failed generate or apply: the runner
+// image's or its registry credentials' when a hook found no image.
+func (h hooks) kind(fallback string) string {
+	if h.grant == nil {
+		return fallback
+	}
+	err := h.grant.ImageFailure()
+	var credErr *registrycreds.Error
+	switch {
+	case errors.As(err, &credErr):
+		return api.KindRegistryCredentialsUnavailable
+	case err != nil:
+		return api.KindRunnerImageUnavailable
+	}
+	return fallback
 }

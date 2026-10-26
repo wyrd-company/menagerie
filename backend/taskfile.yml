@@ -32,9 +32,9 @@ tasks:
       - go test -race -count=1 ./...
 
   test:docker:
-    desc: Run the Docker smoke and registry credential tests (pulls alpine:3.22 and busybox:1.37 when missing)
+    desc: Run the Docker smoke, registry credential and throwaway container tests (pulls alpine:3.22 and busybox:1.37 when missing)
     cmds:
-      - go test -tags docker -count=1 -v ./internal/devcontainer/
+      - go test -tags docker -count=1 -v ./internal/devcontainer/ ./internal/throwaway/
 
   test:openbao:
     desc: Read registry credentials from a disposable OpenBao dev server through a Wyrwood-contract socket (needs bao on PATH)

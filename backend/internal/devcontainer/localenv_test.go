@@ -2,10 +2,7 @@ package devcontainer
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
@@ -21,13 +18,15 @@ func TestLocalEnvironmentKeepsOnlyAllowedVariables(t *testing.T) {
 	if _, ok := env.values["PATH"]; ok {
 		t.Fatal("PATH is readable through ${localEnv:PATH} without being allowed")
 	}
-	if want := []string{"PATH=/usr/bin:/bin", "ALLOWED_VALUE=a=b", "EMPTY_ALLOWED="}; !slices.Equal(env.process, want) {
+	// PATH is the runner image's own, never Menagerie's.
+	if want := []string{"ALLOWED_VALUE=a=b", "EMPTY_ALLOWED="}; !slices.Equal(env.process, want) {
 		t.Fatalf("process %q want %q", env.process, want)
 	}
-	if env := newLocalEnvironment(environ, nil); len(env.values) != 0 || !slices.Equal(env.process, []string{"PATH=/usr/bin:/bin"}) {
+	if env := newLocalEnvironment(environ, nil); len(env.values) != 0 || env.process == nil || len(env.process) != 0 {
 		t.Fatalf("nil allowlist: %v %q", env.values, env.process)
 	}
-	if env := newLocalEnvironment(environ, []string{"PATH"}); env.values["PATH"] != "/usr/bin:/bin" || len(env.process) != 1 {
+	// An allowed PATH substitutes but never replaces the image's.
+	if env := newLocalEnvironment(environ, []string{"PATH", "ALLOWED_VALUE"}); env.values["PATH"] != "/usr/bin:/bin" || !slices.Equal(env.process, []string{"ALLOWED_VALUE=a=b"}) {
 		t.Fatalf("allowed PATH: %v %q", env.values, env.process)
 	}
 }
@@ -77,26 +76,20 @@ func TestRefusedLocalEnvReadsTheLoadedDefinition(t *testing.T) {
 	}
 }
 
-// TestInitializeEnvironmentWithoutPathInheritsNothing runs a command with
-// the environment of an empty allowlist over an environment without PATH:
-// a nil environment would make exec.Cmd pass Menagerie's own.
-func TestInitializeEnvironmentWithoutPathInheritsNothing(t *testing.T) {
-	t.Setenv("MENAGERIE_TEST_SECRET", "secret-value")
-	env := newLocalEnvironment([]string{"MENAGERIE_TEST_SECRET=secret-value"}, nil)
+// TestInitializeEnvironmentInheritsNothing runs a command with the
+// environment of an empty allowlist: the container gets an empty
+// environment, never a nil one.
+func TestInitializeEnvironmentInheritsNothing(t *testing.T) {
+	env := newLocalEnvironment([]string{"MENAGERIE_TEST_SECRET=secret-value", "PATH=/menagerie/bin"}, nil)
 	if env.process == nil || len(env.process) != 0 {
 		t.Fatalf("process %#v", env.process)
 	}
-	dir := t.TempDir()
-	runner := CommandRunner{Dir: dir, Env: env.process}
-	if err := runner.Run(context.Background(), spec.Command{Args: []string{"/bin/sh", "-c", "export -p > exported"}}); err != nil {
+	runner, l := newRunner(t.TempDir(), env.process, nil)
+	if err := runner.Run(context.Background(), spec.Command{Args: []string{"true"}}); err != nil {
 		t.Fatal(err)
 	}
-	exported, err := os.ReadFile(filepath.Join(dir, "exported"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(exported), "MENAGERIE_TEST_SECRET") {
-		t.Fatalf("command inherited Menagerie's environment:\n%s", exported)
+	if c := l.commands[0]; c.Env == nil || len(c.Env) != 0 {
+		t.Fatalf("command environment %#v", c.Env)
 	}
 }
 

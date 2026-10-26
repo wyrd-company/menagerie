@@ -54,7 +54,8 @@ description: >-
   `interview`, `initialize-repository`, `generate`, `apply`, `commit`,
   `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
-  `operation-failed` or `internal-error`, and for interview operations
+  `runner-image-unavailable`, `operation-failed` or `internal-error`, and
+  for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
   `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
   or `backup-failed`. Its message says what was written and what recovery
@@ -80,9 +81,11 @@ description: >-
   any `job-failed` alert, at the latest when the job ends. The slot is
   released when the work returns, never before, so work that ignores
   cancellation keeps its workspace busy.
-  The template service does not stop a template fetch, generate or apply
-  when its request is cancelled, so its hooks can still write to the folder
-  after a timed-out create or upgrade has ended.
+  A cancelled generate or apply revokes its hook token and kills and
+  removes its running hook containers before the job ends, so no hook
+  writes to the folder afterwards. The template service itself does not
+  stop when its request is cancelled: a template fetch, or the files Toha
+  writes before its next hook, can still finish after the job ended.
   Stopping Menagerie also cancels jobs, which fail with their own error,
   not `timed-out`. A timed-out create keeps its folder, as every failed
   create does, for manual recovery. A timed-out build or up can leave a
@@ -115,6 +118,32 @@ description: >-
   result event of a job that reached generation or apply adds `apply`: the
   template service's `{"outcome","files","recordPath","messages","hooks",
   "conflicts"}`.
+
+
+  Template hooks. Each generate or apply carries a new hook token, which
+  the service grants until that request returns. The template service
+  sends each hook to the service's hook runner socket with the token and
+  Toha's target, and the service runs it in a throwaway container: for a
+  create's generate, the workspace folder mounted read-write at its own
+  path and nothing else; for an upgrade's apply, Toha's candidate copied
+  in at its own path, no mount, and the candidate copied back when the
+  hook exits, so Toha merges what the hook wrote and the hook itself never
+  writes to the workspace folder. A create's token admits only the
+  workspace folder and folders in it, an upgrade's only a folder inside
+  `template-service.candidate-folder`. The hook's working directory is
+  under its target, with an empty environment beside the runner image's
+  own, the services' user, no new privileges and the default bridge
+  network. A script hook's template folder is copied into the container.
+  The job console shows one line naming the runner image, a line for an
+  image pull, then the streams the hook does not capture, each line
+  prefixed `hook: `; captured streams go back to Toha only. A hook that
+  found no runner image, or whose container failed, adds a console line
+  that names the runner image, the stage that failed and the Engine
+  error's class. The runner image is the template entry's `runner-image`,
+  else the global `runner-image`, else Menagerie's own image. When none
+  can be found or pulled, the job fails as `runner-image-unavailable`, or
+  as `registry-credentials-unavailable` when the pull's credentials could
+  not be read.
 
 
   Create. After the interview completes the service creates the workspace
@@ -192,6 +221,12 @@ description: >-
   answers and workspace folders are unaffected.
 
 
+  Throwaway containers carry the labels `menagerie.throwaway` (`hook` or
+  `initialize-command`), `menagerie.workspace-root` and `menagerie.job`.
+  Each is force-removed when its command ends or its job is cancelled, and
+  the service removes those of its workspace root when it starts.
+
+
   Container operations use devcontainer-builder as a library. Every
   `${localEnv:NAME}` and `${env:NAME}` in a definition, and Compose
   interpolation, read only the variables of Menagerie's environment that
@@ -201,11 +236,15 @@ description: >-
   start or rebuild the service reads `initializeCommand` from the same
   definition snapshot used for the build, substitutes `${localWorkspaceFolder}`,
   `${localEnv:...}`, `${containerWorkspaceFolder}` and `${devcontainerId}`
-  with the workspace's discovery labels, and runs it inside Menagerie with
-  the workspace folder as working directory and an environment of only the
-  `local-env` variables and `PATH`: a string through `/bin/sh -c`,
-  an array directly, and object members in parallel. A failing command fails
-  the job before any container changes. `start` then builds the definition
+  with the workspace's discovery labels, and runs it in throwaway
+  containers of the global `runner-image`, else Menagerie's own image, as
+  template hooks run: the workspace folder mounted at its own path and as
+  working directory, and an environment of only the `local-env` variables
+  other than `PATH` beside the runner image's own, its `PATH` included. A
+  string runs through `/bin/sh -c`, an array as given, and object members in parallel, each in
+  a container of its own with its output prefixed by its name. A failing
+  command fails the job before any container changes; a missing runner
+  image fails it as `runner-image-unavailable`. `start` then builds the definition
   when it needs a build and brings the container up, reusing and starting an
   existing one. When the definition uses features, an existing
   `devcontainer-lock.json` (including an empty initialization marker) is
@@ -252,7 +291,35 @@ validation-criteria: >-
   covering waiting, single answers, flow ends, failures and slot release;
   `go test ./backend/internal/backup/` pushes through an isolated SSH server
   and agent; `go test -tags templateservice ./backend/internal/workflows/`
-  runs create and upgrade against the real template service. `go test -tags docker
-  ./backend/internal/devcontainer/` runs start, stop, rebuild, failing
-  `initializeCommand`, Compose resource preservation, the `local-env`
-  allowlist and the workspace list against a real Docker Engine.
+  runs create and upgrade against the real template service, with an
+  upgrade whose hook changes a tracked file's content that only Toha's
+  merge brings into the workspace folder. `go test
+  ./backend/internal/throwaway/` covers the hook runner: token refusal and
+  revocation, folder, candidate and working directory checks, each token
+  kind refusing the other kind's target, linked working directories, a
+  candidate copied in and back and never mounted, a copy back that refuses
+  unsafe entries and never writes through a link, captured streams that never reach the console, exit codes,
+  cancellation that waits for the container's removal, runner image
+  choice, and a captured value carried through every failure, the fake
+  Engine's failure at each container stage included, that reaches no
+  refusal and no console line. `go test -tags docker
+  ./backend/internal/devcontainer/ ./backend/internal/throwaway/` runs
+  start, stop, rebuild, failing `initializeCommand`, Compose resource
+  preservation, the `local-env` allowlist and the workspace list against a
+  real Docker Engine, and checks that a hook and an `initializeCommand`
+  that look for the Docker socket, the SSH agent and Menagerie's
+  environment find none, while they still write into the workspace folder;
+  that a script hook runs from its copied template; that an upgrade's
+  hook changes only its candidate, which then holds exactly what it left;
+  that a revoked hook
+  leaves no container and stops writing; that the Engine's failure to start
+  a hook named by a captured value, and a working directory linked out of
+  the folder, reach no refusal or console line; and that start-up removes
+  only its own root's leftovers. `go test -tags templateservice
+  ./backend/internal/workflows/` also drives a captured value into an
+  invalid, missing and linked later working directory and a failing hook's
+  arguments, and finds it in no job error or event. `go test -tags
+  'templateservice docker' ./backend/internal/workflows/` runs those
+  templates in throwaway containers, and a hook that never ends under a
+  short `generate` limit: the job ends timed-out with no hook container
+  left and no write to the folder after it.

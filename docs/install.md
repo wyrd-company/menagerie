@@ -105,11 +105,11 @@ edit both files.
 | Mount or setting | Why |
 | --- | --- |
 | The workspace root at the same path on the host and in the container | Devcontainers bind-mount their workspace folder. The host daemon resolves that path, so it must be the host path. Set `MENAGERIE_WORKSPACE_ROOT` and `workspace-root` to the same value. |
-| `/var/run/docker.sock` | The workspace service drives the host Docker daemon. |
+| `/var/run/docker.sock` | The workspace service drives the host Docker daemon: devcontainers, and the throwaway containers that run template hooks and `initializeCommand`. |
 | The Wyrwood consumer directory at `/run/wyrwood` | `ssh-agent.sock` and `vault.sock`. `wyrwood-directory` names the mount target. |
 | `SSH_AUTH_SOCK=/run/wyrwood/ssh-agent.sock` | Toha's Git transport runs the image's `ssh` client with this agent. |
 | `config.yml` at `/etc/menagerie/config.yml` | Both services read it. |
-| A volume at `/var/lib/menagerie` | Toha's template cache, the template service's session key and the services' home. Without it they are lost when the container is recreated. |
+| A volume at `/var/lib/menagerie` | Toha's template cache, the template service's session key, the services' home and the folder Toha builds an upgrade's candidate in. Without it they are lost when the container is recreated. |
 | `restart: unless-stopped` | Docker starts Menagerie after a host restart, and restarts it after either service stops. |
 | Port `8080` | The web UI and workspace API. Publish it on a private address only. |
 
@@ -124,20 +124,22 @@ docker compose logs menagerie
 The log names the user the services run as, for example:
 
 ```text
-menagerie: services run as menagerie (uid 1000, gid 1000, groups 1000,999), the owner of /srv/menagerie/workspaces
+menagerie: services run as menagerie (uid 1000, gid 1000, groups 1000,998,999), the owner of /srv/menagerie/workspaces; the template service has groups 1000,998
 ```
 
 ### Who the services run as
 
 Both services run as the owner of the workspace root. Everything Menagerie,
 the template hooks and `initializeCommand` write into a workspace belongs to
-that user, and the devcontainer's remote user is remapped to the same uid so
-it can edit the workspace. If root owns the workspace root, the services run
-as root. When `workspace-root` or `wyrwood-directory` is a symbolic link, its
-target's owner and group count.
+that user: hooks and `initializeCommand` run in throwaway containers as
+that uid and gid, with no other group. The devcontainer's remote user is
+remapped to the same uid so it can edit the workspace. If root owns the
+workspace root, the services run as root. When `workspace-root` or
+`wyrwood-directory` is a symbolic link, its target's owner and group count.
 
-The services' groups are the owner's group, the Docker socket's group and
-the Wyrwood consumer directory's group. For a non-root owner:
+The services' groups are the owner's group and the Wyrwood consumer
+directory's group; the workspace service also has the Docker socket's
+group. The template service never talks to Docker. For a non-root owner:
 
 - the Wyrwood binding needs an access group this user has;
 - `config.yml` must be readable by this user;
@@ -156,6 +158,18 @@ Git hosts, mount a known hosts file that also names them:
     volumes:
       - ./ssh_known_hosts:/etc/ssh/ssh_known_hosts:ro
 ```
+
+### Throwaway containers
+
+Template hooks and `initializeCommand` run in throwaway containers on the
+host daemon, which need no extra mount or setting. By default they run
+Menagerie's own image, which Menagerie finds by inspecting its own
+container: by the container id in its mounts or, when they name none, by
+its hostname, Docker's default. When it cannot, a job with a hook or an `initializeCommand`
+fails as `runner-image-unavailable`; set
+[`runner-image`](configuration.md#runner-images). Each container carries
+the label `menagerie.throwaway` and is removed when its command ends; any
+left by a stopped Menagerie are removed when it starts.
 
 ### Container registries
 
@@ -177,10 +191,12 @@ Everyone signs in again.
 ## What Menagerie can do to the host
 
 Menagerie mounts the rootful Docker socket, so whoever controls Menagerie
-controls the host: a manager, anyone who gets past sign-in, and every
-template hook and `initializeCommand`, which run inside the Menagerie
-container. This is the access a manager has when running devcontainers on
-the host by hand. Keep these limits in place:
+controls the host: a manager and anyone who gets past sign-in. This is the
+access a manager has when running devcontainers on the host by hand.
+Template hooks and `initializeCommand` run in throwaway containers that
+cannot reach the Docker socket, the Wyrwood sockets or Menagerie's
+environment; they can write to their workspace folder and reach the
+network. Keep these limits in place:
 
 - Only members of `menagerie_managers` reach the UI. Membership is checked
   at every sign-in; remove someone from the group and restart Menagerie to

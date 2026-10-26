@@ -5,7 +5,7 @@ use common::*;
 use serde_json::{Value, json};
 
 async fn post(world: &World, path: &str, body: &Value) -> Reply {
-    post_bytes(&world.socket, path, serde_json::to_vec(body).unwrap()).await
+    post_bytes(&world.socket, path, body_of(path, body)).await
 }
 
 #[tokio::test(flavor = "multi_thread")]

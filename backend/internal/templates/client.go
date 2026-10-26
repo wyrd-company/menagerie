@@ -159,9 +159,10 @@ func (c *Client) AnswerInterview(ctx context.Context, s Selector, session, submi
 }
 
 // Generate applies a completed create session into the initialized
-// workspace folder.
-func (c *Client) Generate(ctx context.Context, s Selector, session json.RawMessage) (*Applied, error) {
-	return c.apply(ctx, pathGenerate, applyRequest{s, session})
+// workspace folder. hookToken is the hook grant the template service runs
+// the template's hooks with; empty refuses every hook.
+func (c *Client) Generate(ctx context.Context, s Selector, session json.RawMessage, hookToken string) (*Applied, error) {
+	return c.apply(ctx, pathGenerate, applyRequest{s, session, hookToken})
 }
 
 // StartUpgrade starts an upgrade of an existing workspace to s.TemplateID.
@@ -174,9 +175,10 @@ func (c *Client) AnswerUpgrade(ctx context.Context, s Selector, session, submiss
 	return c.interview(ctx, pathUpgradeAnswers, answerRequest{s, session, submission})
 }
 
-// ApplyUpgrade merges a completed upgrade session into the workspace.
-func (c *Client) ApplyUpgrade(ctx context.Context, s Selector, session json.RawMessage) (*Applied, error) {
-	return c.apply(ctx, pathUpgradeApply, applyRequest{s, session})
+// ApplyUpgrade merges a completed upgrade session into the workspace,
+// running the template's hooks with hookToken.
+func (c *Client) ApplyUpgrade(ctx context.Context, s Selector, session json.RawMessage, hookToken string) (*Applied, error) {
+	return c.apply(ctx, pathUpgradeApply, applyRequest{s, session, hookToken})
 }
 
 type answerRequest struct {
@@ -187,7 +189,8 @@ type answerRequest struct {
 
 type applyRequest struct {
 	Selector
-	Session json.RawMessage `json:"session"`
+	Session   json.RawMessage `json:"session"`
+	HookToken string          `json:"hookToken,omitempty"`
 }
 
 func (c *Client) interview(ctx context.Context, path string, body any) (*Reply, error) {

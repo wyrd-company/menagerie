@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
 
 	"github.com/wyrd-company/menagerie/backend/internal/alerts"
@@ -34,8 +35,10 @@ const DefaultPath = "/etc/menagerie/config.yml"
 
 // Default values for optional fields.
 const (
-	DefaultListen         = ":8080"
-	DefaultTemplateSocket = "/run/menagerie/template.sock"
+	DefaultListen           = ":8080"
+	DefaultTemplateSocket   = "/run/menagerie/template.sock"
+	DefaultHookRunnerSocket = "/run/menagerie/hook-runner.sock"
+	DefaultCandidateFolder  = "/var/lib/menagerie/candidates"
 )
 
 // Config is the Menagerie configuration document.
@@ -70,6 +73,10 @@ type Config struct {
 	// Alerts names the webhook told about failed and long-running jobs.
 	// Absent, no alert is sent.
 	Alerts *Alerts `yaml:"alerts"`
+	// RunnerImage is the image of the throwaway containers that run
+	// initializeCommand and the hooks of templates without their own
+	// runner image. Absent, Menagerie's own image.
+	RunnerImage string `yaml:"runner-image"`
 }
 
 // Duration is a positive time span of whole hours, minutes and seconds,
@@ -157,6 +164,9 @@ type Template struct {
 	Name string `yaml:"name"`
 	// Address is the Toha template address.
 	Address string `yaml:"address"`
+	// RunnerImage is the image of the throwaway containers that run the
+	// template's hooks. Absent, the global runner-image.
+	RunnerImage string `yaml:"runner-image"`
 }
 
 // OIDC names the identity provider and Menagerie's public client.
@@ -173,10 +183,18 @@ type OIDC struct {
 	Scopes []string `yaml:"scopes"`
 }
 
-// TemplateService locates the internal template service.
+// TemplateService locates the internal template service and the hook
+// runner it calls back.
 type TemplateService struct {
 	// Socket is the Unix socket the template service listens on.
 	Socket string `yaml:"socket"`
+	// HookRunnerSocket is the Unix socket the workspace service listens on
+	// for the template service's hooks.
+	HookRunnerSocket string `yaml:"hook-runner-socket"`
+	// CandidateFolder is the template service's temporary folder, where
+	// Toha builds an upgrade's candidate and its hooks run. The hook
+	// runner accepts an upgrade's hook target only inside it.
+	CandidateFolder string `yaml:"candidate-folder"`
 }
 
 // RegistryCredentials names, per registry, the secret in a KV version 2
@@ -288,6 +306,12 @@ func givenEmpty(data []byte) []error {
 	return errs
 }
 
+// within reports whether path is root or inside it, lexically.
+func within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && (rel == "." || filepath.IsLocal(rel))
+}
+
 // resolved follows aliases to the node they name.
 func resolved(n *yaml.Node) *yaml.Node {
 	for n.Kind == yaml.AliasNode && n.Alias != nil {
@@ -302,6 +326,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.TemplateService.Socket == "" {
 		c.TemplateService.Socket = DefaultTemplateSocket
+	}
+	if c.TemplateService.HookRunnerSocket == "" {
+		c.TemplateService.HookRunnerSocket = DefaultHookRunnerSocket
+	}
+	if c.TemplateService.CandidateFolder == "" {
+		c.TemplateService.CandidateFolder = DefaultCandidateFolder
 	}
 	if c.WorkspaceRoot != "" {
 		c.WorkspaceRoot = filepath.Clean(c.WorkspaceRoot)
@@ -322,6 +352,19 @@ func (c *Config) validate() error {
 	requireAbsolute("wyrwood-directory", c.WyrwoodDirectory)
 	if !filepath.IsAbs(c.TemplateService.Socket) {
 		errs = append(errs, errors.New("template-service.socket must be an absolute path"))
+	}
+	if !filepath.IsAbs(c.TemplateService.HookRunnerSocket) {
+		errs = append(errs, errors.New("template-service.hook-runner-socket must be an absolute path"))
+	} else if filepath.Clean(c.TemplateService.HookRunnerSocket) == filepath.Clean(c.TemplateService.Socket) {
+		errs = append(errs, errors.New("template-service.hook-runner-socket must differ from template-service.socket"))
+	}
+	if candidates := c.TemplateService.CandidateFolder; !filepath.IsAbs(candidates) || filepath.Clean(candidates) != candidates || candidates == "/" {
+		errs = append(errs, errors.New("template-service.candidate-folder must be an absolute clean folder other than /"))
+	} else if filepath.IsAbs(c.WorkspaceRoot) && (within(c.WorkspaceRoot, candidates) || within(candidates, c.WorkspaceRoot)) {
+		errs = append(errs, errors.New("template-service.candidate-folder must be neither inside workspace-root nor contain it"))
+	}
+	if err := validImage(c.RunnerImage); err != nil {
+		errs = append(errs, fmt.Errorf("runner-image %w", err))
 	}
 	if c.WorkspaceRoot == "/" {
 		errs = append(errs, errors.New("workspace-root must not be the filesystem root"))
@@ -361,6 +404,9 @@ func (c *Config) validate() error {
 		}
 		if t.Address == "" {
 			errs = append(errs, fmt.Errorf("templates[%d].address is required", i))
+		}
+		if err := validImage(t.RunnerImage); err != nil {
+			errs = append(errs, fmt.Errorf("templates[%d].runner-image %w", i, err))
 		}
 	}
 	if c.RegistryCredentials != nil {
@@ -448,6 +494,18 @@ func (r *RegistryCredentials) validate() []error {
 		}
 	}
 	return errs
+}
+
+// validImage accepts an absent image or a Docker image reference, such as
+// alpine:3.22 or ghcr.io/example/runner@sha256:...
+func validImage(ref string) error {
+	if ref == "" {
+		return nil
+	}
+	if _, err := reference.ParseNormalizedNamed(ref); err != nil {
+		return errors.New("must be an image reference such as alpine:3.22")
+	}
+	return nil
 }
 
 // validSecretPath accepts slash-separated OpenBao path segments without

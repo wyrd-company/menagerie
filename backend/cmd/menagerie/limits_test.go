@@ -16,6 +16,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -75,6 +76,15 @@ func awaitEnd(t *testing.T, base, id string) jobs.Snapshot {
 	return jobs.Snapshot{}
 }
 
+// hanging is a throwaway container whose command runs until it is
+// cancelled.
+type hanging struct{}
+
+func (hanging) Run(ctx context.Context, _ throwaway.Command) (int, error) {
+	<-ctx.Done()
+	return -1, ctx.Err()
+}
+
 // TestAJobPastItsLimitTimesOutThroughTheAPI runs a start whose
 // initializeCommand hangs, with a 100 ms initialize-command limit, through
 // the composed server: the job fails as timed-out, the webhook hears of
@@ -107,7 +117,8 @@ func TestAJobPastItsLimitTimesOutThroughTheAPI(t *testing.T) {
 	t.Cleanup(manager.Wait)
 	t.Cleanup(cancel)
 	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
-	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), manager))
+	rt := devcontainer.New(nil, devcontainer.Options{Containers: hanging{}, RunnerImage: func(context.Context) (string, error) { return "runner:sample", nil }})
+	server := httptest.NewServer(newServer(cfg, root, rt, manager, nil, nil))
 	t.Cleanup(server.Close)
 
 	for range 2 {

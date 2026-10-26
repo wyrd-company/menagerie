@@ -14,8 +14,9 @@ Use `task` verbs: `task --list`. `task check` is CI. The live suites
 - The managed thing is a **workspace** (`docs/terms/workspace.yml`), never a
   "devcontainer" or "project", in code, API, UI and docs.
 - Application code never spawns Git, Docker, Toha or devcontainer-builder
-  CLIs; it uses their libraries. Template hooks and `initializeCommand` are
-  the deliberate exceptions.
+  CLIs; it uses their libraries. Template hooks and `initializeCommand` run
+  as throwaway containers through the Docker library, not as Menagerie
+  processes.
 - Builds and devcontainers in tests run on the disposable daemon from
   `scripts/isolated-docker.sh`, never on a shared daemon's BuildKit. Cleanup
   removes only objects carrying the run's own label.

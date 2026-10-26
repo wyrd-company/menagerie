@@ -11,14 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
 	"github.com/wyrd-company/devcontainer-builder/pkg/substitute"
+
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
 // InitializeCommand reads initializeCommand from the definition snapshot.
@@ -89,20 +89,28 @@ func SubstituteCommand(ctx substitute.Context, cmd spec.Command) spec.Command {
 	return out
 }
 
-// CommandRunner executes a resolved command in Menagerie's own container.
+// CommandRunner executes a resolved command in throwaway containers, one
+// per command: the workspace folder mounted at its own path and its
+// working directory, the given environment and the image's own PATH.
 type CommandRunner struct {
-	// Dir is the working directory: the workspace folder.
-	Dir string
-	// Env is the process environment of every command.
+	// Containers runs each command.
+	Containers throwaway.Containers
+	// Image is the runner image.
+	Image string
+	// Folder is the workspace folder and the working directory.
+	Folder string
+	// Env is the whole environment Menagerie gives every command.
 	Env []string
+	// Job is the id of the job, a container label.
+	Job string
 	// Output receives each command's output. Parallel members get a prefixed
 	// writer of their own.
 	Output func(prefix string) io.Writer
 }
 
 // Run executes cmd: a shell string through /bin/sh -c, an argv array
-// directly, and the members of an object in parallel. It waits for every
-// parallel member and fails if any member fails.
+// as given, and the members of an object in parallel containers. It waits
+// for every parallel member and fails if any member fails.
 func (r CommandRunner) Run(ctx context.Context, cmd spec.Command) error {
 	return r.run(ctx, cmd, "")
 }
@@ -112,7 +120,7 @@ func (r CommandRunner) run(ctx context.Context, cmd spec.Command, prefix string)
 	case cmd.Shell != "":
 		return r.exec(ctx, prefix, "/bin/sh", "-c", cmd.Shell)
 	case len(cmd.Args) > 0:
-		return r.exec(ctx, prefix, cmd.Args[0], cmd.Args[1:]...)
+		return r.exec(ctx, prefix, cmd.Args...)
 	case len(cmd.Parallel) > 0:
 		names := make([]string, 0, len(cmd.Parallel))
 		for name := range cmd.Parallel {
@@ -136,20 +144,27 @@ func (r CommandRunner) run(ctx context.Context, cmd spec.Command, prefix string)
 	return nil
 }
 
-// commandWaitDelay bounds how long a cancelled command's Wait waits for
-// its output pipes after the process is killed, so a child process that
-// holds them cannot keep a cancelled job running.
-var commandWaitDelay = 5 * time.Second
-
-func (r CommandRunner) exec(ctx context.Context, prefix, name string, args ...string) error {
-	c := exec.CommandContext(ctx, name, args...)
-	c.WaitDelay = commandWaitDelay
-	c.Dir = r.Dir
-	c.Env = r.Env
-	c.Stdout, c.Stderr = io.Discard, io.Discard
-	if r.Output != nil {
-		out := r.Output(prefix)
-		c.Stdout, c.Stderr = out, out
+func (r CommandRunner) exec(ctx context.Context, prefix string, argv ...string) error {
+	if r.Containers == nil {
+		return errors.New("no container runner is configured")
 	}
-	return c.Run()
+	var out io.Writer = io.Discard
+	if r.Output != nil {
+		out = r.Output(prefix)
+	}
+	env := r.Env
+	if env == nil {
+		env = []string{}
+	}
+	code, err := r.Containers.Run(ctx, throwaway.Command{
+		Kind: throwaway.KindInitializeCommand, Job: r.Job, Image: r.Image,
+		Folder: r.Folder, Dir: r.Folder, Argv: argv, Env: env, Stdout: out, Stderr: out, Log: out,
+	})
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("exit status %d", code)
+	}
+	return nil
 }

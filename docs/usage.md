@@ -43,13 +43,15 @@ written until the interview is complete.
 The job console then shows each phase:
 
 1. `initialize-repository`: the folder becomes a Git repository.
-2. `generate`: Toha writes the files and runs the template's hooks, inside
-   the Menagerie container.
+2. `generate`: Toha writes the files and runs the template's hooks, each in
+   a throwaway container that sees only the workspace folder. Output a hook
+   does not capture appears in the console, each line prefixed `hook: `.
 3. `commit` and `backup`: the first commit, pushed to the workspace's own
    orphan branch in the workspace repository.
-4. `initialize-command`: the devcontainer's `initializeCommand`, inside the
-   Menagerie container, in the workspace folder, with only the variables of
-   [`local-env`](configuration.md#local-environment) and `PATH`.
+4. `initialize-command`: the devcontainer's `initializeCommand`, in
+   throwaway containers that see only the workspace folder, with only the
+   variables of [`local-env`](configuration.md#local-environment) beside
+   the [runner image](configuration.md#runner-images)'s own.
 5. `build` when the definition builds an image, then `up`: the devcontainer
    starts.
 
@@ -63,8 +65,11 @@ The answers are kept in the workspace, in `.toha.json`.
 **Begin upgrade**. Menagerie first commits any local changes and backs the
 workspace up, so the state before the upgrade is on its branch. Then it asks
 only the questions the new version adds; earlier answers come from
-`.toha.json`. Toha merges the new version into the files, keeping your
-edits, and Menagerie commits, backs up and rebuilds the devcontainer.
+`.toha.json`. Toha applies the new version to a separate checkout of the
+workspace and runs the template's hooks there, each in a throwaway
+container that sees only that checkout; then it merges the result into
+the files, keeping your edits, and Menagerie commits, backs up and
+rebuilds the devcontainer.
 
 When the new version and a local edit change the same lines, the upgrade
 writes conflict markers, commits and backs them up, and stops before the
