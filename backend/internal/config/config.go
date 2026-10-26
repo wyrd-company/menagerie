@@ -163,11 +163,13 @@ type OperationLimits struct {
 	Create  Duration `yaml:"create"`
 	Upgrade Duration `yaml:"upgrade"`
 	Commit  Duration `yaml:"commit"`
+	// ApplyBranch limits apply-branch jobs.
+	ApplyBranch Duration `yaml:"apply-branch"`
 }
 
 // ByName maps each operation name to its limit, empty included.
 func (o OperationLimits) ByName() map[string]Duration {
-	return map[string]Duration{"start": o.Start, "stop": o.Stop, "rebuild": o.Rebuild, "create": o.Create, "upgrade": o.Upgrade, "commit": o.Commit}
+	return map[string]Duration{"start": o.Start, "stop": o.Stop, "rebuild": o.Rebuild, "create": o.Create, "upgrade": o.Upgrade, "commit": o.Commit, "apply-branch": o.ApplyBranch}
 }
 
 // Alerts names the webhook that receives job alerts.

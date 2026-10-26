@@ -7,8 +7,9 @@
 // Package backup keeps each workspace's Git repository and backs it up to
 // the workspace repository with go-git. The local workspace is the source of
 // truth: the backup branch, named exactly after the workspace, is
-// force-pushed and never fetched or pulled. Its first commit has no parent
-// and later backups extend its history.
+// force-pushed and never pulled. Its first commit has no parent and later
+// backups extend its history. Apply branch alone fetches: one named branch,
+// into a private ref, which Apply brings into the workspace.
 package backup
 
 import (

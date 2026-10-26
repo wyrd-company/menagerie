@@ -213,6 +213,9 @@
             },
             "commit": {
               "$ref": "#/$defs/duration"
+            },
+            "apply-branch": {
+              "$ref": "#/$defs/duration"
             }
           }
         },
@@ -230,6 +233,7 @@
               "interview",
               "initialize-repository",
               "generate",
+              "fetch",
               "apply",
               "commit",
               "backup-local-changes",

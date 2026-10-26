@@ -120,6 +120,44 @@ async function complete(world: World, job: FixtureJob) {
   });
 }
 
+/** Applies a branch: "missing" is not in the workspace repository, "conflicting" is not applicable. */
+async function runApplyBranch(world: World, job: FixtureJob) {
+  const ws = workspace(world, job.workspace);
+  if (!ws) return;
+  setState(job, "running", "fetch");
+  if (job.branch === "missing") {
+    finish(job, "failed", {
+      kind: "branch-not-found",
+      message: `the workspace repository has no branch ${job.branch}; nothing was changed`,
+    });
+    return;
+  }
+  log(job, `fetched branch ${job.branch} at 5c0ffee`);
+  setState(job, "running", "backup-local-changes");
+  log(job, `no local changes; branch ${ws.name} is at 0decade`);
+  setState(job, "running", "backup");
+  log(job, `branch ${ws.name} in the workspace repository is already up to date`);
+  setState(job, "running", "apply");
+  if (job.branch === "conflicting") {
+    log(job, "not applicable: README.md");
+    finish(job, "failed", {
+      kind: "not-applicable",
+      message: `branch ${job.branch} at 5c0ffee cannot be applied: both the workspace branch and ${job.branch} changed these paths [paths: README.md]; nothing was applied; the workspace branch is at 0decade`,
+    });
+    return;
+  }
+  log(job, "apply: wrote: .devcontainer/devcontainer.json");
+  log(job, `applied branch ${job.branch} (fast-forward)`);
+  setState(job, "running", "backup");
+  log(job, `pushed branch ${ws.name} to the workspace repository`);
+  await tick();
+  setState(job, "running", "rebuild");
+  ws.state = "running";
+  ws.containerId ??= containerId(ws.name);
+  log(job, `container ${ws.containerId.slice(0, 12)} running`);
+  finish(job, "succeeded");
+}
+
 /** Replays the create interview: batch 1 (or its rejection, or a flow stop), then batch 2. */
 export function answer(
   world: World,
@@ -157,5 +195,6 @@ export function answer(
 export function run(world: World, job: FixtureJob) {
   if (job.operation === "create") void runCreate(job);
   else if (job.operation === "upgrade") void runUpgrade(world, job);
+  else if (job.operation === "apply-branch") void runApplyBranch(world, job);
   else void runContainerJob(world, job);
 }

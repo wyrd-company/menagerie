@@ -26,6 +26,7 @@ var Phases = []string{
 	"interview",
 	"initialize-repository",
 	"generate",
+	"fetch",
 	"apply",
 	"commit",
 	"backup-local-changes",

@@ -18,6 +18,8 @@ export interface FixtureJob {
   workspace: string;
   operation: string;
   templateId?: string;
+  /** The branch an apply-branch job applies. */
+  branch?: string;
   state: string;
   phase: string;
   createdAt: string;

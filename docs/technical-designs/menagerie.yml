@@ -63,7 +63,8 @@ proposed-design:
   screens: >-
     The UI has three screens. The workspace list shows every workspace with
     its status (running, stopped, no container, or the operation in progress)
-    and offers start, stop, rebuild and upgrade. The create screen selects an
+    and offers start, stop, rebuild, apply branch and upgrade. Apply branch
+    takes a branch name in the row. The create screen selects an
     approved template, names the workspace and runs the interview. The upgrade
     screen runs the interview for a newer template version, asking only what
     the recorded answers do not cover.
@@ -105,6 +106,27 @@ proposed-design:
     against the newer template, asks the questions they do not answer, and
     applies the merge. The workspace service commits, backs up and rebuilds
     the container.
+  apply-branch-flow: >-
+    Apply branch brings a branch of the workspace repository, such as a
+    reviewed pull request's head, into a workspace through Git. The manager
+    names the branch. The workspace service fetches only that branch into
+    the private ref `refs/menagerie/apply`, deleted when the job ends; a
+    missing branch changes nothing. It then commits every local change, as
+    the commit operation does, and backs the branch up. A branch already in
+    the workspace branch's history changes nothing more. A branch that
+    extends the workspace branch fast-forwards it. Otherwise the two merge
+    file by file over their single merge base: a path changed on one side
+    only takes that side, and a path both sides changed differently, no
+    merge base, several, or a file where the result has a folder refuse the
+    apply with nothing changed. go-git has no merge, and this merge never
+    writes conflict markers. Before writing, the apply refuses a change
+    that has an invalid path, a `.git` component or a submodule, or that
+    would write over an untracked or ignored file, folder or link, inside a
+    nested repository, or over a file changed since the local backup. It
+    writes only the changed paths, without following links, records the
+    index, moves the branch last, backs it up and rebuilds the devcontainer.
+    The applied record is a file like any other. Only the API and the UI
+    start it, never the workspace socket.
   container-operations: >-
     Start, stop and rebuild call devcontainer-builder for the workspace
     folder. Rebuild recreates the container from the current definition.
@@ -113,7 +135,8 @@ proposed-design:
     A workspace that must start after a host restart sets a Docker restart
     policy in its definition; the daemon restarts it.
   operations-and-jobs: >-
-    Each create, upgrade, start, stop, rebuild or commit is a job. A workspace has at
+    Each create, upgrade, apply-branch, start, stop, rebuild or commit is a
+    job. A workspace has at
     most one job at a time. Jobs and their logs are held in memory and
     streamed to the UI. A restart of Menagerie drops job history. Optional
     time limits, a default, per operation and per phase, count running time
@@ -334,8 +357,10 @@ proposed-design:
   git-and-credentials: >-
     The workspace repository is a backup, not a synchronized copy. The local
     workspace is the source of truth; the workspace service uses go-git to
-    init, commit and force-push the workspace branch, and never fetches or
-    pulls it. Template fetching belongs to Toha. Authentication uses the SSH
+    init, commit and force-push the workspace branch, and never pulls it.
+    It fetches only on Apply branch, and then only the named branch, into
+    a private ref, through a remote it never writes to the workspace's Git
+    configuration. Template fetching belongs to Toha. Authentication uses the SSH
     agent at Wyrwood's
     `ssh-agent.sock`, mounted from the host consumer directory. The agent
     offers one key, an OpenBao Transit key. When every approved template is
@@ -383,3 +408,6 @@ proposed-design:
     `workspace-commit` through its mounted socket, and the file is on the
     workspace's backup branch; a scheduled sweep does the same for a
     workspace left dirty. `initializeCommand` finds no workspace socket.
+    A commit pushed on top of a workspace's branch is applied with Apply
+    branch: the folder has it, the devcontainer is rebuilt, and the next
+    backup keeps it.

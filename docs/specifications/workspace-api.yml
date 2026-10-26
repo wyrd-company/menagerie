@@ -37,8 +37,9 @@ description: >-
 
   `POST /api/jobs` starts an operation on a workspace. The operations are
   `start`, `stop`, `rebuild` and `commit` on an existing workspace folder,
-  and the interview operations `create` and `upgrade`, which also name an approved
-  template's `templateId`. Any other operation is refused as
+  `apply-branch` on an existing workspace folder, which also names a
+  `branch`, and the interview operations `create` and `upgrade`, which also
+  name an approved template's `templateId`. Any other operation is refused as
   `unknown-operation`. The service acquires the workspace's job slot before
   any work begins. A workspace has at most one unfinished job; another
   request for it gets 409 `workspace-busy` with the holder's id, while other
@@ -52,15 +53,17 @@ description: >-
   and every client that sees the result event can start the next job.
   `phase` names the current step, for example `read-definition`,
   `initialize-command`, `build`, `remove-container`, `up`, `stop`,
-  `interview`, `initialize-repository`, `generate`, `apply`, `commit`,
-  `backup-local-changes` or `backup`. A failed job carries `error.kind`:
+  `interview`, `initialize-repository`, `generate`, `fetch`, `apply`,
+  `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `runner-image-unavailable`, `operation-failed` or `internal-error`, and
   for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
   `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
-  or `backup-failed`, and for `commit` `commit-failed` or `backup-failed`. Its message says what was written and what recovery
-  is needed.
+  or `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
+  for `apply-branch` `branch-not-found`, `fetch-failed`, `backup-failed`,
+  `not-applicable` or `apply-failed`. Its message says what was written and
+  what recovery is needed.
 
 
   Time limits are configured in `job-limits` and are optional; without
@@ -201,6 +204,60 @@ description: >-
   the workspace's Git configuration and fetch nothing. A failed commit or
   push fails as `backup-failed` and the container is not started or
   rebuilt.
+
+
+  Apply branch. An `apply-branch` job brings a branch of the workspace
+  repository into the workspace. `branch` is a branch's short name,
+  slashes allowed, never a full ref name such as `refs/heads/<name>`; the
+  workspace's own branch is allowed. A request without `branch` is refused
+  as 400 `invalid-request`, and one whose `branch` is not a valid branch
+  name as 400 `invalid-branch`, before any job exists. The workspace socket
+  never starts it.
+
+  In the `fetch` phase the service fetches only that branch and the
+  history it needs, with go-git and the credentials of a push, through a
+  remote it never writes to the workspace's Git configuration, into
+  `refs/menagerie/apply`. It fetches no tags and changes no other ref, and
+  deletes `refs/menagerie/apply` when the job ends, whatever the outcome.
+  A branch the workspace repository does not have fails as
+  `branch-not-found`, and any other fetch failure as `fetch-failed`, both
+  with nothing changed. In `backup-local-changes` the service commits every
+  change as a `commit` job does, with the message `Back up local changes
+  before applying <branch>`, and in `backup` force-pushes the branch; a
+  failure of either fails as `backup-failed` with nothing applied.
+
+  In `apply`, H is the workspace branch's commit and T the fetched one.
+  When T is H or an ancestor of H the job succeeds as already applied,
+  with no commit and no rebuild. When H is an ancestor of T the branch
+  fast-forwards to T. Otherwise H and T merge file by file over their
+  merge base B, which must be exactly one commit: a path whose mode and
+  content are equal in H and T keeps them, one unchanged in H since B
+  takes T's, one unchanged in T keeps H's, and any other path conflicts.
+  The result is a merge commit with parents H and T, by Menagerie, with
+  the message `Apply <branch> to workspace <workspace>`. No merge base,
+  several merge bases, a conflict, or a file where the result also has a
+  folder of that name fail as `not-applicable`. So do, before anything is
+  written: a path the change writes or removes that is not valid in a Git
+  tree or has a `.git` component; a submodule entry in the change; an
+  untracked or ignored file, folder or symbolic link, or a nested Git
+  repository, where the change writes; and a file of H that no longer
+  matches H when the apply checks the folder, as the devcontainer keeps
+  running. The console has one `not applicable: <path>` line per path and
+  the message names the reason and the paths; nothing is applied.
+
+  The service then writes only the paths that differ between H and the
+  result, without following symbolic links, writing symbolic links as
+  links and keeping the executable mode, and removes the folders the
+  change empties. It records the result in the index and moves the branch
+  last, only from H. A failure while writing fails as `apply-failed`: the
+  files written before it remain, the branch stays at H, which is backed
+  up, and recovery is manual. A changed branch is then force-pushed in
+  `backup`, where a failure fails as `backup-failed` without a rebuild,
+  and the devcontainer is rebuilt as after an upgrade, a failure failing
+  with the container operations' kinds. The applied record `.toha.json`
+  is a file like any other. The job's messages name the branch, the
+  workspace and commits, never the workspace repository's address or a
+  transport error's text, which may carry it.
 
 
   Commit. A `commit` job stages every change of the workspace, as `git
@@ -413,7 +470,21 @@ validation-criteria: >-
   ./backend/internal/backup/` covers a file and a folder that replace each
   other, the workspace's exclude files inside and outside the workspace,
   and that the change check agrees with the commit over a table of
-  workspace states. `go test -tags docker
+  workspace states. It also fetches from a local bare workspace repository
+  and applies: an already applied branch, a fast-forward with an
+  executable file, a symbolic link and a removed folder, a file and a
+  folder that replace each other, a clean merge and its merge commit,
+  conflicts of content and mode, no merge base and several, a file where
+  the result has a folder, ignored files, folders and links in the way, a
+  nested repository, a submodule, invalid paths, files changed after the
+  local backup, a missing branch, the private ref's removal, a write
+  failure and a branch moved meanwhile, each refusal leaving the branch,
+  index and folder as they were. `go test ./backend/internal/workflows/`
+  runs `apply-branch` through the API: a commit pushed on top of the
+  workspace's branch is applied, rebuilt and kept by the next backup; a
+  local change is backed up and merged; refusals and request checks; and
+  every failure path, with a workspace repository address that carries a
+  sentinel, has no event or error that names it. `go test -tags docker
   ./backend/internal/devcontainer/` also has a devcontainer commit a file
   through `workspace-commit` and its read-only mounted socket, before and
   after the socket is re-created and after a rebuild, a Compose primary do
