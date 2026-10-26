@@ -396,6 +396,41 @@ func TestAStartKeepsAContainerCreatedWithoutTheSocket(t *testing.T) {
 	}
 }
 
+// TestAStartThatRecreatesForAnotherReasonSaysTheSocketWaits changes the
+// definition of a Compose workspace whose container has no socket: the
+// start recreates the primary for that change, still without the socket,
+// and the console says the socket attaches at the next rebuild.
+func TestAStartThatRecreatesForAnotherReasonSaysTheSocketWaits(t *testing.T) {
+	f := newSocketFixture(t)
+	folder := f.workspace(t, "changed-compose", map[string]string{
+		".devcontainer/compose.yml":       composeFile,
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/data"}`,
+	})
+	f.h.mustRun(f.h.rt.Start, folder)
+	before := f.h.status(folder).ContainerID
+	f.h.write(folder, map[string]string{
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/data", "containerEnv": {"SAMPLE_SETTING": "changed"}}`,
+	})
+	start := &capture{logProgress: logProgress{t: t}}
+	if err := f.rt.Start(f.h.ctx, folder, start); err != nil {
+		t.Fatal(err)
+	}
+	after := f.h.status(folder).ContainerID
+	if after == before {
+		t.Fatal("the changed definition did not recreate the primary; the test checks nothing")
+	}
+	if f.hasSocket(t, after) {
+		t.Fatal("the recreated primary has the socket")
+	}
+	if !strings.Contains(start.out.String(), "this start created the container again, without the workspace socket") || strings.Contains(start.out.String(), f.folder) {
+		t.Fatalf("console %q", start.out.String())
+	}
+	f.h.mustRun(f.rt.Rebuild, folder)
+	if rebuilt := f.h.status(folder).ContainerID; !f.hasSocket(t, rebuilt) {
+		t.Fatalf("the rebuild %s has no socket", rebuilt)
+	}
+}
+
 func quoteJSON(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')

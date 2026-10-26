@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -175,15 +176,17 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
+	held := false
 	if socket != "" && !replace {
 		if socket, err = r.keepContainer(ctx, folder, socket, p); err != nil {
 			return err
 		}
+		held = socket == ""
 	}
 	if socket != "" {
 		nameSocket(dc)
 	}
-	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx), socket: socket}
+	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx), socket: socket, socketHeld: held}
 	switch dc.Mode() {
 	case spec.ModeSingle:
 		err = r.upSingle(ctx, op, replace)
@@ -212,6 +215,9 @@ type operation struct {
 	// socket is the host folder mounted at WorkspaceSocketTarget; empty
 	// mounts none.
 	socket string
+	// socketHeld is set when a start leaves the socket out to keep a
+	// container created without it.
+	socketHeld bool
 }
 
 // workspaceSocket ensures the workspace's socket and returns the folder to
@@ -233,9 +239,14 @@ func (r *Runtime) workspaceSocket(dc *spec.DevContainer, folder string, p Progre
 	return source, nil
 }
 
-// noteSocketAtRebuild is the job console's note for a start that reuses
-// a container created without the workspace socket.
-const noteSocketAtRebuild = "the workspace socket attaches at the next rebuild: this container was created without it, and adding it would recreate the container"
+// Notes for the job console about a start that leaves out the workspace
+// socket: noteSocketAtRebuild before Up, when the container exists without
+// it; noteCreatedWithoutSocket after Up, when Up created or recreated the
+// container anyway, for a change of the definition.
+const (
+	noteSocketAtRebuild      = "the workspace socket attaches at the next rebuild: this container was created without it, and adding it would recreate the container"
+	noteCreatedWithoutSocket = "this start created the container again, without the workspace socket; the socket attaches at the next rebuild"
+)
 
 // keepContainer returns the socket folder to mount on a start, or "" when
 // the workspace's container exists without the socket mount. Adding a
@@ -243,6 +254,11 @@ const noteSocketAtRebuild = "the workspace socket attaches at the next rebuild: 
 // compares, so Compose would recreate the primary; the start keeps the
 // container, and the socket attaches at the next rebuild. A container
 // that has the mount keeps getting it, so its configuration is unchanged.
+//
+// devcontainer-builder exposes no way to learn before Up whether Up will
+// recreate the container, so a start whose definition changed in another
+// way still recreates it, without the socket; noteCreatedWithoutSocket
+// tells the console so.
 func (r *Runtime) keepContainer(ctx context.Context, folder, socket string, p Progress) (string, error) {
 	found, err := hostdocker.New(r.client, hostdocker.Options{}).Inspect(ctx, folder)
 	if errors.Is(err, hostdocker.ErrContainerNotFound) {
@@ -367,6 +383,7 @@ func (r *Runtime) upSingle(ctx context.Context, op *operation, replace bool) err
 		return fmt.Errorf("up: %w", err)
 	}
 	fmt.Fprintf(p.Log(""), "container %s up (created=%t started=%t)\n", shortID(res.ContainerID), res.CreatedThisCall, res.StartedThisCall)
+	op.noteCreated(res.CreatedThisCall)
 	return nil
 }
 
@@ -402,7 +419,16 @@ func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) er
 		return fmt.Errorf("up: %w", err)
 	}
 	fmt.Fprintf(p.Log(""), "compose project %s up (primary %s, created %v, recreated %v)\n", res.ProjectName, shortID(res.PrimaryContainerID), res.CreatedThisCall, res.RecreatedThisCall)
+	op.noteCreated(slices.Contains(res.CreatedThisCall, dc.Service) || slices.Contains(res.RecreatedThisCall, dc.Service))
 	return nil
+}
+
+// noteCreated tells the console when Up created or recreated the
+// container on a start that left the socket out.
+func (op *operation) noteCreated(created bool) {
+	if created && op.socketHeld {
+		fmt.Fprintln(op.p.Log(""), noteCreatedWithoutSocket)
+	}
 }
 
 // Stop stops the workspace's container. The mode comes from the existing
