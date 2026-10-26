@@ -68,7 +68,8 @@ description: >-
   `generate`, `apply`, `commit`, `backup-local-changes` and `backup`.
   Template hooks run inside `generate` and `apply`. A duration is positive
   whole hours, minutes and seconds in that order, such as `2h`, `45m` or
-  `1h30m`. Unknown operation and phase keys are errors. Absent, no job has
+  `1h30m`. Unknown operation and phase keys are errors, and so is a key
+  given without a value (`rebuild:` or `default: ""`). Absent, no job has
   a limit. The workspace API describes what a job past a limit does.
 
 
@@ -83,8 +84,10 @@ description: >-
   start, stop and rebuild, `/create?job={id}` for create and
   `/workspaces/{name}/upgrade?job={id}` for upgrade. Delivery runs in the
   background, never delays or fails a job, and makes one attempt with a
-  10 second time limit; a redirect is not followed. An error or a non-2xx
-  answer writes one line to the service log. The URL can carry a
+  10 second time limit; a redirect ends the attempt and is not followed.
+  A failed attempt writes one line to the service log that names only the
+  failure: `timeout`, `transport error`, `redirect refused` or
+  `status {code}`. The URL can carry a
   credential, so it never appears in a log, an event, an error or an API
   response. Ended and succeeded jobs send nothing. `webhook` is required
   in the section.
@@ -95,8 +98,10 @@ validation-criteria: >-
   scopes the workspace service requests, that the schema's phase keys and
   the phase names above equal the phases the jobs package names, that its
   operation keys equal the API's operations and that its duration pattern
-  is the parser's. `go test ./backend/internal/alerts/` checks the alert
-  body, console links and that no delivery failure logs the URL.
+  is the parser's and refuses an empty value. `go test
+  ./backend/internal/alerts/` checks the alert body, console links and
+  that no delivery failure, a redirect whose malformed Location holds the
+  URL included, logs the URL.
   `go test ./backend/cmd/menagerie/` checks that `local-env` reaches the
   devcontainer runtime and that `job-limits` and `alerts` reach the jobs
   manager.

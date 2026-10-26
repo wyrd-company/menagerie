@@ -72,8 +72,14 @@ description: >-
   work; the job ends `failed` with `error.kind` `timed-out` and a message
   that names the phase and the limit, such as `the build phase passed its
   45m limit` or `the job passed its 2h limit in the build phase`, whatever
-  the cancelled work returns. The slot is released when the work returns,
-  never before, so work that ignores cancellation keeps its workspace busy.
+  the cancelled work returns. A limit that has passed takes effect at the
+  job's next change even when its timer runs late: a phase change, the
+  move to `waiting-for-answers` and the job's end each first settle the
+  running time, so a job that ends past a limit ends timed-out, and a
+  long-running threshold passed while the job ran is alerted once, before
+  any `job-failed` alert, at the latest when the job ends. The slot is
+  released when the work returns, never before, so work that ignores
+  cancellation keeps its workspace busy.
   The template service does not stop a template fetch, generate or apply
   when its request is cancelled, so its hooks can still write to the folder
   after a timed-out create or upgrade has ended.
@@ -236,8 +242,9 @@ validation-criteria: >-
   registers equal the OpenAPI paths and methods, and exercises each response
   and error contract with a held runtime. `go test ./backend/internal/jobs/`
   drives time limits with a manual clock: job, operation and phase limits,
-  the pause while waiting, the slot held until cancelled work returns, and
-  shutdown that is not a timeout; `go test ./backend/cmd/menagerie/` runs a
+  the pause while waiting, the slot held until cancelled work returns,
+  timers that run late against a phase change, a wait or the job's end,
+  and shutdown that is not a timeout; `go test ./backend/cmd/menagerie/` runs a
   start whose `initializeCommand` hangs past a 100 ms phase limit through
   the composed server and receives its `job-failed` alert. `go test
   ./backend/internal/workflows/` runs create and upgrade through the API
