@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyrd-company/menagerie/backend/internal/commits"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 )
@@ -307,4 +308,93 @@ func TestStartUpDiagnosticsNameNoPath(t *testing.T) {
 	}
 	_, err = f.sockets.Ensure("gamma")
 	clean("socket file", err, "workspace socket of gamma: its socket file is a folder")
+}
+
+// TestShutdownWhileTheBodyArrivesStartsNoJob begins shutdown after the
+// handler has taken the request but before its body ends.
+func TestShutdownWhileTheBodyArrivesStartsNoJob(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newFixture(t, func(o *Options) { o.Context = ctx })
+	f.workspace("alpha")
+	conn := f.dial("alpha")
+	body := commitBody("half a body")
+	if _, err := fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: workspace\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", CommitsPath, len(body), body[:5]); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	if _, err := io.WriteString(conn, body[5:]); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	res, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	data, _ := io.ReadAll(res.Body)
+	r := answer{status: res.StatusCode, body: data}
+	if r.status != http.StatusServiceUnavailable || r.kind(t) != KindShuttingDown || strings.Contains(string(r.body), "jobId") {
+		t.Fatalf("answer %d %s", r.status, r.body)
+	}
+	if len(f.jobs.List()) != 0 {
+		t.Fatal("a job started")
+	}
+}
+
+// gatedStarter holds each start until gate closes, after telling entered.
+type gatedStarter struct {
+	Starter
+	entered, gate chan struct{}
+}
+
+func (g *gatedStarter) Start(name, message string) (*jobs.Job, *commits.Outcome, error) {
+	close(g.entered)
+	<-g.gate
+	return g.Starter.Start(name, message)
+}
+
+// TestCloseWaitsForAJobBeingAdmitted closes the sockets while a request
+// is between its shutdown check and its job's start: Close begins
+// shutdown only once the job has started, so the job is answered with
+// its id.
+func TestCloseWaitsForAJobBeingAdmitted(t *testing.T) {
+	g := &gatedStarter{entered: make(chan struct{}), gate: make(chan struct{})}
+	f := newFixture(t, func(o *Options) { g.Starter = o.Commits; o.Commits = g })
+	f.workspace("alpha")
+	answers := make(chan answer, 1)
+	go func() {
+		r, err := f.call(context.Background(), "alpha", http.MethodPost, CommitsPath, []byte(commitBody("admitted")))
+		if err != nil {
+			r = answer{body: []byte(err.Error())}
+		}
+		answers <- r
+	}()
+	<-g.entered
+	closed := make(chan struct{})
+	go func() { f.sockets.Close(); close(closed) }()
+	time.Sleep(200 * time.Millisecond)
+	cancelled := f.sockets.ctx.Err() != nil
+	close(g.gate)
+	if cancelled {
+		t.Fatal("Close began shutdown while a job was being admitted")
+	}
+	r := <-answers
+	<-closed
+	list := f.jobs.List()
+	if len(list) != 1 {
+		t.Fatalf("jobs %v; answer %d %s", list, r.status, r.body)
+	}
+	switch r.status {
+	case http.StatusOK:
+	case http.StatusServiceUnavailable:
+		var e struct{ Error Error }
+		r.decode(t, &e)
+		if e.Error.Kind != KindShuttingDown || e.Error.JobID != list[0].JobID {
+			t.Fatalf("answer %d %s", r.status, r.body)
+		}
+	default:
+		t.Fatalf("answer %d %s", r.status, r.body)
+	}
 }

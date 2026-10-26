@@ -130,6 +130,9 @@ func (s *Sockets) handler(name string) http.Handler {
 		case errors.As(err, &busy):
 			refuse(w, http.StatusConflict, Error{Kind: KindWorkspaceBusy, ActiveJobID: busy.ActiveJobID})
 			return
+		case errors.Is(err, errShuttingDown):
+			refuse(w, http.StatusServiceUnavailable, Error{Kind: KindShuttingDown})
+			return
 		case errors.Is(err, workspace.ErrNotFound):
 			refuse(w, http.StatusNotFound, Error{Kind: KindWorkspaceMissing})
 			return
@@ -159,12 +162,22 @@ func (s *Sockets) handler(name string) http.Handler {
 	})
 }
 
+// errShuttingDown refuses a request admitted after shutdown began.
+var errShuttingDown = errors.New("shutting down")
+
 // start starts the commit job unless the workspace's last accepted commit
-// is within the minimum interval, in which case wait is how long is left.
-// The check and the record are one step, so two requests cannot both pass.
+// is within the minimum interval, in which case wait is how long is left,
+// or shutdown has begun. The checks and the record are one step under the
+// limiter's lock, which Close also holds while it cancels, so no job
+// starts once Close has begun. A base context that ends on its own can
+// still end during Start; the commit job then stops before its commit
+// phase.
 func (s *Sockets) start(name, message string) (*jobs.Job, *commits.Outcome, time.Duration, error) {
 	s.limits.mu.Lock()
 	defer s.limits.mu.Unlock()
+	if s.ctx.Err() != nil {
+		return nil, nil, 0, errShuttingDown
+	}
 	if wait := s.limits.wait(name); wait > 0 {
 		return nil, nil, wait, nil
 	}

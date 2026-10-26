@@ -343,7 +343,11 @@ func (s *Sockets) listen(name, path string) (*listener, error) {
 // Close answers the requests waiting for a job shutting-down, stops every
 // listener and removes the socket files that are still its own.
 func (s *Sockets) Close() {
+	// Under the limiter's lock, so no request is between its shutdown
+	// check and its job's start.
+	s.limits.mu.Lock()
 	s.cancel()
+	s.limits.mu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, done := context.WithTimeout(context.Background(), shutdownGrace)

@@ -400,3 +400,29 @@ func TestTheCommitOperationAndItsKindsAreDocumented(t *testing.T) {
 		}
 	}
 }
+
+// TestAJobStartedAsMenagerieShutsDownWritesNothing starts a commit job on
+// a manager whose context has already ended, as when shutdown begins while
+// a request is being admitted.
+func TestAJobStartedAsMenagerieShutsDownWritesNothing(t *testing.T) {
+	f := newFixture(t)
+	folder := f.workspace(t, "alpha")
+	before := tip(t, folder, "alpha")
+	write(t, folder, "new.txt", "new\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	manager := jobs.NewManager(ctx, jobs.Options{})
+	t.Cleanup(manager.Wait)
+	c := New(Options{Root: f.root, Remote: f.remote, Jobs: manager})
+	job, outcome, err := c.Start("alpha", "chore: too late")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := wait(t, job)
+	if snap.State != jobs.Failed || snap.Error.Kind != KindCommitFailed || snap.Phase == "commit" {
+		t.Fatalf("job %+v", snap)
+	}
+	if commit, changed, _ := outcome.Result(); commit != "" || changed || tip(t, folder, "alpha") != before || f.remote.count() != 0 {
+		t.Fatalf("outcome %s %t, tip %s, pushes %v", commit, changed, tip(t, folder, "alpha"), f.remote.pushes)
+	}
+}

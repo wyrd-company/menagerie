@@ -113,6 +113,11 @@ func (c *Commits) Start(name, message string) (*jobs.Job, *Outcome, error) {
 // is retried.
 func (c *Commits) runner(folder, name, message string, outcome *Outcome) jobs.Runner {
 	return func(ctx context.Context, run *jobs.Run) error {
+		// A job started as Menagerie shuts down, or cancelled before it
+		// ran, writes nothing.
+		if ctx.Err() != nil {
+			return &jobs.Failure{Kind: KindCommitFailed, Err: errors.New("the job was cancelled before its commit phase; nothing was committed or backed up")}
+		}
 		run.Phase("commit")
 		commit, err := backup.CommitAll(folder, name, message, run.Log("commit: "))
 		if err != nil {
