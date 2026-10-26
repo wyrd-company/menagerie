@@ -160,7 +160,7 @@ func CommitTracked(folder, workspace, message string) (Commit, error) {
 	if err != nil {
 		return Commit{}, err
 	}
-	return commit(repo, w, message, true, nil)
+	return commit(repo, w, folder, message, true, nil)
 }
 
 // CommitAll commits every change of the workspace on its branch, as
@@ -170,39 +170,56 @@ func CommitTracked(folder, workspace, message string) (Commit, error) {
 // nested Git repository stays unstaged. Nothing to commit is Changed
 // false.
 func CommitAll(folder, workspace, message string, log io.Writer) (Commit, error) {
-	c, err := changes(folder, workspace)
+	c, err := changes(folder, workspace, log)
 	if err != nil {
 		return Commit{}, err
 	}
 	for _, p := range c.paths {
 		fmt.Fprintf(log, "staged: %s\n", p)
 	}
-	return commit(c.repo, c.w, message, false, c.paths)
+	return commit(c.repo, c.w, folder, message, false, c.paths)
 }
 
-// Pending reports whether CommitAll would commit anything. It changes
-// nothing.
+// Pending reports whether CommitAll would commit anything: whether the
+// index, with every change CommitAll stages applied in memory, differs
+// from the branch's commit. It writes nothing.
 func Pending(folder, workspace string) (bool, error) {
-	c, err := changes(folder, workspace)
+	c, err := changes(folder, workspace, io.Discard)
 	if err != nil {
 		return false, err
 	}
-	return len(c.paths) > 0 || c.indexed, nil
+	idx, err := c.repo.Storer.Index()
+	if err != nil {
+		return false, err
+	}
+	root, err := os.OpenRoot(folder)
+	if err != nil {
+		return false, fmt.Errorf("open workspace folder: %w", err)
+	}
+	defer root.Close()
+	if err := stage(root, idx, c.paths, nil); err != nil {
+		return false, err
+	}
+	head, err := c.repo.Reference(c.branch, false)
+	if err != nil {
+		return false, err
+	}
+	same, err := matchesHead(c.repo, head.Hash(), idx)
+	return !same, err
 }
 
-// workspaceChanges are the changes CommitAll commits.
+// workspaceChanges are the changes CommitAll stages.
 type workspaceChanges struct {
-	repo *git.Repository
-	w    *git.Worktree
+	repo   *git.Repository
+	w      *git.Worktree
+	branch plumbing.ReferenceName
 	// paths are the untracked, modified and deleted paths outside a nested
 	// repository, sorted. The status leaves out untracked paths the
-	// ignore rules exclude.
+	// workspace's ignore rules exclude.
 	paths []string
-	// indexed is true when the index already differs from the branch.
-	indexed bool
 }
 
-func changes(folder, workspace string) (workspaceChanges, error) {
+func changes(folder, workspace string, log io.Writer) (workspaceChanges, error) {
 	repo, branch, err := open(folder, workspace)
 	if err != nil {
 		return workspaceChanges{}, err
@@ -214,16 +231,16 @@ func changes(folder, workspace string) (workspaceChanges, error) {
 	if err != nil {
 		return workspaceChanges{}, err
 	}
+	if err := ignoreRules(repo, w, folder, log); err != nil {
+		return workspaceChanges{}, err
+	}
 	status, err := w.Status()
 	if err != nil {
 		return workspaceChanges{}, fmt.Errorf("read workspace status: %w", err)
 	}
 	nested := nestedRepositories{folder: folder, known: map[string]bool{}}
-	c := workspaceChanges{repo: repo, w: w}
+	c := workspaceChanges{repo: repo, w: w, branch: branch}
 	for p, s := range status {
-		if s.Staging != git.Unmodified && s.Staging != git.Untracked {
-			c.indexed = true
-		}
 		changed := s.Worktree == git.Untracked || s.Worktree == git.Modified || s.Worktree == git.Deleted
 		if changed && !nested.contains(p) {
 			c.paths = append(c.paths, p)
@@ -330,15 +347,14 @@ func commitOutput(repo *git.Repository, folder string, out Output, message strin
 	if err != nil {
 		return Commit{}, err
 	}
+	if err := ignoreRules(repo, w, folder, log); err != nil {
+		return Commit{}, err
+	}
 	status, err := w.Status()
 	if err != nil {
 		return Commit{}, fmt.Errorf("read workspace status: %w", err)
 	}
-	patterns, err := gitignore.ReadPatterns(w.Filesystem, nil)
-	if err != nil {
-		return Commit{}, fmt.Errorf("read ignore rules: %w", err)
-	}
-	ignored := gitignore.NewMatcher(append(patterns, w.Excludes...))
+	ignored := gitignore.NewMatcher(w.Excludes)
 	nested := nestedRepositories{folder: folder, known: map[string]bool{}}
 
 	record, err := relative(out.Record)
@@ -373,25 +389,30 @@ func commitOutput(repo *git.Repository, folder string, out Output, message strin
 		staged = append(staged, p)
 	}
 	sort.Strings(staged)
-	return commit(repo, w, message, false, staged)
+	return commit(repo, w, folder, message, false, staged)
 }
 
 // commit stages paths (or, with all, every tracked change) and commits.
-// Nothing to commit is reported as Changed false, not an error.
-func commit(repo *git.Repository, w *git.Worktree, message string, all bool, paths []string) (Commit, error) {
-	idx, err := repo.Storer.Index()
-	if err != nil {
-		return Commit{}, err
-	}
-	for _, p := range paths {
-		if _, err := w.Filesystem.Lstat(p); errors.Is(err, os.ErrNotExist) {
-			if _, err := idx.Entry(p); err != nil {
-				// Neither present nor tracked: nothing to stage.
-				continue
-			}
+// Paths are staged as stage does, so an entry a staged path conflicts
+// with leaves the index. Nothing to commit is reported as Changed false,
+// not an error.
+func commit(repo *git.Repository, w *git.Worktree, folder, message string, all bool, paths []string) (Commit, error) {
+	if len(paths) > 0 {
+		idx, err := repo.Storer.Index()
+		if err != nil {
+			return Commit{}, err
 		}
-		if err := w.AddWithOptions(&git.AddOptions{Path: p, SkipStatus: true}); err != nil {
-			return Commit{}, fmt.Errorf("stage %s: %w", p, err)
+		root, err := os.OpenRoot(folder)
+		if err != nil {
+			return Commit{}, fmt.Errorf("open workspace folder: %w", err)
+		}
+		err = stage(root, idx, paths, repo.Storer)
+		root.Close()
+		if err != nil {
+			return Commit{}, err
+		}
+		if err := repo.Storer.SetIndex(idx); err != nil {
+			return Commit{}, fmt.Errorf("write index: %w", err)
 		}
 	}
 	sig := signature()
