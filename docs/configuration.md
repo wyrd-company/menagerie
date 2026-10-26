@@ -200,8 +200,9 @@ line. At shutdown Menagerie waits at most 10 seconds for waiting alerts. A
 failed delivery writes one line to the container's log that names only
 what failed: `timeout`, `transport error`, `redirect refused` or
 `status 503`, for example. The webhook URL can carry a token,
-so Menagerie never writes it to a log, an event or an error, a
-configuration error included.
+so Menagerie never writes it to a log, an event or an error. A
+configuration error names the field and what it expects, never the value
+of the webhook or of a duration.
 
 ## Listen address and template service
 

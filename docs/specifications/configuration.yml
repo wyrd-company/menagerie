@@ -94,9 +94,11 @@ description: >-
   writes one line to the service log that names only the failure:
   `timeout`, `transport error`, `redirect refused`, `status {code}` or
   `shutting down`. The URL can carry a credential, so it never appears in
-  a log, an event, an error or an API response; a configuration error for
-  any `webhook` value, a wrongly tagged one included, names the field and
-  not its value. Ended and succeeded jobs send nothing. `webhook` is required
+  a log, an event, an error or an API response. No configuration error
+  quotes the value of `webhook` or of a duration, a wrongly tagged one or
+  one an anchor shares with another field included: an error names the
+  field and what it expects, and a YAML decoding error names the line, the
+  field when known and the expected type. Ended and succeeded jobs send nothing. `webhook` is required
   in the section.
 validation-criteria: >-
   `go test ./backend/internal/config/` parses a valid document, applies the
@@ -111,7 +113,8 @@ validation-criteria: >-
   that shutdown waits one time limit and that no delivery failure, a
   redirect whose malformed Location holds the URL included, logs the URL.
   The config tests also check that no invalid `webhook` value appears in
-  the error and that an empty duration given through an alias or a merge
+  the error, also when an anchor shares it with each duration field or
+  makes it a key, and that an empty duration given through an alias or a merge
   key is refused.
   `go test ./backend/cmd/menagerie/` checks that `local-env` reaches the
   devcontainer runtime and that `job-limits` and `alerts` reach the jobs

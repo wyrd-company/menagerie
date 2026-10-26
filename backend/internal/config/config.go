@@ -92,10 +92,10 @@ func (d Duration) validate(field string) error {
 		return nil
 	}
 	if !durationPattern.MatchString(string(d)) {
-		return fmt.Errorf("%s %q must be whole hours, minutes and seconds, such as 2h, 45m or 1h30m", field, string(d))
+		return fmt.Errorf("%s must be whole hours, minutes and seconds, such as 2h, 45m or 1h30m", field)
 	}
 	if v, err := time.ParseDuration(string(d)); err != nil || v <= 0 {
-		return fmt.Errorf("%s %q must be positive", field, string(d))
+		return fmt.Errorf("%s must be a positive duration such as 45m", field)
 	}
 	return nil
 }
@@ -140,10 +140,10 @@ type Alerts struct {
 type WebhookURL string
 
 // UnmarshalYAML accepts a string and refuses any other node with a fixed
-// message: the decoder's own errors quote the value.
+// message.
 func (w *WebhookURL) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
-		return errors.New("alerts.webhook must be an http or https URL")
+		return fieldError("alerts.webhook must be an http or https URL")
 	}
 	*w = WebhookURL(n.Value)
 	return nil
@@ -215,16 +215,9 @@ func Load(path string) (*Config, error) {
 
 // Parse decodes and validates a configuration document. Unknown fields are
 // errors, so a misspelled key cannot silently fall back to a default. No
-// error names the alerts webhook URL.
+// error names the value of a duration or of the alerts webhook URL: an
+// anchor can share the webhook's node with any field.
 func Parse(data []byte) (*Config, error) {
-	cfg, err := parse(data)
-	if err != nil {
-		return nil, redactWebhook(data, err)
-	}
-	return cfg, nil
-}
-
-func parse(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	var cfg Config
@@ -232,7 +225,7 @@ func parse(data []byte) (*Config, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, errors.New("document is empty")
 		}
-		return nil, err
+		return nil, decodeError(data, err)
 	}
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
@@ -243,23 +236,6 @@ func parse(data []byte) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
-}
-
-// redactWebhook removes the webhook URL from err. WebhookURL keeps it out
-// of its own errors, but an anchor can share its node with another field,
-// whose decoding error quotes it.
-func redactWebhook(data []byte, err error) error {
-	var doc struct {
-		Alerts struct {
-			Webhook yaml.Node `yaml:"webhook"`
-		} `yaml:"alerts"`
-	}
-	_ = yaml.Unmarshal(data, &doc)
-	hook := resolved(&doc.Alerts.Webhook).Value
-	if hook == "" || !strings.Contains(err.Error(), hook) {
-		return err
-	}
-	return errors.New(strings.ReplaceAll(err.Error(), hook, "<alerts.webhook>"))
 }
 
 // durationNodes holds the node given for each duration field, with merge
@@ -299,6 +275,9 @@ func givenEmpty(data []byte) []error {
 		}{{"operations", l.Operations}, {"phases", l.Phases}} {
 			for _, name := range slices.Sorted(maps.Keys(group.nodes)) {
 				n := group.nodes[name]
+				if !keyPattern.MatchString(name) {
+					continue
+				}
 				check("job-limits."+group.name+"."+name, &n)
 			}
 		}
@@ -419,7 +398,11 @@ func (l *JobLimits) validate() []error {
 	}
 	for _, name := range slices.Sorted(maps.Keys(l.Phases)) {
 		if !slices.Contains(jobs.Phases, name) {
-			errs = append(errs, fmt.Errorf("job-limits.phases.%s is not a phase; phases are %s", name, strings.Join(jobs.Phases, ", ")))
+			key := "job-limits.phases." + name
+			if !keyPattern.MatchString(name) {
+				key = "a key of job-limits.phases"
+			}
+			errs = append(errs, fmt.Errorf("%s is not a phase; phases are %s", key, strings.Join(jobs.Phases, ", ")))
 			continue
 		}
 		if err := l.Phases[name].validate("job-limits.phases." + name); err != nil {
