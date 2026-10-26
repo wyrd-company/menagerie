@@ -431,6 +431,34 @@ func TestAStartThatRecreatesForAnotherReasonSaysTheSocketWaits(t *testing.T) {
 	}
 }
 
+// TestAStartThatRecreatesAndThenFailsStillSaysTheSocketWaits changes the
+// definition of a Compose workspace whose container has no socket and
+// makes its postCreateCommand fail: Up recreates the primary and then
+// fails, and the console still says the socket attaches at the next
+// rebuild.
+func TestAStartThatRecreatesAndThenFailsStillSaysTheSocketWaits(t *testing.T) {
+	f := newSocketFixture(t)
+	folder := f.workspace(t, "failing-compose", map[string]string{
+		".devcontainer/compose.yml":       composeFile,
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/data"}`,
+	})
+	f.h.mustRun(f.h.rt.Start, folder)
+	before := f.h.status(folder).ContainerID
+	f.h.write(folder, map[string]string{
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/data", "containerEnv": {"SAMPLE_SETTING": "changed"}, "postCreateCommand": "exit 1"}`,
+	})
+	start := &capture{logProgress: logProgress{t: t}}
+	if err := f.rt.Start(f.h.ctx, folder, start); err == nil {
+		t.Fatal("a failing postCreateCommand did not fail the start; the test checks nothing")
+	}
+	if after := f.h.status(folder).ContainerID; after == before {
+		t.Fatal("the changed definition did not recreate the primary; the test checks nothing")
+	}
+	if !strings.Contains(start.out.String(), "this start created the container again, without the workspace socket") {
+		t.Fatalf("console %q", start.out.String())
+	}
+}
+
 func quoteJSON(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')

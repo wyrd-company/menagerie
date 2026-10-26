@@ -656,11 +656,12 @@ func TestOpenRefusesAFolderThatIsNotOurs(t *testing.T) {
 	}
 }
 
-// TestOpenRefusesALinkInThePathOrAnOverlapWithTheWorkspaceRoot checks the
-// socket folder's path itself, not only its last part: a link above it
-// makes the host mount another folder, and a workspace root reached
-// through a link can still hold the socket folder or sit inside it.
-func TestOpenRefusesALinkInThePathOrAnOverlapWithTheWorkspaceRoot(t *testing.T) {
+// TestOpenRefusesAnOverlapWithTheWorkspaceRootOrAChangeableFolderAbove
+// checks the socket folder with its links resolved: a link above it, such
+// as /var/run to /run, is followed, a socket folder or workspace root
+// reached through a link can still overlap, and a folder above it that
+// another user can change is refused unless it is sticky.
+func TestOpenRefusesAnOverlapWithTheWorkspaceRootOrAChangeableFolderAbove(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), sentinel)
 	mkdir := func(rel string) string {
 		t.Helper()
@@ -689,16 +690,31 @@ func TestOpenRefusesALinkInThePathOrAnOverlapWithTheWorkspaceRoot(t *testing.T) 
 	// The socket folder holds the folder a linked workspace root names.
 	mkdir("outer/root-b")
 	rootContainedLink := link("root-b-link", filepath.Join(dir, "outer", "root-b"))
+	// The socket folder is reached through a link into a workspace.
+	intoRoot := link("into-root", filepath.Join(rootInside, "alpha"))
+	// Folders above the socket folder that another user can write.
+	shared := mkdir("shared")
+	mkdir("shared/sockets")
+	sticky := mkdir("sticky")
+	mkdir("sticky/sockets")
+	for p, mode := range map[string]os.FileMode{shared: 0o777, sticky: 0o777 | os.ModeSticky} {
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
 	client := filepath.Join(dir, ClientName)
 	if err := os.WriteFile(client, []byte("sample client\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for label, c := range map[string]struct{ folder, root, want string }{
-		"link above the folder":     {filepath.Join(alias, "sockets"), "", "workspace-socket.folder must have no symbolic link in its path"},
-		"inside the resolved root":  {filepath.Join(rootInside, "alpha", "sockets"), rootInsideLink, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
-		"holds the resolved root":   {filepath.Join(dir, "outer"), rootContainedLink, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
-		"is the resolved root":      {rootInside, rootInsideLink, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
-		"apart from the root, kept": {filepath.Join(linked, "sockets"), rootInsideLink, ""},
+		"link above the folder, kept":   {filepath.Join(alias, "sockets"), "", ""},
+		"reached through a link inside": {filepath.Join(intoRoot, "sockets"), rootInside, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
+		"writable folder above":         {filepath.Join(shared, "sockets"), "", "workspace-socket.folder must have only folders of root or the services' user above it"},
+		"sticky writable folder, kept":  {filepath.Join(sticky, "sockets"), "", ""},
+		"inside the resolved root":      {filepath.Join(rootInside, "alpha", "sockets"), rootInsideLink, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
+		"holds the resolved root":       {filepath.Join(dir, "outer"), rootContainedLink, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
+		"is the resolved root":          {rootInside, rootInsideLink, "workspace-socket.folder must be neither inside the workspace root nor contain it"},
+		"apart from the root, kept":     {filepath.Join(linked, "sockets"), rootInsideLink, ""},
 	} {
 		t.Run(label, func(t *testing.T) {
 			s, err := Open(Options{Folder: c.folder, WorkspaceRoot: c.root, Client: client})
@@ -713,5 +729,23 @@ func TestOpenRefusesALinkInThePathOrAnOverlapWithTheWorkspaceRoot(t *testing.T) 
 				t.Fatalf("%v, want %q without the path", err, c.want)
 			}
 		})
+	}
+}
+
+// TestAFolderAboveOwnedByAnotherUserIsRefused checks the owner rule for a
+// folder above the socket folder: one owned by neither root nor the
+// services' user is refused. The test's own folders stand for another
+// user's by naming another user as the services' user.
+func TestAFolderAboveOwnedByAnotherUserIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sockets")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := apart(folder, "", os.Geteuid()); err != nil {
+		t.Fatalf("own folders above refused: %v", err)
+	}
+	if err := apart(folder, "", os.Geteuid()+1); !errors.Is(err, errAncestor) {
+		t.Fatalf("%v, want %v", err, errAncestor)
 	}
 }

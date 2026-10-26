@@ -129,8 +129,9 @@ type listener struct {
 }
 
 // Open checks the socket folder and reads the client. The folder must be
-// a folder of this process's user with no symbolic link in its path, and
-// apart from the workspace root; its mode is set to 0700.
+// a folder of this process's user, not itself a symbolic link, below
+// folders no other user can change, and apart from the workspace root;
+// its mode is set to 0700.
 func Open(opts Options) (*Sockets, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -153,7 +154,7 @@ func Open(opts Options) (*Sockets, error) {
 	if err := s.ownFolder(opts.Folder, 0o700, false); err != nil {
 		return nil, fmt.Errorf("workspace-socket.folder %w", err)
 	}
-	if err := apart(opts.Folder, opts.WorkspaceRoot); err != nil {
+	if err := apart(opts.Folder, opts.WorkspaceRoot, s.uid); err != nil {
 		return nil, fmt.Errorf("workspace-socket.folder %w", err)
 	}
 	client, err := os.ReadFile(opts.Client)
@@ -170,35 +171,50 @@ var (
 	errNotOurs  = errors.New("must be a folder of the services' user, not a symbolic link")
 	errMissing  = errors.New("must exist")
 	errUnusable = errors.New("cannot be read, created or given its mode")
-	// errLinkInPath and errOverlap refuse a socket folder.
-	errLinkInPath = errors.New("must have no symbolic link in its path")
-	errOverlap    = errors.New("must be neither inside the workspace root nor contain it, with symbolic links resolved")
+	// errAncestor and errOverlap refuse a socket folder.
+	errAncestor = errors.New("must have only folders of root or the services' user above it, writable by no other user unless sticky")
+	errOverlap  = errors.New("must be neither inside the workspace root nor contain it, with symbolic links resolved")
 )
 
-// apart checks that no part of folder's path is a symbolic link, and
-// that folder is neither inside root nor contains it once root's links
-// resolve. A link in the path would make the host's bind source another
-// folder than the one checked here, and a socket folder inside a
-// workspace would let that workspace's container reach other
-// workspaces' sockets.
-func apart(folder, root string) error {
-	for p := folder; p != filepath.Dir(p); p = filepath.Dir(p) {
+// apart checks that folder, with its links resolved, is neither inside
+// root nor contains it once root's links resolve, and that no folder above
+// it can be changed by a user other than root or this process's user. A
+// socket folder inside a workspace would let that workspace's container
+// reach other workspaces' sockets, and a folder above it that another user
+// can change could later point the path elsewhere. A link above the folder,
+// such as /var/run to /run, is followed as the host's daemon follows it
+// when it binds the folder.
+func apart(folder, root string, uid int) error {
+	resolved, err := filepath.EvalSymlinks(folder)
+	if err != nil {
+		return errUnusable
+	}
+	for p := filepath.Dir(resolved); ; p = filepath.Dir(p) {
 		info, err := os.Lstat(p)
 		if err != nil {
 			return errUnusable
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return errLinkInPath
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || (st.Uid != 0 && int(st.Uid) != uid) {
+			return errAncestor
+		}
+		// A sticky folder lets no other user rename or remove an entry it
+		// does not own.
+		if info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
+			return errAncestor
+		}
+		if p == filepath.Dir(p) {
+			break
 		}
 	}
 	if root == "" {
 		return nil
 	}
-	resolved, err := filepath.EvalSymlinks(root)
+	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return errors.New("cannot be compared with the workspace root, which cannot be resolved")
 	}
-	if within(resolved, folder) || within(folder, resolved) {
+	if within(resolvedRoot, resolved) || within(resolved, resolvedRoot) {
 		return errOverlap
 	}
 	return nil

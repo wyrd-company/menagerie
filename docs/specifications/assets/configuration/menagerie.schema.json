@@ -285,7 +285,7 @@
       "properties": {
         "folder": {
           "type": "string",
-          "description": "Absolute folder, at the same path on the host and in Menagerie's container, owned by the services' user. It holds one folder per workspace, mounted read-only into that workspace's devcontainer. Neither inside nor containing the workspace root, the Wyrwood directory or the candidate folder; no comma."
+          "description": "Absolute folder, at the same path on the host and in Menagerie's container, owned by the services' user, not itself a symbolic link, below folders only root or that user can change (sticky folders excepted). It holds one folder per workspace, mounted read-only into that workspace's devcontainer. Neither inside nor containing the workspace root, the Wyrwood directory or the candidate folder; no comma."
         },
         "min-interval": {
           "anyOf": [

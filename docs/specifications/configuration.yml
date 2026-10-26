@@ -142,8 +142,11 @@ description: >-
   contains `workspace-root`, `wyrwood-directory` or
   `template-service.candidate-folder`. It has the same path on the host
   and in Menagerie's container, exists when the workspace service starts
-  and is a folder of the services' user, not a symbolic link; the service
-  sets its mode to 0700 and refuses to start otherwise. `min-interval` is
+  and is a folder of the services' user, not itself a symbolic link, with
+  every folder above it, its links resolved, a folder of root or the
+  services' user that no other user can write unless it is sticky; the
+  service sets its mode to 0700 and refuses to start otherwise. Resolved,
+  it is neither inside nor contains the resolved `workspace-root`. `min-interval` is
   the shortest time between two accepted commits of a workspace through
   its socket: a duration, or `0` for none; absent, `1m`. Neither field's
   value appears in a configuration error, and the start-up checks of the

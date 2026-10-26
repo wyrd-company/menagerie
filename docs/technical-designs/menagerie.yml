@@ -159,11 +159,13 @@ proposed-design:
     devcontainer reaches at `/run/menagerie/workspace.sock`, the only
     Menagerie endpoint inside a devcontainer. The socket folder is mounted
     at the same path on the host and in Menagerie's container, belongs to
-    the services' user and has mode 0700. No part of its path may be a
-    symbolic link, so the host's bind source is the folder Menagerie
-    checks, and start-up refuses a socket folder inside the workspace root
-    or around it, compared with the root's symbolic links resolved, so no
-    workspace's container reaches another's socket. It holds a folder
+    the services' user and has mode 0700. It is not itself a symbolic
+    link, and every folder above it, with links resolved as the host's
+    daemon resolves them, belongs to root or the services' user and is
+    writable by no other user unless it is sticky, so no one else can
+    point its path elsewhere. Start-up refuses a socket folder inside the
+    workspace root or around it, both compared with their symbolic links
+    resolved, so no workspace's container reaches another's socket. It holds a folder
     per workspace, mode 0755, with `workspace.sock`, mode 0666, and
     `bin/workspace-commit`, the static client copied from Menagerie's
     image. Each rebuild, and each start that creates the container or

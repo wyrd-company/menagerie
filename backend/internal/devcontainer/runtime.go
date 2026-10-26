@@ -379,11 +379,15 @@ func (r *Runtime) upSingle(ctx context.Context, op *operation, replace bool) err
 		req.Mounts = append(req.Mounts, mount.Mount{Type: mount.TypeBind, Source: op.socket, Target: WorkspaceSocketTarget, ReadOnly: true})
 	}
 	res, err := r.dockerHost(p, op.auth).Up(ctx, req)
+	// Up can create the container and then fail, in a lifecycle command
+	// for example; its result still says so.
+	if res != nil {
+		op.noteCreated(res.CreatedThisCall)
+	}
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
 	}
 	fmt.Fprintf(p.Log(""), "container %s up (created=%t started=%t)\n", shortID(res.ContainerID), res.CreatedThisCall, res.StartedThisCall)
-	op.noteCreated(res.CreatedThisCall)
 	return nil
 }
 
@@ -415,11 +419,15 @@ func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) er
 		req.Mounts = append(req.Mounts, "type=bind,source="+op.socket+",target="+WorkspaceSocketTarget+",readonly")
 	}
 	res, err := r.composeHost(p, op.auth).Up(ctx, req)
+	// Up can recreate the primary and then fail, in a lifecycle command
+	// for example; its result still says so.
+	if res != nil {
+		op.noteCreated(slices.Contains(res.CreatedThisCall, dc.Service) || slices.Contains(res.RecreatedThisCall, dc.Service))
+	}
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
 	}
 	fmt.Fprintf(p.Log(""), "compose project %s up (primary %s, created %v, recreated %v)\n", res.ProjectName, shortID(res.PrimaryContainerID), res.CreatedThisCall, res.RecreatedThisCall)
-	op.noteCreated(slices.Contains(res.CreatedThisCall, dc.Service) || slices.Contains(res.RecreatedThisCall, dc.Service))
 	return nil
 }
 
