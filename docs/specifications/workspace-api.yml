@@ -160,12 +160,18 @@ description: >-
   answers and workspace folders are unaffected.
 
 
-  Container operations use devcontainer-builder as a library. Before each
+  Container operations use devcontainer-builder as a library. Every
+  `${localEnv:NAME}` and `${env:NAME}` in a definition, and Compose
+  interpolation, read only the variables of Menagerie's environment that
+  `local-env` lists; any other resolves to its default value or empty, and
+  the job log has the line `localEnv NAME is not in local-env; it resolves
+  to its default value` once for each such name the definition reads. Before each
   start or rebuild the service reads `initializeCommand` from the same
   definition snapshot used for the build, substitutes `${localWorkspaceFolder}`,
   `${localEnv:...}`, `${containerWorkspaceFolder}` and `${devcontainerId}`
   with the workspace's discovery labels, and runs it inside Menagerie with
-  the workspace folder as working directory: a string through `/bin/sh -c`,
+  the workspace folder as working directory and an environment of only the
+  `local-env` variables and `PATH`: a string through `/bin/sh -c`,
   an array directly, and object members in parallel. A failing command fails
   the job before any container changes. `start` then builds the definition
   when it needs a build and brings the container up, reusing and starting an
@@ -210,5 +216,5 @@ validation-criteria: >-
   and agent; `go test -tags templateservice ./backend/internal/workflows/`
   runs create and upgrade against the real template service. `go test -tags docker
   ./backend/internal/devcontainer/` runs start, stop, rebuild, failing
-  `initializeCommand`, Compose resource preservation and the workspace list
-  against a real Docker Engine.
+  `initializeCommand`, Compose resource preservation, the `local-env`
+  allowlist and the workspace list against a real Docker Engine.

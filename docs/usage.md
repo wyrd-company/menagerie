@@ -48,7 +48,8 @@ The job console then shows each phase:
 3. `commit` and `backup`: the first commit, pushed to the workspace's own
    orphan branch in the workspace repository.
 4. `initialize-command`: the devcontainer's `initializeCommand`, inside the
-   Menagerie container, in the workspace folder.
+   Menagerie container, in the workspace folder, with only the variables of
+   [`local-env`](configuration.md#local-environment) and `PATH`.
 5. `build` when the definition builds an image, then `up`: the devcontainer
    starts.
 

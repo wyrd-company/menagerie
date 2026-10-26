@@ -90,11 +90,11 @@ func run(configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	credentials, err := registryCredentials(cfg)
+	opts, err := runtimeOptions(cfg)
 	if err != nil {
 		return err
 	}
-	runtime := devcontainer.New(docker, devcontainer.Options{Credentials: credentials})
+	runtime := devcontainer.New(docker, opts)
 	manager := jobs.NewManager(ctx)
 	handler, err := newHandler(cfg, root, runtime, manager)
 	if err != nil {
@@ -183,6 +183,16 @@ func backupRemote(cfg *config.Config) *backup.Remote {
 // registryCredentials returns the per-operation registry credential source:
 // OpenBao read through the Wyrwood vault socket for the configured
 // registries, anonymous for every other registry.
+// runtimeOptions configures the devcontainer runtime: registry
+// credentials, and the local-env allowlist over Menagerie's environment.
+func runtimeOptions(cfg *config.Config) (devcontainer.Options, error) {
+	credentials, err := registryCredentials(cfg)
+	if err != nil {
+		return devcontainer.Options{}, err
+	}
+	return devcontainer.Options{Credentials: credentials, LocalEnv: cfg.LocalEnv}, nil
+}
+
 func registryCredentials(cfg *config.Config) (func(context.Context) devcontainer.RegistryAuth, error) {
 	rc := cfg.RegistryCredentials
 	if rc == nil {
