@@ -37,7 +37,7 @@ done
 git_test() { git -c user.name="Example User" -c user.email=user@example.invalid "$@"; }
 
 # clone_at_head <dir>: a clone of HEAD carrying the working tree's scripts,
-# with no release tags, no changelog, docs.yml versions at the baseline and
+# with no release tags or changelogs, docs.yml versions at the baseline and
 # one fixture intent in place of the repository's own, so every case starts
 # from the same first-release state whatever the repository's pending
 # intents, tags and changelog are.
@@ -52,7 +52,7 @@ clone_at_head() {
   yq -i '.products.menagerie.version = "0.0.0" | .products.menagerie.docs-version = "0.0.0"' "$1/docs/user/docs.yml"
   git -C "$1" add scripts docs/user/docs.yml
   git -C "$1" ls-files -z '.intentional/intents/*.md' | xargs -r -0 git -C "$1" rm -q
-  git -C "$1" rm -q --ignore-unmatch CHANGELOG.md
+  git -C "$1" rm -q --ignore-unmatch CHANGELOG.md docs/user/CHANGELOG.md
   (cd "$1" && intentional add --release-unit menagerie:minor --message "A fixture change." >/dev/null)
   git -C "$1" add .intentional/intents
   git_test -C "$1" commit -q -m "test: scripts and a fixture intent"
