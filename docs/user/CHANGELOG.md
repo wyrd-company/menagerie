@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+### Fixes
+
+- Use the published Menagerie 0.3.0 image in the installation command and deployment example.
+
 ## 0.2.0
 
 ### Features
