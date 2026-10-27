@@ -37,8 +37,9 @@ description: >-
 
   `POST /api/jobs` starts an operation on a workspace. The operations are
   `start`, `stop`, `rebuild` and `commit` on an existing workspace folder,
-  and the interview operations `create` and `upgrade`, which also name an approved
-  template's `templateId`. Any other operation is refused as
+  `apply-branch` on an existing workspace folder, which also names a
+  `branch`, and the interview operations `create` and `upgrade`, which also
+  name an approved template's `templateId`. Any other operation is refused as
   `unknown-operation`. The service acquires the workspace's job slot before
   any work begins. A workspace has at most one unfinished job; another
   request for it gets 409 `workspace-busy` with the holder's id, while other
@@ -52,15 +53,17 @@ description: >-
   and every client that sees the result event can start the next job.
   `phase` names the current step, for example `read-definition`,
   `initialize-command`, `build`, `remove-container`, `up`, `stop`,
-  `interview`, `initialize-repository`, `generate`, `apply`, `commit`,
-  `backup-local-changes` or `backup`. A failed job carries `error.kind`:
+  `interview`, `initialize-repository`, `generate`, `fetch`, `plan`,
+  `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `runner-image-unavailable`, `operation-failed` or `internal-error`, and
   for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
   `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
-  or `backup-failed`, and for `commit` `commit-failed` or `backup-failed`. Its message says what was written and what recovery
-  is needed.
+  or `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
+  for `apply-branch` `branch-not-found`, `fetch-failed`, `backup-failed`,
+  `not-applicable` or `apply-failed`. Its message says what was written and
+  what recovery is needed.
 
 
   Time limits are configured in `job-limits` and are optional; without
@@ -203,13 +206,126 @@ description: >-
   rebuilt.
 
 
+  Apply branch. An `apply-branch` job brings a branch of the workspace
+  repository into the workspace. `branch` is a branch's short name,
+  slashes allowed, never a full ref name such as `refs/heads/<name>`; the
+  workspace's own branch is allowed. A request without `branch` is refused
+  as 400 `invalid-request`, and one whose `branch` is not a valid branch
+  name as 400 `invalid-branch`, before any job exists. The workspace socket
+  never starts it.
+
+  In the `fetch` phase the service fetches only that branch and the
+  history it needs, with go-git and the credentials of a push, through a
+  remote it never writes to the workspace's Git configuration, into
+  `refs/menagerie/apply`. It fetches no tags and changes no other ref, and
+  deletes `refs/menagerie/apply` when the job ends, whatever the outcome.
+  A branch the workspace repository does not have fails as
+  `branch-not-found`, a shallow workspace repository, which lacks the
+  history an apply walks, as `not-applicable` before it fetches, and any
+  other fetch failure as `fetch-failed`, all with nothing changed. In `backup-local-changes` the service commits every
+  change as a `commit` job does, with the message `Back up local changes
+  before applying <branch>`, and in `backup` force-pushes the branch; a
+  failure of either fails as `backup-failed` with nothing applied. When
+  `branch` is the workspace's own branch there is no `backup` phase before
+  the apply: the console says the branch is not pushed before the apply,
+  so a refused apply leaves the workspace repository as it was.
+
+  In `plan` the service works out the apply in memory, writing nothing to
+  the folder, the index or a ref. H is the workspace branch's commit and
+  T the fetched one.
+  When T is H or an ancestor of H the job succeeds as already applied,
+  with no commit and no rebuild; for the workspace's own branch it then
+  force-pushes the branch in `backup`, which only moves the workspace
+  repository's branch forward. When H is an ancestor of T the branch
+  fast-forwards to T. Otherwise H and T merge file by file over their
+  merge base B, which must be exactly one commit: a path whose mode and
+  content are equal in H and T keeps them, one unchanged in H since B
+  takes T's, one unchanged in T keeps H's, and any other path conflicts.
+  The result is a merge commit with parents H and T, by Menagerie, with
+  the message `Apply <branch> to workspace <workspace>`. No merge base,
+  several merge bases, a conflict, or a file where the result also has a
+  folder of that name fail as `not-applicable`. So do, before anything is
+  written: fetched history that lacks a commit or tree the apply reads; a
+  path the change writes or removes that is not valid in a Git tree,
+  checked before any folder of the result is read: an empty component, so
+  an absolute path, a `.` or `..` component, a backslash, a control
+  character such as a tab or a newline, or `.git` in any spelling NTFS or
+  HFS+ reads as `.git`, `git~1` included; a submodule entry in the
+  change; an untracked or ignored file, folder or symbolic link, or a
+  nested Git repository, where the change writes; and a file of H that no
+  longer matches H. The console has one `not applicable: <path>` line per
+  path and the message names the reason and the paths; nothing is
+  applied.
+
+  A plan refused in `plan` leaves the devcontainer as it was. Otherwise,
+  so that nothing in the devcontainer writes to the folder while the
+  apply does, the service records whether the devcontainer runs and stops
+  it in `stop` as a `stop` job does: for Compose, every service of the
+  workspace's Compose project, found by its project label, also when the
+  primary service's container is gone. A failed state read or stop fails
+  with the container operations' kinds and nothing applied. It then
+  commits again in
+  `backup-local-changes` what the devcontainer wrote before it stopped;
+  when that changed the branch it pushes it in `backup`, with the same
+  rule for the workspace's own branch, and plans again in `plan`. Right
+  before it writes, `apply` lists the running containers through the
+  Docker library and refuses as `not-applicable`, with the reason "a
+  running container mounts the workspace folder", when any but
+  Menagerie's own has a bind mount whose source is the workspace folder,
+  is inside it, or contains it; the console names each such container by
+  its short id. When the second commit or push fails, the second plan
+  refuses, the mount check refuses, or the folder checks of `apply`
+  refuse, nothing is applied and the devcontainer returns to its state
+  before the job: one that ran is started again as a `start` job does,
+  within the `start` operation's time limit, else 10 minutes, and even
+  when the job was cancelled; one that did not run stays stopped. When
+  that start fails, the console says so, the job fails with the start's
+  failure, and the console keeps the refusal. Every exit after the stop
+  that leaves the devcontainer stopped, a time limit included, writes
+  the console line "the devcontainer is stopped; start or rebuild it". An
+  already applied branch never stops the devcontainer.
+
+  The service changes the folder through descriptors: each folder is
+  opened beneath the workspace with no symbolic link in any component, and
+  each file is renamed, created or removed relative to its folder, so a
+  folder swapped for a link is refused, never followed. In `apply` it
+  first checks that the workspace branch is still at H, then moves
+  every file of H the change replaces or removes to a temporary name,
+  `.menagerie-apply-<random>-<n>`, in its own folder, and checks that each
+  still has H's mode and content, a link's target included. When one does
+  not, or is gone, it moves them all back, never over a file created
+  meanwhile, and refuses as `not-applicable`, so a change the devcontainer
+  made is kept. It then writes only the paths that differ between H and
+  the result, each to a name nothing holds, writing symbolic links as
+  links and keeping the executable mode, removes the moved-aside files and
+  the folders the change empties. The index records the result with the
+  stat data taken from each file as it was written, from its descriptor
+  before it closes or, for a link, right after it is made; an entry
+  without such data keeps none, so its content is compared. The branch
+  moves last, only from H. A failure while writing fails as
+  `apply-failed` with the devcontainer stopped: the files written before
+  it remain, the branch stays at H, which is backed up unless `branch` is
+  the workspace's own, the moved-aside files go back to their names where
+  nothing was written, and the message and console name each file still
+  at a temporary name with its path; recovery is manual. A changed branch
+  is then force-pushed in
+  `backup`, where a failure fails as `backup-failed` without a rebuild,
+  and the devcontainer is rebuilt as after an upgrade, a failure failing
+  with the container operations' kinds. The applied record `.toha.json`
+  is a file like any other. The job's messages name the branch, the
+  workspace and commits, never the workspace repository's address or a
+  transport error's text, which may carry it.
+
+
   Commit. A `commit` job stages every change of the workspace, as `git
   add --all` would: untracked, modified and deleted files, and what is
   already staged. A file that replaces a tracked folder, or a folder that
   replaces a tracked file, takes the old entries out of the index, in this
   commit and in the commits after generation and upgrades. Untracked paths
-  the ignore rules exclude and files inside a nested Git repository stay
-  unstaged. The ignore rules are the workspace's `.gitignore` files, its
+  the ignore rules exclude, files inside a nested Git repository, and
+  paths go-git could not read back from the index, such as a name with a
+  tab or a newline or a `git~1` folder, stay unstaged; the job console
+  notes each of the last kind. The ignore rules are the workspace's `.gitignore` files, its
   `.git/info/exclude` and the file its repository's own
   `core.excludesFile` names; Menagerie's own Git configuration is never
   read. An exclude file that does not resolve, through symbolic links, to
@@ -413,7 +529,28 @@ validation-criteria: >-
   ./backend/internal/backup/` covers a file and a folder that replace each
   other, the workspace's exclude files inside and outside the workspace,
   and that the change check agrees with the commit over a table of
-  workspace states. `go test -tags docker
+  workspace states. It also fetches from a local bare workspace repository
+  and applies: an already applied branch, a fast-forward with an
+  executable file, a symbolic link and a removed folder, a file and a
+  folder that replace each other, a clean merge and its merge commit,
+  conflicts of content and mode, no merge base and several, a file where
+  the result has a folder, ignored files, folders and links in the way, a
+  nested repository, a submodule, invalid paths, files changed after the
+  local backup, a missing branch, the private ref's removal, a write
+  failure and a branch moved meanwhile, each refusal leaving the branch,
+  index and folder as they were. Races run at a hook before the folder
+  changes: an edit is kept and refuses the apply, a folder swapped for a
+  link is never followed, a move back never replaces a file created
+  meanwhile; a shallow repository, missing history and paths such as
+  `git~1`, a tab, a newline or an absolute one refuse; and a workspace
+  with such a name still commits its other changes. `go test ./backend/internal/workflows/`
+  runs `apply-branch` through the API: a commit pushed on top of the
+  workspace's branch is applied, rebuilt and kept by the next backup; a
+  local change is backed up and merged; a refused apply of the workspace's
+  own branch leaves the workspace repository as it was; refusals and
+  request checks; and
+  every failure path, with a workspace repository address that carries a
+  sentinel, has no event or error that names it. `go test -tags docker
   ./backend/internal/devcontainer/` also has a devcontainer commit a file
   through `workspace-commit` and its read-only mounted socket, before and
   after the socket is re-created and after a rebuild, a Compose primary do

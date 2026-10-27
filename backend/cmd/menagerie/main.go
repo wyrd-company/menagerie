@@ -295,14 +295,19 @@ func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.R
 	if images != nil {
 		image = images.ForTemplate
 	}
+	var restart time.Duration
+	if cfg.JobLimits != nil {
+		restart = cfg.JobLimits.Operations.Start.Value()
+	}
 	flows := workflows.New(workflows.Options{
-		Root:        root,
-		Templates:   templates.New(cfg.TemplateService.Socket),
-		Approved:    ids,
-		Remote:      backupRemote(cfg),
-		Runtime:     runtime,
-		Hooks:       hooks,
-		RunnerImage: image,
+		Root:         root,
+		Templates:    templates.New(cfg.TemplateService.Socket),
+		Approved:     ids,
+		Remote:       backupRemote(cfg),
+		Runtime:      runtime,
+		Hooks:        hooks,
+		RunnerImage:  image,
+		RestartLimit: restart,
 	})
 	operations := api.ContainerOperations(root, runtime)
 	for name, op := range flows.Operations() {
@@ -393,7 +398,7 @@ func runtimeOptions(cfg *config.Config) (devcontainer.Options, error) {
 	if err != nil {
 		return devcontainer.Options{}, err
 	}
-	return devcontainer.Options{Credentials: credentials, LocalEnv: cfg.LocalEnv}, nil
+	return devcontainer.Options{Credentials: credentials, LocalEnv: cfg.LocalEnv, Own: throwaway.MountedContainerIDs("/proc/self/mountinfo")}, nil
 }
 
 // registryCredentials returns the per-operation registry credential source:

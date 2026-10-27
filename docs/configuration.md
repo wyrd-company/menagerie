@@ -189,14 +189,15 @@ is cancelled and fails as `timed-out`, and its workspace takes the next job
 once the cancelled work has stopped.
 
 - `default` limits every operation.
-- `operations` gives `start`, `stop`, `rebuild`, `create`, `upgrade` or
-  `commit` its own limit, which replaces `default`.
+- `operations` gives `start`, `stop`, `rebuild`, `create`, `upgrade`,
+  `commit` or `apply-branch` its own limit, which replaces `default`.
 - `phases` limits each stay in a phase, inside any operation:
   `read-definition`, `initialize-command`, `build`, `remove-container`,
-  `up`, `stop`, `interview`, `initialize-repository`, `generate`, `apply`,
-  `commit`, `backup-local-changes` or `backup`. Template hooks run inside
-  `generate` and `apply`; a hook still running when its job is cancelled
-  has its container killed and removed before the job ends.
+  `up`, `stop`, `interview`, `initialize-repository`, `generate`,
+  `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or
+  `backup`. Template hooks run inside `generate` and `apply`; a hook
+  still running when its job is cancelled has its container killed and
+  removed before the job ends.
 
 A duration is whole hours, minutes and seconds, such as `2h`, `45m` or
 `1h30m`. A key without a value, such as `rebuild:` or `default: ""`, is an

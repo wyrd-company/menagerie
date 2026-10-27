@@ -20,7 +20,8 @@ Every folder in the workspace root is a row, with its container's state:
 devcontainer was never created. Containers that belong to no folder in the
 root do not appear. **Refresh** reads the folders and containers again.
 
-Each row has **Stop**, **Start**, **Rebuild** and **Upgrade**. A commit,
+Each row has **Stop**, **Start**, **Rebuild**, **Apply branch** and
+**Upgrade**. A commit,
 from the [schedule or the workspace itself](#commit-from-inside-a-workspace),
 shows on its row as **committing**. Rebuild asks
 for confirmation, then removes the container and creates it again from the
@@ -80,12 +81,85 @@ then choose **Rebuild**.
 
 ![An upgrade that asks one new question](assets/upgrade-interview.png)
 
+## Apply a reviewed branch
+
+A change to a workspace, such as its `.devcontainer/` content, can be
+proposed and reviewed as a pull request, then brought into the workspace
+with **Apply branch**:
+
+1. Push the change to a branch of the workspace repository and open a pull
+   request whose base is the workspace's branch.
+2. Review it, but do not merge it on the forge: the workspace's next backup
+   would replace the merge.
+3. In the workspace's row, choose **Apply branch**, enter the pull
+   request's head branch, for example `review/devcontainer`, and choose
+   **Apply**.
+
+The job console shows each phase:
+
+1. `fetch`: Menagerie fetches only that branch from the workspace
+   repository.
+2. `backup-local-changes` and `backup`: it commits every local change, as
+   a [commit](#commit-from-inside-a-workspace) does, and backs the
+   workspace up. When the branch is the workspace's own, it commits but
+   does not push, and there is no `backup` phase here, so that the
+   branch's commits stay on the workspace repository.
+3. `plan`: Menagerie works out the apply without writing anything. When
+   the branch extends the workspace's branch, the workspace fast-forwards
+   to it. When both have changed, Menagerie merges them file by file and
+   commits the merge as `Apply <branch> to workspace <workspace>`. A plan
+   that cannot apply fails here and leaves the devcontainer running.
+4. `stop`: the devcontainer stops, with every service of its Compose
+   project, so that nothing writes to the workspace while the apply does.
+   What it wrote before it stopped is committed (and backed up, for
+   another branch than the workspace's own), and the plan is made again.
+5. `apply`: Menagerie refuses while another running container mounts the
+   workspace folder (the console names it by its short id), then writes
+   only the files that change.
+6. `backup`, then the rebuild of the devcontainer.
+
+When the apply is refused after the stop, nothing is applied and the
+devcontainer returns to its state before the job: Menagerie starts it
+again if it was running. Whenever a job leaves the devcontainer stopped,
+its console ends with "the devcontainer is stopped; start or rebuild
+it".
+
+The backup after the apply pushes the branch's commits to the workspace's
+branch, and the forge marks the pull request merged. A branch already in
+the workspace's history changes nothing and does not rebuild; when it is
+the workspace's own branch, the job still backs the workspace up.
+
+Menagerie writes only through real folders of the workspace, never
+through a symbolic link, and moves the files it replaces to
+`.menagerie-apply-…` names first. When the job fails as `apply-failed`,
+the devcontainer stays stopped, and the message and console name each
+file still under such a name with its path.
+
+The job fails, with nothing applied, when:
+
+| Kind | Meaning |
+| --- | --- |
+| `branch-not-found` | The workspace repository has no branch of that name. Nothing changed, local changes included. |
+| `fetch-failed` | The workspace repository could not be reached. Nothing changed. |
+| `not-applicable` | The branch cannot be applied cleanly. The console lists the paths, one `not applicable:` line each, and the message says why: both sides changed the same file, the branch and the workspace share no history (or more than one merge base), an untracked or ignored file, folder or link, or a nested repository, is where the branch writes, the change has a submodule or a path Menagerie does not write (a `.git` part in any spelling, `git~1`, an absolute path, a tab or a newline), a file changed while the job ran (the change is kept), another running container mounts the workspace folder, the workspace repository is shallow, or part of the branch's history is missing. Local changes are committed, and backed up unless the branch is the workspace's own. Rebase the branch on the workspace's branch, or move the files in the way, and apply again. |
+| `backup-failed` | The backup before or after the apply failed. The message says which; a failed backup after the apply leaves the applied files and does not rebuild. |
+| `apply-failed` | Writing the files failed partway. The branch did not move; the message names the commit to recover from by hand. |
+
+A merge never writes conflict markers: a file both sides changed is
+`not-applicable`. The applied record `.toha.json` is merged like any other
+file. Prefer a branch that is not the workspace's own. When an apply of
+the workspace's own branch is refused, the workspace repository keeps the
+pushed commits, and the message names the fetched commit, until the next
+backup of the workspace replaces them.
+
 ## Backups
 
 Each workspace is backed up to a branch named after its folder, created
-without a parent and replaced by force at every backup. To restore a
-workspace, clone its branch into a folder in the workspace root by hand;
-Menagerie lists it like any other folder.
+without a parent and replaced by force at every backup. Commits pushed to
+that branch from elsewhere survive only when
+[Apply branch](#apply-a-reviewed-branch) brings them in before the next
+backup. To restore a workspace, clone its branch into a folder in the
+workspace root by hand; Menagerie lists it like any other folder.
 
 ## Commit from inside a workspace
 

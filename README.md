@@ -14,7 +14,8 @@ template, together with the devcontainer it defines. Managers sign in with
 your identity provider, answer a template's interview to create a workspace,
 see every workspace and its container, start, stop and rebuild them, and
 upgrade a workspace to a newer template version. An upgrade asks only the new
-questions and keeps local edits. Every workspace is a Git repository that
+questions and keeps local edits. A reviewed branch, such as a pull request's
+head, can be applied to a workspace. Every workspace is a Git repository that
 Menagerie backs up to its own branch, on a schedule or when its
 devcontainer asks through its own socket.
 [devcontainer-builder](https://github.com/wyrd-company/devcontainer-builder)

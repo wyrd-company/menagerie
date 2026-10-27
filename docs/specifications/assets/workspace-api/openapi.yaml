@@ -265,7 +265,7 @@ components:
       properties:
         operation:
           type: string
-          enum: [start, stop, rebuild, create, upgrade, commit]
+          enum: [start, stop, rebuild, create, upgrade, commit, apply-branch]
         workspace:
           type: string
         templateId:
@@ -273,6 +273,12 @@ components:
           description: >-
             Required by create and upgrade: an approved template's id. For
             an upgrade it names the template version to upgrade to.
+        branch:
+          type: string
+          description: >-
+            Required by apply-branch: the short name of a branch of the
+            workspace repository, slashes allowed, not a full ref name such
+            as refs/heads/<name>. The workspace's own branch is allowed.
     JobState:
       type: string
       enum: [running, waiting-for-answers, succeeded, failed, ended]
@@ -352,6 +358,10 @@ components:
             - merge-conflicted
             - backup-failed
             - commit-failed
+            - branch-not-found
+            - fetch-failed
+            - not-applicable
+            - apply-failed
         message:
           type: string
     StateEvent:
@@ -479,6 +489,7 @@ components:
                 - invalid-request
                 - unknown-operation
                 - invalid-workspace-name
+                - invalid-branch
                 - workspace-not-found
                 - workspace-busy
                 - workspace-exists
