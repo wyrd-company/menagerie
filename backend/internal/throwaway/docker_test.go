@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -509,5 +510,55 @@ func TestNoCapturedValueLeavesARealRun(t *testing.T) {
 	g.Revoke()
 	if left := h.containers(filters.Arg("label", "menagerie.test.run="+h.runID)); len(left) != 0 {
 		t.Fatalf("%d hook containers remain", len(left))
+	}
+}
+
+// TestCopiedLinksThroughTheDockerProxy copies folders that hold symbolic
+// links into throwaway containers: a template with an absolute link, as a
+// script hook's template root, and an upgrade candidate, a checkout of the
+// workspace's committed tree, with a virtual environment's absolute link.
+// A relative link that stays in its folder is the control.
+func TestCopiedLinksThroughTheDockerProxy(t *testing.T) {
+	h := newHarness(t)
+	proxied := os.Getenv("MENAGERIE_TEST_PROXY_ROOT") != ""
+	for _, tc := range []struct {
+		name, link, to string
+		copied         bool // a template root, else a candidate target
+		refused        bool // through the proxy
+	}{
+		{"template-absolute", "link", "/usr/bin/env", true, true},
+		{"candidate-venv-absolute", ".venv/bin/python", "/usr/bin/python3", false, true},
+		{"candidate-relative", ".venv/bin/python3", "python", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := h.folder(tc.name)
+			if err := os.MkdirAll(filepath.Join(src, filepath.Dir(tc.link)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(tc.to, filepath.Join(src, tc.link)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(src, "marker"), []byte("v1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			c := throwaway.Command{Kind: throwaway.KindHook, Job: "job-" + random(t), Image: runnerImage, Argv: []string{"true"}, Env: []string{}}
+			if tc.copied {
+				ws := h.folder(tc.name + "-workspace")
+				c.Workspace, c.Folder, c.Dir, c.Copy = ws, ws, ws, src
+			} else {
+				c.Workspace, c.Target, c.Dir = h.folder(tc.name+"-workspace"), src, src
+			}
+			code, err := h.docker.Run(context.Background(), c)
+			var re *throwaway.RunError
+			switch {
+			case proxied && tc.refused:
+				if !errors.As(err, &re) || re.Stage != throwaway.StageCopy || re.Denial == "" {
+					t.Fatalf("run %d %v, want the proxy to refuse the copy", code, err)
+				}
+				t.Logf("refused: %v", err)
+			case err != nil || code != 0:
+				t.Fatalf("run %d %v, want the copy admitted", code, err)
+			}
+		})
 	}
 }
