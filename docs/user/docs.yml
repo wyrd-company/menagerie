@@ -29,6 +29,13 @@ products:
     order: 10
     logo: assets/logo.svg
     social-image: assets/social-image.png
+    nav:
+      - section: Guide
+        groups:
+          - group: Start
+            pages: [overview, install]
+          - group: Operate
+            pages: [configuration, usage, troubleshooting]
     # DRAFT highlights, pending the approved text from the highlights task.
     highlights:
       - >-
@@ -44,8 +51,9 @@ products:
         Backs up each workspace to its own branch in one Git repository after
         every change.
       - >-
-        Signs managers in through your OpenID Connect provider and holds no key
-        or secret itself: Wyrwood supplies them.
+        Signs managers in through your OpenID Connect provider. Git private
+        keys stay in OpenBao and signing uses Wyrwood. Installation tokens stay
+        in memory; the generated interview signing key stays in the data volume.
       - >-
         Runs as one container with no database; the workspace files stay the
         source of truth.

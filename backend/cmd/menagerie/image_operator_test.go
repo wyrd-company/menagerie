@@ -261,9 +261,16 @@ func TestImageOperatorWorkspace(t *testing.T) {
 	gitRun(t, repo, "add", "-A")
 	gitRun(t, repo, "commit", "-q", "-m", "v2")
 	gitRun(t, repo, "tag", "v2")
-	// The operator owns the workspace root and the templates, as on a host.
+	// The workspace socket folder, mounted at its own path with tmp.
+	socketDir := filepath.Join(base, "sockets")
+	if err := os.Mkdir(socketDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The operator owns the workspace root, the socket folder and the
+	// templates, as on a host.
 	chownTree(t, filepath.Join(base, "templates"))
 	chownTree(t, rootDir)
+	chownTree(t, socketDir)
 
 	// The workspace repository and the agent: the agent's folder and socket
 	// belong to an access group, as Wyrwood's do.
@@ -301,7 +308,9 @@ oidc:
 templates:
   - {id: sample-kit-v1, name: "Sample kit, version 1", address: 'file://%s@v1'}
   - {id: sample-kit-v2, name: "Sample kit, version 2", address: 'file://%s@v2'}
-`, port, rootDir, host.URL("backups.git"), agentDir, p.url, client["id"], site+auth.CallbackPath, repo, repo))
+workspace-socket:
+  folder: %s
+`, port, rootDir, host.URL("backups.git"), agentDir, p.url, client["id"], site+auth.CallbackPath, repo, repo, socketDir))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -369,10 +378,18 @@ templates:
 		if !strings.Contains(logs, want) || !strings.Contains(logs, fmt.Sprintf(",%d)", wyrwoodGID)) && !strings.Contains(logs, fmt.Sprintf(",%d,", wyrwoodGID)) {
 			t.Errorf("logs lack %q with group %d:\n%s", want, wyrwoodGID, logs)
 		}
+		// Only the workspace service has the Docker socket's group.
+		socketGID := c.mustExec("stat", "-L", "-c", "%g", "/var/run/docker.sock")
+		if socketGID == fmt.Sprint(operatorGID) || socketGID == fmt.Sprint(wyrwoodGID) {
+			t.Fatalf("the Docker socket's group %s is also the owner's or the access group", socketGID)
+		}
 		for _, service := range []string{"template-service", "workspace-service"} {
 			out := c.mustExec("sh", "-c", "grep '^Groups:' /proc/$(/command/s6-svstat -o pid /run/service/"+service+")/status")
 			if !strings.Contains(" "+out+" ", fmt.Sprintf(" %d ", wyrwoodGID)) {
 				t.Errorf("%s groups %q lack the access group %d", service, out, wyrwoodGID)
+			}
+			if has := strings.Contains(" "+out+" ", " "+socketGID+" "); has != (service == "workspace-service") {
+				t.Errorf("%s groups %q: the Docker socket's group %s present %v", service, out, socketGID, has)
 			}
 		}
 	})
@@ -433,6 +450,33 @@ templates:
 		tip, _ := backups.CommitObject(ref.Hash())
 		if tip == nil || tip.NumParents() != 1 {
 			t.Errorf("the backup branch's upgrade commit: %v", tip)
+		}
+	})
+
+	t.Run("the devcontainer user commits and backs up through the workspace socket", func(t *testing.T) {
+		c.t = t
+		if out := c.mustExec("stat", "-c", "%a %u", socketDir); out != fmt.Sprintf("700 %d", operatorUID) {
+			t.Errorf("socket folder %q", out)
+		}
+		out, code := devcontainerExec(t, c, folder, `echo inside > inside.txt && test "$MENAGERIE_WORKSPACE_SOCKET" = /run/menagerie/workspace.sock && /run/menagerie/bin/workspace-commit -m "chore: commit from inside"`)
+		if code != 0 || !strings.Contains(out, "backed up: pushed") {
+			t.Fatalf("workspace-commit exited %d: %q\n%s", code, out, c.logs(time.Time{}))
+		}
+		backups, _ := git.PlainOpen(filepath.Join(host.Dir, "backups.git"))
+		ref, err := backups.Reference(plumbing.NewBranchReferenceName("alpha"), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tip, _ := backups.CommitObject(ref.Hash())
+		if f, err := tip.File("inside.txt"); err != nil || tip.Message != "chore: commit from inside" {
+			t.Fatalf("backup tip %q: %v %v", tip.Message, f, err)
+		}
+		// The default minimum interval refuses a second commit at once.
+		if out, code := devcontainerExec(t, c, folder, "/run/menagerie/bin/workspace-commit again"); code != 3 || !strings.Contains(out, "retry in") {
+			t.Errorf("a second commit exited %d: %q", code, out)
+		}
+		if others := notOperatorOwned(t, folder); len(others) > 0 {
+			t.Errorf("paths the operator does not own: %v", others)
 		}
 	})
 

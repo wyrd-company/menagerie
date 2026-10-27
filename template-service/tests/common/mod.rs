@@ -5,6 +5,8 @@
 #![allow(dead_code)]
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
+pub use menagerie_template_service::checks::Operation;
+use menagerie_template_service::seal::{self, Binding, SessionKey};
 use menagerie_template_service::{Service, config::Settings, server};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
@@ -118,6 +120,8 @@ fn flows_template(dir: &Path, hook: &str) {
 
 /// Template repositories, a workspace root and the service settings.
 pub struct World {
+    /// The workspace service's hook runner, as this test plays it.
+    pub hooks: HookHost,
     pub temp: tempfile::TempDir,
     pub root: PathBuf,
     pub workspaces: PathBuf,
@@ -132,6 +136,11 @@ pub struct World {
 
 impl World {
     pub fn new() -> Self {
+        Self::with_templates(&[])
+    }
+
+    /// A world whose approved list also has `templates`, as `(id, address)`.
+    pub fn with_templates(templates: &[(&str, &str)]) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let sample = root.join("templates/sample");
@@ -196,6 +205,7 @@ impl World {
         std::fs::create_dir_all(&workspaces).unwrap();
         let data = root.join("data");
         let socket = root.join("run/template.sock");
+        let hook_socket = root.join("run/hook-runner.sock");
         let config = root.join("config.yml");
         let s = sample.display();
         let t = root.join("templates");
@@ -204,14 +214,24 @@ impl World {
             &root,
             "config.yml",
             format!(
-                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n  - {{id: fork, name: Fork, address: 'file://{f}'}}\n  - {{id: dotted-v1, name: Dotted, address: 'file://{t}/dotted.git@v1'}}\n  - {{id: dotted-v2, name: Dotted, address: 'file://{t}/dotted.git@v2'}}\n  - {{id: dotted-main, name: Dotted, address: 'file://{t}/dotted.git'}}\n",
+                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}, hook-runner-socket: {}, candidate-folder: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n  - {{id: fork, name: Fork, address: 'file://{f}'}}\n  - {{id: dotted-v1, name: Dotted, address: 'file://{t}/dotted.git@v1'}}\n  - {{id: dotted-v2, name: Dotted, address: 'file://{t}/dotted.git@v2'}}\n  - {{id: dotted-main, name: Dotted, address: 'file://{t}/dotted.git'}}\n{extra}",
                 workspaces.display(),
                 socket.display(),
+                hook_socket.display(),
+                root.join("candidates").display(),
                 v1 = v1,
                 f = fork.display(),
+                extra = templates
+                    .iter()
+                    .map(|(id, address)| format!(
+                        "  - {{id: {id}, name: {id}, address: '{address}'}}\n"
+                    ))
+                    .collect::<String>(),
             ),
         );
+        let hooks = HookHost::start(&hook_socket);
         Self {
+            hooks,
             temp,
             root,
             workspaces,
@@ -267,6 +287,37 @@ impl World {
     pub fn select(&self, workspace: &str, template: &str) -> Value {
         json!({"workspace": workspace, "target": self.folder(workspace), "templateId": template})
     }
+
+    /// The service's session key, from its data folder.
+    pub fn key(&self) -> SessionKey {
+        SessionKey::load_or_create(&self.data).unwrap()
+    }
+
+    /// Sign `record` for the selector's workspace and template in this flow,
+    /// as only a holder of the service's key can, so that a test reaches the
+    /// checks behind the signature.
+    pub fn signed(&self, operation: Operation, selector: &Value, record: Value) -> Value {
+        let binding = Binding::new(
+            operation,
+            selector["workspace"].as_str().unwrap(),
+            selector["templateId"].as_str().unwrap(),
+        );
+        seal::sealed(&self.key(), binding, record).unwrap()
+    }
+
+    /// A session whose record `edit` changed, signed again for the selector
+    /// in this flow.
+    pub fn resigned(
+        &self,
+        operation: Operation,
+        selector: &Value,
+        session: &Value,
+        edit: impl FnOnce(&mut Value),
+    ) -> Value {
+        let mut record = session["record"].clone();
+        edit(&mut record);
+        self.signed(operation, selector, record)
+    }
 }
 
 /// The service running in this process on the world's socket.
@@ -278,7 +329,10 @@ pub struct Running {
 
 impl Running {
     pub async fn start(world: &World) -> Self {
-        let service = Arc::new(Service::new(world.settings()));
+        let service = Arc::new(Service::new(
+            world.settings(),
+            menagerie_template_service::seal::SessionKey::load_or_create(&world.data).unwrap(),
+        ));
         service.host.prepare().unwrap();
         let listener = server::bind(&world.socket).await.unwrap();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -307,8 +361,268 @@ impl Running {
     }
 
     pub async fn post(&self, path: &str, body: &Value) -> Reply {
-        post_bytes(&self.socket, path, serde_json::to_vec(body).unwrap()).await
+        post_bytes(&self.socket, path, body_of(path, body)).await
     }
+}
+
+/// The token the workspace service grants a generate or apply in these tests.
+pub const HOOK_TOKEN: &str = "0123456789abcdef";
+
+/// A request body as the workspace service sends it: a generate or apply
+/// carries the hook token unless the test gave `hookToken` itself.
+pub fn body_of(path: &str, body: &Value) -> Vec<u8> {
+    let mut body = body.clone();
+    if matches!(path, "/v1/workspaces/generate" | "/v1/upgrades/apply")
+        && let Some(members) = body.as_object_mut()
+        && !members.contains_key("hookToken")
+    {
+        members.insert("hookToken".into(), json!(HOOK_TOKEN));
+    }
+    serde_json::to_vec(&body).unwrap()
+}
+
+/// What the credential route answers for a URL: a status and a body.
+pub type CredentialAnswer = Arc<dyn Fn(&str) -> (u16, Value) + Send + Sync>;
+
+/// The workspace service's hook runner for these tests: it accepts
+/// `HOOK_TOKEN` only and runs each hook as a local process in its folder,
+/// with only `PATH` in its environment, where Menagerie runs a throwaway
+/// container. It records every request it accepts. Its credential route
+/// records each URL and answers as `answer_credentials` set, by default as
+/// the workspace service without a GitHub App does.
+pub struct HookHost {
+    pub socket: PathBuf,
+    pub calls: Arc<std::sync::Mutex<Vec<Value>>>,
+    credential_urls: Arc<std::sync::Mutex<Vec<String>>>,
+    credential_answer: Arc<std::sync::Mutex<CredentialAnswer>>,
+    hold: Arc<Hold>,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HookHost {
+    pub fn start(socket: &Path) -> Self {
+        std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let (ready, listening) = std::sync::mpsc::channel();
+        let path = socket.to_owned();
+        let recorded = calls.clone();
+        let credential_urls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let no_app: CredentialAnswer =
+            Arc::new(|_: &str| (404, json!({"reason": "no GitHub App is configured"})));
+        let credential_answer = Arc::new(std::sync::Mutex::new(no_app));
+        let (urls, answer) = (credential_urls.clone(), credential_answer.clone());
+        let hold = Arc::new(Hold::default());
+        let holding = hold.clone();
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let listener = tokio::net::UnixListener::bind(&path).unwrap();
+                ready.send(()).unwrap();
+                let app = axum::Router::new()
+                    .route(
+                        menagerie_template_service::hooks::HOOK_PATH,
+                        axum::routing::post(move |body: axum::body::Bytes| {
+                            let recorded = recorded.clone();
+                            async move {
+                                tokio::task::spawn_blocking(move || run_hook(&recorded, &body))
+                                    .await
+                                    .unwrap()
+                            }
+                        }),
+                    )
+                    .route(
+                        menagerie_template_service::credentials::CREDENTIAL_PATH,
+                        axum::routing::post(move |body: axum::body::Bytes| {
+                            let request: Value = serde_json::from_slice(&body).unwrap();
+                            let url = request["url"].as_str().unwrap().to_owned();
+                            urls.lock().unwrap().push(url.clone());
+                            let respond = answer.lock().unwrap().clone();
+                            let (status, reply) = respond(&url);
+                            let holding = holding.clone();
+                            async move {
+                                if holding.on.load(std::sync::atomic::Ordering::SeqCst) {
+                                    holding.wait().await;
+                                }
+                                (
+                                    axum::http::StatusCode::from_u16(status).unwrap(),
+                                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                                    serde_json::to_vec(&reply).unwrap(),
+                                )
+                            }
+                        }),
+                    );
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = stopped.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+        });
+        listening.recv().unwrap();
+        Self {
+            socket: socket.to_owned(),
+            calls,
+            credential_urls,
+            credential_answer,
+            hold,
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+
+    pub fn calls(&self) -> Vec<Value> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    /// Answer the credential route with `answer` from now on.
+    pub fn answer_credentials(
+        &self,
+        answer: impl Fn(&str) -> (u16, Value) + Send + Sync + 'static,
+    ) {
+        *self.credential_answer.lock().unwrap() = Arc::new(answer);
+    }
+
+    /// Whether every credential request from now on is held until its
+    /// caller closes the connection.
+    pub fn hold_credentials(&self, on: bool) {
+        self.hold.on.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many credential requests were held.
+    pub fn held(&self) -> usize {
+        self.hold.held.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// How many held credential requests ended because their caller closed
+    /// the connection.
+    pub fn released(&self) -> usize {
+        self.hold.released.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The URL of every credential request, in order.
+    pub fn credential_urls(&self) -> Vec<String> {
+        self.credential_urls.lock().unwrap().clone()
+    }
+}
+
+/// Held credential requests: each waits until its connection closes, or
+/// until the host stops.
+#[derive(Default)]
+pub struct Hold {
+    on: std::sync::atomic::AtomicBool,
+    held: std::sync::atomic::AtomicUsize,
+    released: std::sync::atomic::AtomicUsize,
+    stopping: tokio::sync::Notify,
+}
+
+impl Hold {
+    async fn wait(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        /// Counts the request released when the server drops it, which it
+        /// does when the caller closes the connection.
+        struct Released<'a>(&'a Hold);
+        impl Drop for Released<'_> {
+            fn drop(&mut self) {
+                self.0.released.fetch_add(1, SeqCst);
+            }
+        }
+        let stopping = self.stopping.notified();
+        self.held.fetch_add(1, SeqCst);
+        let released = Released(self);
+        stopping.await;
+        // Stopping the host is not a caller closing the connection.
+        std::mem::forget(released);
+    }
+}
+
+impl Drop for HookHost {
+    fn drop(&mut self) {
+        self.hold.stopping.notify_waiters();
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn run_hook(
+    recorded: &std::sync::Mutex<Vec<Value>>,
+    body: &[u8],
+) -> (
+    axum::http::StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    Vec<u8>,
+) {
+    use axum::http::StatusCode;
+    use base64::Engine;
+    let reply = |status: StatusCode, body: Value| {
+        (
+            status,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            serde_json::to_vec(&body).unwrap(),
+        )
+    };
+    let request: Value = serde_json::from_slice(body).unwrap();
+    if request["token"] != HOOK_TOKEN {
+        return reply(
+            StatusCode::FORBIDDEN,
+            json!({"error": {"kind": "hook-token-refused", "message": "the hook token is unknown or revoked"}}),
+        );
+    }
+    recorded.lock().unwrap().push(request.clone());
+    let argv: Vec<String> = match (&request["program"]["run"], &request["program"]["script"]) {
+        (Value::Array(argv), Value::Null) => argv
+            .iter()
+            .map(|v| v.as_str().unwrap().to_owned())
+            .collect(),
+        (Value::Null, script) => std::iter::once(script["path"].as_str().unwrap().to_owned())
+            .chain(
+                script["args"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_owned()),
+            )
+            .collect(),
+        _ => panic!("program {}", request["program"]),
+    };
+    let mut dir = PathBuf::from(request["target"].as_str().unwrap());
+    if let Some(cwd) = request["cwd"].as_str() {
+        dir.push(cwd);
+    }
+    let output = Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .output()
+        .unwrap();
+    let stream = |captured: &Value, bytes: &[u8]| {
+        if captured.as_bool().unwrap() {
+            json!(base64::engine::general_purpose::STANDARD.encode(bytes))
+        } else {
+            Value::Null
+        }
+    };
+    let code = output.status.code().unwrap_or(-1);
+    reply(
+        StatusCode::OK,
+        json!({
+            "exitCode": code,
+            "success": code == 0,
+            "stdout": stream(&request["capture"]["stdout"], &output.stdout),
+            "stderr": stream(&request["capture"]["stderr"], &output.stderr),
+        }),
+    )
 }
 
 #[derive(Debug)]
@@ -326,6 +640,10 @@ impl Reply {
     /// The reply's session as the exact bytes the service sent.
     pub fn session_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(&self.json["session"]).unwrap()
+    }
+    /// The Toha staged record inside the reply's signed session.
+    pub fn record(&self) -> &Value {
+        &self.json["session"]["record"]
     }
 }
 

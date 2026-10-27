@@ -25,11 +25,12 @@ type Run struct {
 // JobID returns the identifier of the run's job.
 func (r *Run) JobID() string { return r.job.id }
 
-// Phase records the step the job is in. It keeps the job running.
-func (r *Run) Phase(name string) { r.job.setState(Running, name) }
+// Phase records the step the job is in. It keeps the job running, and the
+// phase's time limit counts from this call.
+func (r *Run) Phase(name string) { r.job.setState(Running, name, true) }
 
 // SetState records a nonterminal state, such as waiting-for-answers, with
-// the current phase. Terminal states are set by the runner's return.
+// the current phase. Time limits pause while the job waits. Terminal states are set by the runner's return.
 func (r *Run) SetState(state State) error {
 	if state.Terminal() {
 		return fmt.Errorf("state %s is terminal; return from the runner instead", state)
@@ -37,7 +38,7 @@ func (r *Run) SetState(state State) error {
 	r.job.mu.Lock()
 	phase := r.job.phase
 	r.job.mu.Unlock()
-	r.job.setState(state, phase)
+	r.job.setState(state, phase, false)
 	return nil
 }
 
@@ -70,8 +71,10 @@ func (r *Run) SetApply(data json.RawMessage) error {
 }
 
 // Log returns a writer that appends each line written to it as a log
-// event. Every caller gets its own line buffer, so concurrent writers do
-// not interleave within a line. prefix is added to each line.
+// event. A line ends at a newline, a carriage return, or both together,
+// so each progress update a carriage return ends is an event of its own.
+// Every caller gets its own line buffer, so concurrent writers do not
+// interleave within a line. prefix is added to each line.
 func (r *Run) Log(prefix string) io.Writer {
 	w := &lineWriter{job: r.job, prefix: prefix}
 	r.mu.Lock()
@@ -99,6 +102,11 @@ type lineWriter struct {
 
 	mu  sync.Mutex
 	buf []byte
+	// cr is set when the last line ended at a carriage return, so a
+	// newline that follows it, in this write or the next, ends no line.
+	// Every line end sets it again; until then the buffer starts with the
+	// same bytes, so a stale cr finds no newline to remove.
+	cr bool
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
@@ -106,12 +114,15 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	w.buf = append(w.buf, p...)
 	for {
-		i := bytes.IndexByte(w.buf, '\n')
+		if w.cr {
+			w.buf = bytes.TrimPrefix(w.buf, []byte("\n"))
+		}
+		i := bytes.IndexAny(w.buf, "\r\n")
 		if i < 0 {
 			return len(p), nil
 		}
-		line := bytes.TrimSuffix(w.buf[:i], []byte("\r"))
-		w.job.appendEvent(EventLog, logData{Text: w.prefix + string(line)})
+		w.cr = w.buf[i] == '\r'
+		w.job.appendEvent(EventLog, logData{Text: w.prefix + string(w.buf[:i])})
 		w.buf = w.buf[i+1:]
 	}
 }

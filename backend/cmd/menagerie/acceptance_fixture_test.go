@@ -54,8 +54,8 @@ func envPort(t *testing.T, name string) int {
 }
 
 // heldTemplate turns version 1 of the sample template into one whose hook
-// waits until release exists.
-func heldTemplate(t *testing.T, dir, release string) {
+// waits until heldRelease exists in the workspace folder.
+func heldTemplate(t *testing.T, dir string) {
 	t.Helper()
 	browserTemplate(t, dir, 1)
 	path := filepath.Join(dir, "template.yml")
@@ -64,7 +64,7 @@ func heldTemplate(t *testing.T, dir, release string) {
 		t.Fatal(err)
 	}
 	held := strings.Replace(string(body), "'echo ran > hook-marker.txt'",
-		fmt.Sprintf("'echo ran > hook-marker.txt; while [ ! -e %s ]; do sleep 0.2; done'", release), 1)
+		fmt.Sprintf("'echo ran > hook-marker.txt; while [ ! -e %[1]s ]; do sleep 0.2; done; rm %[1]s'", heldRelease), 1)
 	if held == string(body) {
 		t.Fatal("the sample template has no hook to hold")
 	}
@@ -89,10 +89,6 @@ func TestAcceptanceFixture(t *testing.T) {
 
 	base := t.TempDir()
 	openTo(t, base, tmp)
-	release := filepath.Join(base, "release")
-	if err := os.MkdirAll(release, 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	// The templates and the workspace repository on an SSH Git host that
 	// admits Wyrwood's Transit key.
@@ -115,7 +111,7 @@ func TestAcceptanceFixture(t *testing.T) {
 	gitRun(t, work, "commit", "-q", "-m", "v2")
 	gitRun(t, work, "tag", "v2")
 	gitRun(t, work, "checkout", "-q", "-b", "held", "v1")
-	heldTemplate(t, work, filepath.Join(release, "held-space"))
+	heldTemplate(t, work)
 	gitRun(t, work, "commit", "-q", "-am", "held")
 	gitRun(t, work, "tag", "held")
 	gitRun(t, host.Dir, "clone", "-q", "--bare", work, filepath.Join(host.Dir, "sample-kit.git"))
@@ -226,7 +222,7 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 
 	done := make(chan struct{})
 	control := controlServer(t, controlFixture{p: p, rootDir: rootDir, bare: bare, docker: p.docker, done: done,
-		restart: restart, releaseDir: release})
+		restart: restart, release: true})
 	csrv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", controlPort), Handler: control}
 	go func() { _ = csrv.ListenAndServe() }()
 	t.Cleanup(func() { _ = csrv.Shutdown(context.Background()) })

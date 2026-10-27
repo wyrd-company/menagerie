@@ -46,6 +46,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 	git "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
@@ -161,11 +162,12 @@ oidc:
   issuer: %s
   client-id: %s
   redirect-url: %s
-template-service: {socket: %s}
+template-service: {socket: %s, hook-runner-socket: %s, candidate-folder: %s}
+runner-image: busybox:1.37
 templates:
   - {id: sample-kit-v1, name: "Sample kit, version 1", address: 'file://%s@v1'}
   - {id: sample-kit-v2, name: "Sample kit, version 2", address: 'file://%s@v2'}
-`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, socket, repo, repo))
+`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, socket, filepath.Join(sockDir, "hook-runner.sock"), filepath.Join(base, "candidates"), repo, repo))
 	runTemplateService(t, bin, cfgPath, filepath.Join(base, "template-data"), socket)
 
 	cfg, err := config.Load(cfgPath)
@@ -182,8 +184,15 @@ templates:
 	}
 	t.Cleanup(func() { docker.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := jobs.NewManager(ctx)
-	handler, err := newHandler(cfg, root, devcontainer.New(docker, devcontainer.Options{}), manager)
+	manager := jobs.NewManager(ctx, jobs.Options{})
+	var opts devcontainer.Options
+	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
+	_, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stopHooks)
+	handler, err := newHandler(cfg, root, backupRemote(cfg, nil), devcontainer.New(docker, opts), manager, parts.hooks, parts.images)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,6 +219,46 @@ templates:
 	<-done
 }
 
+// contribute clones branch from of the bare repository, writes body to rel,
+// commits it and pushes the commit to branch to.
+func contribute(bare, from, to, rel string, body []byte) error {
+	if from == "" || to == "" || rel == "" || !filepath.IsLocal(rel) {
+		return errors.New("from, branch and a relative path are required")
+	}
+	dir, err := os.MkdirTemp("", "contribute-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	repo, err := git.PlainClone(dir, false, &git.CloneOptions{URL: bare, ReferenceName: plumbing.NewBranchReferenceName(from), SingleBranch: true})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(rel)), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, rel), body, 0o644); err != nil {
+		return err
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return err
+	}
+	if _, err := wt.Add(filepath.ToSlash(rel)); err != nil {
+		return err
+	}
+	sig := &object.Signature{Name: "Contributor", Email: "contributor@example.invalid", When: time.Now()}
+	if _, err := wt.Commit("Change "+rel, &git.CommitOptions{Author: sig, Committer: sig}); err != nil {
+		return err
+	}
+	spec := gitconfig.RefSpec(fmt.Sprintf("+%s:%s", plumbing.NewBranchReferenceName(from), plumbing.NewBranchReferenceName(to)))
+	return repo.Push(&git.PushOptions{RefSpecs: []gitconfig.RefSpec{spec}})
+}
+
+// heldRelease is the file in its workspace folder that a held hook waits
+// for and then removes.
+const heldRelease = ".release"
+
 type controlFixture struct {
 	p       *pocketID
 	rootDir string
@@ -217,8 +266,8 @@ type controlFixture struct {
 	docker  *dockerclient.Client
 	done    chan struct{}
 	// The image run's controls; the in-process run leaves them unset.
-	restart    func() error
-	releaseDir string
+	restart func() error
+	release bool
 }
 
 func controlServer(t *testing.T, f controlFixture) http.Handler {
@@ -347,6 +396,20 @@ func controlServer(t *testing.T, f controlFixture) http.Handler {
 		}
 		writeJSON(w, map[string]bool{"ok": true})
 	})
+	// A commit on top of a backup branch, pushed to another branch as a
+	// pull request's author would: the body is the new content of path.
+	mux.HandleFunc("POST /backup/contribute", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			err = contribute(f.bare, q.Get("from"), q.Get("branch"), q.Get("path"), body)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
 	// Restart the Menagerie container and wait until it answers again.
 	if f.restart != nil {
 		mux.HandleFunc("POST /restart", func(w http.ResponseWriter, r *http.Request) {
@@ -357,10 +420,11 @@ func controlServer(t *testing.T, f controlFixture) http.Handler {
 			writeJSON(w, map[string]bool{"ok": true})
 		})
 	}
-	// Let a template hook held on a release file finish.
-	if f.releaseDir != "" {
+	// Let a template hook held on a release file in its workspace folder,
+	// the only folder a hook sees, finish.
+	if f.release {
 		mux.HandleFunc("POST /release", func(w http.ResponseWriter, r *http.Request) {
-			path := filepath.Join(f.releaseDir, filepath.Base(r.URL.Query().Get("name")))
+			path := filepath.Join(f.rootDir, filepath.Base(r.URL.Query().Get("name")), heldRelease)
 			if err := os.WriteFile(path, []byte("released\n"), 0o644); err != nil {
 				http.Error(w, err.Error(), 500)
 				return

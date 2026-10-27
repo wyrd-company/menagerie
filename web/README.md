@@ -4,7 +4,9 @@ The browser UI of the workspace service: the workspace list, the create
 interview and the upgrade interview. It is a React and TypeScript single-page
 app built with Vite. The Go workspace service serves the build and owns every
 route under `/api` and `/auth`; the UI holds no state of its own besides the
-current interview session.
+current interview session. The workspace list also applies a reviewed backup
+branch and follows commit jobs. Job consoles show elapsed time and configured
+time limits.
 
 ## Screens
 

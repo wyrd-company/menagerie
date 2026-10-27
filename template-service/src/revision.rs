@@ -260,6 +260,7 @@ mod tests {
             id: "sample".into(),
             name: "Sample".into(),
             address: address.into(),
+            runner_image: None,
         }
     }
 

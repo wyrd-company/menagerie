@@ -4,6 +4,7 @@ import {
   type InterviewReply,
   type Job,
   type JobEvent,
+  type JobLimit,
   type JobResult,
 } from "../api/types.ts";
 
@@ -22,6 +23,9 @@ export interface JobView {
   result: JobResult | null;
   lastEventId: number;
   connection: Connection;
+  /** When `limit` passes; null without a limit, while waiting for answers and once ended. */
+  deadline: string | null;
+  limit: JobLimit | null;
 }
 
 export type JobAction =
@@ -41,6 +45,8 @@ export const initialJobView: JobView = {
   result: null,
   lastEventId: 0,
   connection: "connecting",
+  deadline: null,
+  limit: null,
 };
 
 export function isTerminal(view: JobView): boolean {
@@ -86,7 +92,13 @@ export function jobReducer(view: JobView, action: JobAction): JobView {
       // The stream is the fresher source once it has delivered an event.
       if (view.lastEventId > 0) return next;
       // Phases come from the stream in order; the summary only names the current one.
-      return { ...next, state: action.job.state, phase: action.job.phase };
+      return {
+        ...next,
+        state: action.job.state,
+        phase: action.job.phase,
+        deadline: action.job.deadline ?? null,
+        limit: action.job.limit ?? null,
+      };
     }
     case "interview":
       return withReply(view, action.reply);
@@ -99,13 +111,27 @@ export function jobReducer(view: JobView, action: JobAction): JobView {
       const seen = { ...view, lastEventId: event.id };
       switch (event.type) {
         case "state":
-          return withPhase({ ...seen, state: event.data.state }, event.data.phase);
+          return withPhase(
+            {
+              ...seen,
+              state: event.data.state,
+              deadline: event.data.deadline ?? null,
+              limit: event.data.limit ?? null,
+            },
+            event.data.phase,
+          );
         case "log":
           return { ...seen, logs: [...seen.logs, { id: event.id, text: event.data.text }] };
         case "interview":
           return withReply(seen, event.data);
         case "result":
-          return { ...seen, state: event.data.state, result: event.data };
+          return {
+            ...seen,
+            state: event.data.state,
+            result: event.data,
+            deadline: null,
+            limit: null,
+          };
         default: {
           const text = `[${event.event}] ${typeof event.data === "string" ? event.data : JSON.stringify(event.data)}`;
           return { ...seen, logs: [...seen.logs, { id: event.id, text }] };

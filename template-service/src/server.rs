@@ -1,5 +1,6 @@
 //! JSON over HTTP/1.1 on a Unix socket. Each request runs its Toha work on a
-//! blocking worker and returns owned JSON.
+//! blocking worker, inside its own credential resolver scope, and returns
+//! owned JSON.
 use crate::Service;
 use crate::error::ServiceError;
 use axum::Router;
@@ -79,44 +80,80 @@ where
     Req: DeserializeOwned + Send + 'static,
     Rep: Serialize + Send + 'static,
 {
+    // The one way out of a route: every status and body, refusals and
+    // internal errors included, loses each written form of the credentials
+    // the operation's resolver handed out, whatever text carried them.
+    let handed = crate::credentials::Handed::default();
+    let (status, body) = run(service, body, operation, handed.clone()).await;
+    json(status, handed.scrub(body))
+}
+
+async fn run<Req, Rep>(
+    service: Arc<Service>,
+    body: Bytes,
+    operation: fn(&Service, Req) -> Result<Rep, ServiceError>,
+    handed: crate::credentials::Handed,
+) -> (StatusCode, Vec<u8>)
+where
+    Req: DeserializeOwned + Send + 'static,
+    Rep: Serialize + Send + 'static,
+{
     // The bounded scan runs first, so a body nested too deep is refused as
     // such even when it is also malformed; syntax is then judged before any
     // number refusal.
     let scanned = match crate::numbers::scan(&body) {
         Ok(scanned) => scanned,
-        Err(refusal) => return error(&refusal),
+        Err(refusal) => return refused(&refusal),
     };
     if let Err(e) = serde_json::from_slice::<serde::de::IgnoredAny>(&body) {
-        return error(&ServiceError::bad_request(
+        return refused(&ServiceError::bad_request(
             "malformed-request",
             e.to_string(),
         ));
     }
     if let Err(refusal) = scanned.check() {
-        return error(&refusal);
+        return refused(&refusal);
     }
     let request: Req = match serde_json::from_slice(&body) {
         Ok(request) => request,
         Err(e) => {
-            return error(&ServiceError::bad_request(
+            return refused(&ServiceError::bad_request(
                 "malformed-request",
                 e.to_string(),
             ));
         }
     };
-    let result = tokio::task::spawn_blocking(move || operation(&service, request)).await;
-    match result {
-        Ok(Ok(reply)) => match serde_json::to_vec(&reply) {
-            Ok(bytes) => json(StatusCode::OK, bytes),
-            Err(e) => error(&ServiceError::internal(format!(
-                "reply does not serialize: {e}"
-            ))),
-        },
-        Ok(Err(refusal)) => error(&refusal),
-        Err(join) => error(&ServiceError::internal(format!(
+    // Every Toha fetch the operation makes, on this worker, asks the
+    // workspace service's credential route when an HTTPS remote challenges.
+    // `_alive` lives as long as this future: when the caller goes away the
+    // future is dropped, which ends the resolver's credential requests.
+    let (_alive, ended) = crate::credentials::lifetime();
+    let kept = handed.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let resolver =
+            crate::credentials::resolver(&service.settings.hook_runner_socket, kept, ended);
+        toha::source::with_credential_resolver(resolver, || operation(&service, request))
+    })
+    .await;
+    let reply = match result {
+        Ok(Ok(reply)) => serde_json::to_vec(&reply)
+            .map_err(|e| ServiceError::internal(format!("reply does not serialize: {e}"))),
+        Ok(Err(refusal)) => Err(refusal),
+        Err(join) => Err(ServiceError::internal(format!(
             "request worker failed: {join}"
         ))),
+    };
+    match reply {
+        Ok(bytes) => (StatusCode::OK, bytes),
+        // A failure after the resolver handed out a credential carries no
+        // text from Toha, gix or the remote.
+        Err(error) => refused(&handed.withhold(error)),
     }
+}
+
+fn refused(error: &ServiceError) -> (StatusCode, Vec<u8>) {
+    let status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, error.body())
 }
 
 fn json(status: StatusCode, body: Vec<u8>) -> Response {
@@ -124,8 +161,8 @@ fn json(status: StatusCode, body: Vec<u8>) -> Response {
 }
 
 fn error(error: &ServiceError) -> Response {
-    let status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    json(status, error.body())
+    let (status, body) = refused(error);
+    json(status, body)
 }
 
 #[derive(Debug, thiserror::Error)]

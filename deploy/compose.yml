@@ -16,20 +16,34 @@ services:
       # address, behind the HTTPS origin named by oidc.redirect-url.
       - 127.0.0.1:8080:8080
     environment:
-      # Toha's SSH transport reaches the Wyrwood agent through this socket.
+      # With an SSH identity, Toha's SSH transport reaches the Wyrwood agent
+      # through this socket. Remove it when the GitHub App is the only
+      # identity.
       SSH_AUTH_SOCK: /run/wyrwood/ssh-agent.sock
+      # A certificate bundle for a GitHub Enterprise Server signed by a
+      # private authority: the image's own bundle and that authority. Mount
+      # it below as well.
+      # SSL_CERT_FILE: /etc/menagerie/ca-bundle.pem
     volumes:
       # The workspace root at the same path on the host and in the
       # container, so the devcontainers' bind mounts resolve on the host.
       # Its owner is the user both services run as.
       - ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}:${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}
-      # The host Docker daemon. Only the workspace service uses it.
+      # The workspace socket folder at the same path on the host and in the
+      # container, like the workspace root, so each devcontainer's mount of
+      # its own socket folder resolves on the host. Create it before the
+      # first start, owned by the workspace root's owner.
+      - ${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}:${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}
+      # The host Docker daemon. Only the workspace service uses it, for
+      # devcontainers and for the throwaway containers that run template
+      # hooks and initializeCommand with only the workspace folder mounted.
       - /var/run/docker.sock:/var/run/docker.sock
-      # The Wyrwood consumer directory: ssh-agent.sock and vault.sock. The
+      # The Wyrwood consumer directory: vault.sock and ssh-agent.sock. The
       # agent creates it when it binds the container, under its consumer
       # root, /run/wyrwood/containers unless the agent configures another.
       - ${WYRWOOD_CONSUMER_DIRECTORY:-/run/wyrwood/containers/menagerie}:/run/wyrwood
       - ./config.yml:/etc/menagerie/config.yml:ro
+      # - ./ca-bundle.pem:/etc/menagerie/ca-bundle.pem:ro
       # Toha's template cache and state; it survives recreating the container.
       - menagerie-data:/var/lib/menagerie
 

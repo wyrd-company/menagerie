@@ -18,6 +18,8 @@ const operationLabel: Record<string, string> = {
   start: "starting",
   stop: "stopping",
   rebuild: "rebuilding",
+  commit: "committing",
+  "apply-branch": "applying a branch",
 };
 
 function useFleet() {
@@ -65,13 +67,26 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
   const [pending, setPending] = useState<Record<string, Operation>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [applying, setApplying] = useState<string | null>(null);
+  const [branch, setBranch] = useState("");
 
-  const run = async (workspace: string, operation: Operation) => {
+  const openApply = (workspace: string) => {
     setConfirming(null);
+    setBranch("");
+    setApplying(workspace);
+  };
+
+  const run = async (workspace: string, operation: Operation, branchName?: string) => {
+    setConfirming(null);
+    setApplying(null);
     setPending((p) => ({ ...p, [workspace]: operation }));
     setRowErrors(({ [workspace]: _, ...rest }) => rest);
     try {
-      const job = await startJob({ operation, workspace });
+      const job = await startJob(
+        branchName === undefined
+          ? { operation, workspace }
+          : { operation, workspace, branch: branchName },
+      );
       navigate(paths.list(job.jobId));
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(0, null, String(e));
@@ -171,8 +186,48 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                         </button>
                       </span>
                     ) : (
-                      <button type="button" disabled={busy} onClick={() => setConfirming(ws.name)}>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          setApplying(null);
+                          setConfirming(ws.name);
+                        }}
+                      >
                         Rebuild
+                      </button>
+                    )}
+                    {applying === ws.name ? (
+                      <form
+                        className="apply-branch"
+                        aria-label={`Apply a branch to ${ws.name}`}
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void run(ws.name, "apply-branch", branch.trim());
+                        }}
+                      >
+                        <input
+                          type="text"
+                          className="mono"
+                          name="branch"
+                          aria-label="Branch"
+                          placeholder="branch"
+                          autoComplete="off"
+                          spellCheck={false}
+                          autoFocus
+                          value={branch}
+                          onChange={(e) => setBranch(e.target.value)}
+                        />
+                        <button type="submit" className="primary" disabled={busy || !branch.trim()}>
+                          Apply
+                        </button>
+                        <button type="button" className="ghost" onClick={() => setApplying(null)}>
+                          Cancel
+                        </button>
+                      </form>
+                    ) : (
+                      <button type="button" disabled={busy} onClick={() => openApply(ws.name)}>
+                        Apply branch
                       </button>
                     )}
                     {busy ? (

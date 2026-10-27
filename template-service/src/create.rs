@@ -3,9 +3,11 @@
 use crate::Service;
 use crate::api::{AnswerRequest, ApplyReply, ApplyRequest, InterviewReply, Outcome, StartRequest};
 use crate::checks::{self, Operation};
-use crate::error::ServiceError;
+use crate::error::{ServiceError, ValueFree};
+use crate::hooks::CallbackRunner;
 use crate::host::{self, ProcessEnvironment};
 use crate::reply;
+use crate::seal::{self, Binding};
 use toha::context::{EnvironmentDecision, ExecutionFacts};
 use toha::operations::{Preparation, Session};
 use toha::{ApplyOptions, RawAnswers, Template};
@@ -67,14 +69,20 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
     )?;
     warnings.extend(session.warnings()?);
     let state = session.state()?;
-    reply::interview(&session.record, &selected.target, state, warnings)
+    let sealed = seal::seal(
+        &service.key,
+        Binding::new(Operation::Create, &request.workspace, &request.template_id),
+        &session.record,
+    )?;
+    reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }
 
 /// Rebuild the session and submit one batch. A rejected batch returns the same
 /// questions with their errors and an unchanged session.
 pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
-    let record = checks::session(request.session)?;
+    let binding = Binding::new(Operation::Create, &request.workspace, &request.template_id);
+    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, warnings) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;
@@ -90,7 +98,8 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     let mut session = resume(service, record, &selected.target, config, &registry)?;
     reply::asking(&session.state()?)?;
     let state = session.answer(answers)?;
-    reply::interview(&session.record, &selected.target, state, warnings)
+    let sealed = seal::seal(&service.key, binding, &session.record)?;
+    reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }
 
 /// Rebuild a completed session and apply it into the folder the workspace
@@ -98,7 +107,8 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
 /// written.
 pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
-    let record = checks::session(request.session)?;
+    let binding = Binding::new(Operation::Create, &request.workspace, &request.template_id);
+    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, _) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;
@@ -111,9 +121,12 @@ pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, 
         &registry,
     )?;
     checks::fresh_repository(&selected.folder, &selected.target)?;
-    let session = resume(service, record, &selected.target, config, &registry)?;
-    let done = reply::completed(session.state()?)?;
-    let plan = session.plan(&done)?;
+    // From here Toha renders the template and runs its hooks, so every
+    // refusal is value-free.
+    let session = resume(service, record, &selected.target, config, &registry)
+        .map_err(ValueFree::value_free)?;
+    let done = reply::completed(session.state().map_err(ValueFree::value_free)?)?;
+    let plan = session.plan(&done).map_err(ValueFree::value_free)?;
     let actions = toha::operations::classify_paths(&plan, &selected.target, false)?;
     let messages = done.messages.clone();
     if toha::updates::effective_dry_run(false, &done) {
@@ -123,16 +136,21 @@ pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, 
             messages,
         ));
     }
-    let applied = session.apply_plan(
-        plan,
-        ApplyOptions {
-            force: false,
-            trusted: true,
-        },
-        &toha::hook::ProcessRunner,
-        None,
-        &mut |_| {},
-    )?;
+    let applied = session
+        .apply_plan(
+            plan,
+            ApplyOptions {
+                force: false,
+                trusted: true,
+            },
+            &CallbackRunner {
+                socket: &service.settings.hook_runner_socket,
+                token: request.hook_token.as_deref(),
+            },
+            None,
+            &mut |_| {},
+        )
+        .map_err(ValueFree::value_free)?;
     reply::generated(applied, &actions, messages)
 }
 
@@ -142,13 +160,13 @@ fn resume(
     target: &toha::staging::CanonicalTarget,
     config: toha::config::Config,
     registry: &toha::registry::Registry,
-) -> Result<Session, ServiceError> {
-    Ok(Session::resume(
+) -> Result<Session, toha::operations::OperationError> {
+    Session::resume(
         record,
         target.clone(),
         &service.host.paths,
         config,
         registry,
         &service.host.cwd,
-    )?)
+    )
 }

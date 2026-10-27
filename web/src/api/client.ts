@@ -79,6 +79,8 @@ export interface StartJob {
   operation: Operation;
   workspace: string;
   templateId?: string;
+  /** The branch of the workspace repository an apply-branch job applies. */
+  branch?: string;
 }
 
 export async function startJob(start: StartJob): Promise<Job> {

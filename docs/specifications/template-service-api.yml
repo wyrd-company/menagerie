@@ -10,12 +10,22 @@ description: >-
   client, with JSON over HTTP/1.1 on the Unix socket named by
   `template-service.socket` in the Menagerie configuration. It reads that
   file (`-config`, default `/etc/menagerie/config.yml`) only for
-  `workspace-root`, `templates` and `template-service.socket`, with the
-  workspace service's rules for them, and ignores its other members. Toha's
+  `workspace-root`, `templates`, `template-service.socket`,
+  `template-service.hook-runner-socket` and
+  `template-service.candidate-folder`, with the workspace service's rules
+  for them, and ignores its other members. The service starts no process:
+  the workspace service runs every template hook. The candidate folder,
+  default `/var/lib/menagerie/candidates`, is the service's temporary
+  folder: the service creates it when it is missing, private to its user,
+  and every temporary folder Toha makes is inside it, an upgrade's
+  candidate included. Toha's
   configuration, registry, cache and state live under the folder named by
-  `-data`, default `/var/lib/menagerie/toha`. On start it replaces a socket
-  file left by an ended process and refuses a live socket or another file.
-  It keeps no state between requests.
+  `-data`, default `/var/lib/menagerie/toha`, with the session key
+  `session-key`: 32 random bytes, readable only by the service, written on
+  the first start and read on every later one. A key file of another
+  length, or one its group or others may read, stops the start. On start it replaces a socket file left by an ended
+  process and refuses a live socket or another file. It keeps no state
+  between requests.
 
 
   Routes. Every route is `POST` with a JSON body and answers JSON.
@@ -23,7 +33,8 @@ description: >-
   upgrade, both with `{"workspace","target","templateId"}`.
   `/v1/interviews/answers` and `/v1/upgrades/answers` add `"session"` and
   `"submission"`. `/v1/workspaces/generate` and `/v1/upgrades/apply` add
-  `"session"`. Other members are refused. `workspace` is the folder name,
+  `"session"` and an optional `"hookToken"`, the workspace service's grant
+  for that request's hooks. Other members are refused. `workspace` is the folder name,
   `target` is that folder under the workspace root, and `templateId` is an
   approved template's `id`; for an upgrade it names the template version to
   upgrade to. Another path answers 404 `not-found`, another method 405
@@ -34,8 +45,11 @@ description: >-
   `workspace` is a plain folder name, that `target` is lexically the
   workspace root joined with it, that the folder's real path, with symbolic
   links resolved, is a direct child of the root's real path, and that
-  `templateId` is approved. A route that carries a session then checks that
-  the session's template and named flag are the approved address's formal
+  `templateId` is approved. A route that carries a session then verifies its
+  signature for this flow (create or upgrade), `workspace` and `templateId`,
+  and refuses an unsigned value, an altered record or signature, and a value
+  issued for another flow, workspace or template as `session-tampered`. Only
+  then does it read the record and check that the session's template and named flag are the approved address's formal
   identity, computed without fetching, that it was started for this target,
   and that it belongs to this flow: a create session has no update base, and
   an upgrade session's base is a recorded application. A submission is
@@ -44,10 +58,14 @@ description: >-
 
 
   Interview replies. Start and answer routes answer 200 with
-  `{"session","state","document","warnings"}`. `session` is Toha's whole
-  staged record: the pinned template and revision, the invocation context,
-  admitted documents and accepted submissions. The workspace service returns
-  it unchanged with the next request. `state` is `questions`, `completed` or
+  `{"session","state","document","warnings"}`. `session` is
+  `{"record","signature"}`. `record` is Toha's whole staged record: the
+  pinned template and revision, the invocation context, admitted documents
+  and accepted submissions. `signature` is the unpadded base64url
+  HMAC-SHA256, under the session key, of the flow, `workspace`,
+  `templateId` and the record's JSON serialization, each prefixed by its
+  length. The workspace service returns the session unchanged with the next
+  request. `state` is `questions`, `completed` or
   `ended`. `document` is Toha's batch document while questions remain,
   Toha's ended document after a flow `stop` or `abort`, and `null` once the
   interview completed. A rejected submission answers 200 with the same
@@ -94,8 +112,7 @@ description: >-
   file is asked as a JSON object. `/v1/workspaces/generate` applies a
   completed session into the folder the workspace service created and
   initialized: it must exist, hold only `.git`, and be a Git repository.
-  Template hooks run with Toha's process hook runner inside Menagerie, in
-  their target-relative working directory. Generation succeeds only when
+  Generation succeeds only when
   Toha wrote the applied record `.toha.json`; files written without it are
   the error `record-not-written`. A hook failure leaves the files written
   before it and no applied record, so the folder is no longer new and a
@@ -111,6 +128,145 @@ description: >-
   the whole session. `/v1/upgrades/apply` merges a completed session.
 
 
+  Hooks. Generate and apply hand each of the template's hooks to the
+  workspace service's hook runner: JSON over HTTP/1.1, `POST /v1/hooks/run`
+  on the Unix socket named by `template-service.hook-runner-socket`,
+  default `/run/menagerie/hook-runner.sock`, which the workspace service
+  listens on, open to the services' user only. The request is
+  `{"token","target","program","cwd","templateRoot","capture"}`: `token`
+  is the request's `hookToken`; `target` is Toha's target with its
+  symbolic links resolved: for a generate, the workspace folder; for an
+  upgrade's apply, Toha's candidate, a folder inside the candidate folder
+  where Toha applies the new version before it merges the result into the
+  workspace; `program` is
+  `{"run": [argv]}` or `{"script": {"path","args"}}`, a file of the
+  template; `cwd` is the hook's target-relative working directory or
+  `null`; `templateRoot` is the template's folder in Toha's cache; and
+  `capture` is `{"stdout","stderr"}`, the streams the hook declares. The
+  workspace service resolves the working directory under the target with
+  symbolic links followed and runs the hook in a throwaway container in
+  the folder it resolves to, the program as given, with an empty
+  environment; a script's template folder is copied into the container at
+  its own path first. A generate's target is mounted. An upgrade's
+  candidate is copied in, the workspace folder is not mounted, and when
+  the hook exits the candidate is copied back so it holds exactly what the
+  hook left. A run hook answers 200 with
+  `{"exitCode","success","stdout","stderr"}`, where a captured stream holds
+  its raw bytes in base64 and an uncaptured one is `null` and went to the
+  job console. Any other answer is `{"error":{"kind","message"}}` with
+  one of the hook runner's kinds: `malformed-request` and `invalid-hook`,
+  status 400, for a request that is not a hook, a working directory that
+  is missing, not a folder, or outside the target once its symbolic links
+  are followed, or a script outside its template;
+  `hook-token-refused`, status 403, for an unknown or revoked token or a
+  `target` the token does not admit: a generate's token admits its job's
+  workspace folder and the folders inside it, an apply's token only a
+  folder inside the candidate folder, named without a symbolic link, never
+  the workspace folder; `hook-cancelled`, status
+  409, when the job was cancelled, its container then killed and removed;
+  `runner-image-unavailable`, status 503, when no runner image could be
+  found or pulled; `hook-container-failed`, status 500, when the Engine
+  failed or the candidate could not be copied back. A refusal's message is
+  a fixed sentence. The job console names the failure: the runner image,
+  and a failed container's stage (inspect, pull, create, copy, attach,
+  start, wait, copy-back, remove) and the Engine error's class, or
+  `unsafe-entry` for a copy back that held an entry the copy refuses, never
+  the Engine's message, which can name the program or its working
+  directory. The
+  workspace service revokes the token when the generate or apply request
+  returns. A generate or apply without `hookToken`, or whose hook the
+  runner refuses, fails that hook: the reply is `hook-io-failed`, and its
+  message names the hook and a reason this service chose for the runner's
+  kind, never the runner's message. A hook that runs and fails
+  is `hook-failed`, named by its position, its `id` when it has one and its
+  exit code, never by its program, arguments or working directory, which
+  can hold an earlier hook's captured output; `hook-io-failed` names the
+  hook the same way. No reply, error or log line carries a captured
+  stream. Toha's `requires` check resolves programs on
+  this service's own `PATH`, which agrees with a hook's only when it runs
+  in Menagerie's own image.
+
+
+  Credentials. The hook runner socket also serves `POST
+  /v1/credentials/github`, the GitHub App credentials of a template fetch
+  over `https`. The request is `{"url"}`, the repository's `https` URL
+  without user information; an unknown member, a second value or a body
+  over 8 KiB is refused. For a URL on the configured GitHub App's server
+  whose path is exactly `/{owner}/{repo}` or `/{owner}/{repo}.git`, with no
+  query or fragment, the answer is 200
+  `{"username":"x-access-token","password"}`, where `password` is an
+  installation token with contents read on that one repository. Every
+  other answer is `{"reason"}`, a fixed sentence: 404 when no `github-app`
+  is configured or the URL is any other, and this service then fetches as
+  Toha does by default; 502 when the token could not be minted, the reason
+  naming the cause without a token, URL or GitHub answer; 400 for a body
+  that is not a credential request; 405 for a method other than POST. The
+  answer carries `Cache-Control: no-store`. This service keeps the token
+  in memory for the one fetch and never writes it to disk.
+
+
+  Every request runs its Toha work on one worker thread inside one Toha
+  credential resolver scope, so every fetch of that request, and only that
+  request, can ask the route. This service asks only when an `https`
+  remote asks for credentials, once for each challenge, with the URL
+  `https://host[:port]/path`. The default port 443 is left out, and the path
+  is percent-encoded outside the unreserved characters and `/`. The URL
+  never carries user information, so a template address with a user name
+  is asked for as the same repository without it: a user name does not opt
+  out of the App, and the fetch sends the route's credential instead of
+  it. The route's own rule, which refuses a URL with user information,
+  applies to its direct callers. A 200 is the
+  fetch's credential. A 404 leaves the challenge to Toha's default
+  behaviour. A 502 fails the fetch with the prefix
+  `GitHub App credentials are unavailable: ` and the route's reason, when
+  that reason is one line of at most 200 bytes, and with
+  `the token could not be minted` otherwise. Any other
+  status, a malformed answer or an unreachable socket fails the fetch with
+  a fixed reason of this service, after the same prefix. A failed fetch is
+  a template refusal such as `template-resolve-failed`, whose message is
+  that reason where the flow reports Toha's message.
+
+
+  The request's resolver keeps every credential it handed out. When a
+  request fails after the resolver handed out at least one credential, its
+  refusal carries no text from Toha, gix or the remote, which can hold the
+  credential in forms no redaction can list: the `message` is a fixed
+  sentence for the `kind`, and `warnings` are dropped. `paths`,
+  `locations` and `questions` stay. The sentences:
+  `template-resolve-failed`, "the template could not be fetched; the Git
+  host refused or failed the request"; `template-not-found`, "the template
+  was not found on the Git host"; `template-stale-revision`, "the
+  template's approved revision is stale"; `template-ambiguous`, "the
+  template's name is ambiguous"; `template-refresh-failed`, "the
+  template's catalog entry could not be updated from the Git host";
+  `template-cache-conflict`, "Toha's cache entry for the template does not
+  hold the recorded commit from its source"; `update-refused`, "the upgrade
+  could not read the template from the Git host"; `merge-base-failed`, "the
+  workspace's recorded template revision could not be fetched from the Git
+  host"; `merge-failed`, "the upgrade could not be merged"; `apply-failed`,
+  "the template could not be applied; the workspace repository or its
+  remote could not be read"; any other kind, "the template operation failed
+  after GitHub App credentials were supplied". A request that handed out no
+  credential keeps its full message, the route's reason or this service's
+  own credential reason included. As a second defence, every reply of a
+  route, successes included, passes one boundary that replaces each
+  written form of the handed-out credentials with `<redacted>`: the
+  password; the `username:password` pair and the password in base64 and
+  base64url, padded and unpadded; and each of those Rust-escaped,
+  JSON-escaped and as a decimal byte list. Matches may overlap; every byte
+  a match covers is removed, and each run of covered bytes becomes one
+  `<redacted>`. The service writes no log line for a request.
+
+
+  When the workspace service's request ends before its reply, because the
+  job was cancelled or reached its time limit, the request's credential
+  requests end with it: one in flight loses its connection, and the fetch
+  fails with `GitHub App credentials are unavailable: the operation ended
+  before credentials arrived`; no later one is sent. Toha's own network
+  reads and local work for that request are not interrupted and run until
+  they return.
+
+
   Apply replies. Generate and apply answer 200 with `{"outcome","files",
   "recordPath","messages","hooks","conflicts"}`. `outcome` is `written`,
   `conflicted`, `already-current`, `needs-trust` or `planned`; only
@@ -118,13 +274,20 @@ description: >-
   `recordPath`. `conflicted` is a written merge whose `conflicts` lists the
   paths written with conflict markers. `files` lists `{path, action}`;
   `hooks` lists `{id, exitCode, success}` for each hook that ran. Hook output
-  is not returned.
+  is not returned: the workspace service's job console shows what a hook
+  does not capture.
 
 
   Errors. A refusal answers `{"error":{"kind","message"}}`, adding `paths`
   for refused files, `locations` and `questions` for refused request values,
-  and `warnings`. Request and session: `malformed-request` (400),
-  `malformed-session` (400), `malformed-submission` (400),
+  and `warnings`. Generate and apply build every refusal Toha causes from a
+  message this service chose for the error's variant: no message, path or
+  warning carries a value Toha rendered, since a hook's captured output can
+  reach any value rendered after that hook ran. Their `paths` stay only on
+  `target-conflict` and `target-drift`, which are found from the plan
+  before any hook runs. Request and session: `malformed-request` (400),
+  `malformed-session` (400), `session-tampered` (400),
+  `malformed-submission` (400),
   `submission-template-mismatch` (400), `number-not-representable` (400),
   `nesting-too-deep` (400),
   `invalid-workspace` (400), `target-mismatch` (400), `unknown-template`
@@ -168,7 +331,26 @@ validation-criteria: >-
   `cargo test --locked` in `template-service/` runs the service against
   Toha's library on a Unix socket: `tests/create.rs` covers create, rejected
   answers, generation into an initialized repository, revision pinning and
-  flow ends; `tests/hooks.rs` covers hook folders, hook and I/O failures;
+  flow ends; `tests/hooks.rs` covers hook folders, hook and I/O failures,
+  and hooks without a granted token, against a hook runner that runs each
+  hook as a local process; the unit tests in `src/hooks.rs` cover the hook
+  runner request, captured streams, exit codes, refusals and malformed
+  replies, none of which puts a stream or a reply's text in an error; the
+  unit tests in `src/error.rs` drive a captured value through every apply
+  error that can carry one, alone and wrapped as generate and apply
+  return it, and find it in no refusal; the unit tests in
+  `src/credentials.rs` cover the credential request's URL and every answer
+  of the route, and find a granted token in no refusal or `Debug` output;
+  `tests/credentials.rs` fetches a private template over TLS with the
+  route's token through create and generate, also from an address with a
+  user name, leaves the challenge to Toha on a 404, fails with the route's
+  reason on a 502, runs two creates at once that each fetch with their own
+  repository's token, replies with only the fixed sentence when a remote
+  echoes the credential, also as overlapping copies, keeps Toha's message
+  when no credential was handed out, and ends the credential request and its worker of
+  each caller that goes away, without leaving a thread; `go test -tags
+  templateservice ./backend/internal/workflows/` ends the credential
+  request of a create whose job reaches its time limit;
   `tests/numbers.rs` covers number values through the session and the
   applied record; `tests/revisions.rs` covers admitted revisions for
   fixed and moving addresses, installed branches and tags;
@@ -176,7 +358,10 @@ validation-criteria: >-
   upgrade between two template versions that asks only the new question and
   keeps local edits, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;
-  `tests/requests.rs` covers every request check; `tests/restart.rs` runs
+  `tests/requests.rs` covers every request check, and refuses a session
+  with any record member altered, without its signature, signed with
+  another key, or replayed into another workspace, template or flow, while
+  the untouched session completes and generates; `tests/restart.rs` runs
   the binary across a restart; `tests/limits.rs` sends the binary a request
   nested far deeper than any value; `tests/contract.rs` checks that this
   specification names every route and error kind the service uses.

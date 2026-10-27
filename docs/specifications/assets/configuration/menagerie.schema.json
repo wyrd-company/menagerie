@@ -54,6 +54,10 @@
             "type": "string",
             "minLength": 1,
             "description": "Toha template address."
+          },
+          "runner-image": {
+            "type": "string",
+            "description": "Image of the throwaway containers that run the template's hooks. Absent, the global runner-image."
           }
         }
       }
@@ -111,7 +115,32 @@
           "pattern": "^/",
           "default": "/run/menagerie/template.sock",
           "description": "Unix socket of the template service."
+        },
+        "hook-runner-socket": {
+          "type": "string",
+          "pattern": "^/",
+          "default": "/run/menagerie/hook-runner.sock",
+          "description": "Unix socket on which the workspace service runs the template service's hooks in throwaway containers. Differs from socket."
+        },
+        "candidate-folder": {
+          "type": "string",
+          "pattern": "^/",
+          "default": "/var/lib/menagerie/candidates",
+          "description": "The template service's temporary folder, where Toha builds an upgrade's candidate. The workspace service runs an upgrade's hooks only against a folder inside it. Absolute and clean, not /, and neither inside workspace-root nor containing it."
         }
+      }
+    },
+    "runner-image": {
+      "type": "string",
+      "description": "Image of the throwaway containers that run initializeCommand and the hooks of templates without their own runner-image. Absent, Menagerie's own image."
+    },
+    "local-env": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Variables of Menagerie's own environment that a devcontainer definition may read through ${localEnv:NAME}. Absent, a definition reads none.",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
       }
     },
     "registry-credentials": {
@@ -152,6 +181,176 @@
           }
         }
       }
+    },
+    "job-limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Limits on a job's running time. Time waiting for answers does not count. A job past a limit is cancelled and fails as timed-out. Absent, no job has a limit.",
+      "properties": {
+        "default": {
+          "$ref": "#/$defs/duration",
+          "description": "Limit of every operation without its own."
+        },
+        "operations": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Limit per operation; it replaces default.",
+          "properties": {
+            "start": {
+              "$ref": "#/$defs/duration"
+            },
+            "stop": {
+              "$ref": "#/$defs/duration"
+            },
+            "rebuild": {
+              "$ref": "#/$defs/duration"
+            },
+            "create": {
+              "$ref": "#/$defs/duration"
+            },
+            "upgrade": {
+              "$ref": "#/$defs/duration"
+            },
+            "commit": {
+              "$ref": "#/$defs/duration"
+            },
+            "apply-branch": {
+              "$ref": "#/$defs/duration"
+            }
+          }
+        },
+        "phases": {
+          "type": "object",
+          "description": "Limit per phase, counted from each entry into the phase, inside any operation. Template hooks run inside generate and apply.",
+          "propertyNames": {
+            "enum": [
+              "read-definition",
+              "initialize-command",
+              "build",
+              "remove-container",
+              "up",
+              "stop",
+              "interview",
+              "initialize-repository",
+              "generate",
+              "fetch",
+              "plan",
+              "apply",
+              "commit",
+              "backup-local-changes",
+              "backup"
+            ]
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/duration"
+          }
+        }
+      }
+    },
+    "alerts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "webhook"
+      ],
+      "description": "Webhook told about failed and long-running jobs with one JSON POST each. Absent, no alert is sent.",
+      "properties": {
+        "webhook": {
+          "type": "string",
+          "pattern": "^https?://[^/?#]",
+          "description": "http or https URL alerts are posted to. It can carry a credential and is never logged."
+        },
+        "long-running": {
+          "$ref": "#/$defs/duration",
+          "description": "Running time after which one job-long-running alert is sent for a job."
+        }
+      }
+    },
+    "auto-commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Commits and backs up every workspace that has changes and no unfinished job, on a schedule, with the message chore(menagerie): automatic commit. A busy workspace is skipped until the next sweep. Absent, no commit is scheduled.",
+      "required": [
+        "every"
+      ],
+      "properties": {
+        "every": {
+          "$ref": "#/$defs/duration",
+          "description": "Time between two sweeps of the workspace root; the first is one interval after start-up."
+        }
+      }
+    },
+    "workspace-socket": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Gives each workspace's devcontainer a socket at /run/menagerie/workspace.sock that commits and backs up its own workspace, and the workspace-commit client beside it. Absent, no socket.",
+      "required": [
+        "folder"
+      ],
+      "properties": {
+        "folder": {
+          "type": "string",
+          "description": "Absolute folder, at the same path on the host and in Menagerie's container, owned by the services' user, not itself a symbolic link, below folders only root or that user can change (sticky folders excepted). It holds one folder per workspace, mounted read-only into that workspace's devcontainer. Neither inside nor containing the workspace root, the Wyrwood directory or the candidate folder; no comma."
+        },
+        "min-interval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/duration"
+            },
+            {
+              "const": "0"
+            }
+          ],
+          "default": "1m",
+          "description": "Shortest time between two accepted commits of a workspace through its socket; 0 for none."
+        }
+      }
+    },
+    "github-app": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GitHub App whose installation tokens authenticate backups and template fetches to https repository URLs on its server: /{owner}/{repo} or /{owner}/{repo}.git, with no user information, query or fragment. Its private key is an RSA Transit key in OpenBao, used through the Wyrwood vault socket. Other URLs keep their own authentication. Absent, no token is minted.",
+      "required": [
+        "app-id",
+        "transit-key"
+      ],
+      "properties": {
+        "app-id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The App's id, the issuer of its JWTs."
+        },
+        "transit-key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+          "maxLength": 128,
+          "description": "Name of the Transit key, at the mount transit, that holds the App's private key."
+        },
+        "installations": {
+          "type": "object",
+          "description": "The App's installation id by account name, compared in lower case. A repository whose owner is not listed has its installation looked up.",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$",
+            "maxLength": 100
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "server": {
+          "type": "string",
+          "default": "https://github.com",
+          "description": "The GitHub server's https origin, with no user information, path, query or fragment. The API is https://api.github.com for https://github.com, else {server}/api/v3."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "duration": {
+      "type": "string",
+      "pattern": "^([0-9]+h([0-9]+m)?([0-9]+s)?|[0-9]+m([0-9]+s)?|[0-9]+s)$",
+      "description": "Positive duration of whole hours, minutes and seconds, such as 2h, 45m or 1h30m."
     }
   }
 }

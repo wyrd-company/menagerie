@@ -17,23 +17,30 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	dockerclient "github.com/docker/docker/client"
 
+	"github.com/wyrd-company/menagerie/backend/internal/alerts"
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"github.com/wyrd-company/menagerie/backend/internal/commits"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workflows"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
+	"github.com/wyrd-company/menagerie/backend/internal/workspacesocket"
 	"github.com/wyrd-company/menagerie/web"
 )
 
@@ -90,13 +97,50 @@ func run(configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	credentials, err := registryCredentials(cfg)
+	opts, err := runtimeOptions(cfg)
 	if err != nil {
 		return err
 	}
-	runtime := devcontainer.New(docker, devcontainer.Options{Credentials: credentials})
-	manager := jobs.NewManager(ctx)
-	handler, err := newHandler(cfg, root, runtime, manager)
+	jobOpts, webhook, err := jobOptions(cfg)
+	if err != nil {
+		return err
+	}
+	if webhook != nil {
+		// Queued alerts get the delivery time limit, no more.
+		defer webhook.Close()
+	}
+	app, err := gitHubApp(cfg)
+	if err != nil {
+		return err
+	}
+	remote := backupRemote(cfg, app)
+	manager := jobs.NewManager(ctx, jobOpts)
+	commitJobs := commits.New(commits.Options{Root: root, Remote: remote, Jobs: manager})
+	client, err := clientPath()
+	if err != nil {
+		return err
+	}
+	sockets, err := workspaceSockets(ctx, cfg, root, commitJobs, client, &opts)
+	if err != nil {
+		return err
+	}
+	if sockets != nil {
+		defer sockets.Close()
+	}
+	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
+	runtime := devcontainer.New(docker, opts)
+	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, app)
+	if err != nil {
+		return err
+	}
+	defer stopHooks()
+	if a := cfg.AutoCommit; a != nil {
+		ticker := time.NewTicker(a.Every.Value())
+		defer ticker.Stop()
+		go commitJobs.Schedule(ctx, ticker.C, nil)
+		log.Printf("menagerie: committing workspaces with changes every %s", a.Every.Value())
+	}
+	handler, err := newHandler(cfg, root, remote, runtime, manager, parts.hooks, parts.images)
 	if err != nil {
 		return err
 	}
@@ -112,6 +156,8 @@ func run(configPath string) error {
 	select {
 	case err := <-errc:
 		return err
+	case err := <-hookErrors:
+		return err
 	case <-ctx.Done():
 	}
 	// Event streams end with the base context, so shutdown completes once
@@ -123,10 +169,126 @@ func run(configPath string) error {
 	return nil
 }
 
+// workspaceSockets opens the socket folder, when one is configured, with
+// the client at the path client, gives the devcontainer runtime its mount,
+// and creates the socket of every workspace under root. A workspace whose
+// socket fails is logged; it gets its socket, or fails, at its next start
+// or rebuild.
+func workspaceSockets(ctx context.Context, cfg *config.Config, root *workspace.Root, starter workspacesocket.Starter, client string, opts *devcontainer.Options) (*workspacesocket.Sockets, error) {
+	c := cfg.WorkspaceSocket
+	if c == nil {
+		return nil, nil
+	}
+	sockets, err := workspacesocket.Open(workspacesocket.Options{
+		Folder:        c.Folder,
+		WorkspaceRoot: root.Path(),
+		MinInterval:   c.MinIntervalValue(),
+		Client:        client,
+		Commits:       starter,
+		Context:       ctx,
+	})
+	if err != nil {
+		return nil, err
+	}
+	opts.WorkspaceSocket = func(folder string) (string, error) {
+		name := filepath.Base(folder)
+		if own, err := root.FolderPath(name); err != nil || own != folder {
+			return "", errors.New("workspace socket: the workspace's folder is not a folder of the workspace root")
+		}
+		return sockets.Ensure(name)
+	}
+	names, err := root.Names()
+	if err != nil {
+		sockets.Close()
+		return nil, err
+	}
+	for _, name := range names {
+		if _, err := sockets.Ensure(name); err != nil {
+			log.Printf("menagerie: %v", err)
+		}
+	}
+	log.Print("menagerie: workspace sockets are open")
+	return sockets, nil
+}
+
+// clientPath is the workspace-commit client beside this executable, as
+// the image installs it.
+func clientPath() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", errors.New("workspace socket client: the menagerie executable's path is unknown")
+	}
+	return filepath.Join(filepath.Dir(self), workspacesocket.ClientName), nil
+}
+
+// containers are the parts that run template hooks and initializeCommand
+// in throwaway containers.
+type containers struct {
+	docker *throwaway.Docker
+	images *throwaway.Images
+	hooks  *throwaway.HookRunner
+}
+
+// throwawayContainers composes the throwaway containers on docker, as the
+// services' user, with the configured runner images, removes the ones a
+// previous run left, and gives the devcontainer runtime options their
+// initializeCommand runner.
+func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspace.Root, docker *dockerclient.Client, opts *devcontainer.Options) containers {
+	images := runnerImages(cfg, docker)
+	runner := throwaway.NewDocker(docker, throwaway.DockerOptions{
+		Root:        root.Path(),
+		User:        throwaway.ServiceUser(),
+		Credentials: pullCredentials(opts.Credentials),
+	})
+	if n, err := runner.RemoveLeftovers(ctx); err != nil {
+		log.Printf("menagerie: removing leftover throwaway containers: %v", err)
+	} else if n > 0 {
+		log.Printf("menagerie: removed %d leftover throwaway containers", n)
+	}
+	opts.Containers, opts.RunnerImage = runner, images.ForWorkspace
+	return containers{docker: runner, images: images, hooks: throwaway.NewHookRunner(runner, cfg.TemplateService.CandidateFolder)}
+}
+
+// serveHooks serves the template service's routes on the hook runner
+// socket at path until stop, which also removes the socket: hooks, and
+// GitHub App credentials from app, which may be nil. errs receives a
+// serving failure.
+func serveHooks(ctx context.Context, path string, hooks *throwaway.HookRunner, app *githubapp.Minter) (errs <-chan error, stop func(), err error) {
+	listener, err := throwaway.ListenHookRunner(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hook runner socket: %w", err)
+	}
+	server := &http.Server{Handler: hookRoutes(hooks, app), BaseContext: func(net.Listener) context.Context { return ctx }}
+	failed := make(chan error, 1)
+	go func() {
+		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+			failed <- fmt.Errorf("hook runner socket: %w", err)
+		}
+	}()
+	return failed, func() {
+		_ = server.Close()
+		_ = os.Remove(path)
+	}, nil
+}
+
+// hookRoutes are the hook runner socket's routes: the credential route,
+// and every other path to hooks, which answers the paths it does not
+// serve.
+func hookRoutes(hooks *throwaway.HookRunner, app *githubapp.Minter) http.Handler {
+	credentials := githubapp.Handler(app)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == githubapp.CredentialPath {
+			credentials.ServeHTTP(w, r)
+			return
+		}
+		hooks.ServeHTTP(w, r)
+	})
+}
+
 // newHandler is the workspace service's whole HTTP surface: the workspace
 // API behind manager sign-in.
-func newHandler(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager) (http.Handler, error) {
-	return signedIn(newServer(cfg, root, runtime, manager), cfg.OIDC)
+func newHandler(cfg *config.Config, root *workspace.Root, remote *backup.Remote, runtime *devcontainer.Runtime, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) (http.Handler, error) {
+	return signedIn(newServer(cfg, root, remote, runtime, manager, hooks, images), cfg.OIDC)
 }
 
 // signedIn serves server behind manager sign-in: the sign-in routes are
@@ -141,25 +303,39 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 }
 
 // newServer composes the workspace API: the container operations, create
-// and upgrade with their interviews, and the web UI embedded at build time.
-func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.Runtime, manager *jobs.Manager) *api.Server {
+// and upgrade with their interviews, commit, and the web UI embedded at build time.
+// Backups go to remote. Template hooks run through hooks in the template's
+// runner image; nil hooks refuse every hook.
+func newServer(cfg *config.Config, root *workspace.Root, remote *backup.Remote, runtime *devcontainer.Runtime, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) *api.Server {
 	approved := make([]api.Template, 0, len(cfg.Templates))
 	ids := make(map[string]bool, len(cfg.Templates))
 	for _, t := range cfg.Templates {
 		approved = append(approved, api.Template{ID: t.ID, Name: t.Name})
 		ids[t.ID] = true
 	}
+	var image func(context.Context, string) (string, error)
+	if images != nil {
+		image = images.ForTemplate
+	}
+	var restart time.Duration
+	if cfg.JobLimits != nil {
+		restart = cfg.JobLimits.Operations.Start.Value()
+	}
 	flows := workflows.New(workflows.Options{
-		Root:      root,
-		Templates: templates.New(cfg.TemplateService.Socket),
-		Approved:  ids,
-		Remote:    backupRemote(cfg),
-		Runtime:   runtime,
+		Root:         root,
+		Templates:    templates.New(cfg.TemplateService.Socket),
+		Approved:     ids,
+		Remote:       remote,
+		Runtime:      runtime,
+		Hooks:        hooks,
+		RunnerImage:  image,
+		RestartLimit: restart,
 	})
 	operations := api.ContainerOperations(root, runtime)
 	for name, op := range flows.Operations() {
 		operations[name] = op
 	}
+	operations[api.OperationCommit] = commits.New(commits.Options{Root: root, Remote: remote, Jobs: manager}).Operation()
 	return api.New(api.Options{
 		Root:       root,
 		Status:     runtime,
@@ -171,13 +347,98 @@ func newServer(cfg *config.Config, root *workspace.Root, runtime *devcontainer.R
 	})
 }
 
-// backupRemote is the workspace repository, reached through the SSH agent
-// socket in the Wyrwood consumer directory.
-func backupRemote(cfg *config.Config) *backup.Remote {
-	return &backup.Remote{
-		URL:  cfg.WorkspaceRepository,
-		Auth: backup.AgentAuth(filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName)),
+// backupRemote is the workspace repository: over https on the GitHub
+// App's server, with a contents write token of app when app is not nil;
+// over SSH, through the SSH agent socket in the Wyrwood consumer
+// directory.
+func backupRemote(cfg *config.Config, app *githubapp.Minter) *backup.Remote {
+	auth := backup.AgentAuth(filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName))
+	if app != nil {
+		auth = backup.TokenAuth(app.Tokens(githubapp.Write), auth)
 	}
+	return &backup.Remote{URL: cfg.WorkspaceRepository, Auth: auth}
+}
+
+// gitHubApp is the GitHub App token minter, signing through the Transit
+// key at the Wyrwood vault socket, or nil when no github-app is
+// configured.
+func gitHubApp(cfg *config.Config) (*githubapp.Minter, error) {
+	g := cfg.GitHubApp
+	if g == nil {
+		return nil, nil
+	}
+	signer, err := githubapp.NewTransit(registrycreds.SocketAddress(cfg.WyrwoodDirectory), g.TransitKey)
+	if err != nil {
+		return nil, err
+	}
+	return githubapp.New(githubapp.Options{AppID: g.AppID, Signer: signer, Installations: g.Installations, Server: g.Server})
+}
+
+// jobOptions configures the jobs manager: the configured time limits, and
+// the alert webhook when one is configured. Console links in alerts start
+// with the browser origin of the OIDC redirect URL.
+func jobOptions(cfg *config.Config) (jobs.Options, *alerts.Webhook, error) {
+	var opts jobs.Options
+	if l := cfg.JobLimits; l != nil {
+		opts.Limits = jobs.Limits{Default: l.Default.Value(), Operations: map[string]time.Duration{}, Phases: map[string]time.Duration{}}
+		for name, d := range l.Operations.ByName() {
+			if d != "" {
+				opts.Limits.Operations[name] = d.Value()
+			}
+		}
+		for name, d := range l.Phases {
+			opts.Limits.Phases[name] = d.Value()
+		}
+	}
+	if cfg.Alerts == nil {
+		return opts, nil, nil
+	}
+	redirect, err := url.Parse(cfg.OIDC.RedirectURL)
+	if err != nil {
+		return opts, nil, fmt.Errorf("oidc.redirect-url: %w", err)
+	}
+	webhook, err := alerts.New(alerts.Options{URL: string(cfg.Alerts.Webhook), Origin: redirect.Scheme + "://" + redirect.Host})
+	if err != nil {
+		return opts, nil, err
+	}
+	opts.Alerts, opts.LongRunning = webhook, cfg.Alerts.LongRunning.Value()
+	return opts, webhook, nil
+}
+
+// runnerImages chooses the throwaway containers' images: each template's
+// runner-image, else the global one, else Menagerie's own image.
+func runnerImages(cfg *config.Config, docker throwaway.Inspector) *throwaway.Images {
+	byTemplate := map[string]string{}
+	for _, t := range cfg.Templates {
+		if t.RunnerImage != "" {
+			byTemplate[t.ID] = t.RunnerImage
+		}
+	}
+	return &throwaway.Images{Default: cfg.RunnerImage, Templates: byTemplate, Docker: docker}
+}
+
+// pullCredentials gives runner image pulls the credential source of the
+// devcontainer operations.
+func pullCredentials(source func(context.Context) devcontainer.RegistryAuth) func(context.Context) throwaway.RegistryAuth {
+	if source == nil {
+		return nil
+	}
+	return func(ctx context.Context) throwaway.RegistryAuth {
+		if auth := source(ctx); auth != nil {
+			return auth
+		}
+		return nil
+	}
+}
+
+// runtimeOptions configures the devcontainer runtime: registry
+// credentials, and the local-env allowlist over Menagerie's environment.
+func runtimeOptions(cfg *config.Config) (devcontainer.Options, error) {
+	credentials, err := registryCredentials(cfg)
+	if err != nil {
+		return devcontainer.Options{}, err
+	}
+	return devcontainer.Options{Credentials: credentials, LocalEnv: cfg.LocalEnv, Own: throwaway.MountedContainerIDs("/proc/self/mountinfo")}, nil
 }
 
 // registryCredentials returns the per-operation registry credential source:

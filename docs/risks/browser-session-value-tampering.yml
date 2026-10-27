@@ -7,13 +7,15 @@ title: A manager edits the interview session value held by the browser
 description: >-
   The browser holds Toha's interview session value between requests. A
   manager can change its context, documents or submissions before sending it
-  back. Mitigation: the template service checks the pinned template against
-  the approved template list on every request, so the session value cannot
-  select another template. Signing the session value removes the remaining
-  exposure.
+  back. Mitigation: the template service signs the session value with a key
+  only it reads, bound to the flow, the workspace and the approved template,
+  and refuses an unsigned, altered or replayed value before reading it. Any
+  manager may continue any interview, so the signature does not name the
+  manager. Behind the signature, the service still checks the pinned
+  template against the approved template list on every request.
 categories:
   - security
 likelihood: 1
 impact: 2
-response-strategy: accept
-status: open
+response-strategy: mitigate
+status: mitigated

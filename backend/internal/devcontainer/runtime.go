@@ -6,8 +6,8 @@
 
 // Package devcontainer starts, stops and rebuilds a workspace's
 // devcontainer through the devcontainer-builder library, and runs the
-// workspace's initializeCommand inside Menagerie before each start or
-// rebuild. Single-container and Compose definitions are both supported;
+// workspace's initializeCommand in throwaway containers before each start
+// or rebuild. Single-container and Compose definitions are both supported;
 // the mode branch is explicit in each operation.
 package devcontainer
 
@@ -18,9 +18,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/wyrd-company/devcontainer-builder/pkg/builder"
 	"github.com/wyrd-company/devcontainer-builder/pkg/buildkit"
@@ -29,6 +33,8 @@ import (
 	"github.com/wyrd-company/devcontainer-builder/pkg/host/dockercompose"
 	"github.com/wyrd-company/devcontainer-builder/pkg/registryauth"
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
+
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
 const (
@@ -41,6 +47,16 @@ const (
 	StateRunning     = "running"
 	StateStopped     = "stopped"
 	StateNoContainer = "no-container"
+)
+
+// The workspace socket in a workspace's container: the socket folder's
+// folder of the workspace is mounted read-only at WorkspaceSocketTarget,
+// and WorkspaceSocketEnv names the socket in it.
+const (
+	WorkspaceSocketTarget = "/run/menagerie"
+	WorkspaceSocketName   = "workspace.sock"
+	WorkspaceSocketEnv    = "MENAGERIE_WORKSPACE_SOCKET"
+	WorkspaceSocketPath   = WorkspaceSocketTarget + "/" + WorkspaceSocketName
 )
 
 // Status is a workspace's container state.
@@ -68,9 +84,28 @@ type Options struct {
 	// receives a credential source, so none reads the Docker client
 	// configuration or runs a credential helper.
 	Credentials func(ctx context.Context) RegistryAuth
-	// Environ returns the process environment used for ${localEnv:...}
-	// substitution and for initializeCommand. Defaults to os.Environ.
+	// Environ returns Menagerie's own environment. Defaults to os.Environ.
 	Environ func() []string
+	// LocalEnv names the variables of Environ that a definition may read
+	// through ${localEnv:NAME} and that Compose interpolation and
+	// initializeCommand receive. Nil allows none. Any other reference
+	// resolves to its default value, or empty, and the job log notes it.
+	LocalEnv []string
+	// Containers runs initializeCommand in throwaway containers. Nil fails
+	// a definition that has one.
+	Containers throwaway.Containers
+	// RunnerImage returns the image initializeCommand runs in.
+	RunnerImage func(ctx context.Context) (string, error)
+	// Own lists Menagerie's own container ids, which Mounting leaves out:
+	// Menagerie mounts the workspace root.
+	Own []string
+	// WorkspaceSocket returns the host folder that holds the workspace's
+	// socket, creating the socket when it is missing. The folder is
+	// mounted read-only at WorkspaceSocketTarget on each rebuild and on
+	// each start that creates the container or reuses one that has the
+	// mount; a start that reuses a container without it leaves the
+	// container as it is. Nil mounts nothing.
+	WorkspaceSocket func(folder string) (string, error)
 }
 
 // Runtime operates workspace devcontainers on one Docker Engine.
@@ -128,9 +163,16 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
-	environ := r.opts.Environ()
-	env := envMap(environ)
-	if err := r.initialize(ctx, dc, folder, environ, env, p); err != nil {
+	local := newLocalEnvironment(r.opts.Environ(), r.opts.LocalEnv)
+	for _, name := range refusedLocalEnv(dc.Raw, r.opts.LocalEnv) {
+		fmt.Fprintf(p.Log(""), "localEnv %s is not in local-env; it resolves to its default value\n", name)
+	}
+	env := local.values
+	socket, err := r.workspaceSocket(dc, folder, p)
+	if err != nil {
+		return err
+	}
+	if err := r.initialize(ctx, dc, folder, local.process, env, p); err != nil {
 		return err
 	}
 	// The lockfile snapshot lives for the whole operation; the builder only
@@ -139,7 +181,17 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
-	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx)}
+	held := false
+	if socket != "" && !replace {
+		if socket, err = r.keepContainer(ctx, folder, socket, p); err != nil {
+			return err
+		}
+		held = socket == ""
+	}
+	if socket != "" {
+		nameSocket(dc)
+	}
+	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx), socket: socket, socketHeld: held}
 	switch dc.Mode() {
 	case spec.ModeSingle:
 		err = r.upSingle(ctx, op, replace)
@@ -165,6 +217,85 @@ type operation struct {
 	p      Progress
 	lock   *features.LockfileState
 	auth   RegistryAuth
+	// socket is the host folder mounted at WorkspaceSocketTarget; empty
+	// mounts none.
+	socket string
+	// socketHeld is set when a start leaves the socket out to keep a
+	// container created without it.
+	socketHeld bool
+}
+
+// workspaceSocket ensures the workspace's socket and returns the folder to
+// mount, or "" for none. Compose reads a mount as comma-separated fields
+// with surrounding spaces trimmed, so a folder it would misread is not
+// mounted.
+func (r *Runtime) workspaceSocket(dc *spec.DevContainer, folder string, p Progress) (string, error) {
+	if r.opts.WorkspaceSocket == nil {
+		return "", nil
+	}
+	source, err := r.opts.WorkspaceSocket(folder)
+	if err != nil {
+		return "", err
+	}
+	if dc.Mode() == spec.ModeCompose && (strings.Contains(source, ",") || strings.TrimSpace(source) != source) {
+		fmt.Fprintln(p.Log(""), "the workspace socket is not mounted: Compose cannot mount a folder whose name holds a comma or ends in a space")
+		return "", nil
+	}
+	return source, nil
+}
+
+// Notes for the job console about a start that leaves out the workspace
+// socket: noteSocketAtRebuild before Up, when the container exists without
+// it; noteCreatedWithoutSocket after Up, when Up created or recreated the
+// container anyway, for a change of the definition.
+const (
+	noteSocketAtRebuild      = "the workspace socket attaches at the next rebuild: this container was created without it, and adding it would recreate the container"
+	noteCreatedWithoutSocket = "this start created the container again, without the workspace socket; the socket attaches at the next rebuild"
+)
+
+// keepContainer returns the socket folder to mount on a start, or "" when
+// the workspace's container exists without the socket mount. Adding a
+// mount or a variable changes the configuration devcontainer-builder
+// compares, so Compose would recreate the primary; the start keeps the
+// container, and the socket attaches at the next rebuild. A container
+// that has the mount keeps getting it, so its configuration is unchanged.
+//
+// devcontainer-builder exposes no way to learn before Up whether Up will
+// recreate the container, so a start whose definition changed in another
+// way still recreates it, without the socket; noteCreatedWithoutSocket
+// tells the console so.
+func (r *Runtime) keepContainer(ctx context.Context, folder, socket string, p Progress) (string, error) {
+	found, err := hostdocker.New(r.client, hostdocker.Options{}).Inspect(ctx, folder)
+	if errors.Is(err, hostdocker.ErrContainerNotFound) {
+		return socket, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	info, err := r.client.ContainerInspect(ctx, found.ID)
+	if err != nil {
+		return "", fmt.Errorf("inspect container %s: %w", shortID(found.ID), err)
+	}
+	for _, m := range info.Mounts {
+		if m.Destination == WorkspaceSocketTarget {
+			return socket, nil
+		}
+	}
+	fmt.Fprintln(p.Log(""), noteSocketAtRebuild)
+	return "", nil
+}
+
+// nameSocket names the socket in the container's environment unless the
+// definition sets that name itself. Only the definition in memory
+// changes, not the file.
+func nameSocket(dc *spec.DevContainer) {
+	if _, set := dc.ContainerEnv[WorkspaceSocketEnv]; set {
+		return
+	}
+	if dc.ContainerEnv == nil {
+		dc.ContainerEnv = map[string]any{}
+	}
+	dc.ContainerEnv[WorkspaceSocketEnv] = WorkspaceSocketPath
 }
 
 // featureLockfile reads the definition's feature lockfile snapshot, as
@@ -193,11 +324,30 @@ func (r *Runtime) initialize(ctx context.Context, dc *spec.DevContainer, folder 
 	}
 	p.Phase("initialize-command")
 	cmd = SubstituteCommand(SubstitutionContext(dc, folder, env), cmd)
-	runner := CommandRunner{Dir: folder, Env: environ, Output: func(prefix string) io.Writer { return p.Log("initializeCommand: " + prefix) }}
+	if r.opts.Containers == nil || r.opts.RunnerImage == nil {
+		return &InitializeError{Err: errors.New("no container runner is configured")}
+	}
+	image, err := r.opts.RunnerImage(ctx)
+	if err != nil {
+		return &InitializeError{Err: err}
+	}
+	fmt.Fprintf(p.Log(""), "running initializeCommand in throwaway containers of %s\n", image)
+	runner := CommandRunner{
+		Containers: r.opts.Containers, Image: image, Folder: folder, Env: environ, Job: jobID(p),
+		Output: func(prefix string) io.Writer { return p.Log("initializeCommand: " + prefix) },
+	}
 	if err := runner.Run(ctx, cmd); err != nil {
 		return &InitializeError{Err: err}
 	}
 	return nil
+}
+
+// jobID is the id of the job p reports to, when it has one.
+func jobID(p Progress) string {
+	if j, ok := p.(interface{ JobID() string }); ok {
+		return j.JobID()
+	}
+	return ""
 }
 
 func (r *Runtime) upSingle(ctx context.Context, op *operation, replace bool) error {
@@ -230,7 +380,15 @@ func (r *Runtime) upSingle(ctx context.Context, op *operation, replace bool) err
 	if built != nil {
 		req.Features = built.Features
 	}
+	if op.socket != "" {
+		req.Mounts = append(req.Mounts, mount.Mount{Type: mount.TypeBind, Source: op.socket, Target: WorkspaceSocketTarget, ReadOnly: true})
+	}
 	res, err := r.dockerHost(p, op.auth).Up(ctx, req)
+	// Up can create the container and then fail, in a lifecycle command
+	// for example; its result still says so.
+	if res != nil {
+		op.noteCreated(res.CreatedThisCall)
+	}
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
 	}
@@ -262,12 +420,28 @@ func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) er
 	if primary.BuildResult != nil {
 		req.Features = primary.BuildResult.Features
 	}
+	if op.socket != "" {
+		req.Mounts = append(req.Mounts, "type=bind,source="+op.socket+",target="+WorkspaceSocketTarget+",readonly")
+	}
 	res, err := r.composeHost(p, op.auth).Up(ctx, req)
+	// Up can recreate the primary and then fail, in a lifecycle command
+	// for example; its result still says so.
+	if res != nil {
+		op.noteCreated(slices.Contains(res.CreatedThisCall, dc.Service) || slices.Contains(res.RecreatedThisCall, dc.Service))
+	}
 	if err != nil {
 		return fmt.Errorf("up: %w", err)
 	}
 	fmt.Fprintf(p.Log(""), "compose project %s up (primary %s, created %v, recreated %v)\n", res.ProjectName, shortID(res.PrimaryContainerID), res.CreatedThisCall, res.RecreatedThisCall)
 	return nil
+}
+
+// noteCreated tells the console when Up created or recreated the
+// container on a start that left the socket out.
+func (op *operation) noteCreated(created bool) {
+	if created && op.socketHeld {
+		fmt.Fprintln(op.p.Log(""), noteCreatedWithoutSocket)
+	}
 }
 
 // Stop stops the workspace's container. The mode comes from the existing
@@ -279,8 +453,17 @@ func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
 	host := r.dockerHost(p, anonymous)
 	info, err := host.Inspect(ctx, folder)
 	if errors.Is(err, hostdocker.ErrContainerNotFound) {
-		fmt.Fprintln(p.Log(""), "workspace has no container")
-		return nil
+		// A Compose project keeps its other services running without its
+		// primary; its project label still finds them.
+		err := r.composeHost(p, anonymous).Stop(ctx, folder)
+		if errors.Is(err, dockercompose.ErrProjectNotFound) {
+			fmt.Fprintln(p.Log(""), "workspace has no container")
+			return nil
+		}
+		if err == nil {
+			fmt.Fprintln(p.Log(""), "stopped the services left of the workspace's compose project")
+		}
+		return err
 	}
 	if err != nil {
 		return err
@@ -394,19 +577,49 @@ func logger(p Progress) func(string, ...any) {
 	}
 }
 
-func envMap(environ []string) map[string]string {
-	out := make(map[string]string, len(environ))
-	for _, pair := range environ {
-		if k, v, ok := strings.Cut(pair, "="); ok {
-			out[k] = v
-		}
-	}
-	return out
-}
-
 func shortID(id string) string {
 	if len(id) > 12 {
 		return id[:12]
 	}
 	return id
+}
+
+// Mounting returns the short ids of the running containers, other than
+// Menagerie's own, with a bind mount whose source is folder, is inside it,
+// or contains it.
+func (r *Runtime) Mounting(ctx context.Context, folder string) ([]string, error) {
+	list, err := r.client.ContainerList(ctx, container.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return mounting(list, folder, r.opts.Own), nil
+}
+
+// mounting returns the short ids of the containers in list, other than
+// own, with a bind mount whose source is folder, is inside it, or
+// contains it.
+func mounting(list []container.Summary, folder string, own []string) []string {
+	skip := map[string]bool{}
+	for _, id := range own {
+		skip[id] = true
+	}
+	var ids []string
+	for _, c := range list {
+		if skip[c.ID] {
+			continue
+		}
+		for _, m := range c.Mounts {
+			if m.Type == mount.TypeBind && (within(m.Source, folder) || within(folder, m.Source)) {
+				ids = append(ids, shortID(c.ID))
+				break
+			}
+		}
+	}
+	return ids
+}
+
+// within reports whether p is folder or inside it.
+func within(p, folder string) bool {
+	rel, err := filepath.Rel(folder, p)
+	return err == nil && filepath.IsLocal(rel)
 }

@@ -186,12 +186,12 @@ type fileBeforeApply struct {
 	head, folder string
 }
 
-func (p *fileBeforeApply) ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage) (*templates.Applied, error) {
+func (p *fileBeforeApply) ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error) {
 	p.folder = s.Target
 	p.head = localHead(p.t, s.Target)
 	writeFile(p.t, s.Target, "notes.txt", "operator notes written just before the apply\n")
 	p.before = snapshot(p.t, s.Target)
-	return p.Templates.ApplyUpgrade(ctx, s, session)
+	return p.Templates.ApplyUpgrade(ctx, s, session, hookToken)
 }
 
 func TestAnOperatorFileBeforeTheApplyIsRefusedWithoutWrites(t *testing.T) {

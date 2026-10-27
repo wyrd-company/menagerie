@@ -17,6 +17,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
 // upgrading is one upgrade job.
@@ -56,9 +57,14 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	run.Phase("apply")
-	applied, err := t.ApplyUpgrade(ctx, sel, reply.Session)
+	grant, err := u.w.grantHooks(ctx, run, u.folder, u.template, throwaway.TargetCandidate)
 	if err != nil {
-		return &jobs.Failure{Kind: KindUpgradeFailed, Err: fmt.Errorf("%s; files written before the failure remain in %s; the state before the upgrade is backed up as %s; recovery is manual", applyError(err), u.folder, before.Hash)}
+		return fmt.Errorf("%w; nothing was upgraded", err)
+	}
+	applied, err := t.ApplyUpgrade(ctx, sel, reply.Session, grant.token())
+	grant.revoke()
+	if err != nil {
+		return &jobs.Failure{Kind: grant.kind(KindUpgradeFailed), Err: fmt.Errorf("%s; files written before the failure remain in %s; the state before the upgrade is backed up as %s; recovery is manual", applyError(err), u.folder, before.Hash)}
 	}
 	if err := run.SetApply(applied.Raw); err != nil {
 		return err

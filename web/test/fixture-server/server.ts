@@ -171,14 +171,18 @@ export function createFixture(options: { distDir: string }) {
         operation?: string;
         workspace?: string;
         templateId?: string;
+        branch?: string;
       };
       const { operation, workspace: name } = input;
       if (
         !operation ||
         !name ||
-        !["create", "upgrade", "start", "stop", "rebuild"].includes(operation)
+        !["create", "upgrade", "start", "stop", "rebuild", "apply-branch"].includes(operation)
       ) {
         return fail(res, 400, "invalid-request", "operation and workspace are required");
+      }
+      if (operation === "apply-branch" && !input.branch) {
+        return fail(res, 400, "invalid-request", "branch is required");
       }
       if (
         (operation === "create" || operation === "upgrade") &&
@@ -222,6 +226,7 @@ export function createFixture(options: { distDir: string }) {
         stage: "first",
       };
       if (input.templateId) job.templateId = input.templateId;
+      if (input.branch) job.branch = input.branch;
       jobs.set(job.jobId, job);
       setImmediate(() => {
         run(world, job);

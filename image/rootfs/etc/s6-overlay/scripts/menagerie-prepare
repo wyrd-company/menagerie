@@ -4,8 +4,10 @@
 #
 # Both services run as the owner of the configured workspace root, so every
 # file they, Toha's hooks and initializeCommand write into a workspace
-# belongs to the operator who owns that root. The groups add the Docker
-# socket's and the Wyrwood consumer directory's, so both stay reachable. A
+# belongs to the operator who owns that root. The workspace service's
+# groups add the Docker socket's and the Wyrwood consumer directory's, so
+# both stay reachable. The template service never talks to Docker: its
+# groups add only the Wyrwood directory's, for Toha's ssh transport. A
 # root-owned workspace root keeps the services root.
 set -eu
 config=/etc/menagerie/config.yml
@@ -26,14 +28,19 @@ wyrwood=$(/usr/local/bin/menagerie -config "$config" -print-wyrwood-directory)
 uid=$(stat -L -c %u "$root")
 gid=$(stat -L -c %g "$root")
 
-groups=$gid
+# with_group LIST PATH prints LIST with PATH's group added once.
+with_group() {
+  [ -e "$2" ] || {
+    echo "$1"
+    return
+  }
+  group=$(stat -L -c %g "$2")
+  case ",$1," in *",$group,"*) echo "$1" ;; *) echo "$1,$group" ;; esac
+}
 socket=/var/run/docker.sock
 case "${DOCKER_HOST:-}" in unix://*) socket=${DOCKER_HOST#unix://} ;; esac
-for path in "$socket" "$wyrwood"; do
-  [ -e "$path" ] || continue
-  group=$(stat -L -c %g "$path")
-  case ",$groups," in *",$group,"*) ;; *) groups="$groups,$group" ;; esac
-done
+template_groups=$(with_group "$gid" "$wyrwood")
+groups=$(with_group "$template_groups" "$socket")
 
 if [ "$uid" = 0 ]; then
   user=root home=/root
@@ -54,14 +61,17 @@ fi
 # checked folders themselves to the user.
 /usr/local/bin/menagerie-folders -uid "$uid" -gid "$gid" -root "$root" || exit 1
 
-/command/s6-applyuidgid -u "$uid" -g "$gid" -G "$groups" test -r "$config" ||
+# The template service's groups are the fewer; the workspace service's add
+# to them.
+/command/s6-applyuidgid -u "$uid" -g "$gid" -G "$template_groups" test -r "$config" ||
   fail "$config is not readable by uid $uid"
 
 cat >/run/menagerie-identity <<IDENTITY
 uid=$uid
 gid=$gid
 groups=$groups
+template_groups=$template_groups
 user=$user
 home=$home
 IDENTITY
-echo "menagerie: services run as $user (uid $uid, gid $gid, groups $groups), the owner of $root"
+echo "menagerie: services run as $user (uid $uid, gid $gid, groups $groups), the owner of $root; the template service has groups $template_groups"

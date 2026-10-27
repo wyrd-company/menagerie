@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ApplyReply } from "../api/types.ts";
 import { own } from "../own.ts";
 import { StatusBadge } from "../ui/StatusBadge.tsx";
+import { JobClock } from "./JobClock.tsx";
 import { isTerminal, type JobView } from "./jobView.ts";
 
 interface Props {
@@ -16,6 +17,8 @@ const operationVerb: Record<string, string> = {
   start: "Start",
   stop: "Stop",
   rebuild: "Rebuild",
+  commit: "Commit",
+  "apply-branch": "Apply branch to",
 };
 
 /** Live phases, log lines and the outcome of one job. */
@@ -45,6 +48,8 @@ export function JobConsole({ view, onReconnect, heading }: Props) {
         </div>
         <StatusBadge state={view.state || "running"} />
       </header>
+
+      <JobClock view={view} />
 
       {phases.length > 0 ? (
         <ol className="phase-rail" aria-label="Phases">
