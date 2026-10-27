@@ -55,7 +55,7 @@ vars:
   SOCKGUARD: c9891b35568c2323da7750b747bf7aea1ba795f8
   # The Sockguard fork changes SOCKGUARD lacks. scripts/proxy-config.sh puts
   # a stand-in for some in the profile; the cases that need the others wait.
-  SOCKGUARD_PENDING: 1571 1814 1819 verbosity missing-roots
+  SOCKGUARD_PENDING: 1571 1814 1819 1822 missing-roots
   # The YAML this repository's tooling owns; package documents have their
   # own owners and checks.
   REPOSITORY_YAML: >-
