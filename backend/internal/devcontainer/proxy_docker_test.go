@@ -33,6 +33,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/pkg/stdcopy"
 	"gopkg.in/yaml.v3"
 
@@ -44,10 +45,10 @@ import (
 
 // pendingChanges names what each pending fork change holds back.
 var pendingChanges = map[string]string{
-	"1571":            "per-workspace exceptions, roots, identity headers and the restart-policy setting",
-	"1814":            "the LLBBridge passthrough that devcontainer builds need",
-	"missing-roots":   "refusing to start when a bind root or the workspace root is missing",
-	"network-drivers": "network.allowed_network_drivers",
+	"1571":          "per-workspace exceptions, roots, identity headers and the restart-policy setting",
+	"1814":          "the LLBBridge passthrough that devcontainer builds need",
+	"missing-roots": "refusing to start when a bind root or the workspace root is missing",
+	"1824":          "network.allowed_drivers, on create and on attach",
 }
 
 // proxied reports whether the suite runs through the Docker proxy.
@@ -470,7 +471,7 @@ func TestProxyPingHelper(t *testing.T) {
 // bridge networks.
 func TestTheProxyDeniesANonBridgeComposeNetwork(t *testing.T) {
 	p := newProxyHarness(t)
-	waitsOn(t, "network-drivers")
+	waitsOn(t, "1824")
 	folder := p.workspace("macvlan", map[string]string{
 		".devcontainer/compose.yml": `services:
   app:
@@ -480,6 +481,45 @@ func TestTheProxyDeniesANonBridgeComposeNetwork(t *testing.T) {
 networks:
   outside:
     driver: macvlan
+`,
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/"}`,
+	})
+	p.startDenied(folder, "driver")
+}
+
+// TestTheProxyDeniesAttachingToAnExistingNonBridgeNetwork makes a macvlan
+// or ipvlan network on the Engine itself, outside the proxy, and brings up a
+// Compose workspace whose service joins it as an external network: the
+// shipped profile checks the driver of a network a container attaches to,
+// as well as of one it creates.
+func TestTheProxyDeniesAttachingToAnExistingNonBridgeNetwork(t *testing.T) {
+	p := newProxyHarness(t)
+	waitsOn(t, "1824")
+	// The network is made where the proxy does not look; a kernel without
+	// the macvlan and ipvlan drivers, such as the disposable daemon's on a
+	// hosted runner, cannot make one at all.
+	name := p.runID + "-outside"
+	var created network.CreateResponse
+	var err error
+	for _, driver := range []string{"macvlan", "ipvlan"} {
+		if created, err = p.client.NetworkCreate(p.ctx, name, network.CreateOptions{Driver: driver}); err == nil {
+			break
+		}
+	}
+	if err != nil {
+		t.Skipf("the Engine cannot make a macvlan or ipvlan network here: %v", err)
+	}
+	t.Cleanup(func() { _ = p.client.NetworkRemove(context.Background(), created.ID) })
+	folder := p.workspace("external-macvlan", map[string]string{
+		".devcontainer/compose.yml": `services:
+  app:
+    image: ` + baseImage + `
+    command: ["sleep", "infinity"]
+    networks: [outside]
+networks:
+  outside:
+    name: ` + name + `
+    external: true
 `,
 		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/"}`,
 	})

@@ -109,8 +109,9 @@ clients:
           allow_escaping_links: true
 
         network:
-          # Compose networks use the bridge driver only.
-          allowed_network_drivers: [bridge]
+          # Compose networks use the bridge driver only, on create and on
+          # attaching to an existing network.
+          allowed_drivers: [bridge]
 
         container_remove:
           # Rebuild removes with force and anonymous volumes; Compose

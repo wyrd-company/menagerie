@@ -397,8 +397,9 @@ Compose workspaces work through the proxy, with these limits:
   workspace's own folder in the staging folder, which Menagerie names
   after the workspace and creates before a start or rebuild. With an
   exception, add that folder to its `extraBindSources`.
-- Networks use the `bridge` driver. A network with another driver, such as
-  `macvlan`, fails as `proxy-denied`.
+- Networks use the `bridge` driver. Creating a network with another
+  driver, such as `macvlan`, or joining an existing one, fails as
+  `proxy-denied`.
 - Compose networks stay on the host after a workspace's devcontainer is
   removed; remove them with `docker network rm`.
 
