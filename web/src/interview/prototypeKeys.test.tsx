@@ -105,6 +105,8 @@ describe.each(names)("a workspace or state named %s", (name) => {
       finishedAt: null,
       lastEventId: 0,
       error: null,
+      deadline: null,
+      limit: null,
     };
     render(<JobConsole view={{ ...initialJobView, job }} onReconnect={() => {}} />);
     expect(

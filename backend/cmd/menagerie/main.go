@@ -17,13 +17,16 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	dockerclient "github.com/docker/docker/client"
 
+	"github.com/wyrd-company/menagerie/backend/internal/alerts"
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
@@ -95,7 +98,15 @@ func run(configPath string) error {
 		return err
 	}
 	runtime := devcontainer.New(docker, opts)
-	manager := jobs.NewManager(ctx)
+	jobOpts, webhook, err := jobOptions(cfg)
+	if err != nil {
+		return err
+	}
+	if webhook != nil {
+		// Queued alerts get the delivery time limit, no more.
+		defer webhook.Close()
+	}
+	manager := jobs.NewManager(ctx, jobOpts)
 	handler, err := newHandler(cfg, root, runtime, manager)
 	if err != nil {
 		return err
@@ -178,6 +189,37 @@ func backupRemote(cfg *config.Config) *backup.Remote {
 		URL:  cfg.WorkspaceRepository,
 		Auth: backup.AgentAuth(filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName)),
 	}
+}
+
+// jobOptions configures the jobs manager: the configured time limits, and
+// the alert webhook when one is configured. Console links in alerts start
+// with the browser origin of the OIDC redirect URL.
+func jobOptions(cfg *config.Config) (jobs.Options, *alerts.Webhook, error) {
+	var opts jobs.Options
+	if l := cfg.JobLimits; l != nil {
+		opts.Limits = jobs.Limits{Default: l.Default.Value(), Operations: map[string]time.Duration{}, Phases: map[string]time.Duration{}}
+		for name, d := range l.Operations.ByName() {
+			if d != "" {
+				opts.Limits.Operations[name] = d.Value()
+			}
+		}
+		for name, d := range l.Phases {
+			opts.Limits.Phases[name] = d.Value()
+		}
+	}
+	if cfg.Alerts == nil {
+		return opts, nil, nil
+	}
+	redirect, err := url.Parse(cfg.OIDC.RedirectURL)
+	if err != nil {
+		return opts, nil, fmt.Errorf("oidc.redirect-url: %w", err)
+	}
+	webhook, err := alerts.New(alerts.Options{URL: string(cfg.Alerts.Webhook), Origin: redirect.Scheme + "://" + redirect.Host})
+	if err != nil {
+		return opts, nil, err
+	}
+	opts.Alerts, opts.LongRunning = webhook, cfg.Alerts.LongRunning.Value()
+	return opts, webhook, nil
 }
 
 // registryCredentials returns the per-operation registry credential source:

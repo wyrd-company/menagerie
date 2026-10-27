@@ -205,7 +205,7 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w.manager = jobs.NewManager(ctx)
+	w.manager = jobs.NewManager(ctx, jobs.Options{})
 	w.flows = New(Options{
 		Root:      root,
 		Templates: w.tmpl,

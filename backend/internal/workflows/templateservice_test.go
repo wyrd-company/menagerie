@@ -151,7 +151,7 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.manager = jobs.NewManager(ctx)
+	a.manager = jobs.NewManager(ctx, jobs.Options{})
 	flows := New(Options{
 		Root:      root,
 		Templates: templates.New(socket),
