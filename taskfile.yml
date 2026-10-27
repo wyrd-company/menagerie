@@ -198,10 +198,13 @@ tasks:
         -e MENAGERIE_TEST_PROXY_ROOT=/menagerie-work/tmp/proxy/workspaces
         -e MENAGERIE_TEST_PROXY_EXCEPTIONS=/menagerie-work/proxy/exceptions
         -e 'MENAGERIE_TEST_PROXY_PENDING={{.SOCKGUARD_PENDING}}'
+        -e MENAGERIE_TEST_PROXY_SERVICE_UID=1000
     cmds:
       - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
       - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
-      - scripts/proxy-config.sh 0 /menagerie-work/tmp /menagerie-work/tmp/proxy/workspaces {{.SOCKGUARD_PENDING}} > '{{.STATE}}/sockguard.yaml'
+      # uid 0 is the test binaries'; 1000 stands for Menagerie's services,
+      # which reach the socket through its group only.
+      - scripts/proxy-config.sh 0,1000 /menagerie-work/tmp /menagerie-work/tmp/proxy/workspaces {{.SOCKGUARD_PENDING}} > '{{.STATE}}/sockguard.yaml'
       - scripts/isolated-docker.sh proxy '{{.STATE}}' '{{.SOCKGUARD}}' '{{.STATE}}/sockguard.yaml'
       - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/devcontainer.test' ./backend/internal/devcontainer/
       - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/throwaway.test' ./backend/internal/throwaway/

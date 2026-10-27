@@ -11,22 +11,30 @@
 package devcontainer_test
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/pkg/stdcopy"
+	"gopkg.in/yaml.v3"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
@@ -374,4 +382,90 @@ func (p *proxyHarness) logsOf(id string) string {
 	var out strings.Builder
 	_, _ = stdcopy.StdCopy(&out, &out, rc)
 	return out.String()
+}
+
+// TestOnlyTheWorkspaceServicesGroupReachesTheProxy acts as Menagerie's
+// services, a non-root uid the profile maps to Menagerie's: the workspace
+// service, which has the socket's group, connects and gets the profile;
+// the template service, the same uid without the group, cannot open the
+// socket at all. The socket's mode and group are the profile's.
+func TestOnlyTheWorkspaceServicesGroupReachesTheProxy(t *testing.T) {
+	newProxyHarness(t)
+	uid, err := strconv.Atoi(os.Getenv("MENAGERIE_TEST_PROXY_SERVICE_UID"))
+	if err != nil {
+		t.Fatal("MENAGERIE_TEST_PROXY_SERVICE_UID names no uid")
+	}
+	var cfg struct {
+		Listeners []struct {
+			Socket     string `yaml:"socket"`
+			SocketMode string `yaml:"socket_mode"`
+			SocketGID  int    `yaml:"socket_gid"`
+		} `yaml:"listeners"`
+	}
+	raw, err := os.ReadFile("/menagerie-work/proxy/config/sockguard.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(raw, &cfg); err != nil || len(cfg.Listeners) != 1 {
+		t.Fatalf("the proxy's configuration: %v", err)
+	}
+	socket := strings.TrimPrefix(os.Getenv("DOCKER_HOST"), "unix://")
+	info, err := os.Stat(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := info.Sys().(*syscall.Stat_t)
+	mode, _ := strconv.ParseUint(cfg.Listeners[0].SocketMode, 8, 32)
+	if info.Mode()&os.ModeSocket == 0 || uint64(info.Mode().Perm()) != mode || int(st.Gid) == uid || int(st.Gid) != cfg.Listeners[0].SocketGID {
+		t.Fatalf("socket %s mode %v gid %d, want a socket of mode %s and group %d", socket, info.Mode(), st.Gid, cfg.Listeners[0].SocketMode, cfg.Listeners[0].SocketGID)
+	}
+	// ping asks the proxy for /_ping as uid with groups, through this test
+	// binary's TestProxyPingHelper.
+	ping := func(uid int, groups ...uint32) (string, error) {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestProxyPingHelper$")
+		cmd.Env = append(os.Environ(), "MENAGERIE_TEST_PING_SOCKET="+socket, "TMPDIR=/tmp")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(uid), Groups: groups}}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := ping(uid, st.Gid); err != nil || !strings.HasPrefix(out, "200 OK\n") {
+		t.Errorf("the workspace service's ping: %q %v, want OK", out, err)
+	}
+	// The profile is the uid's: another uid with the group opens the
+	// socket and gets none.
+	if out, err := ping(uid+1, st.Gid); err != nil || !strings.HasPrefix(out, "403 ") || !strings.Contains(out, "client profile not allowed on this listener") {
+		t.Errorf("another uid's ping: %q %v, want a denial", out, err)
+	}
+	if out, err := ping(uid); err != nil || !strings.HasPrefix(out, "dial: ") || !strings.Contains(out, "permission denied") {
+		t.Errorf("the template service's ping: %q %v, want a permission denied open", out, err)
+	}
+}
+
+// TestProxyPingHelper is the process TestOnlyTheWorkspaceServicesGroupReachesTheProxy
+// runs as another user: it dials MENAGERIE_TEST_PING_SOCKET and prints
+// "dial: <error>", or the status line and body of GET /_ping.
+func TestProxyPingHelper(t *testing.T) {
+	socket := os.Getenv("MENAGERIE_TEST_PING_SOCKET")
+	if socket == "" {
+		t.Skip("a helper process of TestOnlyTheWorkspaceServicesGroupReachesTheProxy")
+	}
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		fmt.Printf("dial: %v\n", err)
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.WriteString(conn, "GET /_ping HTTP/1.1\r\nHost: proxy\r\nConnection: close\r\n\r\n"); err != nil {
+		fmt.Printf("write: %v\n", err)
+		return
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		fmt.Printf("read: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Printf("%s\n%s\n", resp.Status, body)
 }

@@ -259,7 +259,9 @@ expect "pending 1815, merged, has no stand-in" 2 'no stand-in is known for pendi
 expect "pending 1819 drops the ownership block" 1 '' sh -c "'$repo/scripts/proxy-config.sh' 0 /work/tmp /work/tmp/p 1819 | grep -q '^ownership:'"
 expect "the proxy profile keeps ownership without pending 1819" 0 '^ownership:$' render 1571 1814 verbosity
 expect "an unknown pending change is refused" 2 'no stand-in is known for pending issue 9999' render 9999
+expect "the proxy profile takes a list of uids" 0 '^      uids: \[0, 1000\]$' "$repo/scripts/proxy-config.sh" 0,1000 /work/tmp /work/tmp/p
 expect "a non-numeric uid is refused" 2 'is not a number' "$repo/scripts/proxy-config.sh" root /work/tmp /work/tmp/p
+expect "an empty uid in the list is refused" 2 'is not a number' "$repo/scripts/proxy-config.sh" 0,,1000 /work/tmp /work/tmp/p
 expect "a relative bind root is refused" 2 'is not absolute' "$repo/scripts/proxy-config.sh" 0 work/tmp /work/tmp/p
 cp -r "$repo/deploy" "$scratch/deploy-moved" && mkdir -p "$scratch/proxy-moved/scripts" && cp "$repo/scripts/proxy-config.sh" "$scratch/proxy-moved/scripts/" && cp -r "$scratch/deploy-moved" "$scratch/proxy-moved/deploy"
 sed -i 's|^  workspace_root: /srv/menagerie/workspaces$|  workspace_root: /srv/menagerie/workspaces/|' "$scratch/proxy-moved/deploy/sockguard.yml"

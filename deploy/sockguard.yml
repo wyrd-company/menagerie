@@ -92,6 +92,15 @@ clients:
           # proxy; a workspace's restartPolicy grant admits listed names.
           require_no_restart_policy: true
 
+        container_archive:
+          # Throwaway containers copy a candidate or a template in at /,
+          # named by its absolute paths: the Engine makes the folders.
+          # The entry checks apply.
+          allowed_paths: ["/"]
+          allow_setid: false
+          allow_device_nodes: false
+          allow_escaping_links: false
+
         container_remove:
           # Rebuild removes with force and anonymous volumes; Compose
           # recreates with force.

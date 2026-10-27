@@ -315,7 +315,7 @@ Edit these values of `sockguard.yml` to match the host:
 
 | Setting | Value |
 | --- | --- |
-| `clients.unix_peer_profiles[0].uids` | The workspace root's owner: `stat -c %u /srv/menagerie/workspaces`. The proxy selects Menagerie's profile by the connecting process's uid; any other uid is denied. |
+| `clients.unix_peer_profiles[0].uids` | The workspace root's owner: `stat -c %u /srv/menagerie/workspaces`. The proxy selects Menagerie's profile by the connecting process's uid; any other uid is denied. The template service has the same uid and keeps out because it lacks the socket's group: it cannot open the socket. |
 | `listeners[0].socket_gid` | A group no Menagerie service has otherwise: not the workspace root's group. Menagerie gives it to the workspace service only. Set the proxy's `group_add` in `compose.yml` to the same number. |
 | `allowed_bind_mounts` | The workspace root, the workspace socket folder and the Compose staging folder: the values in `config.yml`. |
 | `workspace_exceptions.workspace_root` | The workspace root. |
