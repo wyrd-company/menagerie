@@ -34,6 +34,7 @@ import (
 	"github.com/wyrd-company/devcontainer-builder/pkg/registryauth"
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
 
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
@@ -106,6 +107,14 @@ type Options struct {
 	// mount; a start that reuses a container without it leaves the
 	// container as it is. Nil mounts nothing.
 	WorkspaceSocket func(folder string) (string, error)
+	// Client returns a client that sends headers with every request. Each
+	// start, stop and rebuild goes through one that names its workspace to
+	// the Docker proxy. Nil uses the shared client without headers.
+	Client func(headers map[string]string) (*dockerclient.Client, error)
+	// ComposeStaging is the folder Compose's configs and secrets are
+	// written to for their bind mounts: a path the Engine resolves on the
+	// host. Empty is devcontainer-builder's default under TMPDIR.
+	ComposeStaging string
 }
 
 // Runtime operates workspace devcontainers on one Docker Engine.
@@ -145,7 +154,12 @@ func (r *Runtime) Status(ctx context.Context, folder string) (Status, error) {
 // reuses and starts an existing container and runs lifecycle phases
 // according to their markers.
 func (r *Runtime) Start(ctx context.Context, folder string, p Progress) error {
-	return r.bringUp(ctx, folder, p, false)
+	w, done, err := r.forWorkspace(folder)
+	if err != nil {
+		return err
+	}
+	defer done()
+	return w.bringUp(ctx, folder, p, false)
 }
 
 // Rebuild runs initializeCommand, builds the current definition, removes
@@ -154,7 +168,31 @@ func (r *Runtime) Start(ctx context.Context, folder string, p Progress) error {
 // service): named volumes, networks and other services are kept, and
 // Compose Up recreates other services whose configuration changed.
 func (r *Runtime) Rebuild(ctx context.Context, folder string, p Progress) error {
-	return r.bringUp(ctx, folder, p, true)
+	w, done, err := r.forWorkspace(folder)
+	if err != nil {
+		return err
+	}
+	defer done()
+	return w.bringUp(ctx, folder, p, true)
+}
+
+// forWorkspace returns a Runtime whose requests name the workspace in
+// folder to the Docker proxy, and a function that releases it. The name is
+// the workspace's identity, from the workspace root and the folder's name,
+// never from its definition.
+func (r *Runtime) forWorkspace(folder string) (*Runtime, func(), error) {
+	if r.opts.Client == nil {
+		return r, func() {}, nil
+	}
+	workspace, err := dockerproxy.Workspace(folder)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := r.opts.Client(map[string]string{dockerproxy.HeaderWorkspace: workspace})
+	if err != nil {
+		return nil, nil, errors.New("no Docker client could be made for the workspace")
+	}
+	return &Runtime{client: client, opts: r.opts}, func() { _ = client.Close() }, nil
 }
 
 func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replace bool) error {
@@ -168,6 +206,9 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 		fmt.Fprintf(p.Log(""), "localEnv %s is not in local-env; it resolves to its default value\n", name)
 	}
 	env := local.values
+	if err := checkIdentityLabels(ctx, dc, folder, env); err != nil {
+		return err
+	}
 	socket, err := r.workspaceSocket(dc, folder, p)
 	if err != nil {
 		return err
@@ -449,6 +490,15 @@ func (op *operation) noteCreated(created bool) {
 // definition cannot select the wrong stop. A Compose primary stops its
 // whole project. A workspace without a container is already stopped.
 func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
+	w, done, err := r.forWorkspace(folder)
+	if err != nil {
+		return err
+	}
+	defer done()
+	return w.stop(ctx, folder, p)
+}
+
+func (r *Runtime) stop(ctx context.Context, folder string, p Progress) error {
 	p.Phase("stop")
 	host := r.dockerHost(p, anonymous)
 	info, err := host.Inspect(ctx, folder)
@@ -539,7 +589,7 @@ func (r *Runtime) dockerHost(p Progress, auth RegistryAuth) *hostdocker.Host {
 
 func (r *Runtime) composeHost(p Progress, auth RegistryAuth) *dockercompose.Host {
 	out := p.Log("")
-	return dockercompose.New(r.client, dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth})
+	return dockercompose.New(r.client, dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth, UserDataFolder: r.opts.ComposeStaging})
 }
 
 // needsBuild reports whether the definition needs a derived image, as

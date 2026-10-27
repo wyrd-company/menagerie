@@ -88,6 +88,11 @@ type Config struct {
 	// repositories on its server with installation tokens. Absent, no
 	// token is minted.
 	GitHubApp *GitHubApp `yaml:"github-app"`
+	// ComposeStagingFolder holds the files a Compose workspace's configs
+	// and secrets are written to, which its services bind-mount. It has
+	// the same path in the container and on the host. Absent,
+	// devcontainer-builder's default under TMPDIR.
+	ComposeStagingFolder string `yaml:"compose-staging-folder"`
 }
 
 // GitHubApp names the GitHub App whose installation tokens Menagerie uses
@@ -509,6 +514,7 @@ func (c *Config) validate() error {
 	if c.GitHubApp != nil {
 		errs = append(errs, c.GitHubApp.validate()...)
 	}
+	errs = append(errs, c.validateComposeStaging()...)
 	names := map[string]int{}
 	for i, name := range c.LocalEnv {
 		if !envNamePattern.MatchString(name) {
@@ -573,6 +579,34 @@ func (w *WorkspaceSocket) validate(c *Config) []error {
 	if w.MinInterval != "0" {
 		if err := w.MinInterval.validate("workspace-socket.min-interval"); err != nil {
 			errs = append(errs, fmt.Errorf("%w, or 0 for none", err))
+		}
+	}
+	return errs
+}
+
+// validateComposeStaging checks compose-staging-folder: an absolute clean
+// folder other than /, apart from Menagerie's other folders. No error names
+// the value.
+func (c *Config) validateComposeStaging() []error {
+	folder := c.ComposeStagingFolder
+	if folder == "" {
+		return nil
+	}
+	if !filepath.IsAbs(folder) || filepath.Clean(folder) != folder || folder == "/" {
+		return []error{errors.New("compose-staging-folder must be an absolute clean folder other than /")}
+	}
+	others := []struct{ field, path string }{
+		{"workspace-root", c.WorkspaceRoot},
+		{"wyrwood-directory", c.WyrwoodDirectory},
+		{"template-service.candidate-folder", c.TemplateService.CandidateFolder},
+	}
+	if c.WorkspaceSocket != nil {
+		others = append(others, struct{ field, path string }{"workspace-socket.folder", c.WorkspaceSocket.Folder})
+	}
+	var errs []error
+	for _, other := range others {
+		if filepath.IsAbs(other.path) && (within(other.path, folder) || within(folder, other.path)) {
+			errs = append(errs, fmt.Errorf("compose-staging-folder must be neither inside %s nor contain it", other.field))
 		}
 	}
 	return errs

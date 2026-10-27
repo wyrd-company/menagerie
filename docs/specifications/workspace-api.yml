@@ -56,7 +56,11 @@ description: >-
   `interview`, `initialize-repository`, `generate`, `fetch`, `plan`,
   `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
-  `runner-image-unavailable`, `operation-failed` or `internal-error`, and
+  `runner-image-unavailable`, `identity-label-refused` (the definition sets
+  a label that names a workspace or a Compose project; the message names the
+  key, never its value), `proxy-denied` (the Docker proxy denied a request;
+  the message names the proxy's reason), `operation-failed` or
+  `internal-error`, and
   for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
   `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`

@@ -33,6 +33,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/commits"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
@@ -88,7 +89,7 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	docker, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	docker, err := dockerproxy.NewClient(nil)
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
@@ -239,6 +240,7 @@ func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspac
 		Root:        root.Path(),
 		User:        throwaway.ServiceUser(),
 		Credentials: pullCredentials(opts.Credentials),
+		Client:      dockerproxy.NewClient,
 	})
 	if n, err := runner.RemoveLeftovers(ctx); err != nil {
 		log.Printf("menagerie: removing leftover throwaway containers: %v", err)
@@ -438,7 +440,13 @@ func runtimeOptions(cfg *config.Config) (devcontainer.Options, error) {
 	if err != nil {
 		return devcontainer.Options{}, err
 	}
-	return devcontainer.Options{Credentials: credentials, LocalEnv: cfg.LocalEnv, Own: throwaway.MountedContainerIDs("/proc/self/mountinfo")}, nil
+	return devcontainer.Options{
+		Credentials:    credentials,
+		LocalEnv:       cfg.LocalEnv,
+		Own:            throwaway.MountedContainerIDs("/proc/self/mountinfo"),
+		Client:         dockerproxy.NewClient,
+		ComposeStaging: cfg.ComposeStagingFolder,
+	}, nil
 }
 
 // registryCredentials returns the per-operation registry credential source:

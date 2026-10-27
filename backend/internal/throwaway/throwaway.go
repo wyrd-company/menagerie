@@ -39,6 +39,8 @@ import (
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/pkg/stdcopy"
+
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 )
 
 // Labels every throwaway container carries.
@@ -54,7 +56,16 @@ const (
 	// LabelID is a random id of one container, so a container whose
 	// creation reply was lost can still be found and removed.
 	LabelID = "menagerie.throwaway.id"
+	// LabelWorkspace is the identity of the workspace the command belongs
+	// to, as dockerproxy.Workspace makes it. The container's requests name
+	// the same identity in dockerproxy.HeaderThrowawayWorkspace.
+	LabelWorkspace = "menagerie.throwaway.workspace"
 )
+
+// labelLocalFolder is devcontainer-builder's label of a workspace's
+// devcontainer. A throwaway container never carries it, so no lookup of a
+// workspace's devcontainer finds one.
+const labelLocalFolder = "devcontainer.local_folder"
 
 // Kinds of throwaway containers.
 const (
@@ -68,6 +79,10 @@ type Command struct {
 	Kind string
 	// Job is the id of the job the command belongs to.
 	Job string
+	// Workspace is the folder of the workspace the command belongs to. Its
+	// identity labels the container and names the workspace to the Docker
+	// proxy.
+	Workspace string
 	// Image is the image reference the container runs.
 	Image string
 	// Folder, when set, is the workspace folder, bind-mounted read-write
@@ -121,6 +136,10 @@ type DockerOptions struct {
 	// Credentials returns the registry credentials of one pull. Nil pulls
 	// anonymously.
 	Credentials func(ctx context.Context) RegistryAuth
+	// Client returns a client that sends headers with every request; each
+	// command's requests go through one, naming its workspace. Nil uses
+	// the shared client without headers.
+	Client func(headers map[string]string) (*dockerclient.Client, error)
 }
 
 // Docker runs throwaway containers on one Docker Engine.
@@ -205,19 +224,30 @@ type RunError struct {
 	Class string
 	// Container is the short id of the container, when one exists.
 	Container string
+	// Denial is the Docker proxy's reason for denying the stage's request,
+	// when it denied it.
+	Denial string
 }
 
 func (e *RunError) Error() string {
+	text := fmt.Sprintf("%s (%s)", stageText[e.Stage], e.Class)
 	if e.Container != "" {
-		return fmt.Sprintf("%s (container %s, %s)", stageText[e.Stage], e.Container, e.Class)
+		text = fmt.Sprintf("%s (container %s, %s)", stageText[e.Stage], e.Container, e.Class)
 	}
-	return fmt.Sprintf("%s (%s)", stageText[e.Stage], e.Class)
+	if e.Denial != "" {
+		text += ": the Docker proxy denied it: " + e.Denial
+	}
+	return text
 }
 
 // failed is the RunError of stage for err, which it reads only for its
-// class.
+// class and for the Docker proxy's reason when the proxy denied it.
 func failed(stage Stage, err error, id string) *RunError {
-	return &RunError{Stage: stage, Class: class(err), Container: shortID(id)}
+	e := &RunError{Stage: stage, Class: class(err), Container: shortID(id)}
+	if d := dockerproxy.Denial(err); d != nil {
+		e.Denial = d.Reason
+	}
+	return e
 }
 
 // class names the Engine error class of err.
@@ -251,13 +281,42 @@ func class(err error) string {
 
 // Run runs c in a new container and removes it. Every error it returns is
 // a *RunError, an *ImageError, or a fixed sentence.
-func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
+func (d *Docker) Run(ctx context.Context, c Command) (int, error) {
 	if len(c.Argv) == 0 || c.Argv[0] == "" {
 		return -1, errors.New("the command is empty")
 	}
 	if (c.Folder == "") == (c.Target == "") {
 		return -1, errors.New("the command needs exactly one of a mounted folder and a copied target")
 	}
+	if !filepath.IsAbs(c.Workspace) {
+		return -1, errors.New("the command names no workspace")
+	}
+	workspace, err := dockerproxy.Workspace(c.Workspace)
+	if err != nil {
+		return -1, err
+	}
+	run, done, err := d.forWorkspace(workspace)
+	if err != nil {
+		return -1, err
+	}
+	defer done()
+	return run.run(ctx, c, workspace)
+}
+
+// forWorkspace returns a Docker whose requests name workspace to the
+// Docker proxy, and a function that releases it.
+func (d *Docker) forWorkspace(workspace string) (*Docker, func(), error) {
+	if d.opts.Client == nil {
+		return d, func() {}, nil
+	}
+	client, err := d.opts.Client(map[string]string{dockerproxy.HeaderThrowawayWorkspace: workspace})
+	if err != nil {
+		return nil, nil, errors.New("no Docker client could be made for the command's workspace")
+	}
+	return &Docker{client: client, opts: d.opts}, func() { _ = client.Close() }, nil
+}
+
+func (d *Docker) run(ctx context.Context, c Command, workspace string) (code int, err error) {
 	stdout, stderr := orDiscard(c.Stdout), orDiscard(c.Stderr)
 	if err := d.ensureImage(ctx, c.Image, orDiscard(c.Log)); err != nil {
 		return -1, &ImageError{Image: c.Image, Err: err}
@@ -270,7 +329,9 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	for k, v := range d.opts.Labels {
 		labels[k] = v
 	}
+	delete(labels, labelLocalFolder)
 	labels[LabelKind], labels[LabelRoot], labels[LabelJob], labels[LabelID] = c.Kind, d.opts.Root, c.Job, id
+	labels[LabelWorkspace] = workspace
 	env := c.Env
 	if env == nil {
 		env = []string{}
@@ -386,6 +447,11 @@ func (d *Docker) removeLabelled(ctx context.Context, id string) error {
 	}
 	var errs []error
 	for _, c := range list {
+		// A proxy can answer a list with containers its filter does not
+		// match; only this container is removed.
+		if c.Labels[LabelID] != id {
+			continue
+		}
 		errs = append(errs, d.remove(ctx, c.ID))
 	}
 	return errors.Join(errs...)
@@ -530,6 +596,12 @@ func (d *Docker) RemoveLeftovers(ctx context.Context) (int, error) {
 	removed := 0
 	var errs []error
 	for _, c := range list {
+		// A proxy can answer a list with containers its filters do not
+		// match, such as workspaces' devcontainers; only this workspace
+		// root's throwaway containers are removed.
+		if !d.leftover(c.Labels) {
+			continue
+		}
 		if err := d.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !dockerclient.IsErrNotFound(err) {
 			errs = append(errs, failed(StageRemove, err, c.ID))
 			continue
@@ -537,6 +609,17 @@ func (d *Docker) RemoveLeftovers(ctx context.Context) (int, error) {
 		removed++
 	}
 	return removed, errors.Join(errs...)
+}
+
+// leftover reports whether labels are those of a throwaway container of
+// this workspace root.
+func (d *Docker) leftover(labels map[string]string) bool {
+	switch labels[LabelKind] {
+	case KindHook, KindInitializeCommand:
+	default:
+		return false
+	}
+	return labels[LabelRoot] == d.opts.Root
 }
 
 // ServiceUser is the user the workspace service runs as, uid:gid: the

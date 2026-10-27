@@ -77,6 +77,16 @@ func TestRuntimeOptionsCarryTheLocalEnvAllowlist(t *testing.T) {
 	}
 }
 
+// TestRuntimeOptionsNameWorkspacesAndStageCompose checks that every
+// devcontainer operation gets a client of its own, for the Docker proxy's
+// workspace header, and that compose-staging-folder reaches the runtime.
+func TestRuntimeOptionsNameWorkspacesAndStageCompose(t *testing.T) {
+	opts, err := runtimeOptions(&config.Config{ComposeStagingFolder: "/srv/compose-staging"})
+	if err != nil || opts.Client == nil || opts.ComposeStaging != "/srv/compose-staging" {
+		t.Fatalf("options %+v %v", opts, err)
+	}
+}
+
 // TestBackupsUseTheWyrwoodAgentSocket checks that the composed backup
 // remote authenticates SSH pushes through ssh-agent.sock in the configured
 // Wyrwood directory.

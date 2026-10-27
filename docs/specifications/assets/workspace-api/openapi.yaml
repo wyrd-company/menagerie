@@ -348,6 +348,8 @@ components:
             - initialize-command-failed
             - registry-credentials-unavailable
             - runner-image-unavailable
+            - identity-label-refused
+            - proxy-denied
             - internal-error
             - workspace-exists
             - template-refused

@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
@@ -104,11 +105,14 @@ const (
 	KindInitializeCommandFailed        = "initialize-command-failed"
 	KindRegistryCredentialsUnavailable = "registry-credentials-unavailable"
 	KindRunnerImageUnavailable         = "runner-image-unavailable"
+	KindIdentityLabelRefused           = "identity-label-refused"
+	KindProxyDenied                    = "proxy-denied"
 )
 
 // ContainerFailure names the job error kind of a container operation
 // failure: registry-credentials-unavailable, runner-image-unavailable,
-// initialize-command-failed, or the default operation-failed.
+// initialize-command-failed, identity-label-refused, proxy-denied, or the
+// default operation-failed.
 func ContainerFailure(err error) error {
 	var credErr *registrycreds.Error
 	if errors.As(err, &credErr) {
@@ -121,6 +125,13 @@ func ContainerFailure(err error) error {
 	var initErr *devcontainer.InitializeError
 	if errors.As(err, &initErr) {
 		return &jobs.Failure{Kind: KindInitializeCommandFailed, Err: err}
+	}
+	var labelErr *devcontainer.IdentityLabelError
+	if errors.As(err, &labelErr) {
+		return &jobs.Failure{Kind: KindIdentityLabelRefused, Err: err}
+	}
+	if dockerproxy.Denial(err) != nil {
+		return &jobs.Failure{Kind: KindProxyDenied, Err: err}
 	}
 	return err
 }
