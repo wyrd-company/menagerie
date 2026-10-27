@@ -635,8 +635,8 @@ func shortID(id string) string {
 }
 
 // Mounting returns the short ids of the running containers, other than
-// Menagerie's own, with a bind mount whose source is folder, is inside it,
-// or contains it.
+// Menagerie's own, with a writable bind mount whose source is folder, is
+// inside it, or contains it.
 func (r *Runtime) Mounting(ctx context.Context, folder string) ([]string, error) {
 	list, err := r.client.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
@@ -646,8 +646,9 @@ func (r *Runtime) Mounting(ctx context.Context, folder string) ([]string, error)
 }
 
 // mounting returns the short ids of the containers in list, other than
-// own, with a bind mount whose source is folder, is inside it, or
-// contains it.
+// own, with a writable bind mount whose source is folder, is inside it,
+// or contains it. A read-only bind, such as the Docker proxy's of the
+// workspace root, cannot change the folder.
 func mounting(list []container.Summary, folder string, own []string) []string {
 	skip := map[string]bool{}
 	for _, id := range own {
@@ -659,7 +660,7 @@ func mounting(list []container.Summary, folder string, own []string) []string {
 			continue
 		}
 		for _, m := range c.Mounts {
-			if m.Type == mount.TypeBind && (within(m.Source, folder) || within(folder, m.Source)) {
+			if m.Type == mount.TypeBind && m.RW && (within(m.Source, folder) || within(folder, m.Source)) {
 				ids = append(ids, shortID(c.ID))
 				break
 			}

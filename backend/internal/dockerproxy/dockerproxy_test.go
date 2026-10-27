@@ -90,9 +90,8 @@ func TestDenialReasonStaysOnOneLine(t *testing.T) {
 
 func TestOtherForbiddenResponsesAreNotDenials(t *testing.T) {
 	for name, body := range map[string]string{
-		"engine message":  `{"message":"forbidden by the daemon"}`,
-		"proxy no reason": `{"message":"request denied by sockguard policy"}`,
-		"not json":        `denied`,
+		"engine message": `{"message":"forbidden by the daemon"}`,
+		"not json":       `denied`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			err, _ := create(t, body, nil)
@@ -103,6 +102,13 @@ func TestOtherForbiddenResponsesAreNotDenials(t *testing.T) {
 				t.Errorf("Denial = %+v, want nil", d)
 			}
 		})
+	}
+}
+
+func TestADenialWithoutAReasonSaysSo(t *testing.T) {
+	err, _ := create(t, `{"message":"request denied by sockguard policy"}`, nil)
+	if d := Denial(err); d == nil || d.Reason != noReason {
+		t.Fatalf("Denial = %+v, want the no-reason denial", d)
 	}
 }
 

@@ -43,6 +43,9 @@ const proxyMessage = "request denied by sockguard policy"
 // error; the quoted reason follows it, so wrapping text cannot join it.
 const marker = "the Docker proxy denied the request: "
 
+// noReason stands for the reason of a denial whose body has none.
+const noReason = "the proxy gave no reason; its response.deny_verbosity is minimal"
+
 // maxDenial bounds the denial body read; a denial is a short JSON object.
 const maxDenial = 64 << 10
 
@@ -99,8 +102,12 @@ func (d *denials) RoundTrip(req *http.Request) (*http.Response, error) {
 		Message string `json:"message"`
 		Reason  string `json:"reason"`
 	}
-	if len(raw) <= maxDenial && json.Unmarshal(raw, &denial) == nil && denial.Message == proxyMessage && denial.Reason != "" {
-		body, _ = json.Marshal(map[string]string{"message": marker + strconv.Quote(oneLine(denial.Reason))})
+	if len(raw) <= maxDenial && json.Unmarshal(raw, &denial) == nil && denial.Message == proxyMessage {
+		reason := oneLine(denial.Reason)
+		if reason == "" {
+			reason = noReason
+		}
+		body, _ = json.Marshal(map[string]string{"message": marker + strconv.Quote(reason)})
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	resp.ContentLength = int64(len(body))

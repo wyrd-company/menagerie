@@ -34,6 +34,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
@@ -63,7 +64,9 @@ func newHarness(t *testing.T) *harness {
 		rc.Close()
 	}
 	h := &harness{t: t, client: client, root: t.TempDir(), runID: random(t)}
-	h.docker = throwaway.NewDocker(client, throwaway.DockerOptions{Root: h.root, User: throwaway.ServiceUser(), Labels: map[string]string{"menagerie.test.run": h.runID}})
+	// Each command names its workspace to the Docker proxy, as the
+	// workspace service's do.
+	h.docker = throwaway.NewDocker(client, throwaway.DockerOptions{Root: h.root, User: throwaway.ServiceUser(), Labels: map[string]string{"menagerie.test.run": h.runID}, Client: dockerproxy.NewClient})
 	t.Cleanup(func() {
 		for _, c := range h.containers(filters.Arg("label", "menagerie.test.run="+h.runID)) {
 			_ = client.ContainerRemove(context.Background(), c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})

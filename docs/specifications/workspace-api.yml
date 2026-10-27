@@ -280,9 +280,11 @@ description: >-
   before it writes, `apply` lists the running containers through the
   Docker library and refuses as `not-applicable`, with the reason "a
   running container mounts the workspace folder", when any but
-  Menagerie's own has a bind mount whose source is the workspace folder,
-  is inside it, or contains it; the console names each such container by
-  its short id. When the second commit or push fails, the second plan
+  Menagerie's own has a writable bind mount whose source is the workspace
+  folder, is inside it, or contains it; the console names each such
+  container by its short id. A read-only bind, such as the Docker proxy's
+  of the workspace root, does not count. Through the proxy, the list holds
+  only the containers Menagerie created. When the second commit or push fails, the second plan
   refuses, the mount check refuses, or the folder checks of `apply`
   refuse, nothing is applied and the devcontainer returns to its state
   before the job: one that ran is started again as a `start` job does,
