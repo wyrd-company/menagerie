@@ -48,7 +48,6 @@ var pendingChanges = map[string]string{
 	"1571": "per-workspace exceptions, roots, identity headers and the restart-policy setting",
 	"1814": "the LLBBridge passthrough that devcontainer builds need",
 	"1821": "refusing to start when a bind root or the workspace root is missing",
-	"1824": "network.allowed_drivers, on create and on attach",
 }
 
 // proxied reports whether the suite runs through the Docker proxy.
@@ -457,7 +456,6 @@ func TestProxyPingHelper(t *testing.T) {
 // bridge networks.
 func TestTheProxyDeniesANonBridgeComposeNetwork(t *testing.T) {
 	p := newProxyHarness(t)
-	waitsOn(t, "1824")
 	folder := p.workspace("macvlan", map[string]string{
 		".devcontainer/compose.yml": `services:
   app:
@@ -477,7 +475,7 @@ networks:
 // or ipvlan network on the Engine itself, outside the proxy, and brings up a
 // Compose workspace whose service joins it as an external network: the
 // network is not Menagerie's, so the proxy's ownership check denies the
-// create before its driver is read; with #1824 the driver check denies it
+// create before its driver is read; the driver check would deny it
 // too.
 func TestTheProxyDeniesAttachingToAnExistingNonBridgeNetwork(t *testing.T) {
 	p := newProxyHarness(t)
@@ -543,7 +541,6 @@ func (p *proxyHarness) createProxy(t *testing.T, image, dir string) string {
 // which Menagerie never calls and the shipped profile does not admit.
 func TestTheProxyChecksTheDriverOfAnExistingNetwork(t *testing.T) {
 	p := newProxyHarness(t)
-	waitsOn(t, "1824")
 	running, err := p.client.ContainerInspect(p.ctx, "sockguard")
 	if err != nil {
 		t.Fatalf("the suite's proxy: %v", err)
