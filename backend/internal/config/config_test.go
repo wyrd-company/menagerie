@@ -87,6 +87,17 @@ func TestParseRegistryCredentials(t *testing.T) {
 	}
 }
 
+func TestParseLocalEnv(t *testing.T) {
+	cfg, err := Parse([]byte(valid))
+	if err != nil || cfg.LocalEnv != nil {
+		t.Fatalf("absent local-env: %q %v", cfg.LocalEnv, err)
+	}
+	cfg, err = Parse([]byte(valid + "local-env: [TZ, LANG, _UNDERSCORE_1]\n"))
+	if err != nil || strings.Join(cfg.LocalEnv, ",") != "TZ,LANG,_UNDERSCORE_1" {
+		t.Fatalf("local-env %q %v", cfg.LocalEnv, err)
+	}
+}
+
 func TestParseRejects(t *testing.T) {
 	cases := []struct {
 		name, doc, want string
@@ -121,6 +132,9 @@ func TestParseRejects(t *testing.T) {
 		{"dot path", valid + strings.Replace(registryCredentials, "menagerie/registries/ghcr", "menagerie/../ghcr", 1), "registries[0].path \"menagerie/../ghcr\" must be"},
 		{"missing path", valid + strings.Replace(registryCredentials, "      path: menagerie/registries/ghcr\n", "", 1), "registries[0].path is required"},
 		{"unknown registry field", valid + strings.Replace(registryCredentials, "      path: menagerie/registries/ghcr\n", "      path: menagerie/registries/ghcr\n      token: x\n", 1), "field token not found"},
+		{"local-env name", valid + "local-env: [TZ, 1LANG]\n", "local-env[1] must be a variable name"},
+		{"local-env with value", valid + "local-env: [TZ=UTC]\n", "local-env[0] must be a variable name"},
+		{"duplicate local-env", valid + "local-env: [TZ, LANG, TZ]\n", "local-env[2] names TZ, as local-env[0] does"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

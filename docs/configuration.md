@@ -36,6 +36,8 @@ registry-credentials:
   registries:
     - {registry: ghcr.io, path: menagerie/ghcr}
     - {registry: docker.io, path: menagerie/docker-hub}
+
+local-env: [TZ, LANG]
 ```
 
 ## Workspaces
@@ -110,6 +112,24 @@ Menagerie sends no token and no namespace; Wyrwood adds the binding's token
 and renews it. A registry no entry names is anonymous. When a credential
 cannot be read, the job fails with `registry-credentials-unavailable` and one
 of the reasons in [Troubleshooting](troubleshooting.md#registry-credentials).
+
+## Local environment
+
+A devcontainer definition reads Menagerie's own environment through
+`${localEnv:NAME}` (and `${env:NAME}`). `local-env` lists the variables it
+may read; without it, it reads none. Each entry is a variable name: letters,
+digits and underscores, not starting with a digit, and each name once.
+
+- A reference to any other variable resolves to its default value, such as
+  `fallback` in `${localEnv:NAME:fallback}`, or to an empty string, as an
+  unset variable does. The job log notes each one:
+  `localEnv NAME is not in local-env; it resolves to its default value`.
+- Compose interpolation of `${VAR}` in a workspace's Compose files sees only
+  the listed variables.
+- `initializeCommand` runs with only the listed variables and `PATH`. `PATH`
+  is readable through `${localEnv:PATH}` only when it is listed.
+- `build.args` reach the build as written: devcontainer-builder does not
+  substitute variables in them yet.
 
 ## Listen address and template service
 

@@ -130,6 +130,14 @@ proposed-design:
     and, when present, runs it inside the Menagerie container with the
     workspace folder as the working directory. A failing command fails the
     job before the devcontainer starts.
+  local-environment: >-
+    A definition reads Menagerie's own environment only through the
+    configured `local-env` allowlist, empty by default, so a definition
+    cannot copy Menagerie's environment into a devcontainer, a build or a
+    Compose project. `${localEnv:...}` substitution and Compose
+    interpolation see only the allowed variables; `initializeCommand` gets
+    them and `PATH`. A refused reference resolves as an unset variable does
+    and is named in the job log.
   git-and-credentials: >-
     The workspace repository is a backup, not a synchronized copy. The local
     workspace is the source of truth; the workspace service uses go-git to

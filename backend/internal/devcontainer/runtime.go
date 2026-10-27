@@ -68,9 +68,13 @@ type Options struct {
 	// receives a credential source, so none reads the Docker client
 	// configuration or runs a credential helper.
 	Credentials func(ctx context.Context) RegistryAuth
-	// Environ returns the process environment used for ${localEnv:...}
-	// substitution and for initializeCommand. Defaults to os.Environ.
+	// Environ returns Menagerie's own environment. Defaults to os.Environ.
 	Environ func() []string
+	// LocalEnv names the variables of Environ that a definition may read
+	// through ${localEnv:NAME} and that Compose interpolation and
+	// initializeCommand receive. Nil allows none. Any other reference
+	// resolves to its default value, or empty, and the job log notes it.
+	LocalEnv []string
 }
 
 // Runtime operates workspace devcontainers on one Docker Engine.
@@ -128,9 +132,12 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 	if err != nil {
 		return err
 	}
-	environ := r.opts.Environ()
-	env := envMap(environ)
-	if err := r.initialize(ctx, dc, folder, environ, env, p); err != nil {
+	local := newLocalEnvironment(r.opts.Environ(), r.opts.LocalEnv)
+	for _, name := range refusedLocalEnv(dc.Raw, r.opts.LocalEnv) {
+		fmt.Fprintf(p.Log(""), "localEnv %s is not in local-env; it resolves to its default value\n", name)
+	}
+	env := local.values
+	if err := r.initialize(ctx, dc, folder, local.process, env, p); err != nil {
 		return err
 	}
 	// The lockfile snapshot lives for the whole operation; the builder only
@@ -392,16 +399,6 @@ func logger(p Progress) func(string, ...any) {
 	return func(format string, args ...any) {
 		fmt.Fprintf(out, strings.TrimSuffix(format, "\n")+"\n", args...)
 	}
-}
-
-func envMap(environ []string) map[string]string {
-	out := make(map[string]string, len(environ))
-	for _, pair := range environ {
-		if k, v, ok := strings.Cut(pair, "="); ok {
-			out[k] = v
-		}
-	}
-	return out
 }
 
 func shortID(id string) string {

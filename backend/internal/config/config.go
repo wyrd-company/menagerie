@@ -55,6 +55,10 @@ type Config struct {
 	// RegistryCredentials names the OpenBao secrets that hold container
 	// registry credentials. Absent, every registry is anonymous.
 	RegistryCredentials *RegistryCredentials `yaml:"registry-credentials"`
+	// LocalEnv names the variables of Menagerie's own environment that a
+	// devcontainer definition may read through ${localEnv:NAME}. Absent,
+	// a definition reads none.
+	LocalEnv []string `yaml:"local-env"`
 }
 
 // Template is one approved template.
@@ -103,7 +107,10 @@ type Registry struct {
 	Path string `yaml:"path"`
 }
 
-var templateIDPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+var (
+	templateIDPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	envNamePattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
 // Load reads and validates the configuration file at path.
 func Load(path string) (*Config, error) {
@@ -210,6 +217,16 @@ func (c *Config) validate() error {
 	}
 	if c.RegistryCredentials != nil {
 		errs = append(errs, c.RegistryCredentials.validate()...)
+	}
+	names := map[string]int{}
+	for i, name := range c.LocalEnv {
+		if !envNamePattern.MatchString(name) {
+			errs = append(errs, fmt.Errorf("local-env[%d] must be a variable name: letters, digits and underscores, not starting with a digit", i))
+		} else if first, dup := names[name]; dup {
+			errs = append(errs, fmt.Errorf("local-env[%d] names %s, as local-env[%d] does", i, name, first))
+		} else {
+			names[name] = i
+		}
 	}
 	return errors.Join(errs...)
 }

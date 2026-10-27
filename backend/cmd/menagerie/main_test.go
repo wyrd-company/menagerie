@@ -65,6 +65,18 @@ func TestRegistryCredentialsReadTheWyrwoodVaultSocket(t *testing.T) {
 	}
 }
 
+// TestRuntimeOptionsCarryTheLocalEnvAllowlist checks that the configured
+// local-env list reaches the devcontainer runtime, and that none is none.
+func TestRuntimeOptionsCarryTheLocalEnvAllowlist(t *testing.T) {
+	opts, err := runtimeOptions(&config.Config{LocalEnv: []string{"TZ", "LANG"}})
+	if err != nil || strings.Join(opts.LocalEnv, ",") != "TZ,LANG" || opts.Environ != nil {
+		t.Fatalf("options %+v %v", opts, err)
+	}
+	if opts, err := runtimeOptions(&config.Config{}); err != nil || opts.LocalEnv != nil {
+		t.Fatalf("absent local-env %+v %v", opts, err)
+	}
+}
+
 // TestBackupsUseTheWyrwoodAgentSocket checks that the composed backup
 // remote authenticates SSH pushes through ssh-agent.sock in the configured
 // Wyrwood directory.

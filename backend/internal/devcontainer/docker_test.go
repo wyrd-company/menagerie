@@ -340,6 +340,74 @@ func TestFailingInitializeCommandPreventsStartAndRebuild(t *testing.T) {
 	}
 }
 
+// TestLocalEnvReadsOnlyAllowedVariables sets variables in the test
+// process's own environment, as Menagerie's would be, and allows one.
+func TestLocalEnvReadsOnlyAllowedVariables(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("MENAGERIE_TEST_ALLOWED", "allowed-value")
+	t.Setenv("MENAGERIE_TEST_SECRET", "secret-value")
+	rt := devcontainer.New(h.client, devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}})
+	folder := h.workspace("env-space", map[string]string{
+		".devcontainer/devcontainer.json": `{
+  "image": "` + baseImage + `",
+  "initializeCommand": "env > init-env; echo ${localEnv:MENAGERIE_TEST_SECRET} > init-arg",
+  "containerEnv": {
+    "ALLOWED": "${localEnv:MENAGERIE_TEST_ALLOWED}",
+    "SECRET": "${localEnv:MENAGERIE_TEST_SECRET}",
+    "SECRET_ALIAS": "${env:MENAGERIE_TEST_SECRET}",
+    "SECRET_DEFAULT": "${localEnv:MENAGERIE_TEST_SECRET:fallback}"
+  },
+  "remoteEnv": {"REMOTE_SECRET": "${localEnv:MENAGERIE_TEST_SECRET}"}
+}`,
+	})
+	var log strings.Builder
+	p := &recordProgress{logProgress: logProgress{t: t}, out: &log}
+	if err := rt.Start(h.ctx, folder, p); err != nil {
+		t.Fatal(err)
+	}
+	info := h.inspect(h.status(folder).ContainerID)
+	for key, want := range map[string]string{"ALLOWED": "allowed-value", "SECRET": "", "SECRET_ALIAS": "", "SECRET_DEFAULT": "fallback"} {
+		if got := envValue(info, key); got != want {
+			t.Errorf("containerEnv %s=%q want %q", key, got, want)
+		}
+	}
+	if got := h.exec(info.ID, "sh", "-c", "env"); strings.Contains(got, "secret-value") {
+		t.Errorf("devcontainer environment holds the refused value:\n%s", got)
+	}
+	for key, value := range info.Config.Labels {
+		if strings.Contains(value, "secret-value") {
+			t.Errorf("label %s holds the refused value: %s", key, value)
+		}
+	}
+	initEnv, _ := os.ReadFile(filepath.Join(folder, "init-env"))
+	if !strings.Contains(string(initEnv), "MENAGERIE_TEST_ALLOWED=allowed-value") || !strings.Contains(string(initEnv), "PATH=") || strings.Contains(string(initEnv), "secret-value") {
+		t.Errorf("initializeCommand environment:\n%s", initEnv)
+	}
+	if arg, _ := os.ReadFile(filepath.Join(folder, "init-arg")); strings.TrimSpace(string(arg)) != "" {
+		t.Errorf("initializeCommand substitution read the refused value: %q", arg)
+	}
+	if got := strings.Count(log.String(), "localEnv MENAGERIE_TEST_SECRET is not in local-env"); got != 1 {
+		t.Errorf("job log notes the refused variable %d times, want once:\n%s", got, log.String())
+	}
+	if strings.Contains(log.String(), "MENAGERIE_TEST_ALLOWED is not") {
+		t.Errorf("job log notes the allowed variable:\n%s", log.String())
+	}
+}
+
+// recordProgress also keeps the operation's output.
+type recordProgress struct {
+	logProgress
+	out *strings.Builder
+}
+
+func (p *recordProgress) Log(prefix string) io.Writer {
+	inner := p.logProgress.Log(prefix)
+	return writerFunc(func(b []byte) (int, error) {
+		p.out.Write(b)
+		return inner.Write(b)
+	})
+}
+
 const composeFile = `services:
   app:
     image: ` + baseImage + `

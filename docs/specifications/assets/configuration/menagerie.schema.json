@@ -114,6 +114,15 @@
         }
       }
     },
+    "local-env": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Variables of Menagerie's own environment that a devcontainer definition may read through ${localEnv:NAME}. Absent, a definition reads none.",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      }
+    },
     "registry-credentials": {
       "type": "object",
       "additionalProperties": false,

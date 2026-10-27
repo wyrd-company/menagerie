@@ -46,8 +46,16 @@ description: >-
   token and no namespace: Wyrwood supplies the binding's token and renews
   it. A registry that no entry names is anonymous; without the section,
   every registry is. The template service ignores this section.
+
+
+  Optional `local-env` lists the variables of the workspace service's own
+  environment that a devcontainer definition may read through
+  `${localEnv:NAME}` or `${env:NAME}`. Each entry matches
+  `^[A-Za-z_][A-Za-z0-9_]*$` and appears once. Absent, a definition reads
+  no variable. The template service ignores this list.
 validation-criteria: >-
   `go test ./backend/internal/config/` parses a valid document, applies the
   defaults, rejects each invalid field, and checks that the schema's keys
   equal the keys the parser accepts and that its default scopes equal the
-  scopes the workspace service requests.
+  scopes the workspace service requests. `go test ./backend/cmd/menagerie/`
+  checks that `local-env` reaches the devcontainer runtime.
