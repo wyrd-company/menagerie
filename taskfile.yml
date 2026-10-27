@@ -49,11 +49,18 @@ vars:
   # The Wyrwood release the acceptance run's controller and agent come from.
   # renovate: datasource=github-releases depName=wyrd-company/wyrwood
   WYRWOOD_VERSION: 0.4.0
+  # The Docker proxy the proxy suite runs: a commit of
+  # github.com/wyrd-company/sockguard, built on the disposable daemon, or an
+  # image reference, pulled.
+  SOCKGUARD: c1df2d1841a4566cffd98e3c3ae304688c4b8283
+  # The Sockguard fork changes SOCKGUARD lacks; the cases that need one
+  # wait.
+  SOCKGUARD_PENDING: 1571 1814 1821
   # The YAML this repository's tooling owns; package documents have their
   # own owners and checks.
   REPOSITORY_YAML: >-
     taskfile.yml backend/taskfile.yml template-service/taskfile.yml web/taskfile.yml
-    deploy/compose.yml deploy/config.yml .github/*.yml .github/workflows/*.yml
+    deploy/compose.yml deploy/config.yml deploy/sockguard.yml .github/*.yml .github/workflows/*.yml
     .config/lefthook.yml .ryl.yml
 
 tasks:
@@ -148,6 +155,7 @@ tasks:
     cmds:
       - task: test:scripts:docker
       - task: test:docker
+      - task: test:docker:proxy
       - task: test:openbao
       - task: test:pocketid
       - task: test:templateservice
@@ -175,6 +183,37 @@ tasks:
         -e MENAGERIE_TEST_WORKSPACE_COMMIT=/menagerie-work/bin/workspace-commit
         '{{.STATE}}/devcontainer.test' -test.v -test.count=1 -test.timeout 10m
       - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/throwaway.test' -test.v -test.count=1 -test.timeout 10m
+
+  test:docker:proxy:
+    desc: Run the Docker suites again through the Docker proxy with deploy/sockguard.yml, and the proxy's own cases, on a disposable Docker daemon
+    vars:
+      STATE: '{{.SCRATCH}}/docker-proxy'
+      OWNER:
+        sh: od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'
+      # The test binaries run as root in the runner; their workspaces,
+      # socket folders and Compose staging live under its TMPDIR.
+      PROXY: >-
+        -e DOCKER_HOST=unix:///menagerie-work/proxy/socket/menagerie.sock
+        -e MENAGERIE_TEST_ENGINE=tcp://127.0.0.1:2375
+        -e MENAGERIE_TEST_PROXY_ROOT=/menagerie-work/tmp/proxy/workspaces
+        -e MENAGERIE_TEST_PROXY_EXCEPTIONS=/menagerie-work/proxy/exceptions
+        -e 'MENAGERIE_TEST_PROXY_PENDING={{.SOCKGUARD_PENDING}}'
+        -e MENAGERIE_TEST_PROXY_SERVICE_UID=1000
+    cmds:
+      - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
+      - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
+      # uid 0 is the test binaries'; 1000 stands for Menagerie's services,
+      # which reach the socket through its group only.
+      - scripts/proxy-config.sh 0,1000 /menagerie-work/tmp /menagerie-work/tmp/proxy/workspaces {{.SOCKGUARD_PENDING}} > '{{.STATE}}/sockguard.yaml'
+      - scripts/isolated-docker.sh proxy '{{.STATE}}' '{{.SOCKGUARD}}' '{{.STATE}}/sockguard.yaml'
+      - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/devcontainer.test' ./backend/internal/devcontainer/
+      - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/throwaway.test' ./backend/internal/throwaway/
+      - CGO_ENABLED=0 go build -trimpath -o '{{.STATE}}/workspace-commit' ./backend/cmd/workspace-commit
+      - >-
+        scripts/isolated-docker.sh run '{{.STATE}}' -c '{{.STATE}}/workspace-commit'
+        -e MENAGERIE_TEST_WORKSPACE_COMMIT=/menagerie-work/bin/workspace-commit {{.PROXY}}
+        '{{.STATE}}/devcontainer.test' -test.v -test.count=1 -test.timeout 10m
+      - scripts/isolated-docker.sh run '{{.STATE}}' {{.PROXY}} '{{.STATE}}/throwaway.test' -test.v -test.count=1 -test.timeout 10m
 
   test:openbao:
     desc: Read registry credentials and sign GitHub App JWTs with a disposable OpenBao dev server (needs bao on PATH)

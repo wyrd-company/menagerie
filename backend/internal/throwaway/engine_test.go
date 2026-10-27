@@ -21,6 +21,8 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	dockerclient "github.com/docker/docker/client"
+
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 )
 
 // engine is a fake Docker Engine API. It knows no image until one is
@@ -48,10 +50,24 @@ type engine struct {
 	archive []byte
 	// onWait runs before a wait is answered.
 	onWait func()
+	// unfiltered answers a list with every container, as a proxy that
+	// drops label filters would.
+	unfiltered bool
+	// denied maps a stage to the reason a Docker proxy denies it with.
+	denied map[string]string
+	// headers holds each request's throwaway workspace header.
+	headers []string
 }
 
 // failing answers the request with the stage's failure, if it has one.
 func (e *engine) failing(w http.ResponseWriter, stage string, status int) bool {
+	if reason, ok := e.denied[stage]; ok {
+		body, _ := json.Marshal(map[string]string{"message": "request denied by sockguard policy", "reason": reason})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write(body)
+		return true
+	}
 	message, ok := e.fail[stage]
 	if !ok {
 		return false
@@ -82,7 +98,13 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	e.handlers.Add(1)
 	defer e.handlers.Done()
 	path := apiVersion.ReplaceAllString(r.URL.Path, "")
+	e.mu.Lock()
+	e.headers = append(e.headers, r.Header.Get(dockerproxy.HeaderThrowawayWorkspace))
+	e.mu.Unlock()
 	switch {
+	case path == "/_ping":
+		w.Header().Set("Api-Version", "1.47")
+		_, _ = io.WriteString(w, "OK")
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/images/"):
 		if e.failing(w, "inspect", http.StatusInternalServerError) {
 			return
@@ -144,7 +166,7 @@ func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
 		var list []container.Summary
 		for id, labels := range e.live {
-			if args.MatchKVList("label", labels) {
+			if e.unfiltered || args.MatchKVList("label", labels) {
 				list = append(list, container.Summary{ID: id, Labels: labels})
 			}
 		}
@@ -225,7 +247,8 @@ func (e *engine) left() map[string]map[string]string {
 }
 
 func sample(t *testing.T) Command {
-	return Command{Kind: KindHook, Job: "job-1", Image: "runner:sample", Folder: t.TempDir(), Dir: "/", Argv: []string{"true"}}
+	folder := t.TempDir()
+	return Command{Kind: KindHook, Job: "job-1", Workspace: folder, Image: "runner:sample", Folder: folder, Dir: "/", Argv: []string{"true"}}
 }
 
 // TestRunnerNotesStayOutOfTheCommandsStreams pulls a missing image: the
@@ -381,5 +404,134 @@ func TestAFoldersCommandMountsOnlyItsFolder(t *testing.T) {
 	mounts := e.creates[0].HostConfig.Mounts
 	if len(mounts) != 1 || mounts[0].Type != "bind" || mounts[0].Source != c.Folder || mounts[0].Target != c.Folder || len(e.creates[0].HostConfig.Binds) != 0 {
 		t.Fatalf("mounts %+v binds %v", mounts, e.creates[0].HostConfig.Binds)
+	}
+}
+
+// TestACommandNamesItsWorkspace runs a command through a client made for
+// its workspace: every request names the workspace's identity to the
+// Docker proxy, the container carries it as LabelWorkspace, and never the
+// devcontainer label, even when the configured labels hold it.
+func TestACommandNamesItsWorkspace(t *testing.T) {
+	e, base := newEngine(t)
+	var made []map[string]string
+	opts := DockerOptions{
+		Root:   "/srv",
+		Labels: map[string]string{labelLocalFolder: "/srv/other", "test": "x"},
+		Client: func(headers map[string]string) (*dockerclient.Client, error) {
+			made = append(made, headers)
+			return dockerclient.NewClientWithOpts(dockerclient.WithHost(base.DaemonHost()), dockerclient.WithHTTPHeaders(headers))
+		},
+	}
+	c := sample(t)
+	want, err := dockerproxy.Workspace(c.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, err := NewDocker(base, opts).Run(context.Background(), c); err != nil || code != 0 {
+		t.Fatalf("run %d %v", code, err)
+	}
+	if len(made) != 1 || made[0][dockerproxy.HeaderThrowawayWorkspace] != want || len(made[0]) != 1 {
+		t.Fatalf("clients made with %v, want one naming %s", made, want)
+	}
+	e.handlers.Wait()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i, h := range e.headers {
+		if h != want {
+			t.Errorf("request %d names workspace %q, want %q", i, h, want)
+		}
+	}
+	labels := e.creates[0].Labels
+	if labels[LabelWorkspace] != want {
+		t.Errorf("label %s = %q, want %q", LabelWorkspace, labels[LabelWorkspace], want)
+	}
+	if _, ok := labels[labelLocalFolder]; ok {
+		t.Errorf("the container carries %s", labelLocalFolder)
+	}
+}
+
+// TestACommandWithoutAWorkspaceIsRefused refuses a command that names no
+// workspace before any request.
+func TestACommandWithoutAWorkspaceIsRefused(t *testing.T) {
+	e, client := newEngine(t)
+	c := sample(t)
+	c.Workspace = ""
+	if _, err := NewDocker(client, DockerOptions{Root: "/srv"}).Run(context.Background(), c); err == nil || err.Error() != "the command names no workspace" {
+		t.Fatalf("run error %v", err)
+	}
+	e.handlers.Wait()
+	if len(e.headers) != 0 {
+		t.Fatalf("%d requests were sent", len(e.headers))
+	}
+}
+
+// TestRemoveLeftoversRemovesOnlyItsOwn answers the leftover list with
+// every container, as a proxy that drops label filters would: only this
+// root's throwaway containers are removed, never a devcontainer or another
+// root's command.
+func TestRemoveLeftoversRemovesOnlyItsOwn(t *testing.T) {
+	e, client := newEngine(t)
+	e.unfiltered = true
+	e.live = map[string]map[string]string{
+		"own-hook":   {LabelKind: KindHook, LabelRoot: "/srv"},
+		"own-init":   {LabelKind: KindInitializeCommand, LabelRoot: "/srv"},
+		"devcontain": {labelLocalFolder: "/srv/alpha"},
+		"other-root": {LabelKind: KindHook, LabelRoot: "/elsewhere"},
+		"odd-kind":   {LabelKind: "other", LabelRoot: "/srv"},
+	}
+	n, err := NewDocker(client, DockerOptions{Root: "/srv"}).RemoveLeftovers(context.Background())
+	if err != nil || n != 2 {
+		t.Fatalf("removed %d, %v", n, err)
+	}
+	left := e.left()
+	for _, id := range []string{"devcontain", "other-root", "odd-kind"} {
+		if _, ok := left[id]; !ok {
+			t.Errorf("%s was removed", id)
+		}
+	}
+}
+
+// TestALostCreationRemovesOnlyItsContainer loses a create's reply while
+// the list answers every container: only the container with the run's id
+// is removed.
+func TestALostCreationRemovesOnlyItsContainer(t *testing.T) {
+	e, client := newEngine(t)
+	e.unfiltered = true
+	e.live["devcontain"] = map[string]string{labelLocalFolder: "/srv/alpha"}
+	e.onCreate = func(w http.ResponseWriter, _ *http.Request, register func() string) {
+		register()
+		http.Error(w, `{"message":"lost"}`, http.StatusInternalServerError)
+	}
+	if _, err := NewDocker(client, DockerOptions{Root: "/srv"}).Run(context.Background(), sample(t)); err == nil {
+		t.Fatal("run succeeded")
+	}
+	left := e.left()
+	if _, ok := left["devcontain"]; !ok || len(left) != 1 {
+		t.Fatalf("left %v, want only the devcontainer", left)
+	}
+}
+
+// TestAProxyDenialNamesItsReason denies the create as the Docker proxy
+// does: the error names the stage and the proxy's reason.
+func TestAProxyDenialNamesItsReason(t *testing.T) {
+	e, _ := newEngine(t)
+	e.denied = map[string]string{"create": "bind source /srv/other is outside the workspace"}
+	srv := httptest.NewServer(e)
+	t.Cleanup(srv.Close)
+	t.Setenv("DOCKER_HOST", "tcp://"+srv.Listener.Addr().String())
+	t.Setenv("DOCKER_TLS_VERIFY", "")
+	t.Setenv("DOCKER_CERT_PATH", "")
+	client, err := dockerproxy.NewClient(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	_, err = NewDocker(client, DockerOptions{Root: "/srv"}).Run(context.Background(), sample(t))
+	var re *RunError
+	if !errors.As(err, &re) || re.Stage != StageCreate || re.Denial != "bind source /srv/other is outside the workspace" {
+		t.Fatalf("error %v, want a create RunError with the proxy's reason", err)
+	}
+	if !strings.HasSuffix(err.Error(), ": the Docker proxy denied it: bind source /srv/other is outside the workspace") {
+		t.Errorf("error text %q", err)
 	}
 }

@@ -1,7 +1,7 @@
 // ---
 // relationships:
 //   implements: menagerie
-//   references: [workspace, menagerie-has-host-root]
+//   references: [workspace, menagerie-has-host-root, buildkit-traffic-not-inspectable]
 // ---
 
 // Package devcontainer starts, stops and rebuilds a workspace's
@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -34,6 +35,7 @@ import (
 	"github.com/wyrd-company/devcontainer-builder/pkg/registryauth"
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
 
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
@@ -106,6 +108,15 @@ type Options struct {
 	// mount; a start that reuses a container without it leaves the
 	// container as it is. Nil mounts nothing.
 	WorkspaceSocket func(folder string) (string, error)
+	// Client returns a client that sends headers with every request. Each
+	// start, stop and rebuild goes through one that names its workspace to
+	// the Docker proxy. Nil uses the shared client without headers.
+	Client func(headers map[string]string) (*dockerclient.Client, error)
+	// ComposeStaging is the folder that holds one folder per workspace,
+	// named after it, that the workspace's Compose configs and secrets are
+	// written to for their bind mounts: a path the Engine resolves on the
+	// host. Empty is devcontainer-builder's default under TMPDIR.
+	ComposeStaging string
 }
 
 // Runtime operates workspace devcontainers on one Docker Engine.
@@ -145,7 +156,12 @@ func (r *Runtime) Status(ctx context.Context, folder string) (Status, error) {
 // reuses and starts an existing container and runs lifecycle phases
 // according to their markers.
 func (r *Runtime) Start(ctx context.Context, folder string, p Progress) error {
-	return r.bringUp(ctx, folder, p, false)
+	w, done, err := r.forWorkspace(folder)
+	if err != nil {
+		return err
+	}
+	defer done()
+	return w.bringUp(ctx, folder, p, false)
 }
 
 // Rebuild runs initializeCommand, builds the current definition, removes
@@ -154,7 +170,31 @@ func (r *Runtime) Start(ctx context.Context, folder string, p Progress) error {
 // service): named volumes, networks and other services are kept, and
 // Compose Up recreates other services whose configuration changed.
 func (r *Runtime) Rebuild(ctx context.Context, folder string, p Progress) error {
-	return r.bringUp(ctx, folder, p, true)
+	w, done, err := r.forWorkspace(folder)
+	if err != nil {
+		return err
+	}
+	defer done()
+	return w.bringUp(ctx, folder, p, true)
+}
+
+// forWorkspace returns a Runtime whose requests name the workspace in
+// folder to the Docker proxy, and a function that releases it. The name is
+// the workspace's identity, from the workspace root and the folder's name,
+// never from its definition.
+func (r *Runtime) forWorkspace(folder string) (*Runtime, func(), error) {
+	if r.opts.Client == nil {
+		return r, func() {}, nil
+	}
+	workspace, err := dockerproxy.Workspace(folder)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := r.opts.Client(map[string]string{dockerproxy.HeaderWorkspace: workspace})
+	if err != nil {
+		return nil, nil, errors.New("no Docker client could be made for the workspace")
+	}
+	return &Runtime{client: client, opts: r.opts}, func() { _ = client.Close() }, nil
 }
 
 func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replace bool) error {
@@ -168,6 +208,9 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 		fmt.Fprintf(p.Log(""), "localEnv %s is not in local-env; it resolves to its default value\n", name)
 	}
 	env := local.values
+	if err := checkIdentityLabels(ctx, dc, folder, env); err != nil {
+		return err
+	}
 	socket, err := r.workspaceSocket(dc, folder, p)
 	if err != nil {
 		return err
@@ -423,7 +466,10 @@ func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) er
 	if op.socket != "" {
 		req.Mounts = append(req.Mounts, "type=bind,source="+op.socket+",target="+WorkspaceSocketTarget+",readonly")
 	}
-	res, err := r.composeHost(p, op.auth).Up(ctx, req)
+	if err := r.ensureStaging(folder); err != nil {
+		return err
+	}
+	res, err := r.composeHost(p, op.auth, folder).Up(ctx, req)
 	// Up can recreate the primary and then fail, in a lifecycle command
 	// for example; its result still says so.
 	if res != nil {
@@ -449,13 +495,22 @@ func (op *operation) noteCreated(created bool) {
 // definition cannot select the wrong stop. A Compose primary stops its
 // whole project. A workspace without a container is already stopped.
 func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
+	w, done, err := r.forWorkspace(folder)
+	if err != nil {
+		return err
+	}
+	defer done()
+	return w.stop(ctx, folder, p)
+}
+
+func (r *Runtime) stop(ctx context.Context, folder string, p Progress) error {
 	p.Phase("stop")
 	host := r.dockerHost(p, anonymous)
 	info, err := host.Inspect(ctx, folder)
 	if errors.Is(err, hostdocker.ErrContainerNotFound) {
 		// A Compose project keeps its other services running without its
 		// primary; its project label still finds them.
-		err := r.composeHost(p, anonymous).Stop(ctx, folder)
+		err := r.composeHost(p, anonymous, folder).Stop(ctx, folder)
 		if errors.Is(err, dockercompose.ErrProjectNotFound) {
 			fmt.Fprintln(p.Log(""), "workspace has no container")
 			return nil
@@ -470,7 +525,7 @@ func (r *Runtime) Stop(ctx context.Context, folder string, p Progress) error {
 	}
 	if project := info.Labels[dockercompose.LabelProject]; project != "" {
 		fmt.Fprintf(p.Log(""), "stopping compose project %s\n", project)
-		return r.composeHost(p, anonymous).Stop(ctx, folder)
+		return r.composeHost(p, anonymous, folder).Stop(ctx, folder)
 	}
 	fmt.Fprintf(p.Log(""), "stopping container %s\n", shortID(info.ID))
 	return host.StopByID(ctx, info.ID)
@@ -537,9 +592,50 @@ func (r *Runtime) dockerHost(p Progress, auth RegistryAuth) *hostdocker.Host {
 	return hostdocker.New(r.client, hostdocker.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth})
 }
 
-func (r *Runtime) composeHost(p Progress, auth RegistryAuth) *dockercompose.Host {
+func (r *Runtime) composeHost(p Progress, auth RegistryAuth, folder string) *dockercompose.Host {
+	return dockercompose.New(r.client, r.composeOptions(p, auth, folder))
+}
+
+// composeOptions are a Compose operation's options: its output, its
+// credential source, and the staging folder of the configs and secrets of
+// the workspace in folder.
+func (r *Runtime) composeOptions(p Progress, auth RegistryAuth, folder string) dockercompose.Options {
 	out := p.Log("")
-	return dockercompose.New(r.client, dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth})
+	return dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth, UserDataFolder: r.stagingFolder(folder)}
+}
+
+// stagingFolder is the workspace's own folder in ComposeStaging, named
+// after the workspace, as the Docker proxy expects of a per-workspace
+// root; empty without ComposeStaging.
+func (r *Runtime) stagingFolder(folder string) string {
+	if r.opts.ComposeStaging == "" {
+		return ""
+	}
+	return filepath.Join(r.opts.ComposeStaging, filepath.Base(folder))
+}
+
+// errStaging is a staging folder that cannot be used. It names no path.
+var errStaging = errors.New("the workspace's Compose staging folder is not a folder of the services' user")
+
+// ensureStaging creates the workspace's staging folder, private to the
+// services' user, before Up writes into it. An existing entry must be a
+// real folder of this user, never a link.
+func (r *Runtime) ensureStaging(folder string) error {
+	dir := r.stagingFolder(folder)
+	if dir == "" {
+		return nil
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return errStaging
+	}
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		return errStaging
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
+		return errStaging
+	}
+	return nil
 }
 
 // needsBuild reports whether the definition needs a derived image, as
@@ -585,8 +681,8 @@ func shortID(id string) string {
 }
 
 // Mounting returns the short ids of the running containers, other than
-// Menagerie's own, with a bind mount whose source is folder, is inside it,
-// or contains it.
+// Menagerie's own, with a writable bind mount whose source is folder, is
+// inside it, or contains it.
 func (r *Runtime) Mounting(ctx context.Context, folder string) ([]string, error) {
 	list, err := r.client.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
@@ -596,8 +692,9 @@ func (r *Runtime) Mounting(ctx context.Context, folder string) ([]string, error)
 }
 
 // mounting returns the short ids of the containers in list, other than
-// own, with a bind mount whose source is folder, is inside it, or
-// contains it.
+// own, with a writable bind mount whose source is folder, is inside it,
+// or contains it. A read-only bind, such as the Docker proxy's of the
+// workspace root, cannot change the folder.
 func mounting(list []container.Summary, folder string, own []string) []string {
 	skip := map[string]bool{}
 	for _, id := range own {
@@ -609,7 +706,7 @@ func mounting(list []container.Summary, folder string, own []string) []string {
 			continue
 		}
 		for _, m := range c.Mounts {
-			if m.Type == mount.TypeBind && (within(m.Source, folder) || within(folder, m.Source)) {
+			if m.Type == mount.TypeBind && m.RW && (within(m.Source, folder) || within(folder, m.Source)) {
 				ids = append(ids, shortID(c.ID))
 				break
 			}

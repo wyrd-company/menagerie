@@ -1,0 +1,27 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+  references:
+    - menagerie-has-host-root
+slug: buildkit-traffic-not-inspectable
+title: Build steps pass the Docker proxy uninspected
+description: >-
+  Devcontainer builds run on the host daemon's BuildKit, which
+  devcontainer-builder reaches through the Docker proxy's mediated BuildKit
+  connection. The build's step graph travels over BuildKit's LLBBridge,
+  which the Menagerie profile forwards without inspecting it, so the proxy
+  does not see what each step runs. A step runs code from the definition's
+  Dockerfile and features. Mitigation: the proxy still inspects the outer
+  solve and denies the insecure entitlement and the host network for a
+  build, and BuildKit enforces the outer build's entitlements on every
+  step; the solve may only load its image into the daemon through the moby
+  exporter, with no push, registry cache or export; base images come only
+  from the listed registries. A step still reaches the network the daemon
+  gives builds, and can read what its build context and features hold.
+categories:
+  - security
+likelihood: 2
+impact: 3
+response-strategy: accept
+status: accepted

@@ -37,6 +37,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
@@ -65,10 +66,18 @@ type writerFunc func([]byte) (int, error)
 func (f writerFunc) Write(b []byte) (int, error) { return f(b) }
 
 type harness struct {
-	t      *testing.T
-	ctx    context.Context
+	t   *testing.T
+	ctx context.Context
+	// client observes and cleans up: the Engine named by
+	// MENAGERIE_TEST_ENGINE, when the suite runs through the Docker proxy,
+	// which redacts what a test inspects; else proxied.
 	client *dockerclient.Client
-	rt     *devcontainer.Runtime
+	// proxied is the client the runtimes and throwaway containers use,
+	// for the Engine or proxy DOCKER_HOST names.
+	proxied *dockerclient.Client
+	rt      *devcontainer.Runtime
+	// prefix starts the folder of every workspace of this test.
+	prefix string
 	root   string
 	runID  string
 	// images are built images no remaining container references.
@@ -77,23 +86,38 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	client, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	root := t.TempDir()
+	return newHarnessAt(t, root, filepath.Base(filepath.Dir(root))+"-"+filepath.Base(root))
+}
+
+// newHarnessAt is a harness whose workspaces are folders of root and whose
+// resources carry runID.
+func newHarnessAt(t *testing.T, root, runID string) *harness {
+	t.Helper()
+	proxied, err := dockerproxy.NewClient(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	client := proxied
+	if engine := os.Getenv("MENAGERIE_TEST_ENGINE"); engine != "" {
+		if client, err = dockerclient.NewClientWithOpts(dockerclient.WithHost(engine), dockerclient.WithAPIVersionNegotiation()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ctx := context.Background()
-	root := t.TempDir()
-	h := &harness{t: t, ctx: ctx, client: client, root: root, runID: filepath.Base(filepath.Dir(root)) + "-" + filepath.Base(root)}
-	h.rt = devcontainer.New(client, h.options(devcontainer.Options{}))
+	h := &harness{t: t, ctx: ctx, client: client, proxied: proxied, root: root, runID: runID, prefix: root + "/"}
+	h.rt = devcontainer.New(proxied, h.options(devcontainer.Options{}))
 	t.Cleanup(h.cleanup)
 	ensureImage(t, h, baseImage)
 	return h
 }
 
 // options runs initializeCommand in throwaway containers of baseImage that
-// carry the test's run label.
+// carry the test's run label, and names each operation's workspace to the
+// Docker proxy as the workspace service does.
 func (h *harness) options(opts devcontainer.Options) devcontainer.Options {
-	opts.Containers = throwaway.NewDocker(h.client, throwaway.DockerOptions{Root: h.root, User: throwaway.ServiceUser(), Labels: map[string]string{"menagerie.test.run": h.runID}})
+	opts.Client = dockerproxy.NewClient
+	opts.Containers = throwaway.NewDocker(h.proxied, throwaway.DockerOptions{Root: h.root, User: throwaway.ServiceUser(), Labels: map[string]string{"menagerie.test.run": h.runID}, Client: dockerproxy.NewClient})
 	opts.RunnerImage = func(context.Context) (string, error) { return baseImage, nil }
 	return opts
 }
@@ -108,7 +132,7 @@ func (h *harness) cleanup() {
 	projects := map[string]bool{}
 	images := append([]string(nil), h.images...)
 	for _, c := range list {
-		if strings.HasPrefix(c.Labels["devcontainer.local_folder"], h.root+"/") {
+		if strings.HasPrefix(c.Labels["devcontainer.local_folder"], h.prefix) {
 			images = append(images, c.Image)
 			if p := c.Labels[dockercompose.LabelProject]; p != "" {
 				projects[p] = true
@@ -132,7 +156,7 @@ func (h *harness) cleanup() {
 		}
 	}
 	for _, c := range list {
-		if strings.HasPrefix(c.Labels["devcontainer.local_folder"], h.root+"/") {
+		if strings.HasPrefix(c.Labels["devcontainer.local_folder"], h.prefix) {
 			_ = h.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
 		}
 	}
@@ -256,6 +280,9 @@ const singleDefinition = `{
 func single(value string) string { return strings.Replace(singleDefinition, "%s", value, 1) }
 
 func TestSingleContainerStartStopRebuild(t *testing.T) {
+	// The definition asks for privileged and a restart policy, which the
+	// proxy admits only through an exception for a workspace of its root.
+	waitsOn(t, "1814", "1571")
 	h := newHarness(t)
 	folder := h.workspace("single-space", map[string]string{
 		".devcontainer/devcontainer.json": single("one"),
@@ -360,7 +387,7 @@ func TestLocalEnvReadsOnlyAllowedVariables(t *testing.T) {
 	h := newHarness(t)
 	t.Setenv("MENAGERIE_TEST_ALLOWED", "allowed-value")
 	t.Setenv("MENAGERIE_TEST_SECRET", "secret-value")
-	rt := devcontainer.New(h.client, h.options(devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}}))
+	rt := devcontainer.New(h.proxied, h.options(devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}}))
 	folder := h.workspace("env-space", map[string]string{
 		".devcontainer/devcontainer.json": `{
   "image": "` + baseImage + `",
@@ -456,7 +483,7 @@ func TestInitializeCommandCannotReachDockerTheAgentOrMenageriesEnvironment(t *te
 	t.Setenv("SSH_AUTH_SOCK", agent)
 	t.Setenv("MENAGERIE_TEST_SECRET", "secret-value")
 	t.Setenv("MENAGERIE_TEST_ALLOWED", "allowed-value")
-	rt := devcontainer.New(h.client, h.options(devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}}))
+	rt := devcontainer.New(h.proxied, h.options(devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}}))
 	probe, _ := json.Marshal([]string{"/bin/sh", "-c", initializeProbe, "sh", agent})
 	folder := h.workspace("init-space", map[string]string{
 		".devcontainer/devcontainer.json": `{"image": "` + baseImage + `", "initializeCommand": {"probe": ` + string(probe) + `, "write": "echo parallel > init-parallel"}}`,
@@ -655,6 +682,7 @@ func readLock(t *testing.T, folder string) string {
 // lockfile marker stays empty after the failure and holds the resolved
 // feature document after the success.
 func TestFeatureLockfilePublishedOnlyAfterSuccess(t *testing.T) {
+	waitsOn(t, "1814")
 	h := newHarness(t)
 	ensureImage(t, h, featureImage)
 	definitions := map[string]string{
@@ -718,14 +746,20 @@ func TestStopReachesTheComposeProjectWithoutItsPrimary(t *testing.T) {
 func TestMountingListsTheRunningContainersThatMountTheFolder(t *testing.T) {
 	h := newHarness(t)
 	folder := h.workspace("mounted", map[string]string{"file.txt": "x\n"})
+	// Through the Docker proxy, Menagerie sees only the containers created
+	// through it, so the test creates them there.
+	creator := h.client
+	if proxied() {
+		creator = h.proxied
+	}
 	run := func(source string) string {
-		created, err := h.client.ContainerCreate(h.ctx,
+		created, err := creator.ContainerCreate(h.ctx,
 			&container.Config{Image: baseImage, Cmd: []string{"sleep", "infinity"}, Labels: map[string]string{"menagerie.test.run": h.runID}},
 			&container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: source, Target: "/mnt"}}}, nil, nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := h.client.ContainerStart(h.ctx, created.ID, container.StartOptions{}); err != nil {
+		if err := creator.ContainerStart(h.ctx, created.ID, container.StartOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		return created.ID[:12]
@@ -745,5 +779,55 @@ func TestMountingListsTheRunningContainersThatMountTheFolder(t *testing.T) {
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("mounting %v, want %v", got, want)
+	}
+}
+
+// TestComposeConfigsAndSecretsStageInTheWorkspacesFolder brings up a
+// Compose workspace whose service mounts a config and a secret: both are
+// written into the workspace's own folder of the staging folder, a host
+// path, and the service reads them.
+func TestComposeConfigsAndSecretsStageInTheWorkspacesFolder(t *testing.T) {
+	h := newHarness(t)
+	staging := t.TempDir()
+	h.rt = devcontainer.New(h.proxied, h.options(devcontainer.Options{ComposeStaging: staging}))
+	folder := h.workspace("staged-space", map[string]string{
+		".devcontainer/compose.yml": `services:
+  app:
+    image: ` + baseImage + `
+    command: ["sleep", "infinity"]
+    configs: [sample-config]
+    secrets: [sample-secret]
+configs:
+  sample-config:
+    content: config-value
+secrets:
+  sample-secret:
+    file: ./secret.txt
+`,
+		".devcontainer/secret.txt":        "secret-value\n",
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/"}`,
+	})
+	h.mustRun(h.rt.Start, folder)
+	id := h.status(folder).ContainerID
+	if got := h.exec(id, "cat", "/sample-config"); got != "config-value" {
+		t.Errorf("config %q", got)
+	}
+	if got := h.exec(id, "cat", "/run/secrets/sample-secret"); got != "secret-value" {
+		t.Errorf("secret %q", got)
+	}
+	var staged []string
+	for _, m := range h.inspect(id).Mounts {
+		if m.Type == "bind" && strings.HasPrefix(m.Source, staging+"/") {
+			staged = append(staged, m.Source)
+		}
+	}
+	own := filepath.Join(staging, filepath.Base(folder)) + "/"
+	if len(staged) == 0 {
+		t.Fatalf("no mount comes from the staging folder %s", staging)
+	}
+	for _, src := range staged {
+		if !strings.HasPrefix(src, own) {
+			t.Errorf("mount source %s is outside the workspace's staging folder %s", src, own)
+		}
 	}
 }

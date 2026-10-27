@@ -68,6 +68,11 @@ workspace-socket:
   folder: /srv/menagerie/sockets
   # min-interval: 1m
 
+# A Compose workspace's configs and secrets are written here for its
+# services to bind: the same path on the host and in the container, as
+# compose.yml mounts it, and one of the Docker proxy's bind roots.
+compose-staging-folder: /srv/menagerie/compose-staging
+
 # Commit and back up every idle workspace with changes, once an interval.
 # Without this section nothing is committed on a schedule.
 # auto-commit:

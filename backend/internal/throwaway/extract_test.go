@@ -8,8 +8,10 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -273,5 +275,57 @@ func TestACopyBackRemovesAReadOnlyOldTree(t *testing.T) {
 				t.Fatalf("round %d left %s beside the folder", round, e.Name())
 			}
 		}
+	}
+}
+
+// TestTheCopyArchiveNamesEntriesFromTheRoot reads the archive a copy into a
+// throwaway container sends: every entry is named by its path without the
+// leading slash, never absolute and never climbing out with "..", as the
+// Docker proxy's archive inspector requires of an archive copied to "/";
+// folders end in a slash, links stay links, and every entry belongs to the
+// containers' user.
+func TestTheCopyArchiveNamesEntriesFromTheRoot(t *testing.T) {
+	folder := filepath.Join(t.TempDir(), "template")
+	if err := os.MkdirAll(filepath.Join(folder, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "sub", "file"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("sub/file", filepath.Join(folder, "link")); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := writeTar(&buf, folder, 1234, 5678); err != nil {
+		t.Fatal(err)
+	}
+	base := strings.TrimPrefix(folder, "/")
+	want := map[string]byte{base + "/": tar.TypeDir, base + "/sub/": tar.TypeDir, base + "/sub/file": tar.TypeReg, base + "/link": tar.TypeSymlink}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(hdr.Name, "/") || path.Clean(hdr.Name) == ".." || strings.HasPrefix(path.Clean(hdr.Name), "../") {
+			t.Errorf("entry %q is not named from the root", hdr.Name)
+		}
+		typ, ok := want[hdr.Name]
+		if !ok || hdr.Typeflag != typ {
+			t.Errorf("entry %q of type %c, want one of %v", hdr.Name, hdr.Typeflag, want)
+		}
+		delete(want, hdr.Name)
+		if hdr.Uid != 1234 || hdr.Gid != 5678 {
+			t.Errorf("entry %q belongs to %d:%d", hdr.Name, hdr.Uid, hdr.Gid)
+		}
+		if hdr.Typeflag == tar.TypeSymlink && hdr.Linkname != "sub/file" {
+			t.Errorf("link %q points to %q", hdr.Name, hdr.Linkname)
+		}
+	}
+	if len(want) != 0 {
+		t.Errorf("entries missing: %v", want)
 	}
 }

@@ -344,6 +344,10 @@
           "description": "The GitHub server's https origin, with no user information, path, query or fragment. The API is https://api.github.com for https://github.com, else {server}/api/v3."
         }
       }
+    },
+    "compose-staging-folder": {
+      "type": "string",
+      "description": "Absolute clean folder, other than /, at the same path on the host and in Menagerie's container, owned by the services' user. It holds one folder per Compose workspace, named after it, that the workspace's configs and secrets are written into for its services' bind mounts. Neither inside nor containing the workspace root, the Wyrwood directory, the candidate folder or the workspace socket folder. Absent, a folder under TMPDIR, which the host does not see when Menagerie runs in its image."
     }
   },
   "$defs": {

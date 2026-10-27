@@ -60,7 +60,7 @@ func credentialRuntime(t *testing.T, h *harness, reg *testRegistry, fetcher regi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return devcontainer.New(h.client, h.options(devcontainer.Options{Credentials: func(ctx context.Context) devcontainer.RegistryAuth {
+	return devcontainer.New(h.proxied, h.options(devcontainer.Options{Credentials: func(ctx context.Context) devcontainer.RegistryAuth {
 		return registries.Operation(ctx)
 	}}))
 }
@@ -102,6 +102,7 @@ func assertNoSecret(t *testing.T, texts ...string) {
 // authentication, with credentials only from the injected provider, while
 // the Docker client configuration names a working credential helper.
 func TestRegistryCredentialsReachEveryPath(t *testing.T) {
+	notThroughTheProxy(t, "the test registry listens on a port of its own, which the shipped profile's registries do not name")
 	h := newHarness(t)
 	ensureImage(t, h, featureImage)
 	reg := startRegistry(t)
@@ -188,6 +189,7 @@ func TestRegistryCredentialsReachEveryPath(t *testing.T) {
 // Docker configuration names, and that an unreadable configured secret
 // fails pulls and builds with the typed error before any registry read.
 func TestRegistryCredentialsFailClosed(t *testing.T) {
+	notThroughTheProxy(t, "the test registry listens on a port of its own, which the shipped profile's registries do not name")
 	h := newHarness(t)
 	ensureImage(t, h, featureImage)
 	reg := startRegistry(t)
@@ -199,7 +201,7 @@ func TestRegistryCredentialsFailClosed(t *testing.T) {
 		".devcontainer/Dockerfile":        "FROM " + private + "\nRUN true\n",
 	}
 
-	anonymous := devcontainer.New(h.client, h.options(devcontainer.Options{}))
+	anonymous := devcontainer.New(h.proxied, h.options(devcontainer.Options{}))
 	for name, files := range map[string]map[string]string{"anonymous-pull": pull, "anonymous-build": build} {
 		folder := h.workspace(name, files)
 		unauthorized := reg.unauthorized.Load()

@@ -74,7 +74,7 @@ func newSocketFixture(t *testing.T) *socketFixture {
 	f := &socketFixture{h: h, root: root, remote: remote, jobs: jobs.NewManager(context.Background(), jobs.Options{}), folder: folder, client: client}
 	f.commits = commits.New(commits.Options{Root: root, Remote: &backup.Remote{URL: remote}, Jobs: f.jobs})
 	f.open(t)
-	f.rt = devcontainer.New(h.client, h.options(devcontainer.Options{
+	f.rt = devcontainer.New(h.proxied, h.options(devcontainer.Options{
 		Environ:  func() []string { return []string{"SOCKETS=" + folder} },
 		LocalEnv: []string{"SOCKETS"},
 		WorkspaceSocket: func(folder string) (string, error) {

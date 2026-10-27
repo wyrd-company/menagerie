@@ -1,0 +1,263 @@
+# The Docker proxy's configuration for the deployment example in
+# compose.yml: one Unix listener for Menagerie's workspace service and its
+# profile. The sockguard service reads it at /etc/sockguard/sockguard.yaml.
+# Installation (docs/install.md) explains each setting an operator edits.
+#
+# Sockguard ignores keys it does not know, so a misspelled key falls back
+# to its default without an error. Start from this file and change values,
+# not keys; Menagerie's live suite loads this file and asserts its effect.
+#
+# Every host path below has the same path on the host, in Menagerie's
+# container and in the proxy's container, where it is mounted read-only:
+# the proxy resolves bind sources in its own mount namespace.
+
+upstream:
+  socket: /var/run/docker.sock
+
+# Throwaway command containers stream their output (attach) and copy an
+# upgrade's candidate back out (GET archive). The proxy counts both as
+# reads that can carry files out of a container, and admits them only with
+# this proxy-wide acknowledgment. Ownership keeps them to the containers
+# Menagerie created, and Menagerie is the proxy's only client.
+insecure_allow_read_exfiltration: true
+
+# One listener, for Menagerie only. The socket is root's, with group 2375
+# and mode 0660: Menagerie's start-up gives the group to the workspace
+# service and not to the template service, which runs as the same user and
+# never talks to Docker. The group must not be the services' own group.
+listeners:
+  - name: menagerie
+    socket: /run/sockguard/menagerie.sock
+    socket_mode: "0660"
+    socket_gid: 2375
+    allowed_profiles: [menagerie]
+
+log:
+  level: info
+  format: json
+  access_log: true
+
+health:
+  enabled: true
+  path: /health
+
+response:
+  # A denial names its reason, which Menagerie shows in the job's error.
+  deny_verbosity: verbose
+  # Compose finds the object roots it mounted from Mounts[].Source in the
+  # container list.
+  redact_mount_paths: false
+
+# The owner label every container, network and volume Menagerie creates
+# carries. Pulled base images and images BuildKit builds carry none.
+ownership:
+  owner: menagerie
+  label_key: com.sockguard.owner
+  allow_unowned_images: true
+
+# Per-workspace exceptions. The operator writes the file; the proxy mounts
+# its folder read-only and sees a replaced file. Both keys need a restart
+# of the proxy to change.
+workspace_exceptions:
+  file: /etc/sockguard/exceptions/workspace-exceptions.json
+  workspace_root: /srv/menagerie/workspaces
+
+clients:
+  # The kernel's peer credentials select the profile: the uid is the owner
+  # of Menagerie's workspace-root, the user its services run as. A peer
+  # with another uid gets no profile, and the listener denies it.
+  unix_peer_profiles:
+    - profile: menagerie
+      uids: [1000]
+
+  profiles:
+    - name: menagerie
+      mode: enforce
+
+      request_body:
+        container_create:
+          # The workspace root, the workspace socket folder and the Compose
+          # staging folder (compose-staging-folder in Menagerie's config).
+          allowed_bind_mounts:
+            - /srv/menagerie/workspaces
+            - /srv/menagerie/sockets
+            - /srv/menagerie/compose-staging
+          allow_privileged: false
+          allow_host_network: false
+          allow_host_pid: false
+          allow_host_ipc: false
+          # Grants from the exceptions file open gates for one workspace.
+          apply_workspace_exceptions: true
+          # A restart policy lets the daemon start a container without the
+          # proxy; a workspace's restartPolicy grant admits listed names.
+          require_no_restart_policy: true
+
+        container_archive:
+          # Throwaway containers copy a candidate or a template in at /,
+          # its entries named from the root: the Engine makes the folders.
+          allowed_paths: ["/"]
+          allow_setid: false
+          allow_device_nodes: false
+          # An upgrade's candidate is a checkout of the workspace, and its
+          # committed absolute links, such as a virtual environment's
+          # bin/python, are legitimate; templates hold them too. The proxy
+          # counts every absolute link as escaping. Admitting them lets a
+          # later entry write through a link only inside the throwaway
+          # container and its workspace bind, which the hook itself can
+          # already write. Set-id bits, device nodes and absolute or ".."
+          # entry names stay refused.
+          allow_escaping_links: true
+
+        network:
+          # Compose networks use the bridge driver only, on create and on
+          # attaching to an existing network.
+          allowed_drivers: [bridge]
+
+        container_remove:
+          # Rebuild removes with force and anonymous volumes; Compose
+          # recreates with force.
+          allow_force: true
+          allow_remove_volumes: true
+
+        exec:
+          # Lifecycle commands and environment probes. Bounded by
+          # ownership and by the target container's own limits.
+          allow_any_command: true
+          allow_root_user: true
+          allow_privileged: false
+
+        image_pull:
+          allow_imports: false
+          # The registries the workspaces' images and runner images come
+          # from. Edit this list.
+          allowed_registries:
+            - docker.io
+            - ghcr.io
+            - mcr.microsoft.com
+            - quay.io
+
+        build:
+          allow_remote_context: false
+          allow_host_network: false
+          # Devcontainer Dockerfiles use RUN.
+          allow_run_instructions: true
+
+        buildkit:
+          control:
+            allow_info: false
+            allow_list_workers: true
+            allow_status: true
+            solve:
+              allow: true
+              # A build loads its image into the daemon through the moby
+              # exporter: no push, no registry cache.
+              allowed_exporters: [moby]
+          # Build steps pass uninspected; the outer solve's checks stay:
+          # insecure entitlements and the host network are denied.
+          llb_bridge:
+            allow_uninspected_passthrough: true
+          session:
+            file_sync:
+              allow: true
+            auth:
+              # Registry credentials for base images. The same list as
+              # image_pull.allowed_registries.
+              allow: true
+              allowed_registries:
+                - docker.io
+                - ghcr.io
+                - mcr.microsoft.com
+                - quay.io
+
+      rules:
+        - match: {method: POST, path: "/images/**/push"}
+          action: deny
+          reason: "menagerie: image push is not permitted"
+        - match: {method: GET, path: "/images/get"}
+          action: deny
+          reason: "menagerie: image save is not permitted"
+        - match: {method: GET, path: "/images/**/get"}
+          action: deny
+          reason: "menagerie: image save is not permitted"
+        - match: {method: POST, path: "/images/load"}
+          action: deny
+          reason: "menagerie: image load is not permitted"
+        - match: {method: "*", path: "/libpod/**"}
+          action: deny
+          reason: "menagerie: libpod API is not permitted"
+
+        # Version negotiation, and the host's OS, architecture and runtimes.
+        - match: {method: HEAD, path: "/_ping"}
+          action: allow
+        - match: {method: GET, path: "/_ping"}
+          action: allow
+        - match: {method: GET, path: "/info"}
+          action: allow
+
+        # Containers: lookup, inspect, lifecycle, rebuild.
+        - match: {method: GET, path: "/containers/json"}
+          action: allow
+        - match: {method: GET, path: "/containers/*/json"}
+          action: allow
+        - match: {method: POST, path: "/containers/create"}
+          action: allow
+        - match: {method: POST, path: "/containers/*/start"}
+          action: allow
+        - match: {method: POST, path: "/containers/*/stop"}
+          action: allow
+        - match: {method: DELETE, path: "/containers/*"}
+          action: allow
+
+        # Throwaway command containers: output, exit, and the copy of a
+        # template candidate in and back.
+        - match: {method: POST, path: "/containers/*/attach"}
+          action: allow
+        - match: {method: POST, path: "/containers/*/wait"}
+          action: allow
+        - match: {method: PUT, path: "/containers/*/archive"}
+          action: allow
+        - match: {method: GET, path: "/containers/*/archive"}
+          action: allow
+
+        # Exec: lifecycle commands and environment probes.
+        - match: {method: POST, path: "/containers/*/exec"}
+          action: allow
+        - match: {method: POST, path: "/exec/*/start"}
+          action: allow
+        - match: {method: GET, path: "/exec/*/json"}
+          action: allow
+
+        # Images: inspect, slash-bearing names included, and pull.
+        - match: {method: GET, path: "/images/**/json"}
+          action: allow
+        - match: {method: POST, path: "/images/create"}
+          action: allow
+
+        # Mediated BuildKit.
+        - match: {method: POST, path: "/grpc"}
+          action: allow
+        - match: {method: POST, path: "/session"}
+          action: allow
+
+        # Compose networks and volumes. Networks stay until removed by hand.
+        - match: {method: GET, path: "/networks"}
+          action: allow
+        - match: {method: POST, path: "/networks/create"}
+          action: allow
+        - match: {method: GET, path: "/volumes"}
+          action: allow
+        - match: {method: POST, path: "/volumes/create"}
+          action: allow
+        # Up retires old object-record volumes.
+        - match: {method: DELETE, path: "/volumes/*"}
+          action: allow
+
+        - match: {method: "*", path: "/**"}
+          action: deny
+          reason: "menagerie: not in the Menagerie profile"
+
+# No client reaches the root policy through the menagerie listener.
+rules:
+  - match: {method: "*", path: "/**"}
+    action: deny
+    reason: "no profile"

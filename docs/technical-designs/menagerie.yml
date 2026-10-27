@@ -17,9 +17,10 @@ design-challenges:
     Menagerie runs in a container but tells the host Docker daemon what to
     bind-mount. The daemon resolves bind sources on the host.
   docker-is-root: >-
-    The daemon is rootful, so access to it is root on the host. Menagerie has
-    the same access a manager running devcontainer-builder on the host has,
-    and it is reachable through a web UI.
+    The daemon is rootful, so access to it is root on the host, and
+    Menagerie is reachable through a web UI. A workspace's definition, which
+    its own devcontainer may be able to edit, asks the daemon for mounts,
+    privileges and namespaces.
   interview-across-requests: >-
     A Toha interview spans many HTTP requests. Toha's pending interview borrows
     its template and cannot be held between requests.
@@ -51,7 +52,9 @@ proposed-design:
     Rust. It embeds Toha and serves template interviews, generation and
     upgrades to the workspace service over an internal API. Template hooks
     and `initializeCommand` run in throwaway containers that the workspace
-    service starts. The container mounts the host Docker socket. Git access
+    service starts. Menagerie reaches the host Docker daemon only through a
+    Sockguard Docker proxy beside it, whose profile bounds what Menagerie and
+    the definitions it runs may ask for. Git access
     goes through Wyrwood: its SSH-agent socket, or GitHub App installation
     tokens signed through its vault socket. The workspace root is mounted at
     the same path on the host and in the container.
@@ -153,10 +156,16 @@ proposed-design:
   container-operations: >-
     Start, stop and rebuild call devcontainer-builder for the workspace
     folder. Rebuild recreates the container from the current definition.
-    Devcontainers get whatever their definition asks for, including
-    privileged mode, as they do when devcontainer-builder runs on the host.
-    A workspace that must start after a host restart sets a Docker restart
-    policy in its definition; the daemon restarts it.
+    Devcontainers get what their definition asks for as far as the proxy's
+    profile and the workspace's exceptions admit: no privileged mode, host
+    namespace, added capability or device, restart policy or bind outside
+    the workspace's own folders without an exception that names the
+    workspace. A workspace that must start after a host restart needs a
+    restart-policy grant; Menagerie restarts nothing itself. Before it runs
+    anything, a start or rebuild refuses a definition that sets an identity
+    label (`devcontainer.local_folder`, `devcontainer.config_file`,
+    `menagerie.*`, `com.docker.compose.*`, `com.sockguard.*`) in `runArgs`
+    or in a Compose service, as Compose loads it.
   operations-and-jobs: >-
     Each create, upgrade, apply-branch, start, stop, rebuild or commit is a
     job. A workspace has at
@@ -264,11 +273,28 @@ proposed-design:
     records what the container could already write: no path is refused.
     Throwaway containers never get the socket folder.
   docker-access: >-
-    The workspace service talks to the host Docker daemon through the mounted
-    socket, with devcontainer-builder for devcontainers and the Docker
-    library for throwaway containers. Only the workspace service uses
-    Docker: the template service reaches a container only by asking the
-    workspace service to run a hook.
+    The workspace service talks to the host Docker daemon through the Docker
+    proxy's Unix socket, which `DOCKER_HOST` names, with devcontainer-builder
+    for devcontainers and the Docker library for throwaway containers. The
+    proxy selects Menagerie's profile by the connecting process's uid, and
+    the socket's group belongs to the workspace service only: the template
+    service, as the same user, reaches a container only by asking the
+    workspace service to run a hook. Each start, stop and rebuild uses a
+    client of its own whose requests carry `X-Sockguard-Workspace`, and each
+    throwaway container's requests carry `X-Sockguard-Throwaway-Workspace`:
+    the workspace's identity, the workspace root with its links resolved and
+    the folder's name, never a value from the definition. The proxy checks
+    labels and bind sources against it. A denied request keeps the proxy's
+    reason through the Engine API error, and the job fails as `proxy-denied`
+    with that reason and no request body or environment. Every list
+    result is checked against its labels before Menagerie removes a
+    container, so a list the proxy answers more widely removes nothing
+    else. The profile, `deploy/sockguard.yml`, and the operator's
+    exceptions file are the proxy's; Menagerie mounts the exceptions folder
+    read-only and never writes it. Compose configs and secrets are staged in
+    the workspace's own folder of `compose-staging-folder`, named after the
+    workspace and created before a start or rebuild: a host path inside a
+    root the proxy allows.
   registry-credentials: >-
     Container registry credentials for pulls, builds, feature downloads and
     Compose services come from OpenBao. Configuration names, per registry, a
@@ -293,8 +319,10 @@ proposed-design:
     network, without an SSH agent. Its program runs as given, never through
     the image's entrypoint. Menagerie's own notes on a run, such as an image
     pull, go to the job console, never into a stream a hook captures. Every
-    container carries Menagerie's labels, with the workspace root, the job
-    and a random id of its own, and is force-removed when its command ends.
+    container carries Menagerie's labels, with the workspace root, the
+    workspace's identity, the job and a random id of its own, and never
+    `devcontainer.local_folder`, so no workspace exception applies to it; it
+    is force-removed when its command ends.
     A container's creation runs to the Engine's reply, which a cancellation
     does not interrupt; a creation that fails is followed by a search for
     its id label, so a lost reply leaves no container. The workspace
@@ -466,16 +494,24 @@ proposed-design:
     Configuration names the workspace root, the workspace repository, the
     approved template list with optional runner images, the OIDC issuer and
     client, the Wyrwood consumer directory, the registry credential secrets,
-    the default runner image, the commit schedule, the socket folder and the
-    GitHub App.
+    the default runner image, the commit schedule, the socket folder, the
+    Compose staging folder and the GitHub App.
   deployment: >-
-    The Menagerie container mounts the workspace root at the same path as on
-    the host, the host Docker socket and the Wyrwood consumer directory,
-    and, with workspace sockets, the socket folder at the same path as on
-    the host.
+    The Menagerie container mounts the workspace root, the socket folder and
+    the Compose staging folder at the same paths as on the host, the Docker
+    proxy's socket volume and exceptions folder read-only, and the Wyrwood
+    consumer directory; it never mounts the host Docker socket. The proxy
+    runs as a sidecar container, never inside the Menagerie image: root in
+    its socket's group, with only the capability to resolve every bind
+    source, no network and a read-only file system. It mounts the host
+    Docker socket, its configuration, the exceptions folder, and the three
+    bind roots read-only at their host paths, so it resolves bind sources
+    as the daemon does. Docker never creates a missing root, and the proxy
+    refuses to start without one; Menagerie starts after the proxy.
     Throwaway containers need nothing more: the root's host path is their
-    bind source, and Menagerie's own image is their default image. It has a
-    Docker restart policy, so it returns after a host restart. Its UI is
+    bind source, and Menagerie's own image is their default image. Both
+    containers have a Docker restart policy, so they return after a host
+    restart. Its UI is
     not exposed to the public internet. Menagerie is bound to a Wyrwood policy
     that grants only what it uses: the SSH Transit key, signing with the
     GitHub App's Transit key, or both, and read access to the registry
@@ -506,3 +542,10 @@ proposed-design:
     workspace from a private `https` template and backs it up; the Git host
     sees only installation tokens, read for the template and write for the
     backup, and no job event, log line or reply holds a token or a JWT.
+    The Docker suites run again through the proxy with the shipped profile:
+    a definition that asks for privileged mode or binds a folder outside
+    the roots fails as `proxy-denied` with the proxy's reason and starts
+    once an exception names the workspace; a bind of another workspace's
+    folder or socket folder, and a create that names another workspace in
+    its header, are denied; a definition that forges an identity label is
+    refused before anything runs.

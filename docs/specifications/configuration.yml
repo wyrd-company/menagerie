@@ -158,6 +158,18 @@ description: >-
   fixed text.
 
 
+  Optional `compose-staging-folder` is an absolute clean folder other than
+  `/`, at the same path on the host and in Menagerie's container, that is
+  neither inside nor contains `workspace-root`, `wyrwood-directory`,
+  `template-service.candidate-folder` or `workspace-socket.folder`. It
+  holds one folder per Compose workspace, named after the workspace, which
+  the workspace service creates with mode 0700 before a start or rebuild
+  and refuses when it is a link, not a folder or another user's; the
+  workspace's Compose configs and secrets are written there for their bind
+  mounts. Absent, devcontainer-builder writes them under `TMPDIR`. No error
+  of the field names its value.
+
+
   Optional `github-app` names a GitHub App whose installation tokens
   authenticate backups and template fetches to `https` repository URLs on
   its server: a URL whose path is exactly `/{owner}/{repo}` or

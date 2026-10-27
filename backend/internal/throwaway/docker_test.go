@@ -34,6 +34,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
@@ -63,7 +64,9 @@ func newHarness(t *testing.T) *harness {
 		rc.Close()
 	}
 	h := &harness{t: t, client: client, root: t.TempDir(), runID: random(t)}
-	h.docker = throwaway.NewDocker(client, throwaway.DockerOptions{Root: h.root, User: throwaway.ServiceUser(), Labels: map[string]string{"menagerie.test.run": h.runID}})
+	// Each command names its workspace to the Docker proxy, as the
+	// workspace service's do.
+	h.docker = throwaway.NewDocker(client, throwaway.DockerOptions{Root: h.root, User: throwaway.ServiceUser(), Labels: map[string]string{"menagerie.test.run": h.runID}, Client: dockerproxy.NewClient})
 	t.Cleanup(func() {
 		for _, c := range h.containers(filters.Arg("label", "menagerie.test.run="+h.runID)) {
 			_ = client.ContainerRemove(context.Background(), c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
@@ -506,5 +509,52 @@ func TestNoCapturedValueLeavesARealRun(t *testing.T) {
 	g.Revoke()
 	if left := h.containers(filters.Arg("label", "menagerie.test.run="+h.runID)); len(left) != 0 {
 		t.Fatalf("%d hook containers remain", len(left))
+	}
+}
+
+// TestCopiedLinksThroughTheDockerProxy copies folders that hold symbolic
+// links into throwaway containers: a template with an absolute link, as a
+// script hook's template root, and an upgrade candidate, a checkout of the
+// workspace's committed tree, with a virtual environment's absolute link,
+// beside a relative link that stays in its folder. The shipped profile's
+// allow_escaping_links admits all three; the proxy counts the absolute ones
+// as escaping.
+func TestCopiedLinksThroughTheDockerProxy(t *testing.T) {
+	h := newHarness(t)
+	for _, tc := range []struct {
+		name, link, to string
+		copied         bool // a template root, else a candidate target
+	}{
+		{"template-absolute", "link", "/usr/bin/env", true},
+		{"candidate-venv-absolute", ".venv/bin/python", "/usr/bin/python3", false},
+		{"candidate-relative", ".venv/bin/python3", "python", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := h.folder(tc.name)
+			if err := os.MkdirAll(filepath.Join(src, filepath.Dir(tc.link)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(tc.to, filepath.Join(src, tc.link)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(src, "marker"), []byte("v1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			c := throwaway.Command{Kind: throwaway.KindHook, Job: "job-" + random(t), Image: runnerImage, Argv: []string{"true"}, Env: []string{}}
+			if tc.copied {
+				ws := h.folder(tc.name + "-workspace")
+				c.Workspace, c.Folder, c.Dir, c.Copy = ws, ws, ws, src
+			} else {
+				c.Workspace, c.Target, c.Dir = h.folder(tc.name+"-workspace"), src, src
+			}
+			if code, err := h.docker.Run(context.Background(), c); err != nil || code != 0 {
+				t.Fatalf("run %d %v, want the copy admitted", code, err)
+			}
+			if !tc.copied {
+				if got, err := os.Readlink(filepath.Join(src, tc.link)); err != nil || got != tc.to {
+					t.Errorf("the copied back link points to %q, %v; want %q", got, err, tc.to)
+				}
+			}
+		})
 	}
 }

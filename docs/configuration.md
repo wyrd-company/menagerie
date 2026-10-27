@@ -72,7 +72,20 @@ github-app:
 workspaces, the same path on the host and in the container. Every folder
 directly in it is a workspace, whether Menagerie created it or not, and it
 is never `/`. Menagerie finds a workspace's container by the
-`devcontainer.local_folder` label and shows no other container.
+`devcontainer.local_folder` label and shows no other container. Behind the
+Docker proxy, give the root's path with no symbolic link in it: the proxy
+compares that label with the workspace's folder with links resolved.
+
+`compose-staging-folder` holds one folder per Compose workspace, named
+after it, that its configs and secrets are written to and its services
+bind-mount. Menagerie creates a workspace's folder, private to the
+services' user, before a start or rebuild. It is an absolute
+folder at the same path on the host and in the container, belongs to the
+workspace root's owner, and is one of the proxy's allowed bind roots. It
+must be neither inside nor around the workspace root, the Wyrwood
+directory, the candidate folder or the workspace socket folder. Without
+it, they are written under the container's `TMPDIR`, which the host does
+not see.
 
 `workspace-repository` is the Git remote for backups. Each workspace is
 pushed, by force, to an orphan branch named after its folder. SSH remotes

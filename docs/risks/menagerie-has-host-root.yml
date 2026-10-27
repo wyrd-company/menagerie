@@ -2,31 +2,65 @@ $schema: https://refinery.systems/ontology/risk
 relationships:
   mitigated-by:
     - menagerie
+  references:
+    - buildkit-traffic-not-inspectable
+    - proxy-ignores-unknown-config-keys
 slug: menagerie-has-host-root
 title: Menagerie has root on the host
 description: >-
-  Menagerie mounts the rootful Docker socket, so whoever controls Menagerie
-  controls the host. This includes a manager and an attacker who gets past
-  sign-in. This is the same access a manager has when running
-  devcontainer-builder on the host. Mitigation: only members of the
-  `menagerie_managers` group reach the UI; the UI is not exposed to the
-  public internet; only templates on the approved template list are used;
-  Menagerie stores no keys or tokens, and holds GitHub App installation
-  tokens, each for one repository, only in memory until shortly before they
-  expire; template hooks and `initializeCommand`
-  run in throwaway containers that mount only their workspace folder, so
-  they reach neither the Docker socket nor the Wyrwood sockets nor
-  Menagerie's environment. They still reach the network, and a hook can
-  still change its workspace's definition, which its devcontainer then
-  gets as asked. The copy back of an upgrade hook's candidate checks the
-  candidate by its path, so a process running as the services' user can
-  redirect the swap by replacing a folder above the candidate in between;
-  that user already holds the Docker socket, as it holds the hook runner
-  socket, whose credential route hands out read tokens. A body-inspecting
-  Docker proxy reduces this exposure further.
+  Menagerie drives the rootful Docker daemon, so whoever controls Menagerie,
+  a manager or an attacker who gets past sign-in, holds what the daemon
+  admits for it. Menagerie reaches the daemon only through the Sockguard
+  Docker proxy, and never mounts the daemon's socket. The proxy's
+  Menagerie profile denies privileged containers, the host network, PID
+  and IPC namespaces, added capabilities and devices, restart policies,
+  image push, save and load, and bind mounts outside the workspace root,
+  the workspace socket folder and the Compose staging folder; a
+  devcontainer binds only its own workspace's folders. Each request names
+  its workspace in a header that Menagerie sets from its root and the
+  workspace's name, and Menagerie refuses a definition that sets an
+  identity label, so a definition cannot pass itself off as another
+  workspace. The proxy runs as root with only `CAP_DAC_READ_SEARCH`, so it
+  can read any file under its mounts, which are all read-only: the
+  workspace root, the workspace socket folder, the Compose staging folder,
+  its configuration and the exceptions folder; that is bounded by what it
+  mounts, and it already holds the Docker socket. What remains: the
+  operator's exceptions file grants a named
+  workspace more, and that grant then reaches anyone who can change that
+  workspace's definition; build steps pass the proxy uninspected
+  (buildkit-traffic-not-inspectable); Menagerie may exec as root in the
+  containers it created, and the profile's proxy-wide
+  `insecure_allow_read_exfiltration` admits attach and archive reads of
+  them, which throwaway containers need for their output and an upgrade
+  candidate's copy back, so Menagerie can read their output and files;
+  ownership keeps both to the containers the proxy marks as Menagerie's,
+  and Menagerie is the proxy's only client; the profile's
+  `container_archive.allow_escaping_links` admits symbolic links that point
+  out of their folder in what Menagerie copies into a throwaway container,
+  so a later entry of the copy can write through such a link, but only
+  inside that container and its workspace-scoped binds, which the hook can
+  already write; set-id bits, device nodes and absolute or `..` entry names
+  stay refused; and the proxy
+  ignores unknown configuration keys (proxy-ignores-unknown-config-keys).
+  Mitigation besides the proxy: only members of the `menagerie_managers`
+  group reach the UI; the UI is not exposed to the public internet; only
+  templates on the approved template list are used; Menagerie stores no
+  keys or tokens, and holds GitHub App installation tokens, each for one
+  repository, only in memory until shortly before they expire; template
+  hooks and `initializeCommand` run in throwaway containers that mount
+  only their workspace folder, so they reach neither the proxy's socket
+  nor the Wyrwood sockets nor Menagerie's environment, and the template
+  service, which runs as the same user, lacks the proxy socket's group.
+  Hooks still reach the network, and a hook can still change its
+  workspace's definition, which its devcontainer then gets as far as the
+  profile and its exceptions admit. The copy back of an upgrade hook's
+  candidate checks the candidate by its path, so a process running as the
+  services' user can redirect the swap by replacing a folder above the
+  candidate in between; that user already reaches the proxy, as it holds
+  the hook runner socket, whose credential route hands out read tokens.
 categories:
   - security
 likelihood: 2
-impact: 5
-response-strategy: accept
-status: accepted
+impact: 4
+response-strategy: mitigate
+status: mitigated

@@ -3,6 +3,59 @@
 name: menagerie
 
 services:
+  # The Docker proxy. Menagerie reaches the Docker daemon only through it;
+  # it admits what deploy/sockguard.yml allows and denies the rest, with a
+  # reason Menagerie shows in the job's error.
+  sockguard:
+    image: ${SOCKGUARD_IMAGE:-ghcr.io/wyrd-company/sockguard:2.2.11-wyrd.1}
+    container_name: menagerie-sockguard
+    restart: unless-stopped
+    # Root, for the Docker socket, with one capability. DAC_READ_SEARCH lets
+    # the bind-source resolver walk folders it cannot otherwise read: the
+    # workspace socket folder is 0700 and the services' user's, and so are
+    # Compose's staging folders and any private folder in a workspace.
+    # Without it, as the image's own user 65532 or as root with no
+    # capability, every devcontainer that mounts its workspace socket is
+    # denied ("cannot be resolved: permission denied"). The listener
+    # socket's group, 2375 in sockguard.yml, comes from group_add: an owner
+    # may give its file a group it is in, so no CHOWN. Nothing else: no
+    # network, a read-only file system, and /tmp for the archives it
+    # inspects.
+    user: "0:0"
+    group_add: ["2375"]
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    network_mode: none
+    tmpfs: [/tmp]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - menagerie-proxy:/run/sockguard
+      - ./sockguard.yml:/etc/sockguard/sockguard.yaml:ro
+      # The exceptions file's folder, not the file, so the proxy sees a
+      # replaced file. The operator writes it; neither container does.
+      - ./sockguard-exceptions:/etc/sockguard/exceptions:ro
+      # The folders Menagerie's devcontainers bind, read-only at their host
+      # paths: the proxy resolves each bind source as the daemon does, and
+      # does not start without one. Docker fails rather than create a
+      # missing folder: create each before the first start.
+      - type: bind
+        source: ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}
+        target: ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}
+        target: ${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MENAGERIE_COMPOSE_STAGING:-/srv/menagerie/compose-staging}
+        target: ${MENAGERIE_COMPOSE_STAGING:-/srv/menagerie/compose-staging}
+        read_only: true
+        bind: {create_host_path: false}
+
   menagerie:
     image: ${MENAGERIE_IMAGE:-ghcr.io/wyrd-company/menagerie:0.1.0}
     # Wyrwood binds the container by this name and names its consumer
@@ -11,11 +64,19 @@ services:
     # Docker restarts Menagerie after a host restart, and after either of its
     # services stops, which stops the container.
     restart: unless-stopped
+    # Menagerie starts after the proxy's container starts. The proxy's image
+    # has no health check, so Compose cannot wait for its socket; Menagerie's
+    # start-up waits for the socket itself.
+    depends_on:
+      sockguard:
+        condition: service_started
     ports:
       # The UI is not for the public internet: publish it on a private
       # address, behind the HTTPS origin named by oidc.redirect-url.
       - 127.0.0.1:8080:8080
     environment:
+      # The Docker proxy's socket; Menagerie never mounts the daemon's.
+      DOCKER_HOST: unix:///run/sockguard/menagerie.sock
       # With an SSH identity, Toha's SSH transport reaches the Wyrwood agent
       # through this socket. Remove it when the GitHub App is the only
       # identity.
@@ -34,10 +95,17 @@ services:
       # its own socket folder resolves on the host. Create it before the
       # first start, owned by the workspace root's owner.
       - ${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}:${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}
-      # The host Docker daemon. Only the workspace service uses it, for
-      # devcontainers and for the throwaway containers that run template
-      # hooks and initializeCommand with only the workspace folder mounted.
-      - /var/run/docker.sock:/var/run/docker.sock
+      # The Compose staging folder at the same path on the host and in the
+      # container: a Compose workspace's services bind its configs and
+      # secrets from it. Create it before the first start, owned by the
+      # workspace root's owner.
+      - ${MENAGERIE_COMPOSE_STAGING:-/srv/menagerie/compose-staging}:${MENAGERIE_COMPOSE_STAGING:-/srv/menagerie/compose-staging}
+      # The Docker proxy's socket folder. Only the workspace service reaches
+      # Docker through it, for devcontainers and for the throwaway
+      # containers that run template hooks and initializeCommand.
+      - menagerie-proxy:/run/sockguard:ro
+      # The proxy's exceptions, for reading only.
+      - ./sockguard-exceptions:/etc/sockguard/exceptions:ro
       # The Wyrwood consumer directory: vault.sock and ssh-agent.sock. The
       # agent creates it when it binds the container, under its consumer
       # root, /run/wyrwood/containers unless the agent configures another.
@@ -49,3 +117,4 @@ services:
 
 volumes:
   menagerie-data:
+  menagerie-proxy:

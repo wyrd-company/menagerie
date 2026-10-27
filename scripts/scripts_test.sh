@@ -248,6 +248,28 @@ printf -- '---\ntitle: Draft\n---\n\nNot published.\n' >"$docs-unpublished/draft
 expect "the docs check refuses a folder with no published page" 1 'no page in .* is marked docs: true' \
   sh -c "cd '$repo' && node scripts/check-docs.mjs '$docs-unpublished'"
 
+# The live suite's Docker proxy profile is the shipped one with test paths,
+# the runner's uid and a marked stand-in per pending fork change only.
+render() { "$repo/scripts/proxy-config.sh" 0 /work/tmp /work/tmp/proxy/workspaces "$@"; }
+expect "the proxy profile takes the runner's uid" 0 '^      uids: \[0\]$' render
+expect "the proxy profile allows only the test bind root" 0 '^3$' sh -c "'$repo/scripts/proxy-config.sh' 0 /work/tmp /work/tmp/proxy/workspaces | grep -c '^            - /work/tmp\$'"
+expect "the proxy profile's exceptions root is the test workspace root" 0 '^  workspace_root: /work/tmp/proxy/workspaces$' render
+expect "the proxy profile keeps exec's allow_any_command" 0 '^          allow_any_command: true$' render 1571 1814
+expect "pending 1815, merged, has no stand-in" 2 'no stand-in is known for pending issue 1815' render 1815
+expect "the proxy profile keeps its ownership block" 0 '^ownership:$' render 1571 1814
+expect "pending 1819, merged, has no stand-in" 2 'no stand-in is known for pending issue 1819' render 1819
+expect "an unknown pending change is refused" 2 'no stand-in is known for pending issue 9999' render 9999
+expect "the proxy profile takes a list of uids" 0 '^      uids: \[0, 1000\]$' "$repo/scripts/proxy-config.sh" 0,1000 /work/tmp /work/tmp/p
+expect "a non-numeric uid is refused" 2 'is not a number' "$repo/scripts/proxy-config.sh" root /work/tmp /work/tmp/p
+expect "an empty uid in the list is refused" 2 'is not a number' "$repo/scripts/proxy-config.sh" 0,,1000 /work/tmp /work/tmp/p
+expect "a relative bind root is refused" 2 'is not absolute' "$repo/scripts/proxy-config.sh" 0 work/tmp /work/tmp/p
+cp -r "$repo/deploy" "$scratch/deploy-moved" && mkdir -p "$scratch/proxy-moved/scripts" && cp "$repo/scripts/proxy-config.sh" "$scratch/proxy-moved/scripts/" && cp -r "$scratch/deploy-moved" "$scratch/proxy-moved/deploy"
+sed -i 's|^  workspace_root: /srv/menagerie/workspaces$|  workspace_root: /srv/menagerie/workspaces/|' "$scratch/proxy-moved/deploy/sockguard.yml"
+expect "a profile whose workspace_root line moved is refused" 1 "workspace_root line moved" "$scratch/proxy-moved/scripts/proxy-config.sh" 0 /work/tmp /work/tmp/p
+cp "$repo/deploy/sockguard.yml" "$scratch/proxy-moved/deploy/sockguard.yml"
+sed -i 's|^\(  path: /health\)$|\1\n  extra: /srv/menagerie/other|' "$scratch/proxy-moved/deploy/sockguard.yml"
+expect "a profile host path the renderer does not replace is refused" 1 'holds a host path this script does not replace' "$scratch/proxy-moved/scripts/proxy-config.sh" 0 /work/tmp /work/tmp/p
+
 # Toolchain versions named in several places agree, so a bump moves them all.
 go_version=$(sed -n 's/^go //p' "$repo/go.mod")
 node_version=$(cat "$repo/.node-version")

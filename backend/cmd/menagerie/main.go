@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/docker/docker/api/types/system"
 	dockerclient "github.com/docker/docker/client"
 
 	"github.com/wyrd-company/menagerie/backend/internal/alerts"
@@ -33,6 +34,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/commits"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/dockerproxy"
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
@@ -88,7 +90,7 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	docker, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	docker, err := dockerproxy.NewClient(nil)
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
@@ -127,6 +129,7 @@ func run(configPath string) error {
 	if sockets != nil {
 		defer sockets.Close()
 	}
+	warnSwarmManager(ctx, docker, log.Printf)
 	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
 	runtime := devcontainer.New(docker, opts)
 	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, app)
@@ -235,11 +238,7 @@ type containers struct {
 // initializeCommand runner.
 func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspace.Root, docker *dockerclient.Client, opts *devcontainer.Options) containers {
 	images := runnerImages(cfg, docker)
-	runner := throwaway.NewDocker(docker, throwaway.DockerOptions{
-		Root:        root.Path(),
-		User:        throwaway.ServiceUser(),
-		Credentials: pullCredentials(opts.Credentials),
-	})
+	runner := throwaway.NewDocker(docker, throwawayOptions(root.Path(), opts))
 	if n, err := runner.RemoveLeftovers(ctx); err != nil {
 		log.Printf("menagerie: removing leftover throwaway containers: %v", err)
 	} else if n > 0 {
@@ -247,6 +246,39 @@ func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspac
 	}
 	opts.Containers, opts.RunnerImage = runner, images.ForWorkspace
 	return containers{docker: runner, images: images, hooks: throwaway.NewHookRunner(runner, cfg.TemplateService.CandidateFolder)}
+}
+
+// swarmManagerWarning is logged once when the Docker host is a Swarm
+// manager.
+const swarmManagerWarning = "menagerie: the Docker host is a Swarm manager, which is not supported behind the Docker proxy: its volume list holds cluster volumes the proxy's owner filter does not apply to"
+
+// engineInfo reads the Engine's system information. *dockerclient.Client
+// satisfies it.
+type engineInfo interface {
+	Info(ctx context.Context) (system.Info, error)
+}
+
+// warnSwarmManager logs swarmManagerWarning when the Engine reports that
+// this host manages a Swarm. It never stops the start-up: an Engine that
+// cannot answer says nothing.
+func warnSwarmManager(ctx context.Context, engine engineInfo, logf func(string, ...any)) {
+	info, err := engine.Info(ctx)
+	if err != nil || !info.Swarm.ControlAvailable {
+		return
+	}
+	logf("%s", swarmManagerWarning)
+}
+
+// throwawayOptions are the throwaway containers' options: the workspace
+// root's label, the services' user, the pulls' credentials, and a client
+// for each command that names its workspace to the Docker proxy.
+func throwawayOptions(root string, opts *devcontainer.Options) throwaway.DockerOptions {
+	return throwaway.DockerOptions{
+		Root:        root,
+		User:        throwaway.ServiceUser(),
+		Credentials: pullCredentials(opts.Credentials),
+		Client:      dockerproxy.NewClient,
+	}
 }
 
 // serveHooks serves the template service's routes on the hook runner
@@ -438,7 +470,13 @@ func runtimeOptions(cfg *config.Config) (devcontainer.Options, error) {
 	if err != nil {
 		return devcontainer.Options{}, err
 	}
-	return devcontainer.Options{Credentials: credentials, LocalEnv: cfg.LocalEnv, Own: throwaway.MountedContainerIDs("/proc/self/mountinfo")}, nil
+	return devcontainer.Options{
+		Credentials:    credentials,
+		LocalEnv:       cfg.LocalEnv,
+		Own:            throwaway.MountedContainerIDs("/proc/self/mountinfo"),
+		Client:         dockerproxy.NewClient,
+		ComposeStaging: cfg.ComposeStagingFolder,
+	}, nil
 }
 
 // registryCredentials returns the per-operation registry credential source:

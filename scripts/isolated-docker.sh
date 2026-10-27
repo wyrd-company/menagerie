@@ -6,6 +6,7 @@
 #   isolated-docker.sh shell <state> <script>             run a shell script in the runner
 #   isolated-docker.sh run <state> [-c FILE]... [-e NAME=VALUE]... <binary> [args...]
 #                                                         run a test binary in the runner
+#   isolated-docker.sh proxy <state> <sockguard> <config> start the Docker proxy on the daemon
 #   isolated-docker.sh down <state> [owner]               remove what up created
 #
 # The daemon is a docker:dind container with its own data root, BuildKit
@@ -25,6 +26,15 @@
 # publishes from the daemon's network namespace on the caller's 127.0.0.1,
 # each at the same number, so a browser here reaches a service that listens
 # there on every address.
+#
+# proxy runs the Docker proxy as Menagerie's deployment runs it, on the
+# daemon: <sockguard> is a commit of github.com/wyrd-company/sockguard,
+# built on the daemon, or an image reference, pulled; <config> is its
+# rendered configuration (scripts/proxy-config.sh). It mounts the work
+# volume read-only at its own path, so it resolves bind sources as the
+# daemon does, and serves the socket that proxy_socket names; the
+# exceptions file folder is proxy_exceptions. A test reaches the proxy
+# with DOCKER_HOST=unix://$proxy_socket.
 #
 # <state> is a folder that records the owned container and volume names.
 # down removes only objects that carry this run's label, and it is safe to
@@ -63,6 +73,9 @@ owned() { # owned container|volume <name>: the object exists and carries this ru
 }
 
 dind_exec() { docker exec "$(cat "$state/run")-dind" docker -H tcp://127.0.0.1:2375 "$@"; }
+
+proxy_socket=$work/proxy/socket/menagerie.sock
+proxy_exceptions=$work/proxy/exceptions
 
 case "$cmd" in
   up)
@@ -129,6 +142,39 @@ case "$cmd" in
     shift
     docker cp "$bin" "$run-runner:$work/bin/$(basename "$bin")" >/dev/null
     docker exec "${envs[@]}" -w / "$run-runner" "$work/bin/$(basename "$bin")" "$@"
+    ;;
+  proxy)
+    [ $# -eq 2 ] || usage
+    run=$(cat "$state/run")
+    source=$1 config=$2
+    case "$source" in
+      *[!0-9a-f]* | '') image=$source; dind_exec pull -q "$image" >/dev/null ;;
+      *)
+        [ ${#source} -eq 40 ] || { echo "$source is neither a full commit nor an image reference" >&2; exit 2; }
+        image=menagerie-test-sockguard:$source
+        dind_exec build -q -t "$image" "https://github.com/wyrd-company/sockguard.git#$source" >/dev/null
+        ;;
+    esac
+    docker exec "$run-runner" mkdir -p "$work/proxy/socket" "$work/proxy/config" "$proxy_exceptions"
+    docker cp "$config" "$run-runner:$work/proxy/config/sockguard.yaml" >/dev/null
+    # As compose.yml runs it: root in the socket's group, with only the
+    # capability to resolve every bind source, no network, and a writable
+    # /tmp only, where it spools a copy's archive to inspect it.
+    dind_exec run -d --name sockguard --user 0:0 --group-add 2375 --cap-drop ALL --cap-add DAC_READ_SEARCH \
+      --read-only --tmpfs /tmp --security-opt no-new-privileges --network none \
+      -v /var/run/docker.sock:/var/run/docker.sock -v "$work:$work:ro" \
+      -v "$work/proxy/socket:/run/sockguard" \
+      -v "$work/proxy/config/sockguard.yaml:/etc/sockguard/sockguard.yaml:ro" \
+      -v "$proxy_exceptions:/etc/sockguard/exceptions:ro" "$image" >/dev/null
+    for ((i = 0; i < ready_attempts; i++)); do
+      docker exec "$run-runner" test -S "$proxy_socket" && break
+      sleep 1
+    done
+    docker exec "$run-runner" test -S "$proxy_socket" || {
+      dind_exec logs sockguard 2>&1 | tail -20
+      exit 1
+    }
+    echo "proxy $image on unix://$proxy_socket"
     ;;
   down)
     [ -s "$state/run" ] || exit 0
