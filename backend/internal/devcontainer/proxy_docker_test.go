@@ -473,10 +473,9 @@ networks:
 
 // TestTheProxyDeniesAttachingToAnExistingNonBridgeNetwork makes a macvlan
 // or ipvlan network on the Engine itself, outside the proxy, and brings up a
-// Compose workspace whose service joins it as an external network: the
-// network is not Menagerie's, so the proxy's ownership check denies the
-// create before its driver is read; the driver check would deny it
-// too.
+// Compose workspace whose service joins it as an external network. The
+// network is neither Menagerie's nor a bridge: the driver check and the
+// ownership check each deny the join, and the reason names the network.
 func TestTheProxyDeniesAttachingToAnExistingNonBridgeNetwork(t *testing.T) {
 	p := newProxyHarness(t)
 	// The network is made where the proxy does not look; a kernel without
@@ -507,7 +506,7 @@ networks:
 `,
 		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/"}`,
 	})
-	p.startDenied(folder, "owner policy denied access to network")
+	p.startDenied(folder, `network "`+name+`"`)
 }
 
 // createProxy creates a second proxy of image, as the suite's own runs,
