@@ -47,7 +47,7 @@ for issue in "$@"; do
       prelude="insecure_allow_body_blind_writes: true"
       ;;
     1819) script+=(-e '/^ownership:$/,/^$/d') ;;
-    1571 | 1814 | verbosity) ;;
+    1571 | 1814 | verbosity | missing-roots) ;;
     *) echo "no stand-in is known for pending issue $issue" >&2; exit 2 ;;
   esac
 done

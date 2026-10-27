@@ -29,10 +29,24 @@ services:
       # replaced file. The operator writes it; neither container does.
       - ./sockguard-exceptions:/etc/sockguard/exceptions:ro
       # The folders Menagerie's devcontainers bind, read-only at their host
-      # paths: the proxy resolves each bind source as the daemon does.
-      - ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}:${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}:ro
-      - ${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}:${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}:ro
-      - ${MENAGERIE_COMPOSE_STAGING:-/srv/menagerie/compose-staging}:${MENAGERIE_COMPOSE_STAGING:-/srv/menagerie/compose-staging}:ro
+      # paths: the proxy resolves each bind source as the daemon does, and
+      # does not start without one. Docker fails rather than create a
+      # missing folder: create each before the first start.
+      - type: bind
+        source: ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}
+        target: ${MENAGERIE_WORKSPACE_ROOT:-/srv/menagerie/workspaces}
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}
+        target: ${MENAGERIE_WORKSPACE_SOCKETS:-/srv/menagerie/sockets}
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MENAGERIE_COMPOSE_STAGING:-/srv/menagerie/compose-staging}
+        target: ${MENAGERIE_COMPOSE_STAGING:-/srv/menagerie/compose-staging}
+        read_only: true
+        bind: {create_host_path: false}
 
   menagerie:
     image: ${MENAGERIE_IMAGE:-ghcr.io/wyrd-company/menagerie:0.1.0}
@@ -42,7 +56,12 @@ services:
     # Docker restarts Menagerie after a host restart, and after either of its
     # services stops, which stops the container.
     restart: unless-stopped
-    depends_on: [sockguard]
+    # Menagerie starts after the proxy's container starts. The proxy's image
+    # has no health check, so Compose cannot wait for its socket; Menagerie's
+    # start-up waits for the socket itself.
+    depends_on:
+      sockguard:
+        condition: service_started
     ports:
       # The UI is not for the public internet: publish it on a private
       # address, behind the HTTPS origin named by oidc.redirect-url.

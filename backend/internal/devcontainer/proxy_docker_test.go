@@ -26,6 +26,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/pkg/stdcopy"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
@@ -35,11 +36,12 @@ import (
 
 // pendingChanges names what each pending fork change holds back.
 var pendingChanges = map[string]string{
-	"1571":      "per-workspace exceptions, roots, identity headers and the restart-policy setting",
-	"1814":      "the LLBBridge passthrough that devcontainer builds need",
-	"1815":      "exec.allow_any_command",
-	"1819":      "label filters kept under ownership",
-	"verbosity": "deny reasons in a profile's denials (response.deny_verbosity)",
+	"1571":          "per-workspace exceptions, roots, identity headers and the restart-policy setting",
+	"1814":          "the LLBBridge passthrough that devcontainer builds need",
+	"1815":          "exec.allow_any_command",
+	"1819":          "label filters kept under ownership",
+	"verbosity":     "deny reasons in a profile's denials (response.deny_verbosity)",
+	"missing-roots": "refusing to start when a bind root or the workspace root is missing",
 }
 
 // proxied reports whether the suite runs through the Docker proxy.
@@ -282,4 +284,95 @@ func TestTheShippedProfileDeniesHostNetworkAndRestartPolicies(t *testing.T) {
 			p.startDenied(folder, tc.want)
 		})
 	}
+}
+
+// TestTheProxyDoesNotStartWithoutARoot starts a second proxy, as the
+// suite's own runs, with a configuration that names a folder its mount
+// namespace lacks: as an allowed bind root, and as the exceptions'
+// workspace root. It exits rather than fall back to a lexical check.
+func TestTheProxyDoesNotStartWithoutARoot(t *testing.T) {
+	p := newProxyHarness(t)
+	waitsOn(t, "missing-roots")
+	running, err := p.client.ContainerInspect(p.ctx, "sockguard")
+	if err != nil {
+		t.Fatalf("the suite's proxy: %v", err)
+	}
+	config, err := os.ReadFile("/menagerie-work/proxy/config/sockguard.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The control: the same proxy with the configuration as it is keeps
+	// running, so an exit below is the missing root's.
+	for name, edit := range map[string]func(string, string) string{
+		"control": func(c, _ string) string { return c },
+		"bind root": func(c, missing string) string {
+			return strings.Replace(c, "allowed_bind_mounts:\n", "allowed_bind_mounts:\n            - "+missing+"\n", 1)
+		},
+		"workspace root": func(c, missing string) string {
+			i := strings.Index(c, "  workspace_root: ")
+			j := i + strings.Index(c[i:], "\n")
+			return c[:i] + "  workspace_root: " + missing + c[j:]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(os.TempDir(), p.runID+"-"+strings.ReplaceAll(name, " ", "-"))
+			missing := filepath.Join(dir, "missing")
+			if err := os.MkdirAll(filepath.Join(dir, "socket"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+			edited := edit(string(config), missing)
+			if name != "control" && (edited == string(config) || !strings.Contains(edited, missing)) {
+				t.Fatalf("the %s was not replaced in the configuration", name)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "sockguard.yaml"), []byte(edited), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			created, err := p.client.ContainerCreate(p.ctx,
+				&container.Config{Image: running.Config.Image, User: "0:0", Labels: map[string]string{"menagerie.test.run": p.runID}},
+				&container.HostConfig{
+					CapDrop: []string{"ALL"}, CapAdd: []string{"CHOWN", "DAC_READ_SEARCH"}, ReadonlyRootfs: true,
+					Tmpfs: map[string]string{"/tmp": ""}, NetworkMode: "none", SecurityOpt: []string{"no-new-privileges"},
+					Binds: []string{
+						"/var/run/docker.sock:/var/run/docker.sock", "/menagerie-work:/menagerie-work:ro",
+						filepath.Join(dir, "socket") + ":/run/sockguard",
+						filepath.Join(dir, "sockguard.yaml") + ":/etc/sockguard/sockguard.yaml:ro",
+						p.exceptions + ":/etc/sockguard/exceptions:ro",
+					},
+				}, nil, nil, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			waited, waitErr := p.client.ContainerWait(p.ctx, created.ID, container.WaitConditionNextExit)
+			if err := p.client.ContainerStart(p.ctx, created.ID, container.StartOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			// Test-only bound: the suite's proxy binds its socket within a
+			// second, and a refused start exits as fast.
+			select {
+			case res := <-waited:
+				if name == "control" || res.StatusCode == 0 {
+					t.Errorf("the proxy exited %d with the %s configuration:\n%s", res.StatusCode, name, p.logsOf(created.ID))
+				}
+			case err := <-waitErr:
+				t.Fatal(err)
+			case <-time.After(20 * time.Second):
+				if name != "control" {
+					t.Errorf("the proxy runs with a missing %s", name)
+				}
+			}
+		})
+	}
+}
+
+// logsOf is the end of a container's log, for a failure message.
+func (p *proxyHarness) logsOf(id string) string {
+	rc, err := p.client.ContainerLogs(p.ctx, id, container.LogsOptions{ShowStdout: true, ShowStderr: true, Tail: "40"})
+	if err != nil {
+		return err.Error()
+	}
+	defer rc.Close()
+	var out strings.Builder
+	_, _ = stdcopy.StdCopy(&out, &out, rc)
+	return out.String()
 }

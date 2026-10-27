@@ -168,9 +168,14 @@ explains the second.
 | `restart: unless-stopped` | Docker starts Menagerie after a host restart, and restarts it after either service stops. |
 | Port `8080` | The web UI and workspace API. Publish it on a private address only. |
 
-Create the socket folder and the Compose staging folder before the first
-start, owned by the workspace root's owner; Docker would create a missing
-one owned by root, and Menagerie then refuses to start or cannot write it:
+Create the workspace root, the socket folder and the Compose staging
+folder before the first start, the last two owned by the workspace root's
+owner. The proxy mounts all three with `create_host_path: false`, so
+Docker does not create a missing one empty and owned by root: the proxy's
+container fails to start, and so does Menagerie, which starts after it.
+The proxy itself refuses to start when one of its bind roots, or the
+exceptions' workspace root, is missing in its mount namespace, rather than
+check bind sources by their path alone:
 
 ```sh
 owner="$(stat -c %u /srv/menagerie/workspaces)"
@@ -296,10 +301,10 @@ one Unix listener and one profile, `menagerie`.
 | Proxy mount | Why |
 | --- | --- |
 | `/var/run/docker.sock` | The host Docker daemon. |
-| The `menagerie-proxy` volume at `/run/sockguard` | The listener socket `menagerie.sock`, which Menagerie mounts read-only. |
+| The `menagerie-proxy` volume at `/run/sockguard` | The listener socket `menagerie.sock`, which Menagerie mounts read-only. Menagerie's container starts after the proxy's (`depends_on` with `condition: service_started`): the proxy's image has no health check, so Menagerie's start-up waits for the socket itself. |
 | `sockguard.yml` at `/etc/sockguard/sockguard.yaml`, read-only | The configuration. |
 | The exceptions folder at `/etc/sockguard/exceptions`, read-only | The folder, not the file, so the proxy sees a replaced file. |
-| The workspace root, the workspace socket folder and the Compose staging folder, each read-only at its host path | The proxy resolves every bind source in its own mount namespace, as the daemon does. |
+| The workspace root, the workspace socket folder and the Compose staging folder, each read-only at its host path, never created | The proxy resolves every bind source in its own mount namespace, as the daemon does. |
 
 Edit these values of `sockguard.yml` to match the host:
 

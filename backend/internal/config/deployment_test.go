@@ -33,8 +33,29 @@ type composeService struct {
 	NetworkMode   string            `yaml:"network_mode"`
 	Ports         []string          `yaml:"ports"`
 	Environment   map[string]string `yaml:"environment"`
-	Volumes       []string          `yaml:"volumes"`
+	Volumes       []composeVolume   `yaml:"volumes"`
 	Restart       string            `yaml:"restart"`
+}
+
+// composeVolume is one mount of a service, in the short syntax
+// (source:target[:mode]) or the long one.
+type composeVolume struct {
+	Short    string
+	Source   string `yaml:"source"`
+	Target   string `yaml:"target"`
+	ReadOnly bool   `yaml:"read_only"`
+	Bind     struct {
+		CreateHostPath *bool `yaml:"create_host_path"`
+	} `yaml:"bind"`
+}
+
+func (v *composeVolume) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		v.Short = n.Value
+		return nil
+	}
+	type long composeVolume
+	return n.Decode((*long)(v))
 }
 
 // interpolate applies Compose's ${NAME:-default} and ${NAME:?message}
@@ -130,14 +151,28 @@ func TestDeploymentExampleAgreesWithTheImage(t *testing.T) {
 	checkProxy(t, cfg, compose.Services, svc, mounts, modes)
 }
 
-// volumes maps each of svc's mount targets to its source and its mode.
+// volumes maps each of svc's mount targets to its source and its mode:
+// ro, or for a long-syntax bind that Docker must not create, ro,nocreate.
 func volumes(t *testing.T, svc composeService) (map[string]string, map[string]string) {
 	t.Helper()
 	mounts, modes := map[string]string{}, map[string]string{}
 	for _, v := range svc.Volumes {
-		parts := strings.Split(interpolate(t, v), ":")
+		if v.Short == "" {
+			target := interpolate(t, v.Target)
+			mounts[target] = interpolate(t, v.Source)
+			var mode []string
+			if v.ReadOnly {
+				mode = append(mode, "ro")
+			}
+			if c := v.Bind.CreateHostPath; c != nil && !*c {
+				mode = append(mode, "nocreate")
+			}
+			modes[target] = strings.Join(mode, ",")
+			continue
+		}
+		parts := strings.Split(interpolate(t, v.Short), ":")
 		if len(parts) < 2 {
-			t.Fatalf("volume %q", v)
+			t.Fatalf("volume %q", v.Short)
 		}
 		mounts[parts[1]] = parts[0]
 		if len(parts) > 2 {
@@ -246,10 +281,15 @@ func checkProxy(t *testing.T, cfg *Config, services map[string]composeService, s
 	if got := client.RequestBody.ContainerCreate.AllowedBindMounts; !slices.Equal(got, roots) {
 		t.Errorf("allowed_bind_mounts %v, want exactly %v", got, roots)
 	}
+	// The proxy does not start without a root, so Docker must not create a
+	// missing one empty and root's.
 	for _, root := range roots {
-		if pmounts[root] != root || pmodes[root] != "ro" {
-			t.Errorf("the proxy mounts %s from %q:%s, want its host path read-only", root, pmounts[root], pmodes[root])
+		if pmounts[root] != root || pmodes[root] != "ro,nocreate" {
+			t.Errorf("the proxy mounts %s from %q:%s, want its host path read-only, never created", root, pmounts[root], pmodes[root])
 		}
+	}
+	if !strings.Contains(repoFile(t, "deploy/compose.yml"), "      sockguard:\n        condition: service_started\n") {
+		t.Error("Menagerie does not depend on the proxy's start")
 	}
 	if profile.Response.DenyVerbosity != "verbose" || profile.Ownership.Owner == "" {
 		t.Errorf("deny_verbosity %q, ownership owner %q", profile.Response.DenyVerbosity, profile.Ownership.Owner)

@@ -504,7 +504,8 @@ proposed-design:
     bind source, no network and a read-only file system. It mounts the host
     Docker socket, its configuration, the exceptions folder, and the three
     bind roots read-only at their host paths, so it resolves bind sources
-    as the daemon does.
+    as the daemon does. Docker never creates a missing root, and the proxy
+    refuses to start without one; Menagerie starts after the proxy.
     Throwaway containers need nothing more: the root's host path is their
     bind source, and Menagerie's own image is their default image. Both
     containers have a Docker restart policy, so they return after a host
