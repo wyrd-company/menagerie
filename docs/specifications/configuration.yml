@@ -84,7 +84,7 @@ description: >-
   `waiting-for-answers` does not count, and no deadline applies while a job
   waits. Interviews keep no expiry. `default` limits every operation
   without its own limit; `operations` gives `start`, `stop`, `rebuild`,
-  `create` or `upgrade` its own limit, which replaces `default`; `phases`
+  `create`, `upgrade` or `commit` its own limit, which replaces `default`; `phases`
   limits each stay in a phase, counted from each entry into the phase
   (an answered interview enters `interview` again), inside any operation.
   The phase names are `read-definition`, `initialize-command`, `build`,
@@ -106,7 +106,7 @@ description: >-
   "operation", "phase", "state", "error": {"kind", "message"} | null,
   "console"}`, where `console` is the browser address of the job's
   console: the origin of `oidc.redirect-url` followed by `/?job={id}` for
-  start, stop and rebuild, `/create?job={id}` for create and
+  start, stop, rebuild and commit, `/create?job={id}` for create and
   `/workspaces/{name}/upgrade?job={id}` for upgrade. Alerts wait in one
   queue of 64 and one background sender posts them in the order they were
   raised, so a job's `job-long-running` alert is posted before its
@@ -124,6 +124,36 @@ description: >-
   field and what it expects, and a YAML decoding error names the line, the
   field when known and the expected type. Ended and succeeded jobs send nothing. `webhook` is required
   in the section.
+
+
+  Optional `auto-commit` schedules commits: `every`, a duration and
+  required in the section, is the time between two sweeps of the
+  workspace root, the first one interval after start-up. Each sweep starts
+  a commit job, with the message `chore(menagerie): automatic commit`, on
+  every workspace that has no unfinished job and has a change to commit;
+  a busy workspace waits for the next sweep. Absent, no commit is
+  scheduled.
+
+
+  Optional `workspace-socket` gives each workspace's devcontainer a socket
+  that commits and backs up its own workspace, as the workspace API
+  describes. `folder`, required in the section, is an absolute clean
+  folder other than `/`, without a comma, that is neither inside nor
+  contains `workspace-root`, `wyrwood-directory` or
+  `template-service.candidate-folder`. It has the same path on the host
+  and in Menagerie's container, exists when the workspace service starts
+  and is a folder of the services' user, not itself a symbolic link, with
+  every folder above it, its links resolved, a folder of root or the
+  services' user that no other user can write unless it is sticky; the
+  service sets its mode to 0700 and refuses to start otherwise. Resolved,
+  it is neither inside nor contains the resolved `workspace-root`. `min-interval` is
+  the shortest time between two accepted commits of a workspace through
+  its socket: a duration, or `0` for none; absent, `1m`. Neither field's
+  value appears in a configuration error, and the start-up checks of the
+  socket folder name the field and the rule, never the path or an
+  operating system error's text. No decoding error names an anchor: an
+  unknown alias or an anchor that holds its own alias is reported with a
+  fixed text.
 validation-criteria: >-
   `go test ./backend/internal/config/` parses a valid document, applies the
   defaults, rejects each invalid field, and checks that the schema's keys
@@ -139,7 +169,9 @@ validation-criteria: >-
   The config tests also check that no invalid `webhook` value appears in
   the error, also when an anchor shares it with each duration field or
   makes it a key, and that an empty duration given through an alias or a merge
-  key is refused.
+  key is refused. They parse `auto-commit`, `workspace-socket` and the
+  `commit` limit, and check that no error of those fields quotes the
+  value given.
   `go test ./backend/cmd/menagerie/` checks that `local-env` reaches the
   devcontainer runtime and that `job-limits` and `alerts` reach the jobs
   manager.

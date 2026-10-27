@@ -51,6 +51,13 @@ job-limits:
 alerts:
   webhook: https://ntfy.example.test/menagerie
   long-running: 45m
+
+auto-commit:
+  every: 1h
+
+workspace-socket:
+  folder: /srv/menagerie/sockets
+  min-interval: 1m
 ```
 
 ## Workspaces
@@ -182,8 +189,8 @@ is cancelled and fails as `timed-out`, and its workspace takes the next job
 once the cancelled work has stopped.
 
 - `default` limits every operation.
-- `operations` gives `start`, `stop`, `rebuild`, `create` or `upgrade` its
-  own limit, which replaces `default`.
+- `operations` gives `start`, `stop`, `rebuild`, `create`, `upgrade` or
+  `commit` its own limit, which replaces `default`.
 - `phases` limits each stay in a phase, inside any operation:
   `read-definition`, `initialize-command`, `build`, `remove-container`,
   `up`, `stop`, `interview`, `initialize-repository`, `generate`, `apply`,
@@ -236,6 +243,62 @@ what failed: `timeout`, `transport error`, `redirect refused` or
 so Menagerie never writes it to a log, an event or an error. A
 configuration error names the field and what it expects, never the value
 of the webhook or of a duration.
+
+## Automatic commits
+
+With `auto-commit`, Menagerie checks every workspace each `every`, the first
+time one interval after it starts. A workspace with uncommitted changes and
+no job in progress gets a commit job: every change is committed, as
+`git add --all` and a commit would, with the message
+`chore(menagerie): automatic commit`, and the workspace's branch is backed
+up. A workspace with a job in progress is skipped until the next check.
+Files the workspace's ignore rules exclude, and repositories cloned inside
+it, are not committed. The ignore rules are the workspace's `.gitignore`
+files, its `.git/info/exclude`, and the file its repository's own
+`core.excludesFile` names when that file is a regular file of at most
+1 MiB inside the workspace folder, with symbolic links resolved. Any other
+exclude file, elsewhere or larger, is skipped with a note in the job's
+console, and the files it excludes can be committed.
+Menagerie's own Git configuration does not apply. Without `auto-commit`
+nothing is committed on a schedule.
+
+## Workspace sockets
+
+With `workspace-socket`, every workspace's devcontainer can commit and back
+up its own workspace with `workspace-commit`, as
+[Usage](usage.md#commit-from-inside-a-workspace) shows. Menagerie keeps one
+folder per workspace in `folder`, with a Unix socket and the client, and
+mounts it read-only at `/run/menagerie` in that workspace's devcontainer.
+The socket only knows its own workspace, and needs no token.
+
+- `folder` is an absolute folder that is mounted at the same path on the
+  host and in Menagerie's container, like the workspace root. It must exist
+  before Menagerie starts and belong to the owner of the workspace root,
+  the user the services run as; Menagerie sets its mode to 0700. It must
+  not hold a comma, it must not itself be a symbolic link, and every
+  folder above it must belong to root or that user and be writable by no
+  other user unless it is sticky, as `/tmp` is. A symbolic link above it,
+  such as `/var/run` to `/run`, is followed. It must be neither inside nor
+  around the workspace root, the Wyrwood directory or the candidate
+  folder; the workspace root is also compared with both paths' symbolic
+  links resolved.
+- `min-interval` is the shortest time between two commits of one workspace
+  through its socket, `1m` by default; `0` allows any number. A request
+  that comes sooner is refused with the time to wait, so a loop in a
+  devcontainer cannot fill its backup branch.
+
+A devcontainer gets the socket when its container is created or rebuilt.
+A start keeps a container that was created without the socket as it is,
+so it is not recreated, and the job's console notes that the socket
+attaches at the next rebuild. A start that recreates the container for
+another reason, such as a changed `containerEnv`, also creates it without
+the socket, and the console says so; the socket attaches at the next
+rebuild. A Compose workspace gets the socket on its primary service only.
+
+Each workspace's socket takes at most 32 connections at once, and all
+sockets together 256. A request has 10 seconds for its header and 10 for
+its body, and an idle connection is closed after 60 seconds; the wait for
+the commit job is bounded only by the `commit` [job time limit](#job-time-limits).
 
 ## Listen address and template service
 

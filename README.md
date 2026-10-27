@@ -15,7 +15,8 @@ your identity provider, answer a template's interview to create a workspace,
 see every workspace and its container, start, stop and rebuild them, and
 upgrade a workspace to a newer template version. An upgrade asks only the new
 questions and keeps local edits. Every workspace is a Git repository that
-Menagerie backs up to its own branch.
+Menagerie backs up to its own branch, on a schedule or when its
+devcontainer asks through its own socket.
 [devcontainer-builder](https://github.com/wyrd-company/devcontainer-builder)
 builds and runs the devcontainers, and
 [Wyrwood](https://github.com/wyrd-company/wyrwood) gives Menagerie its SSH

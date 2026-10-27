@@ -357,3 +357,61 @@ func TestFolderOwnerUsesTheFolderOwner(t *testing.T) {
 		t.Fatal("missing folder produced an update")
 	}
 }
+
+// TestTheWorkspaceSocketNeverReachesInitializeCommand gives the runtime a
+// workspace socket: initializeCommand's throwaway container still has only
+// the workspace folder and the allowed variables, so the socket is the
+// devcontainer's alone.
+func TestTheWorkspaceSocketNeverReachesInitializeCommand(t *testing.T) {
+	_, folder := writeDefinition(t, `{"image": "alpine:3.22", "initializeCommand": "exit 3"}`)
+	client, err := dockerclient.NewClientWithOpts(dockerclient.WithHost("unix://"+filepath.Join(t.TempDir(), "absent.sock")), dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sockets := filepath.Join(t.TempDir(), "sockets")
+	var asked []string
+	l := &localContainers{}
+	rt := New(client, Options{
+		Environ:     func() []string { return []string{"SAMPLE_ALLOWED=a1"} },
+		LocalEnv:    []string{"SAMPLE_ALLOWED"},
+		Containers:  l,
+		RunnerImage: func(context.Context) (string, error) { return "runner:sample", nil },
+		WorkspaceSocket: func(f string) (string, error) {
+			asked = append(asked, f)
+			return filepath.Join(sockets, filepath.Base(f)), nil
+		},
+	})
+	if err := rt.Start(context.Background(), folder, &progress{}); err == nil {
+		t.Fatal("initializeCommand did not fail")
+	}
+	if len(asked) != 1 || asked[0] != folder {
+		t.Fatalf("socket asked for %v", asked)
+	}
+	if len(l.commands) != 1 {
+		t.Fatalf("%d commands", len(l.commands))
+	}
+	c := l.commands[0]
+	if c.Folder != folder || c.Copy != "" || strings.Join(c.Env, ",") != "SAMPLE_ALLOWED=a1" {
+		t.Fatalf("command folder %s copy %s env %q", c.Folder, c.Copy, c.Env)
+	}
+}
+
+// TestAWorkspaceSocketFailureStopsTheStart fails the socket: the start
+// fails before initializeCommand or the devcontainer.
+func TestAWorkspaceSocketFailureStopsTheStart(t *testing.T) {
+	_, folder := writeDefinition(t, `{"image": "alpine:3.22", "initializeCommand": "touch init-ran"}`)
+	client, err := dockerclient.NewClientWithOpts(dockerclient.WithHost("unix://"+filepath.Join(t.TempDir(), "absent.sock")), dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := errors.New("workspace socket refused")
+	l := &localContainers{}
+	rt := New(client, Options{
+		Containers:      l,
+		RunnerImage:     func(context.Context) (string, error) { return "runner:sample", nil },
+		WorkspaceSocket: func(string) (string, error) { return "", refused },
+	})
+	if err := rt.Start(context.Background(), folder, &progress{}); !errors.Is(err, refused) || len(l.commands) != 0 {
+		t.Fatalf("got %v after %d commands", err, len(l.commands))
+	}
+}

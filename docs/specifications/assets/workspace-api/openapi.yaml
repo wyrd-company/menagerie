@@ -265,7 +265,7 @@ components:
       properties:
         operation:
           type: string
-          enum: [start, stop, rebuild, create, upgrade]
+          enum: [start, stop, rebuild, create, upgrade, commit]
         workspace:
           type: string
         templateId:
@@ -351,6 +351,7 @@ components:
             - not-applied
             - merge-conflicted
             - backup-failed
+            - commit-failed
         message:
           type: string
     StateEvent:

@@ -23,7 +23,7 @@ export interface Template {
   name: string;
 }
 
-export type Operation = "create" | "upgrade" | "start" | "stop" | "rebuild";
+export type Operation = "create" | "upgrade" | "start" | "stop" | "rebuild" | "commit";
 
 export interface ErrorBody {
   kind: string;

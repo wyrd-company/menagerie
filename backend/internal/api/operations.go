@@ -55,6 +55,9 @@ const (
 	OperationUpgrade = "upgrade"
 )
 
+// OperationCommit commits a workspace's changes and backs its branch up.
+const OperationCommit = "commit"
+
 // ContainerRuntime runs container operations on a workspace folder.
 // *devcontainer.Runtime satisfies it.
 type ContainerRuntime interface {
