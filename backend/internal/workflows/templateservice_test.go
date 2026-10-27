@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -35,6 +36,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -63,8 +65,9 @@ const definition = `{
 `
 
 // sampleTemplate writes version 1 or 2 of a generic template. Version 2
-// adds one question. Its hook leaves a marker and clones a nested
-// repository that the template's .gitignore excludes.
+// adds one question. Its hook writes its version into a tracked marker,
+// leaves an ignored marker named by its version where it ran, and clones a
+// nested repository that the template's .gitignore excludes.
 func sampleTemplate(t *testing.T, dir string, version int) {
 	extra, extraLine := "", ""
 	if version == 2 {
@@ -72,11 +75,45 @@ func sampleTemplate(t *testing.T, dir string, version int) {
 		extraLine = "extra: {{ extra }}\n"
 	}
 	writeFile(t, dir, "template.yml", "name: sample\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\n"+extra+
-		"hooks:\n  - run: [sh, -c, 'echo ran > hook-marker.txt && git init -q clones/tool && echo cloned > clones/tool/README']\n")
+		fmt.Sprintf("hooks:\n  - run: [sh, -c, 'echo v%d > hook-marker.txt && mkdir -p markers && echo ran > markers/hook-v%d.txt && git init -q clones/tool && echo cloned > clones/tool/README']\n", version, version))
 	writeFile(t, dir, "template/result.txt", "label: {{ label }}\n"+extraLine)
 	writeFile(t, dir, "template/local.txt", fmt.Sprintf("first: template\nsecond: stable\nthird: stable\nfourth: stable\nfifth: v%d\n", version))
 	writeFile(t, dir, "template/.gitignore", "/clones/\n/markers/\n*.local\n")
 	writeFile(t, dir, "template/.devcontainer/devcontainer.json", definition)
+}
+
+// capturedSecret is what the leaks template's first hook captures and its
+// second hook takes as an argument before it fails. The template holds it
+// only in lower case.
+const capturedSecret = "CAPTURED-SAMPLE-VALUE"
+
+// capturing is a template whose first hook captures capturedSecret, as
+// prefix followed by the value, and whose second hook uses it as given.
+// The template holds the value only in lower case.
+func capturing(prefix, second string) string {
+	return "name: captures\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n" +
+		"  - id: token\n    run: [sh, -c, 'v=" + prefix + "$(echo " + strings.ToLower(capturedSecret) + " | tr a-z A-Z); " + "echo \"$v\"']\n    capture: [stdout]\n" +
+		second
+}
+
+// leakTemplates carry a captured value into every way a later hook's
+// working directory can fail: invalid when it renders, missing, and linked
+// to the templates folder, which exists for this process but not in a
+// throwaway container. Toha reads hook results nowhere else that can fail
+// before the hook runs; a failing hook is the leaks template.
+var leakTemplates = map[string]string{
+	"leaks-deferred": capturing("/", "  - run: ['true']\n    cwd: '{{ token.stdout }}'\n"),
+	"leaks-linked": strings.Replace(capturing("", "  - run: ['true']\n    cwd: '{{ token.stdout }}'\n"),
+		`echo \"$v\"`, `ln -s ../../templates \"$v\"; echo \"$v\"`, 1),
+	"leaks-missing": capturing("", "  - run: ['true']\n    cwd: '{{ token.stdout }}'\n"),
+}
+
+// leakKinds are the template service error kinds the leak templates fail
+// with.
+var leakKinds = map[string]string{
+	"leaks-deferred": "(apply-failed)",
+	"leaks-linked":   "(hook-io-failed)",
+	"leaks-missing":  "(hook-io-failed)",
 }
 
 // accept is a workspace root served by the real template service and the
@@ -90,7 +127,44 @@ type accept struct {
 	flows              *Workflows
 }
 
+// localContainers stands in for throwaway containers without Docker: it
+// runs each hook as a local process in its working directory, with its
+// environment and PATH.
+type localContainers struct{}
+
+func (localContainers) Run(ctx context.Context, c throwaway.Command) (int, error) {
+	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = c.Dir, append(c.Env, "PATH="+os.Getenv("PATH")), c.Stdout, c.Stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && ctx.Err() == nil {
+		return exit.ExitCode(), nil
+	}
+	if err != nil {
+		return -1, err
+	}
+	return 0, nil
+}
+
 func newAccept(t *testing.T, runtime Runtime) *accept {
+	t.Helper()
+	return newAcceptWith(t, runtime, acceptOptions{containers: localContainers{}, image: "runner:local"})
+}
+
+// acceptOptions run the template's hooks through containers in image,
+// under limits. templates adds approved templates by id; credentials,
+// when set, serves the hook runner socket's credential route; env is added
+// to the template service's environment.
+type acceptOptions struct {
+	containers  throwaway.Containers
+	image       string
+	limits      jobs.Limits
+	templates   map[string]string
+	credentials http.Handler
+	env         []string
+}
+
+func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	t.Helper()
 	bin := os.Getenv("MENAGERIE_TEMPLATE_SERVICE")
 	if bin == "" {
@@ -112,13 +186,24 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 	gitCLI(t, a.repo, "add", "-A")
 	gitCLI(t, a.repo, "commit", "-q", "-m", "v2")
 	gitCLI(t, a.repo, "tag", "v2")
-	for name, template := range map[string]string{
+	fixtures := map[string]string{
 		"broken": "name: broken\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - run: [sh, -c, 'exit 3']\n",
+		"hangs":  "name: hangs\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - run: [sh, -c, 'while :; do date >> ticks.txt; sleep 0.1; done']\n",
+		"leaks":  "name: leaks\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - id: token\n    run: [sh, -c, 'echo " + strings.ToLower(capturedSecret) + " | tr a-z A-Z']\n    capture: [stdout]\n  - run: [sh, -c, 'exit 4', '{{ token.stdout }}']\n",
 		"flows":  "name: flows\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\n  - flow: stop\n    when: label == 'stop'\n  - {id: second, type: text, prompt: Second, required: true}\n",
-	} {
+	}
+	for name, template := range leakTemplates {
+		fixtures[name] = template
+	}
+	fixtures["named"] = "name: named\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\n"
+	for name, template := range fixtures {
 		dir := filepath.Join(base, "templates", name)
 		writeFile(t, dir, "template.yml", template)
 		writeFile(t, dir, "template/out.txt", "label: {{ label }}\n")
+		if name == "named" {
+			// A file named by the answer, so a plan can refuse its path.
+			writeFile(t, dir, "template/{{ label }}.txt", "named\n")
+		}
 		gitCLI(t, dir, "init", "-q", "-b", "main")
 		gitCLI(t, dir, "add", "-A")
 		gitCLI(t, dir, "commit", "-q", "-m", name)
@@ -138,26 +223,61 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	socket := filepath.Join(sockDir, "template.sock")
+	hookSocket := filepath.Join(sockDir, "hook-runner.sock")
+	candidates := filepath.Join(base, "candidates")
+	hooks := throwaway.NewHookRunner(opts.containers, candidates)
+	hookListener, err := throwaway.ListenHookRunner(hookSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hookHandler http.Handler = hooks
+	if opts.credentials != nil {
+		hookHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/credentials/github" {
+				opts.credentials.ServeHTTP(w, r)
+				return
+			}
+			hooks.ServeHTTP(w, r)
+		})
+	}
+	hookServer := &http.Server{Handler: hookHandler}
+	go func() { _ = hookServer.Serve(hookListener) }()
+	t.Cleanup(func() { _ = hookServer.Close() })
 	t2 := filepath.Join(base, "templates")
-	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s}\ntemplates:\n"+
+	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s, hook-runner-socket: %s, candidate-folder: %s}\ntemplates:\n"+
 		"  - {id: sample-v1, name: Sample, address: 'file://%s@v1'}\n  - {id: sample-v2, name: Sample, address: 'file://%s@v2'}\n"+
-		"  - {id: broken, name: Broken, address: 'file://%s/broken'}\n  - {id: flows, name: Flows, address: 'file://%s/flows'}\n",
-		a.root, a.host.URL("backups.git"), socket, a.repo, a.repo, t2, t2)
+		"  - {id: broken, name: Broken, address: 'file://%s/broken'}\n  - {id: flows, name: Flows, address: 'file://%s/flows'}\n  - {id: hangs, name: Hangs, address: 'file://%s/hangs'}\n"+
+		"  - {id: leaks, name: Leaks, address: 'file://%s/leaks'}\n",
+		a.root, a.host.URL("backups.git"), socket, hookSocket, candidates, a.repo, a.repo, t2, t2, t2, t2)
+	approved := map[string]bool{"sample-v1": true, "sample-v2": true, "broken": true, "flows": true, "hangs": true, "leaks": true, "named": true}
+	config += fmt.Sprintf("  - {id: named, name: Named, address: 'file://%s/named'}\n", t2)
+	for name := range leakTemplates {
+		config += fmt.Sprintf("  - {id: %s, name: Leaks, address: 'file://%s/%s'}\n", name, t2, name)
+		approved[name] = true
+	}
+	for id, address := range opts.templates {
+		config += fmt.Sprintf("  - {id: %s, name: %s, address: '%s'}\n", id, id, address)
+		approved[id] = true
+	}
 	writeFile(t, base, "config.yml", config)
-	startService(t, bin, filepath.Join(base, "config.yml"), filepath.Join(base, "data"), socket)
+	startService(t, bin, filepath.Join(base, "config.yml"), filepath.Join(base, "data"), socket, opts.env...)
 
 	root, err := workspace.NewRoot(a.root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.manager = jobs.NewManager(ctx)
+	a.manager = jobs.NewManager(ctx, jobs.Options{Limits: opts.limits})
 	flows := New(Options{
 		Root:      root,
 		Templates: templates.New(socket),
-		Approved:  map[string]bool{"sample-v1": true, "sample-v2": true, "broken": true, "flows": true},
+		Approved:  approved,
 		Remote:    &backup.Remote{URL: a.host.URL("backups.git"), Auth: backup.AgentAuth(a.host.AgentPath)},
 		Runtime:   runtime,
+		Hooks:     hooks,
+		RunnerImage: func(context.Context, string) (string, error) {
+			return opts.image, nil
+		},
 	})
 	a.flows = flows
 	a.http = httptest.NewServer(api.New(api.Options{Root: root, Jobs: a.manager, Operations: flows.Operations(), Interviews: flows}))
@@ -167,10 +287,29 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 	return a
 }
 
+// noCapturedValue checks a failed generation: its error names kind, and
+// neither the error nor any event, the job's log included, carries
+// capturedSecret.
+func noCapturedValue(t *testing.T, job *jobs.Job, kind string) {
+	t.Helper()
+	all, _, _ := job.EventsAfter(0)
+	for _, e := range all {
+		if strings.Contains(string(e.Data), capturedSecret) {
+			t.Fatalf("event %d %s carries the captured value", e.ID, e.Type)
+		}
+	}
+	snap := job.Snapshot()
+	if snap.State != jobs.Failed || snap.Error == nil || snap.Error.Kind != KindGenerationFailed ||
+		strings.Contains(snap.Error.Message, capturedSecret) || !strings.Contains(snap.Error.Message, kind) {
+		t.Fatalf("%+v %+v, want a generation failure %s without the captured value", snap, snap.Error, kind)
+	}
+}
+
 // startService runs the template service binary until the test ends.
-func startService(t *testing.T, bin, config, data, socket string) {
+func startService(t *testing.T, bin, config, data, socket string, env ...string) {
 	t.Helper()
 	cmd := exec.Command(bin, "-config", config, "-data", data)
+	cmd.Env = append(os.Environ(), env...)
 	out, _ := cmd.StdoutPipe()
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
@@ -339,7 +478,10 @@ func acceptCreateAndUpgrade(t *testing.T, a *accept, afterCreate func(folder str
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("backed-up files %v, want %v", names, want)
 	}
-	for _, kept := range []string{"clones/tool/README", "clones/tool/.git"} {
+	if got := fileAt(t, history[0], "hook-marker.txt"); got != "v1\n" {
+		t.Fatalf("generated hook-marker.txt %q", got)
+	}
+	for _, kept := range []string{"clones/tool/README", "clones/tool/.git", "markers/hook-v1.txt"} {
 		if _, err := os.Stat(filepath.Join(folder, kept)); err != nil {
 			t.Fatalf("%s missing from the workspace: %v", kept, err)
 		}
@@ -375,6 +517,18 @@ func acceptCreateAndUpgrade(t *testing.T, a *accept, afterCreate func(folder str
 	upgraded := history[0]
 	if got := fileAt(t, upgraded, "local.txt"); !strings.Contains(got, "third: operator") || !strings.Contains(got, "fifth: v2") {
 		t.Fatalf("upgraded local.txt %q", got)
+	}
+	// The upgrade's hook changed its marker in Toha's candidate; only
+	// Toha's merge brought the change into the workspace folder, and the
+	// hook wrote nothing there itself.
+	if got := fileAt(t, upgraded, "hook-marker.txt"); got != "v2\n" {
+		t.Fatalf("upgraded hook-marker.txt %q", got)
+	}
+	if got, err := os.ReadFile(filepath.Join(folder, "hook-marker.txt")); err != nil || string(got) != "v2\n" {
+		t.Fatalf("the workspace's hook-marker.txt %q %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "markers/hook-v2.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the upgrade's hook ran in the workspace folder: %v", err)
 	}
 	if got := fileAt(t, upgraded, "result.txt"); got != "label: first\nextra: added\n" {
 		t.Fatalf("upgraded result.txt %q", got)
@@ -420,6 +574,49 @@ func TestTemplateServiceFailuresAreVisibleJobs(t *testing.T) {
 		}
 		if status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"beta","templateId":"broken"}`); status != 409 || !strings.Contains(body, KindWorkspaceExists) {
 			t.Fatalf("second create %d %s", status, body)
+		}
+	})
+
+	t.Run("a failed hook's arguments stay out of the job", func(t *testing.T) {
+		job, _ := a.drive(t, "create", "leaky", "leaks", map[string]any{"label": "x"})
+		evidence(t, job)
+		snap := job.Snapshot()
+		// The job's error and every event, its log included, leave out the
+		// value the failed hook took as an argument.
+		all, _, _ := job.EventsAfter(0)
+		for _, e := range all {
+			if strings.Contains(string(e.Data), capturedSecret) {
+				t.Fatalf("event %d %s carries the captured value", e.ID, e.Type)
+			}
+		}
+		if snap.Error == nil || strings.Contains(snap.Error.Message, capturedSecret) {
+			t.Fatalf("job error %+v", snap.Error)
+		}
+		if snap.State != jobs.Failed || snap.Error.Kind != KindGenerationFailed || !strings.Contains(snap.Error.Message, "(hook-failed): hook 1 failed with exit code 4;") {
+			t.Fatalf("%+v %+v", snap, snap.Error)
+		}
+	})
+
+	// Each way a later hook fails with an earlier hook's captured value
+	// ends the job with a template service error that names its kind and
+	// never the value.
+	for name, kind := range leakKinds {
+		t.Run("a captured value stays out of a failed job: "+name, func(t *testing.T) {
+			job, _ := a.drive(t, "create", name, name, map[string]any{"label": "x"})
+			evidence(t, job)
+			noCapturedValue(t, job, kind)
+		})
+	}
+
+	// An answer is in the job's interview events by design; the refused
+	// generation's error leaves out the path the plan rendered from it.
+	t.Run("a rendered answer stays out of a refused generation", func(t *testing.T) {
+		answer := "/" + strings.ToLower(capturedSecret)
+		job, _ := a.drive(t, "create", "named", "named", map[string]any{"label": answer})
+		evidence(t, job)
+		snap := job.Snapshot()
+		if snap.State != jobs.Failed || snap.Error == nil || !strings.Contains(snap.Error.Message, "(plan-failed)") || strings.Contains(snap.Error.Message, answer) {
+			t.Fatalf("%+v %+v", snap, snap.Error)
 		}
 	})
 

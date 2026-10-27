@@ -1,0 +1,696 @@
+package jobs
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakeClock is a manual clock with timers that fire when Advance passes
+// their due time.
+type fakeClock struct {
+	mu     sync.Mutex
+	now    time.Time
+	timers []*fakeTimer
+	// lateStop makes Stop too late to stop a timer, as when a real timer
+	// has fired and its call waits for the job's lock.
+	lateStop bool
+	// onNow, when set, runs once at the next Now, before it reads the
+	// clock, so a test can run timers inside a window the code opens.
+	onNow func()
+}
+
+type fakeTimer struct {
+	clock   *fakeClock
+	at      time.Time
+	f       func()
+	stopped bool
+}
+
+func (t *fakeTimer) Stop() bool {
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+	was := !t.stopped
+	if !t.clock.lateStop {
+		t.stopped = true
+	}
+	return was
+}
+
+func newFakeClock() *fakeClock { return &fakeClock{now: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)} }
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	hook := c.onNow
+	c.onNow = nil
+	c.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+// Pass moves the clock by d without running timers, as when due timers
+// have fired but their calls have not run yet. Advance(0) runs them.
+func (c *fakeClock) Pass(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// SetOnNow sets onNow.
+func (c *fakeClock) SetOnNow(f func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onNow = f
+}
+
+func (c *fakeClock) AfterFunc(d time.Duration, f func()) Timer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t := &fakeTimer{clock: c, at: c.now.Add(d), f: f}
+	c.timers = append(c.timers, t)
+	return t
+}
+
+// Advance moves the clock by d and runs, in due order, every timer that
+// is due, including timers armed by the ones it runs.
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	target := c.now.Add(d)
+	c.mu.Unlock()
+	for {
+		c.mu.Lock()
+		var next *fakeTimer
+		for _, t := range c.timers {
+			if !t.stopped && !t.at.After(target) && (next == nil || t.at.Before(next.at)) {
+				next = t
+			}
+		}
+		if next == nil {
+			c.now = target
+			c.mu.Unlock()
+			return
+		}
+		next.stopped = true
+		if next.at.After(c.now) {
+			c.now = next.at
+		}
+		c.mu.Unlock()
+		next.f()
+	}
+}
+
+type recordedAlerts struct {
+	mu          sync.Mutex
+	failed      []Snapshot
+	longRunning []Snapshot
+	// order holds the event of each alert, as the alerts package names it.
+	order []string
+}
+
+func (a *recordedAlerts) JobFailed(s Snapshot) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.failed = append(a.failed, s)
+	a.order = append(a.order, "job-failed")
+}
+
+func (a *recordedAlerts) JobLongRunning(s Snapshot) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.longRunning = append(a.longRunning, s)
+	a.order = append(a.order, "job-long-running")
+}
+
+func (a *recordedAlerts) events() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.order...)
+}
+
+func (a *recordedAlerts) counts() (int, int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.failed), len(a.longRunning)
+}
+
+func limitedManager(ctx context.Context, clock *fakeClock, opts Options) (*Manager, *recordedAlerts) {
+	alerts := &recordedAlerts{}
+	opts.Alerts, opts.Now, opts.AfterFunc = alerts, clock.Now, clock.AfterFunc
+	return NewManager(ctx, opts), alerts
+}
+
+// steps lets a test drive a runner: the runner calls serve, which runs on
+// the runner's goroutine each step the test sends with do, until ctx ends.
+type steps chan func(*Run)
+
+func (s steps) serve(ctx context.Context, run *Run) error {
+	for {
+		select {
+		case f := <-s:
+			f(run)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// do runs f on the runner's goroutine and waits for it.
+func (s steps) do(f func(*Run)) {
+	done := make(chan struct{})
+	s <- func(r *Run) { f(r); close(done) }
+	<-done
+}
+
+// awaitEnd is waitEnded with a bound, so a job that a limit fails to end
+// fails the test instead of hanging it.
+func awaitEnd(t *testing.T, job *Job) Snapshot {
+	t.Helper()
+	ended := make(chan Snapshot, 1)
+	go func() {
+		for {
+			_, done, changed := job.EventsAfter(0)
+			if done {
+				ended <- job.Snapshot()
+				return
+			}
+			<-changed
+		}
+	}()
+	select {
+	case snap := <-ended:
+		return snap
+	case <-time.After(10 * time.Second):
+		t.Fatalf("job %s did not end: %+v", job.ID(), job.Snapshot())
+		return Snapshot{}
+	}
+}
+
+func waitPhase(t *testing.T, job *Job, phase string) {
+	t.Helper()
+	waitFor(t, job, func(e Event) bool {
+		return e.Type == EventState && strings.Contains(string(e.Data), `"phase":"`+phase+`"`)
+	})
+}
+
+func TestPhaseLimitCancelsTheJobAndFreesTheWorkspace(t *testing.T) {
+	clock := newFakeClock()
+	m, alerts := limitedManager(context.Background(), clock, Options{Limits: Limits{Default: 2 * time.Hour, Phases: map[string]time.Duration{"build": 45 * time.Minute}}})
+	var cause error
+	job, err := m.Start("alpha", "rebuild", func(ctx context.Context, run *Run) error {
+		run.Phase("build")
+		<-ctx.Done()
+		cause = context.Cause(ctx)
+		return ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, job, "build")
+	start := clock.Now()
+	snap := job.Snapshot()
+	if snap.Deadline == nil || !snap.Deadline.Equal(start.Add(45*time.Minute)) || *snap.Limit != (Limit{Seconds: 2700, Scope: ScopePhase}) {
+		t.Fatalf("deadline %v limit %+v", snap.Deadline, snap.Limit)
+	}
+	clock.Advance(44 * time.Minute)
+	if s := job.Snapshot(); s.State != Running {
+		t.Fatalf("ended before its limit: %+v", s)
+	}
+	clock.Advance(time.Minute)
+	snap = awaitEnd(t, job)
+	want := Error{Kind: KindTimedOut, Message: "the build phase passed its 45m limit"}
+	if snap.State != Failed || snap.Error == nil || *snap.Error != want {
+		t.Fatalf("snapshot %+v error %+v", snap, snap.Error)
+	}
+	if snap.Deadline != nil || snap.Limit != nil {
+		t.Fatalf("ended job keeps deadline %v limit %+v", snap.Deadline, snap.Limit)
+	}
+	if !errors.Is(cause, ErrTimedOut) {
+		t.Fatalf("cause %v", cause)
+	}
+	events, _, _ := job.EventsAfter(0)
+	var logged bool
+	for _, e := range events {
+		logged = logged || e.Type == EventLog && eventText(t, e) == want.Message+"; cancelling the job"
+	}
+	if !logged {
+		t.Fatal("no log line at the cancel")
+	}
+	if failed, _ := alerts.counts(); failed != 1 || alerts.failed[0].Error.Kind != KindTimedOut {
+		t.Fatalf("failed alerts %+v", alerts.failed)
+	}
+	next, err := m.Start("alpha", "start", func(context.Context, *Run) error { return nil })
+	if err != nil {
+		t.Fatalf("workspace not freed: %v", err)
+	}
+	awaitEnd(t, next)
+}
+
+func TestJobLimitNamesThePhaseAndFollowsTheOperation(t *testing.T) {
+	clock := newFakeClock()
+	m, _ := limitedManager(context.Background(), clock, Options{Limits: Limits{
+		Default:    2 * time.Hour,
+		Operations: map[string]time.Duration{"rebuild": time.Hour},
+	}})
+	hang := func(ctx context.Context, run *Run) error {
+		run.Phase("build")
+		<-ctx.Done()
+		return nil
+	}
+	start, _ := m.Start("beta", "start", hang)
+	rebuild, _ := m.Start("alpha", "rebuild", hang)
+	waitPhase(t, start, "build")
+	waitPhase(t, rebuild, "build")
+	if l := start.Snapshot().Limit; l == nil || *l != (Limit{Seconds: 7200, Scope: ScopeJob}) {
+		t.Fatalf("start limit %+v", l)
+	}
+	clock.Advance(time.Hour)
+	snap := awaitEnd(t, rebuild)
+	if snap.Error == nil || snap.Error.Kind != KindTimedOut || snap.Error.Message != "the job passed its 1h limit in the build phase" {
+		t.Fatalf("rebuild %+v %+v", snap, snap.Error)
+	}
+	if s := start.Snapshot(); s.State != Running {
+		t.Fatalf("start ended with the rebuild limit: %+v", s)
+	}
+	clock.Advance(time.Hour)
+	if snap := awaitEnd(t, start); snap.Error == nil || snap.Error.Message != "the job passed its 2h limit in the build phase" {
+		t.Fatalf("start %+v %+v", snap, snap.Error)
+	}
+}
+
+// TestWaitingPausesEveryLimit proves the rule that a limit times
+// Menagerie's work and never the manager answering an interview.
+func TestWaitingPausesEveryLimit(t *testing.T) {
+	clock := newFakeClock()
+	m, alerts := limitedManager(context.Background(), clock, Options{
+		Limits:      Limits{Default: 10 * time.Minute, Phases: map[string]time.Duration{"interview": 8 * time.Minute}},
+		LongRunning: 9 * time.Minute,
+	})
+	steps := make(steps)
+	job, _ := m.Start("alpha", "create", steps.serve)
+	steps.do(func(run *Run) { run.Phase("interview") })
+	clock.Advance(4 * time.Minute)
+	setState := func(s State) {
+		t.Helper()
+		steps.do(func(run *Run) {
+			if err := run.SetState(s); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	setState(WaitingForAnswers)
+	snap := job.Snapshot()
+	if snap.Deadline != nil || snap.Limit == nil || *snap.Limit != (Limit{Seconds: 480, Scope: ScopePhase}) {
+		t.Fatalf("waiting deadline %v limit %+v", snap.Deadline, snap.Limit)
+	}
+	clock.Advance(24 * time.Hour)
+	if s := job.Snapshot(); s.State != WaitingForAnswers {
+		t.Fatalf("waiting job ended: %+v %+v", s, s.Error)
+	}
+	if _, lr := alerts.counts(); lr != 0 {
+		t.Fatal("long-running alert while waiting")
+	}
+	// The answer resumes the interview phase: its limit starts again, the
+	// job limit keeps the four minutes already run.
+	steps.do(func(run *Run) { run.Phase("interview") })
+	if s := job.Snapshot(); s.Deadline == nil || !s.Deadline.Equal(clock.Now().Add(6*time.Minute)) {
+		t.Fatalf("resumed deadline %v", s.Deadline)
+	}
+	clock.Advance(5 * time.Minute)
+	if _, lr := alerts.counts(); lr != 1 {
+		t.Fatalf("long-running alerts %d after nine running minutes", lr)
+	}
+	if s := job.Snapshot(); s.State != Running {
+		t.Fatalf("ended after nine running minutes: %+v %+v", s, s.Error)
+	}
+	clock.Advance(time.Minute)
+	snap = awaitEnd(t, job)
+	if snap.Error == nil || snap.Error.Message != "the job passed its 10m limit in the interview phase" {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if _, lr := alerts.counts(); lr != 1 {
+		t.Fatalf("long-running alerts %d", lr)
+	}
+}
+
+func TestPhaseLimitCountsFromEachEntry(t *testing.T) {
+	clock := newFakeClock()
+	m, _ := limitedManager(context.Background(), clock, Options{Limits: Limits{Phases: map[string]time.Duration{"interview": 10 * time.Minute}}})
+	steps := make(steps)
+	job, _ := m.Start("alpha", "upgrade", steps.serve)
+	enter := func() { steps.do(func(run *Run) { run.Phase("interview") }) }
+	enter()
+	clock.Advance(9 * time.Minute)
+	enter()
+	clock.Advance(9 * time.Minute)
+	if s := job.Snapshot(); s.State != Running {
+		t.Fatalf("phase limit not restarted: %+v %+v", s, s.Error)
+	}
+	clock.Advance(time.Minute)
+	if snap := awaitEnd(t, job); snap.Error == nil || snap.Error.Message != "the interview phase passed its 10m limit" {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+}
+
+// TestTimedOutRunnerHoldsTheSlotUntilItReturns covers a runner that ignores
+// its cancelled context: the job stays unfinished and the workspace busy
+// until it returns, and its success is still reported as timed-out.
+// TestALateTickChangesNothing lets every superseded timer fire: each
+// rereads the clock, and none cancels the job twice.
+func TestALateTickChangesNothing(t *testing.T) {
+	clock := newFakeClock()
+	clock.lateStop = true
+	m, _ := limitedManager(context.Background(), clock, Options{Limits: Limits{Phases: map[string]time.Duration{"build": 10 * time.Minute}}})
+	steps := make(steps)
+	job, _ := m.Start("alpha", "start", steps.serve)
+	steps.do(func(run *Run) { run.Phase("build") })
+	clock.Advance(5 * time.Minute)
+	steps.do(func(run *Run) { run.Phase("build") })
+	clock.Advance(5 * time.Minute)
+	if s := job.Snapshot(); s.State != Running {
+		t.Fatalf("a superseded timer ended the job: %+v %+v", s, s.Error)
+	}
+	clock.Advance(5 * time.Minute)
+	awaitEnd(t, job)
+	events, _, _ := job.EventsAfter(0)
+	cancels := 0
+	for _, e := range events {
+		if e.Type == EventLog {
+			cancels++
+		}
+	}
+	if cancels != 1 {
+		t.Fatalf("%d cancel lines", cancels)
+	}
+}
+
+// TestATimeoutAtTheEndWins fires the limit inside finish's window, after
+// the runner has returned success and before the outcome is chosen, and
+// then with the limit's timer not yet run at all. Both end timed-out.
+func TestATimeoutAtTheEndWins(t *testing.T) {
+	for name, fire := range map[string]bool{"timer runs in the window": true, "timer not yet run": false} {
+		t.Run(name, func(t *testing.T) {
+			clock := newFakeClock()
+			m, alerts := limitedManager(context.Background(), clock, Options{Limits: Limits{Phases: map[string]time.Duration{"build": time.Minute}}})
+			job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
+				run.Phase("build")
+				clock.Pass(2 * time.Minute)
+				if fire {
+					clock.SetOnNow(func() { clock.Advance(0) })
+				}
+				return nil
+			})
+			snap := awaitEnd(t, job)
+			if snap.State != Failed || snap.Error == nil || snap.Error.Message != "the build phase passed its 1m limit" {
+				t.Fatalf("%+v %+v", snap, snap.Error)
+			}
+			if failed, _ := alerts.counts(); failed != 1 {
+				t.Fatalf("%d failed alerts", failed)
+			}
+		})
+	}
+}
+
+// TestAPassedLimitSurvivesTheChange changes the phase, or starts waiting,
+// after a limit has passed but before its timer runs. The change does not
+// erase the limit: the job times out on it.
+func TestAPassedLimitSurvivesTheChange(t *testing.T) {
+	cases := map[string]struct {
+		limits Limits
+		change func(*Run)
+		want   string
+	}{
+		"phase change": {
+			Limits{Phases: map[string]time.Duration{"build": time.Minute}},
+			func(run *Run) { run.Phase("up") },
+			"the build phase passed its 1m limit",
+		},
+		"waiting": {
+			Limits{Phases: map[string]time.Duration{"interview": time.Minute}},
+			func(run *Run) { _ = run.SetState(WaitingForAnswers) },
+			"the interview phase passed its 1m limit",
+		},
+		"job limit at a phase change": {
+			Limits{Default: time.Minute},
+			func(run *Run) { run.Phase("up") },
+			"the job passed its 1m limit in the build phase",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			clock := newFakeClock()
+			clock.lateStop = true
+			m, _ := limitedManager(context.Background(), clock, Options{Limits: tc.limits})
+			steps := make(steps)
+			job, _ := m.Start("alpha", "create", steps.serve)
+			first := "build"
+			if name == "waiting" {
+				first = "interview"
+			}
+			steps.do(func(run *Run) { run.Phase(first) })
+			clock.Pass(2 * time.Minute)
+			steps.do(tc.change)
+			clock.Advance(0)
+			snap := awaitEnd(t, job)
+			if snap.Error == nil || snap.Error.Kind != KindTimedOut || snap.Error.Message != tc.want {
+				t.Fatalf("%+v %+v", snap, snap.Error)
+			}
+		})
+	}
+}
+
+// TestAPassedThresholdIsAlertedAtTheEnd ends a job, or starts it waiting,
+// after its running time passed the long-running threshold but before the
+// threshold's timer runs. The threshold passed while the job ran, so the
+// alert is sent once, and before a failure's.
+func TestAPassedThresholdIsAlertedAtTheEnd(t *testing.T) {
+	cases := map[string]struct {
+		end  func(*Run) error
+		want []string
+	}{
+		"succeeded": {func(*Run) error { return nil }, []string{"job-long-running"}},
+		"failed":    {func(*Run) error { return errors.New("boom") }, []string{"job-long-running", "job-failed"}},
+		"waiting": {func(run *Run) error {
+			_ = run.SetState(WaitingForAnswers)
+			return ErrEnded
+		}, []string{"job-long-running"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			clock := newFakeClock()
+			clock.lateStop = true
+			m, alerts := limitedManager(context.Background(), clock, Options{LongRunning: time.Minute})
+			job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
+				run.Phase("build")
+				clock.Pass(2 * time.Minute)
+				return tc.end(run)
+			})
+			awaitEnd(t, job)
+			clock.Advance(0)
+			if got := alerts.events(); !slices.Equal(got, tc.want) {
+				t.Fatalf("alerts %q, want %q", got, tc.want)
+			}
+			if alerts.longRunning[0].State != Running || alerts.longRunning[0].Phase != "build" {
+				t.Fatalf("long-running snapshot %+v", alerts.longRunning[0])
+			}
+		})
+	}
+}
+
+// lockCheckedAlerts records whether the job's lock was held at each alert.
+type lockCheckedAlerts struct {
+	recordedAlerts
+	job      *Job
+	unlocked []string
+}
+
+func (a *lockCheckedAlerts) check(event string) {
+	if a.job.mu.TryLock() {
+		a.job.mu.Unlock()
+		a.unlocked = append(a.unlocked, event)
+	}
+}
+
+func (a *lockCheckedAlerts) JobFailed(s Snapshot) {
+	a.check("job-failed")
+	a.recordedAlerts.JobFailed(s)
+}
+
+func (a *lockCheckedAlerts) JobLongRunning(s Snapshot) {
+	a.check("job-long-running")
+	a.recordedAlerts.JobLongRunning(s)
+}
+
+// TestAlertsAreRaisedUnderTheJobLock raises a warning from the threshold's
+// timer and a failure from the end. Each is raised under the lock that
+// orders the job's changes, so no failure can be raised between a timer's
+// claim of the warning and its raising, and the warning comes first.
+func TestAlertsAreRaisedUnderTheJobLock(t *testing.T) {
+	clock := newFakeClock()
+	alerts := &lockCheckedAlerts{}
+	m := NewManager(context.Background(), Options{LongRunning: time.Minute, Alerts: alerts, Now: clock.Now, AfterFunc: clock.AfterFunc})
+	fail := make(chan struct{})
+	job, _ := m.Start("alpha", "start", func(_ context.Context, r *Run) error {
+		r.Phase("build")
+		<-fail
+		return errors.New("boom")
+	})
+	alerts.job = job
+	waitPhase(t, job, "build")
+	clock.Advance(time.Minute)
+	close(fail)
+	awaitEnd(t, job)
+	if got := alerts.events(); !slices.Equal(got, []string{"job-long-running", "job-failed"}) {
+		t.Fatalf("alerts %q", got)
+	}
+	if len(alerts.unlocked) != 0 {
+		t.Fatalf("raised without the job lock: %q", alerts.unlocked)
+	}
+}
+
+func TestTimedOutRunnerHoldsTheSlotUntilItReturns(t *testing.T) {
+	clock := newFakeClock()
+	m, _ := limitedManager(context.Background(), clock, Options{Limits: Limits{Default: time.Minute}})
+	release := make(chan struct{})
+	job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
+		run.Phase("up")
+		<-release
+		return nil
+	})
+	waitPhase(t, job, "up")
+	clock.Advance(time.Minute)
+	waitFor(t, job, func(e Event) bool { return e.Type == EventLog })
+	if s := job.Snapshot(); s.State.Terminal() {
+		t.Fatalf("job ended before its runner returned: %+v", s)
+	}
+	var busy *BusyError
+	if _, err := m.Start("alpha", "stop", func(context.Context, *Run) error { return nil }); !errors.As(err, &busy) {
+		t.Fatalf("second job beside an abandoned runner: %v", err)
+	}
+	close(release)
+	if snap := awaitEnd(t, job); snap.State != Failed || snap.Error.Kind != KindTimedOut || snap.Error.Message != "the job passed its 1m limit in the up phase" {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+}
+
+func TestShutdownIsNotATimeout(t *testing.T) {
+	clock := newFakeClock()
+	ctx, cancel := context.WithCancel(context.Background())
+	m, _ := limitedManager(ctx, clock, Options{Limits: Limits{Default: time.Minute}})
+	release := make(chan struct{})
+	job, _ := m.Start("alpha", "start", func(ctx context.Context, run *Run) error {
+		run.Phase("up")
+		<-release
+		return ctx.Err()
+	})
+	waitPhase(t, job, "up")
+	cancel()
+	clock.Advance(time.Hour)
+	close(release)
+	if snap := awaitEnd(t, job); snap.State != Failed || snap.Error.Kind != "operation-failed" {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+}
+
+func TestOnlyFailedJobsAlert(t *testing.T) {
+	clock := newFakeClock()
+	m, alerts := limitedManager(context.Background(), clock, Options{LongRunning: time.Hour})
+	for i, runner := range []Runner{
+		func(context.Context, *Run) error { return nil },
+		func(context.Context, *Run) error { return ErrEnded },
+		func(context.Context, *Run) error { return errors.New("boom") },
+	} {
+		job, _ := m.Start("alpha", "start", runner)
+		if snap := awaitEnd(t, job); i == 2 && snap.State != Failed {
+			t.Fatalf("%+v", snap)
+		}
+	}
+	clock.Advance(2 * time.Hour)
+	if failed, lr := alerts.counts(); failed != 1 || lr != 0 || alerts.failed[0].Error.Message != "boom" {
+		t.Fatalf("failed %+v long-running %d", alerts.failed, lr)
+	}
+}
+
+func TestNoLimitMeansNoDeadline(t *testing.T) {
+	clock := newFakeClock()
+	m, _ := limitedManager(context.Background(), clock, Options{})
+	release := make(chan struct{})
+	job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
+		run.Phase("build")
+		<-release
+		return nil
+	})
+	waitPhase(t, job, "build")
+	clock.Advance(1000 * time.Hour)
+	if s := job.Snapshot(); s.State != Running || s.Deadline != nil || s.Limit != nil {
+		t.Fatalf("%+v", s)
+	}
+	events, _, _ := job.EventsAfter(1)
+	if string(events[0].Data) != `{"state":"running","phase":"build","deadline":null,"limit":null}` {
+		t.Fatalf("state event %s", events[0].Data)
+	}
+	close(release)
+	awaitEnd(t, job)
+}
+
+func TestFormatLimit(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		2 * time.Hour:                       "2h",
+		45 * time.Minute:                    "45m",
+		90 * time.Minute:                    "1h30m",
+		time.Hour + 30*time.Second:          "1h30s",
+		10 * time.Second:                    "10s",
+		100 * time.Millisecond:              "100ms",
+		time.Minute + 1500*time.Millisecond: "1m1.5s",
+	} {
+		if got := FormatLimit(d); got != want {
+			t.Errorf("FormatLimit(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+// TestPhasesAreThePublishedPhases checks that Phases names exactly the
+// phases the operations publish, so a phase limit can name each of them.
+func TestPhasesAreThePublishedPhases(t *testing.T) {
+	published := map[string]bool{}
+	call := regexp.MustCompile(`\.Phase\("([a-z-]+)"\)`)
+	for _, dir := range []string{"../devcontainer", "../workflows"} {
+		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range files {
+			if strings.HasSuffix(f, "_test.go") {
+				continue
+			}
+			src, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, m := range call.FindAllStringSubmatch(string(src), -1) {
+				published[m[1]] = true
+			}
+		}
+	}
+	var got []string
+	for p := range published {
+		got = append(got, p)
+	}
+	sort.Strings(got)
+	want := slices.Clone(Phases)
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("published phases %v, Phases %v", got, want)
+	}
+}

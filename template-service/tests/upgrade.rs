@@ -41,7 +41,7 @@ async fn an_upgrade_asks_only_the_new_question_and_keeps_local_edits() {
         start.json["document"]["context"]["commit"],
         world.v2.as_str()
     );
-    let admitted = &start.json["session"]["submissions"][0]["catalog"];
+    let admitted = &start.record()["submissions"][0]["catalog"];
     assert_eq!(
         admitted["title"], "second",
         "the fresh document was not admitted"
@@ -134,6 +134,18 @@ async fn an_upgrade_asks_only_the_new_question_and_keeps_local_edits() {
         "the optional null was not replayed: {application}"
     );
     assert_eq!(application["answers"]["catalog"]["title"], "second");
+    // The upgrade's hook ran against Toha's candidate, a temporary folder
+    // removed after the merge, and never against the workspace folder.
+    let target = std::path::PathBuf::from(
+        world.hooks.calls().last().unwrap()["target"]
+            .as_str()
+            .unwrap(),
+    );
+    assert!(
+        !target.starts_with(folder.canonicalize().unwrap()) && !target.exists(),
+        "upgrade hook target {}",
+        target.display()
+    );
     service.stop().await;
 }
 

@@ -7,6 +7,7 @@ relationships:
     - authentication
     - template-service-api
     - backup-force-push-overwrites-branch
+    - workspace-fills-its-backup-branch
 format: openapi
 description: >-
   The workspace service serves a JSON API to the browser, defined by
@@ -35,9 +36,10 @@ description: >-
 
 
   `POST /api/jobs` starts an operation on a workspace. The operations are
-  `start`, `stop` and `rebuild` on an existing workspace folder, and the
-  interview operations `create` and `upgrade`, which also name an approved
-  template's `templateId`. Any other operation is refused as
+  `start`, `stop`, `rebuild` and `commit` on an existing workspace folder,
+  `apply-branch` on an existing workspace folder, which also names a
+  `branch`, and the interview operations `create` and `upgrade`, which also
+  name an approved template's `templateId`. Any other operation is refused as
   `unknown-operation`. The service acquires the workspace's job slot before
   any work begins. A workspace has at most one unfinished job; another
   request for it gets 409 `workspace-busy` with the holder's id, while other
@@ -51,14 +53,51 @@ description: >-
   and every client that sees the result event can start the next job.
   `phase` names the current step, for example `read-definition`,
   `initialize-command`, `build`, `remove-container`, `up`, `stop`,
-  `interview`, `initialize-repository`, `generate`, `apply`, `commit`,
-  `backup-local-changes` or `backup`. A failed job carries `error.kind`:
-  `initialize-command-failed`, `registry-credentials-unavailable`,
-  `operation-failed` or `internal-error`, and for interview operations
+  `interview`, `initialize-repository`, `generate`, `fetch`, `plan`,
+  `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
+  `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
+  `runner-image-unavailable`, `operation-failed` or `internal-error`, and
+  for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
   `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
-  or `backup-failed`. Its message says what was written and what recovery
-  is needed. No timeout is applied to a job.
+  or `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
+  for `apply-branch` `branch-not-found`, `fetch-failed`, `backup-failed`,
+  `not-applicable` or `apply-failed`. Its message says what was written and
+  what recovery is needed.
+
+
+  Time limits are configured in `job-limits` and are optional; without
+  them a job runs until it ends. A job's limit is its operation's limit,
+  else the default; a phase limit counts from each entry into the phase,
+  an answered interview's return to `interview` included. Limits count
+  running time only. A limit times Menagerie's work, never the manager
+  answering an interview: time in `waiting-for-answers` does not count, no
+  deadline applies while a job waits, and interviews keep no expiry. When a
+  limit passes, the service writes one log line and cancels the job's
+  work; the job ends `failed` with `error.kind` `timed-out` and a message
+  that names the phase and the limit, such as `the build phase passed its
+  45m limit` or `the job passed its 2h limit in the build phase`, whatever
+  the cancelled work returns. A limit that has passed takes effect at the
+  job's next change even when its timer runs late: a phase change, the
+  move to `waiting-for-answers` and the job's end each first settle the
+  running time, so a job that ends past a limit ends timed-out, and a
+  long-running threshold passed while the job ran is alerted once, before
+  any `job-failed` alert, at the latest when the job ends. The slot is
+  released when the work returns, never before, so work that ignores
+  cancellation keeps its workspace busy.
+  A cancelled generate or apply revokes its hook token and kills and
+  removes its running hook containers before the job ends, so no hook
+  writes to the folder afterwards. The template service itself does not
+  stop when its request is cancelled: a template fetch, or the files Toha
+  writes before its next hook, can still finish after the job ended.
+  Stopping Menagerie also cancels jobs, which fail with their own error,
+  not `timed-out`. A timed-out create keeps its folder, as every failed
+  create does, for manual recovery. A timed-out build or up can leave a
+  half-created container: a later start reuses or starts it and a rebuild
+  removes it. A job's `deadline` is when the limit that ends first passes,
+  null when no limit applies, while the job waits and once it has ended;
+  `limit` is that limit, `{seconds, scope}` with scope `job` or `phase`,
+  null when none applies and once the job has ended.
 
 
   Interview operations. A create names a workspace that is a legal Git
@@ -83,6 +122,32 @@ description: >-
   result event of a job that reached generation or apply adds `apply`: the
   template service's `{"outcome","files","recordPath","messages","hooks",
   "conflicts"}`.
+
+
+  Template hooks. Each generate or apply carries a new hook token, which
+  the service grants until that request returns. The template service
+  sends each hook to the service's hook runner socket with the token and
+  Toha's target, and the service runs it in a throwaway container: for a
+  create's generate, the workspace folder mounted read-write at its own
+  path and nothing else; for an upgrade's apply, Toha's candidate copied
+  in at its own path, no mount, and the candidate copied back when the
+  hook exits, so Toha merges what the hook wrote and the hook itself never
+  writes to the workspace folder. A create's token admits only the
+  workspace folder and folders in it, an upgrade's only a folder inside
+  `template-service.candidate-folder`. The hook's working directory is
+  under its target, with an empty environment beside the runner image's
+  own, the services' user, no new privileges and the default bridge
+  network. A script hook's template folder is copied into the container.
+  The job console shows one line naming the runner image, a line for an
+  image pull, then the streams the hook does not capture, each line
+  prefixed `hook: `; captured streams go back to Toha only. A hook that
+  found no runner image, or whose container failed, adds a console line
+  that names the runner image, the stage that failed and the Engine
+  error's class. The runner image is the template entry's `runner-image`,
+  else the global `runner-image`, else Menagerie's own image. When none
+  can be found or pulled, the job fails as `runner-image-unavailable`, or
+  as `registry-credentials-unavailable` when the pull's credentials could
+  not be read.
 
 
   Create. After the interview completes the service creates the workspace
@@ -133,24 +198,226 @@ description: >-
   the apply starts fails the job with nothing written, while a file written
   after that check and before the commit is committed with the output.
   Pushes use
-  go-git with the SSH agent at `ssh-agent.sock` in the Wyrwood directory
-  and the default known hosts files for host-key verification; they
-  replace the remote branch named after the workspace, write no remote to
-  the workspace's Git configuration and fetch nothing. A failed commit or
-  push fails as `backup-failed` and the container is not started or
-  rebuilt.
+  go-git, to an SSH remote with the SSH agent at `ssh-agent.sock` in the
+  Wyrwood directory and the default known hosts files for host-key
+  verification, and to an `https` repository on the configured GitHub
+  App's server with a contents write installation token for that
+  repository; they replace the remote branch named after the workspace,
+  write no remote to the workspace's Git configuration and fetch nothing.
+  A push or fetch with a token follows no redirect, to the same origin or
+  another. A failed commit or push fails as `backup-failed` and the
+  container is not started or rebuilt; a push to a remote that is not SSH
+  or a local path, a URL go-git cannot read included, names a fixed
+  reason, never the URL, a token or the server's answer.
+
+
+  Apply branch. An `apply-branch` job brings a branch of the workspace
+  repository into the workspace. `branch` is a branch's short name,
+  slashes allowed, never a full ref name such as `refs/heads/<name>`; the
+  workspace's own branch is allowed. A request without `branch` is refused
+  as 400 `invalid-request`, and one whose `branch` is not a valid branch
+  name as 400 `invalid-branch`, before any job exists. The workspace socket
+  never starts it.
+
+  In the `fetch` phase the service fetches only that branch and the
+  history it needs, with go-git and the credentials of a push, through a
+  remote it never writes to the workspace's Git configuration, into
+  `refs/menagerie/apply`. It fetches no tags and changes no other ref, and
+  deletes `refs/menagerie/apply` when the job ends, whatever the outcome.
+  A branch the workspace repository does not have fails as
+  `branch-not-found`, a shallow workspace repository, which lacks the
+  history an apply walks, as `not-applicable` before it fetches, and any
+  other fetch failure as `fetch-failed`, all with nothing changed. In `backup-local-changes` the service commits every
+  change as a `commit` job does, with the message `Back up local changes
+  before applying <branch>`, and in `backup` force-pushes the branch; a
+  failure of either fails as `backup-failed` with nothing applied. When
+  `branch` is the workspace's own branch there is no `backup` phase before
+  the apply: the console says the branch is not pushed before the apply,
+  so a refused apply leaves the workspace repository as it was.
+
+  In `plan` the service works out the apply in memory, writing nothing to
+  the folder, the index or a ref. H is the workspace branch's commit and
+  T the fetched one.
+  When T is H or an ancestor of H the job succeeds as already applied,
+  with no commit and no rebuild; for the workspace's own branch it then
+  force-pushes the branch in `backup`, which only moves the workspace
+  repository's branch forward. When H is an ancestor of T the branch
+  fast-forwards to T. Otherwise H and T merge file by file over their
+  merge base B, which must be exactly one commit: a path whose mode and
+  content are equal in H and T keeps them, one unchanged in H since B
+  takes T's, one unchanged in T keeps H's, and any other path conflicts.
+  The result is a merge commit with parents H and T, by Menagerie, with
+  the message `Apply <branch> to workspace <workspace>`. No merge base,
+  several merge bases, a conflict, or a file where the result also has a
+  folder of that name fail as `not-applicable`. So do, before anything is
+  written: fetched history that lacks a commit or tree the apply reads; a
+  path the change writes or removes that is not valid in a Git tree,
+  checked before any folder of the result is read: an empty component, so
+  an absolute path, a `.` or `..` component, a backslash, a control
+  character such as a tab or a newline, or `.git` in any spelling NTFS or
+  HFS+ reads as `.git`, `git~1` included; a submodule entry in the
+  change; an untracked or ignored file, folder or symbolic link, or a
+  nested Git repository, where the change writes; and a file of H that no
+  longer matches H. The console has one `not applicable: <path>` line per
+  path and the message names the reason and the paths; nothing is
+  applied.
+
+  A plan refused in `plan` leaves the devcontainer as it was. Otherwise,
+  so that nothing in the devcontainer writes to the folder while the
+  apply does, the service records whether the devcontainer runs and stops
+  it in `stop` as a `stop` job does: for Compose, every service of the
+  workspace's Compose project, found by its project label, also when the
+  primary service's container is gone. A failed state read or stop fails
+  with the container operations' kinds and nothing applied. It then
+  commits again in
+  `backup-local-changes` what the devcontainer wrote before it stopped;
+  when that changed the branch it pushes it in `backup`, with the same
+  rule for the workspace's own branch, and plans again in `plan`. Right
+  before it writes, `apply` lists the running containers through the
+  Docker library and refuses as `not-applicable`, with the reason "a
+  running container mounts the workspace folder", when any but
+  Menagerie's own has a bind mount whose source is the workspace folder,
+  is inside it, or contains it; the console names each such container by
+  its short id. When the second commit or push fails, the second plan
+  refuses, the mount check refuses, or the folder checks of `apply`
+  refuse, nothing is applied and the devcontainer returns to its state
+  before the job: one that ran is started again as a `start` job does,
+  within the `start` operation's time limit, else 10 minutes, and even
+  when the job was cancelled; one that did not run stays stopped. When
+  that start fails, the console says so, the job fails with the start's
+  failure, and the console keeps the refusal. Every exit after the stop
+  that leaves the devcontainer stopped, a time limit included, writes
+  the console line "the devcontainer is stopped; start or rebuild it". An
+  already applied branch never stops the devcontainer.
+
+  The service changes the folder through descriptors: each folder is
+  opened beneath the workspace with no symbolic link in any component, and
+  each file is renamed, created or removed relative to its folder, so a
+  folder swapped for a link is refused, never followed. In `apply` it
+  first checks that the workspace branch is still at H, then moves
+  every file of H the change replaces or removes to a temporary name,
+  `.menagerie-apply-<random>-<n>`, in its own folder, and checks that each
+  still has H's mode and content, a link's target included. When one does
+  not, or is gone, it moves them all back, never over a file created
+  meanwhile, and refuses as `not-applicable`, so a change the devcontainer
+  made is kept. It then writes only the paths that differ between H and
+  the result, each to a name nothing holds, writing symbolic links as
+  links and keeping the executable mode, removes the moved-aside files and
+  the folders the change empties. The index records the result with the
+  stat data taken from each file as it was written, from its descriptor
+  before it closes or, for a link, right after it is made; an entry
+  without such data keeps none, so its content is compared. The branch
+  moves last, only from H. A failure while writing fails as
+  `apply-failed` with the devcontainer stopped: the files written before
+  it remain, the branch stays at H, which is backed up unless `branch` is
+  the workspace's own, the moved-aside files go back to their names where
+  nothing was written, and the message and console name each file still
+  at a temporary name with its path; recovery is manual. A changed branch
+  is then force-pushed in
+  `backup`, where a failure fails as `backup-failed` without a rebuild,
+  and the devcontainer is rebuilt as after an upgrade, a failure failing
+  with the container operations' kinds. The applied record `.toha.json`
+  is a file like any other. The job's messages name the branch, the
+  workspace and commits, never the workspace repository's address or a
+  transport error's text, which may carry it.
+
+
+  Commit. A `commit` job stages every change of the workspace, as `git
+  add --all` would: untracked, modified and deleted files, and what is
+  already staged. A file that replaces a tracked folder, or a folder that
+  replaces a tracked file, takes the old entries out of the index, in this
+  commit and in the commits after generation and upgrades. Untracked paths
+  the ignore rules exclude, files inside a nested Git repository, and
+  paths go-git could not read back from the index, such as a name with a
+  tab or a newline or a `git~1` folder, stay unstaged; the job console
+  notes each of the last kind. The ignore rules are the workspace's `.gitignore` files, its
+  `.git/info/exclude` and the file its repository's own
+  `core.excludesFile` names; Menagerie's own Git configuration is never
+  read. An exclude file that does not resolve, through symbolic links, to
+  a regular file of at most 1 MiB inside the workspace folder is skipped,
+  and the job console notes it without its path; the files it excludes
+  can then be committed. In the `commit` phase it commits on
+  the workspace branch, as Menagerie, when the staged index differs from
+  the branch's commit; in the
+  `backup` phase it force-pushes the branch, also when nothing changed. A
+  commit that fails, for example on a workspace whose HEAD is not on its
+  branch, fails as `commit-failed` with nothing pushed; a failed push fails
+  as `backup-failed` and keeps the commit. A commit started through this
+  API has the message `chore(menagerie): commit workspace changes`. With
+  `auto-commit`, the service sweeps the workspace root every interval,
+  first one interval after start-up, and starts a commit with the message
+  `chore(menagerie): automatic commit` on each workspace that has no
+  unfinished job and a change the job would commit; a busy workspace is
+  skipped, never queued. The check stages in memory and writes nothing,
+  so it finds a change exactly when the job would commit. The `commit` operation's time limit applies to
+  every commit job.
+
+
+  Workspace socket. With `workspace-socket`, each workspace's devcontainer
+  has a Unix socket at `/run/menagerie/workspace.sock`, named by
+  `MENAGERIE_WORKSPACE_SOCKET` unless the definition sets that name, and
+  the client `/run/menagerie/bin/workspace-commit`. The folder
+  `/run/menagerie` is the workspace's folder in the socket folder, mounted
+  read-only on each rebuild of a single container or a Compose primary,
+  and on each start that creates the container or reuses one that has the
+  mount. A start that reuses a container created without the mount leaves
+  out the mount and the variable, so the container is not recreated, and
+  the job log notes that the socket attaches at the next rebuild. A start
+  that recreates such a container for another reason, such as a changed
+  `containerEnv`, creates it without the socket too, and the job log says
+  that the socket attaches at the next rebuild. A Compose
+  workspace whose socket folder path holds a comma or ends in a space gets
+  no mount, and the job log says so. The socket serves the one workspace
+  it was created for and speaks HTTP/1.1 JSON, defined by
+  `assets/workspace-socket/openapi.yaml`. `POST /v1/commits` takes
+  `{"message"}`: a commit message that is not blank, at most 4096 bytes of
+  UTF-8, without NUL, in a body of at most 16 KiB with no other member. It
+  starts a commit job on the workspace with that message, waits for the
+  job to end and answers 200 `{"jobId","state","commit","changed",
+  "pushed","error"}`: `commit` is the branch's commit after the commit
+  phase, null when that phase failed, and `error` is null or `{"kind"}`. A
+  client that disconnects does not cancel the job. When Menagerie shuts
+  down while a request waits, it answers 503 `{"error":{"kind":
+  "shutting-down","jobId"}}`, with `jobId` when the request had started a
+  job, and a request that arrives, or finishes its body, during shutdown
+  gets the same without `jobId` and starts no job. Each workspace's socket has at most 32 connections at once and
+  the process 256; a connection over either is closed when accepted. The
+  request header and the body each have 10 seconds, and an idle
+  connection is closed after 60; the wait for the job has none, as the
+  `commit` operation's time limit governs it. Refusals answer
+  `{"error":{"kind"}}`: 400 `invalid-message` or `invalid-request`; 409
+  `workspace-busy` with `activeJobId`; 429 `rate-limited` with
+  `retryAfterSeconds` and `Retry-After` when the workspace's last accepted
+  commit is within `workspace-socket.min-interval`; 404
+  `workspace-not-found` when the workspace's folder is gone; 500
+  `internal-error`. Any other path answers 404 `not-found` and any other
+  method 405 `method-not-allowed`. A refused request does not count toward
+  the interval. No reply carries a message: the job's console has the
+  detail, so no error text, path or remote address reaches the container.
+  `workspace-commit [-m] <message>` prints the job id, the commit and
+  whether the backup pushed, and exits 0 when the job succeeded, 1 when it
+  failed (with its kind), 2 on a usage error or an invalid message, 3 when
+  the workspace is busy, rate limited (with when to retry) or Menagerie
+  is shutting down, and 4 when the socket cannot be reached.
 
 
   `GET /api/jobs/{id}/events` streams the job's events as Server-Sent Events.
   Event ids are the job's sequence numbers from 1. `state` carries
-  `{state, phase}`, `log` carries one output line `{text}`, and `result`
+  `{state, phase, deadline, limit}`, `log` carries one output line
+  `{text}`, a line ending at a newline, a carriage return or both
+  together, so each progress update is its own event, and `result`
   carries `{state, error}` and ends the stream. An operation can add event
   types with opaque JSON data, such as `interview`; the service compacts
   each payload to one line without changing its text, numbers included, and
   frames every payload line as its own data field. `Last-Event-ID`, or the
   `lastEventId` query parameter, replays the events after that id, so a
   reconnecting client misses nothing. The stream has no keepalive and no
-  deadline.
+  deadline. A push's or fetch's `log` lines carry the remote's own text,
+  such as a hook's rejection; the workspace repository URL and the
+  transfer's token, as given and as its basic-authentication pair in
+  base64 or base64url, padded or not, are replaced by `[redacted]`, also
+  when the remote splits them across packets. Where one of these values
+  contains another, the longer is replaced whole.
 
 
   Jobs, events and logs are held only in the memory of the running process.
@@ -160,14 +427,30 @@ description: >-
   answers and workspace folders are unaffected.
 
 
-  Container operations use devcontainer-builder as a library. Before each
+  Throwaway containers carry the labels `menagerie.throwaway` (`hook` or
+  `initialize-command`), `menagerie.workspace-root` and `menagerie.job`.
+  Each is force-removed when its command ends or its job is cancelled, and
+  the service removes those of its workspace root when it starts.
+
+
+  Container operations use devcontainer-builder as a library. Every
+  `${localEnv:NAME}` and `${env:NAME}` in a definition, and Compose
+  interpolation, read only the variables of Menagerie's environment that
+  `local-env` lists; any other resolves to its default value or empty, and
+  the job log has the line `localEnv NAME is not in local-env; it resolves
+  to its default value` once for each such name the definition reads. Before each
   start or rebuild the service reads `initializeCommand` from the same
   definition snapshot used for the build, substitutes `${localWorkspaceFolder}`,
   `${localEnv:...}`, `${containerWorkspaceFolder}` and `${devcontainerId}`
-  with the workspace's discovery labels, and runs it inside Menagerie with
-  the workspace folder as working directory: a string through `/bin/sh -c`,
-  an array directly, and object members in parallel. A failing command fails
-  the job before any container changes. `start` then builds the definition
+  with the workspace's discovery labels, and runs it in throwaway
+  containers of the global `runner-image`, else Menagerie's own image, as
+  template hooks run: the workspace folder mounted at its own path and as
+  working directory, and an environment of only the `local-env` variables
+  other than `PATH` beside the runner image's own, its `PATH` included. A
+  string runs through `/bin/sh -c`, an array as given, and object members in parallel, each in
+  a container of its own with its output prefixed by its name. A failing
+  command fails the job before any container changes; a missing runner
+  image fails it as `runner-image-unavailable`. `start` then builds the definition
   when it needs a build and brings the container up, reusing and starting an
   existing one. When the definition uses features, an existing
   `devcontainer-lock.json` (including an empty initialization marker) is
@@ -202,13 +485,89 @@ description: >-
 validation-criteria: >-
   `go test ./backend/internal/api/` checks that the routes the server
   registers equal the OpenAPI paths and methods, and exercises each response
-  and error contract with a held runtime. `go test
+  and error contract with a held runtime. `go test ./backend/internal/jobs/`
+  drives time limits with a manual clock: job, operation and phase limits,
+  the pause while waiting, the slot held until cancelled work returns,
+  timers that run late against a phase change, a wait or the job's end,
+  and shutdown that is not a timeout; `go test ./backend/cmd/menagerie/` runs a
+  start whose `initializeCommand` hangs past a 100 ms phase limit through
+  the composed server and receives its `job-failed` alert. `go test
   ./backend/internal/workflows/` runs create and upgrade through the API
   with a held template service and a real local workspace repository,
   covering waiting, single answers, flow ends, failures and slot release;
   `go test ./backend/internal/backup/` pushes through an isolated SSH server
-  and agent; `go test -tags templateservice ./backend/internal/workflows/`
-  runs create and upgrade against the real template service. `go test -tags docker
-  ./backend/internal/devcontainer/` runs start, stop, rebuild, failing
-  `initializeCommand`, Compose resource preservation and the workspace list
-  against a real Docker Engine.
+  and agent, and pushes and fetches through an isolated HTTPS Git host
+  with a token, whose every failure names neither the URL nor the token; `go test -tags templateservice ./backend/internal/workflows/`
+  runs create and upgrade against the real template service, with an
+  upgrade whose hook changes a tracked file's content that only Toha's
+  merge brings into the workspace folder. `go test
+  ./backend/internal/throwaway/` covers the hook runner: token refusal and
+  revocation, folder, candidate and working directory checks, each token
+  kind refusing the other kind's target, linked working directories, a
+  candidate copied in and back and never mounted, a copy back that refuses
+  unsafe entries and never writes through a link, captured streams that never reach the console, exit codes,
+  cancellation that waits for the container's removal, runner image
+  choice, and a captured value carried through every failure, the fake
+  Engine's failure at each container stage included, that reaches no
+  refusal and no console line. `go test -tags docker
+  ./backend/internal/devcontainer/ ./backend/internal/throwaway/` runs
+  start, stop, rebuild, failing `initializeCommand`, Compose resource
+  preservation, the `local-env` allowlist and the workspace list against a
+  real Docker Engine, and checks that a hook and an `initializeCommand`
+  that look for the Docker socket, the SSH agent and Menagerie's
+  environment find none, while they still write into the workspace folder;
+  that a script hook runs from its copied template; that an upgrade's
+  hook changes only its candidate, which then holds exactly what it left;
+  that a revoked hook
+  leaves no container and stops writing; that the Engine's failure to start
+  a hook named by a captured value, and a working directory linked out of
+  the folder, reach no refusal or console line; and that start-up removes
+  only its own root's leftovers. `go test -tags templateservice
+  ./backend/internal/workflows/` also drives a captured value into an
+  invalid, missing and linked later working directory and a failing hook's
+  arguments, and finds it in no job error or event. `go test -tags
+  'templateservice docker' ./backend/internal/workflows/` runs those
+  templates in throwaway containers, and a hook that never ends under a
+  short `generate` limit: the job ends timed-out with no hook container
+  left and no write to the folder after it. `go test
+  ./backend/internal/commits/ ./backend/internal/workspacesocket/
+  ./backend/cmd/workspace-commit/` covers the commit job's phases and
+  kinds, the sweep's idle and change checks, the socket's binding to its
+  workspace, message and request checks, the minimum interval, the busy
+  refusal, a client that leaves, the connection bounds, the header, body
+  and idle deadlines, a job wait longer than all of them, the
+  shutting-down answer, stale and linked socket files, start-up errors
+  without a path, and a reply for every refusal and failure that carries
+  only kinds, ids, hashes, numbers and booleans. `go test
+  ./backend/internal/backup/` covers a file and a folder that replace each
+  other, the workspace's exclude files inside and outside the workspace,
+  and that the change check agrees with the commit over a table of
+  workspace states. It also fetches from a local bare workspace repository
+  and applies: an already applied branch, a fast-forward with an
+  executable file, a symbolic link and a removed folder, a file and a
+  folder that replace each other, a clean merge and its merge commit,
+  conflicts of content and mode, no merge base and several, a file where
+  the result has a folder, ignored files, folders and links in the way, a
+  nested repository, a submodule, invalid paths, files changed after the
+  local backup, a missing branch, the private ref's removal, a write
+  failure and a branch moved meanwhile, each refusal leaving the branch,
+  index and folder as they were. Races run at a hook before the folder
+  changes: an edit is kept and refuses the apply, a folder swapped for a
+  link is never followed, a move back never replaces a file created
+  meanwhile; a shallow repository, missing history and paths such as
+  `git~1`, a tab, a newline or an absolute one refuse; and a workspace
+  with such a name still commits its other changes. `go test ./backend/internal/workflows/`
+  runs `apply-branch` through the API: a commit pushed on top of the
+  workspace's branch is applied, rebuilt and kept by the next backup; a
+  local change is backed up and merged; a refused apply of the workspace's
+  own branch leaves the workspace repository as it was; refusals and
+  request checks; and
+  every failure path, with a workspace repository address that carries a
+  sentinel, has no event or error that names it. `go test -tags docker
+  ./backend/internal/devcontainer/` also has a devcontainer commit a file
+  through `workspace-commit` and its read-only mounted socket, before and
+  after the socket is re-created and after a rebuild, a Compose primary do
+  the same, a sweep commit a workspace left dirty, each onto the backup
+  branch, an `initializeCommand` find no socket, and a start keep a
+  single container and a Compose primary created without the socket, with
+  the same container id, until a rebuild gives it the socket.

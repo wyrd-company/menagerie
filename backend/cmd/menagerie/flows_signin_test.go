@@ -58,7 +58,7 @@ func TestSignedInManagersAnswerInterviewsOfAnySize(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := jobs.NewManager(ctx)
+	manager := jobs.NewManager(ctx, jobs.Options{})
 	t.Cleanup(manager.Wait)
 	t.Cleanup(cancel)
 	var h http.Handler
@@ -73,7 +73,7 @@ func TestSignedInManagersAnswerInterviewsOfAnySize(t *testing.T) {
 		OIDC:            config.OIDC{Issuer: issuer.URL(), ClientID: clientID, RedirectURL: srv.URL + auth.CallbackPath},
 	}
 	// The composition run serves.
-	h, err = newHandler(cfg, root, devcontainer.New(nil, devcontainer.Options{}), manager)
+	h, err = newHandler(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), manager, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +90,13 @@ func TestSignedInManagersAnswerInterviewsOfAnySize(t *testing.T) {
 	var snap jobs.Snapshot
 	_ = json.Unmarshal([]byte(a.body), &snap)
 	job, _ := manager.Get(snap.JobID)
-	for job.Snapshot().State != jobs.WaitingForAnswers {
+	// Take the change channel before reading the state, so a move to
+	// waiting-for-answers between the two cannot be missed.
+	for {
 		_, ended, changed := job.EventsAfter(0)
+		if job.Snapshot().State == jobs.WaitingForAnswers {
+			break
+		}
 		if ended {
 			t.Fatalf("job ended: %+v", job.Snapshot())
 		}

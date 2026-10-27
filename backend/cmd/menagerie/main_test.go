@@ -65,6 +65,18 @@ func TestRegistryCredentialsReadTheWyrwoodVaultSocket(t *testing.T) {
 	}
 }
 
+// TestRuntimeOptionsCarryTheLocalEnvAllowlist checks that the configured
+// local-env list reaches the devcontainer runtime, and that none is none.
+func TestRuntimeOptionsCarryTheLocalEnvAllowlist(t *testing.T) {
+	opts, err := runtimeOptions(&config.Config{LocalEnv: []string{"TZ", "LANG"}})
+	if err != nil || strings.Join(opts.LocalEnv, ",") != "TZ,LANG" || opts.Environ != nil {
+		t.Fatalf("options %+v %v", opts, err)
+	}
+	if opts, err := runtimeOptions(&config.Config{}); err != nil || opts.LocalEnv != nil {
+		t.Fatalf("absent local-env %+v %v", opts, err)
+	}
+}
+
 // TestBackupsUseTheWyrwoodAgentSocket checks that the composed backup
 // remote authenticates SSH pushes through ssh-agent.sock in the configured
 // Wyrwood directory.
@@ -86,7 +98,7 @@ func TestBackupsUseTheWyrwoodAgentSocket(t *testing.T) {
 			c.Close()
 		}
 	}()
-	remote := backupRemote(&config.Config{WyrwoodDirectory: dir, WorkspaceRepository: "git@example.invalid:sample/backups.git"})
+	remote := backupRemote(&config.Config{WyrwoodDirectory: dir, WorkspaceRepository: "git@example.invalid:sample/backups.git"}, nil)
 	if remote.URL != "git@example.invalid:sample/backups.git" {
 		t.Fatalf("url %s", remote.URL)
 	}
@@ -112,7 +124,7 @@ func TestServerServesCreateAndUpgrade(t *testing.T) {
 		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
 		TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")},
 	}
-	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background())))
+	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
 	defer server.Close()
 	for _, tc := range []struct{ path, body, kind string }{
 		{"/api/jobs", `{"operation":"create","workspace":"a..b","templateId":"sample"}`, "invalid-workspace-name"},
@@ -162,7 +174,7 @@ func TestServerTakesInterviewAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := jobs.NewManager(ctx)
+	manager := jobs.NewManager(ctx, jobs.Options{})
 	defer manager.Wait()
 	defer cancel()
 	cfg := &config.Config{
@@ -170,7 +182,7 @@ func TestServerTakesInterviewAnswers(t *testing.T) {
 		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
 		TemplateService: config.TemplateService{Socket: socket},
 	}
-	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), manager))
+	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), manager, nil, nil))
 	defer server.Close()
 	resp, err := http.Post(server.URL+"/api/jobs", "application/json", strings.NewReader(`{"operation":"create","workspace":"alpha","templateId":"sample"}`))
 	if err != nil {
@@ -219,7 +231,7 @@ func TestServerServesTheEmbeddedUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
-	server := httptest.NewServer(newServer(cfg, root, devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background())))
+	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
 	defer server.Close()
 	for path, want := range map[string]string{
 		"/":                         "ui-index",

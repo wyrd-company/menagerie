@@ -1,0 +1,23 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: workspace-fills-its-backup-branch
+title: A devcontainer fills its workspace's backup branch with commits
+description: >-
+  Anything running in a devcontainer can call its workspace socket. A loop,
+  or an agent that commits after every step, can add a commit and a push
+  for each call, growing the workspace's backup branch and the workspace
+  repository and keeping the workspace busy with commit jobs. Mitigation:
+  the socket refuses a commit within `workspace-socket.min-interval`, one
+  minute by default, of the workspace's last accepted one; a busy
+  workspace refuses the next commit instead of queueing it; a commit with
+  nothing changed adds no commit. Setting the interval to `0` removes the
+  limit. A socket reaches only its own workspace, so the growth stays on
+  that workspace's branch.
+categories:
+  - operational
+likelihood: 2
+impact: 1
+response-strategy: mitigate
+status: mitigated

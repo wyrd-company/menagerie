@@ -101,7 +101,7 @@ func newFixture(t *testing.T, ui fsFS) *fixture {
 		// A container labelled for a path outside the root is never asked for.
 		"/elsewhere/outsider": {State: devcontainer.StateRunning, ContainerID: "c-outsider"},
 	}}
-	manager := jobs.NewManager(context.Background())
+	manager := jobs.NewManager(context.Background(), jobs.Options{})
 	opts := Options{
 		Root:       root,
 		Status:     rt,
@@ -206,7 +206,7 @@ func TestStartJobAndStream(t *testing.T) {
 	}
 	events := readStream(t, f, snap.JobID, "")
 	got := describe(events)
-	want := `state {"state":"running","phase":""}|state {"state":"running","phase":"rebuild"}|log {"text":"rebuild alpha"}|result {"state":"succeeded","error":null}`
+	want := `state {"state":"running","phase":"","deadline":null,"limit":null}|state {"state":"running","phase":"rebuild","deadline":null,"limit":null}|log {"text":"rebuild alpha"}|result {"state":"succeeded","error":null}`
 	if got != want {
 		t.Fatalf("events\n%s\nwant\n%s", got, want)
 	}

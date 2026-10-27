@@ -7,13 +7,25 @@ const SPECIFICATION: &str = concat!(
     "/../docs/specifications/template-service-api.yml"
 );
 
-/// Dashed string literals in the source that are not error kinds.
-const NOT_KINDS: [&str; 5] = [
+/// Dashed string literals in the source that are not error kinds. The
+/// `hook-*`, `invalid-hook` and `runner-image-unavailable` literals are the
+/// workspace service's hook runner refusals, which the service reads.
+const NOT_KINDS: [&str; 15] = [
+    "candidate-folder",
+    "hook-cancelled",
+    "hook-container-failed",
+    "hook-runner-socket",
+    "hook-token-refused",
+    "invalid-hook",
     "kebab-case",
     "lower-case",
     "not-previewed",
+    "runner-image",
+    "runner-image-unavailable",
+    "session-key",
     "template-service",
     "workspace-root",
+    "workspace-service",
 ];
 
 fn description() -> String {

@@ -24,8 +24,9 @@ async fn a_fixed_address_refuses_a_session_on_another_existing_revision() {
     for template in ["sample-v1", "sample-commit"] {
         let (selector, start) = answered(&service, &world, "alpha", template).await;
         let envelope = json!({"template": start["document"]["context"]["template"], "answers": sample_answers("first")});
-        let mut moved = start["session"].clone();
-        moved["commit"] = json!(world.v2);
+        let moved = world.resigned(Operation::Create, &selector, &start["session"], |r| {
+            r["commit"] = json!(world.v2)
+        });
         let refused = service
             .post(
                 "/v1/interviews/answers",
@@ -53,8 +54,9 @@ async fn a_fixed_address_refuses_a_session_on_another_existing_revision() {
             .await;
         assert_eq!(done.json["state"], "completed", "{template}: {}", done.json);
         let folder = world.initialize("alpha");
-        let mut moved = done.json["session"].clone();
-        moved["commit"] = json!(world.v2);
+        let moved = world.resigned(Operation::Create, &selector, &done.json["session"], |r| {
+            r["commit"] = json!(world.v2)
+        });
         let refused = service
             .post(
                 "/v1/workspaces/generate",
@@ -84,8 +86,9 @@ async fn a_fixed_upgrade_address_refuses_a_session_on_another_revision() {
     let folder = create(&world, &service, "alpha", "sample-v1").await;
     let selector = world.select("alpha", "sample-v2");
     let start = service.post("/v1/upgrades", &selector).await;
-    let mut moved = start.json["session"].clone();
-    moved["commit"] = json!(world.v3);
+    let moved = world.resigned(Operation::Upgrade, &selector, &start.json["session"], |r| {
+        r["commit"] = json!(world.v3)
+    });
     let before = git(&folder, &["rev-parse", "HEAD"]);
     let refused = service
         .post(
@@ -139,7 +142,7 @@ async fn an_installed_branch_moves_when_a_create_starts_and_never_on_resume() {
         "resume moved to the newer revision: {}",
         resumed.json
     );
-    assert_eq!(resumed.json["session"]["commit"], world.v1.as_str());
+    assert_eq!(resumed.record()["commit"], world.v1.as_str());
 
     let fresh = service
         .post("/v1/interviews", &world.select("beta", "sample-main"))
@@ -209,8 +212,9 @@ async fn an_installed_tag_stays_on_its_revision() {
         start.json
     );
     let envelope = submission(&start, sample_answers("first"));
-    let mut moved = start.json["session"].clone();
-    moved["commit"] = json!(world.v2);
+    let moved = world.resigned(Operation::Create, &selector, &start.json["session"], |r| {
+        r["commit"] = json!(world.v2)
+    });
     let refused = service
         .post(
             "/v1/interviews/answers",
@@ -269,11 +273,11 @@ async fn installations_toha_does_not_update_are_used_as_they_are() {
     service.stop().await;
 }
 
-/// Edit the commit of a session reply and send it to an answer route.
-fn edited(session: &Value, commit: &str) -> Value {
-    let mut session = session.clone();
-    session["commit"] = json!(commit);
-    session
+/// Edit the commit of a create session and sign it again.
+fn edited(world: &World, selector: &Value, session: &Value, commit: &str) -> Value {
+    world.resigned(Operation::Create, selector, session, |record| {
+        record["commit"] = json!(commit)
+    })
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -289,7 +293,7 @@ async fn a_tag_replaced_by_a_branch_still_refuses_an_edited_commit() {
             "/v1/interviews/answers",
             &with(
                 selector.clone(),
-                json!({"session": edited(&start["session"], &world.v2), "submission": envelope}),
+                json!({"session": edited(&world, &selector, &start["session"], &world.v2), "submission": envelope}),
             ),
         )
         .await;
@@ -314,8 +318,8 @@ async fn a_tag_replaced_by_a_branch_still_refuses_an_edited_commit() {
         .post(
             "/v1/workspaces/generate",
             &with(
-                selector,
-                json!({"session": edited(&done.json["session"], &world.v2)}),
+                selector.clone(),
+                json!({"session": edited(&world, &selector, &done.json["session"], &world.v2)}),
             ),
         )
         .await;
@@ -374,7 +378,7 @@ async fn admissions_of_other_addresses_do_not_count() {
     let (selector, start) = answered(&service, &world, "alpha", "sample-v1").await;
     for commit in [world.v2.as_str(), foreign.as_str()] {
         let refused = service
-            .post("/v1/interviews/answers", &with(selector.clone(), json!({"session": edited(&start["session"], commit),
+            .post("/v1/interviews/answers", &with(selector.clone(), json!({"session": edited(&world, &selector, &start["session"], commit),
                 "submission": {"template": start["document"]["context"]["template"], "answers": sample_answers("first")}})))
             .await;
         assert_eq!(
@@ -401,7 +405,7 @@ async fn a_session_commit_is_never_a_path() {
         &world.v1[..12],
     ] {
         let refused = service
-            .post("/v1/interviews/answers", &with(selector.clone(), json!({"session": edited(&start["session"], commit),
+            .post("/v1/interviews/answers", &with(selector.clone(), json!({"session": edited(&world, &selector, &start["session"], commit),
                 "submission": {"template": start["document"]["context"]["template"], "answers": sample_answers("first")}})))
             .await;
         assert_eq!(
@@ -433,7 +437,10 @@ async fn a_cleared_cache_admits_only_the_current_resolution() {
             "/v1/interviews/answers",
             &with(
                 selector.clone(),
-                submit(&edited(&start["session"], &world.v2), &start["document"]),
+                submit(
+                    &edited(&world, &selector, &start["session"], &world.v2),
+                    &start["document"],
+                ),
             ),
         )
         .await;
@@ -487,7 +494,7 @@ async fn a_cache_entry_must_hold_its_commit() {
     assert!(copied.success());
     world.offline();
     let refused = service
-        .post("/v1/interviews/answers", &with(selector, json!({"session": edited(&start["session"], &world.v2),
+        .post("/v1/interviews/answers", &with(selector.clone(), json!({"session": edited(&world, &selector, &start["session"], &world.v2),
             "submission": {"template": start["document"]["context"]["template"], "answers": sample_answers("first")}})))
         .await;
     assert_eq!(
@@ -665,7 +672,7 @@ async fn an_installed_dot_git_source_is_admitted() {
             "/v1/interviews/answers",
             &with(
                 selector.clone(),
-                json!({"session": edited(&start["session"], &world.v3), "submission": envelope}),
+                json!({"session": edited(&world, &selector, &start["session"], &world.v3), "submission": envelope}),
             ),
         )
         .await;

@@ -5,9 +5,11 @@
 # The same path as on the host: compose.yml mounts it at its own path.
 workspace-root: /srv/menagerie/workspaces
 
-# Each workspace is backed up to its own orphan branch here, over SSH,
-# through the Wyrwood agent's ssh-agent.sock.
-workspace-repository: ssh://git@github.com/example-org/workspace-backups.git
+# Each workspace is backed up to its own orphan branch here. An https URL
+# on GitHub uses the GitHub App below; an SSH URL uses the Wyrwood agent's
+# ssh-agent.sock instead.
+workspace-repository: https://github.com/example-org/workspace-backups.git
+# workspace-repository: ssh://git@github.com/example-org/workspace-backups.git
 
 # Where compose.yml mounts the Wyrwood consumer directory.
 wyrwood-directory: /run/wyrwood
@@ -21,6 +23,22 @@ templates:
   - id: sample-workspace
     name: Sample workspace
     address: gh:example-org/workspace-templates@1.0.0#sample-workspace
+    # The image this template's hooks run in. Without it, the top-level
+    # runner-image.
+    # runner-image: ghcr.io/example-org/sample-workspace-runner:1.0.0
+
+# The image of the throwaway containers that run initializeCommand and the
+# hooks of templates without their own runner-image. Without it, Menagerie's
+# own image.
+# runner-image: ghcr.io/example-org/workspace-runner:1.0.0
+
+# The GitHub App Menagerie authenticates to GitHub with: installation tokens
+# for the backup repository and private https templates. Its private key is
+# the Transit key transit-key, used through the Wyrwood vault socket. Without
+# this section, only the SSH identity authenticates.
+github-app:
+  app-id: 123456
+  transit-key: menagerie-github-app
 
 # Registry credentials read from OpenBao through the Wyrwood vault socket.
 # Without this section every registry is anonymous.
@@ -28,3 +46,29 @@ templates:
 #   kv-mount: kv
 #   registries:
 #     - {registry: ghcr.io, path: menagerie/ghcr}
+
+# Time limits on a job's running time; waiting for answers does not count.
+# Without this section a job has no limit.
+# job-limits:
+#   default: 2h
+#   phases:
+#     build: 45m
+
+# A webhook told about failed jobs and, past long-running, slow ones. The
+# URL can carry a token; Menagerie never logs it.
+# alerts:
+#   webhook: https://ntfy.example.test/menagerie
+#   long-running: 45m
+
+# A socket in each workspace's devcontainer, at /run/menagerie/workspace.sock,
+# with the workspace-commit client beside it: the devcontainer commits and
+# backs up its own workspace. compose.yml mounts the folder at its own path.
+# A second commit of a workspace within min-interval is refused.
+workspace-socket:
+  folder: /srv/menagerie/sockets
+  # min-interval: 1m
+
+# Commit and back up every idle workspace with changes, once an interval.
+# Without this section nothing is committed on a schedule.
+# auto-commit:
+#   every: 1h

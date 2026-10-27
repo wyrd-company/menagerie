@@ -14,8 +14,9 @@ Use `task` verbs: `task --list`. `task check` is CI. The live suites
 - The managed thing is a **workspace** (`docs/terms/workspace.yml`), never a
   "devcontainer" or "project", in code, API, UI and docs.
 - Application code never spawns Git, Docker, Toha or devcontainer-builder
-  CLIs; it uses their libraries. Template hooks and `initializeCommand` are
-  the deliberate exceptions.
+  CLIs; it uses their libraries. Template hooks and `initializeCommand` run
+  as throwaway containers through the Docker library, not as Menagerie
+  processes.
 - Builds and devcontainers in tests run on the disposable daemon from
   `scripts/isolated-docker.sh`, never on a shared daemon's BuildKit. Cleanup
   removes only objects carrying the run's own label.
@@ -38,4 +39,6 @@ Design and specifications: `docs/technical-designs/`, `docs/specifications/`,
 `docs/terms/`, `docs/risks/`. Public pages (everything under `docs/user/`,
 published to wyrd.foo through `docs/user/docs.yml` on release and docs tags,
 not on a push to `main`): `docs/user/*.md`.
+Every public page has `product: menagerie` front matter and a navigation
+entry in `docs/user/docs.yml`; public assets live in `docs/user/assets/`.
 Deployment example: `deploy/`. Package notes: `web/README.md`, `template-service/README.md`.

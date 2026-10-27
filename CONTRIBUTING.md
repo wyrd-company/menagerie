@@ -35,6 +35,12 @@ need Go, Rust, Node.js with pnpm, Task, Docker and the linters that
 
 ## Releases
 
+Public documentation lives in `docs/user/`. Each page has `product: menagerie`
+front matter and appears in the navigation in `docs/user/docs.yml`; put its
+assets in `docs/user/assets/`. Add a `menagerie-docs` change intent for public
+documentation changes. Intentional writes the product and docs versions in
+`docs/user/docs.yml`.
+
 Intentional versions Menagerie and writes `CHANGELOG.md`; tags are bare
 versions such as `0.1.0`. To release, on an up-to-date `main`:
 

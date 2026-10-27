@@ -15,16 +15,20 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	dockerclient "github.com/docker/docker/client"
@@ -34,6 +38,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -78,10 +83,19 @@ func newHarness(t *testing.T) *harness {
 	}
 	ctx := context.Background()
 	root := t.TempDir()
-	h := &harness{t: t, ctx: ctx, client: client, rt: devcontainer.New(client, devcontainer.Options{}), root: root, runID: filepath.Base(filepath.Dir(root)) + "-" + filepath.Base(root)}
+	h := &harness{t: t, ctx: ctx, client: client, root: root, runID: filepath.Base(filepath.Dir(root)) + "-" + filepath.Base(root)}
+	h.rt = devcontainer.New(client, h.options(devcontainer.Options{}))
 	t.Cleanup(h.cleanup)
 	ensureImage(t, h, baseImage)
 	return h
+}
+
+// options runs initializeCommand in throwaway containers of baseImage that
+// carry the test's run label.
+func (h *harness) options(opts devcontainer.Options) devcontainer.Options {
+	opts.Containers = throwaway.NewDocker(h.client, throwaway.DockerOptions{Root: h.root, User: throwaway.ServiceUser(), Labels: map[string]string{"menagerie.test.run": h.runID}})
+	opts.RunnerImage = func(context.Context) (string, error) { return baseImage, nil }
+	return opts
 }
 
 // cleanup removes only resources marked by this test's root or run label.
@@ -340,6 +354,151 @@ func TestFailingInitializeCommandPreventsStartAndRebuild(t *testing.T) {
 	}
 }
 
+// TestLocalEnvReadsOnlyAllowedVariables sets variables in the test
+// process's own environment, as Menagerie's would be, and allows one.
+func TestLocalEnvReadsOnlyAllowedVariables(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("MENAGERIE_TEST_ALLOWED", "allowed-value")
+	t.Setenv("MENAGERIE_TEST_SECRET", "secret-value")
+	rt := devcontainer.New(h.client, h.options(devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}}))
+	folder := h.workspace("env-space", map[string]string{
+		".devcontainer/devcontainer.json": `{
+  "image": "` + baseImage + `",
+  "initializeCommand": "env > init-env; echo ${localEnv:MENAGERIE_TEST_SECRET} > init-arg",
+  "containerEnv": {
+    "ALLOWED": "${localEnv:MENAGERIE_TEST_ALLOWED}",
+    "SECRET": "${localEnv:MENAGERIE_TEST_SECRET}",
+    "SECRET_ALIAS": "${env:MENAGERIE_TEST_SECRET}",
+    "SECRET_DEFAULT": "${localEnv:MENAGERIE_TEST_SECRET:fallback}"
+  },
+  "remoteEnv": {"REMOTE_SECRET": "${localEnv:MENAGERIE_TEST_SECRET}"}
+}`,
+	})
+	var log strings.Builder
+	p := &recordProgress{logProgress: logProgress{t: t}, out: &log}
+	if err := rt.Start(h.ctx, folder, p); err != nil {
+		t.Fatal(err)
+	}
+	info := h.inspect(h.status(folder).ContainerID)
+	for key, want := range map[string]string{"ALLOWED": "allowed-value", "SECRET": "", "SECRET_ALIAS": "", "SECRET_DEFAULT": "fallback"} {
+		if got := envValue(info, key); got != want {
+			t.Errorf("containerEnv %s=%q want %q", key, got, want)
+		}
+	}
+	if got := h.exec(info.ID, "sh", "-c", "env"); strings.Contains(got, "secret-value") {
+		t.Errorf("devcontainer environment holds the refused value:\n%s", got)
+	}
+	for key, value := range info.Config.Labels {
+		if strings.Contains(value, "secret-value") {
+			t.Errorf("label %s holds the refused value: %s", key, value)
+		}
+	}
+	initEnv, _ := os.ReadFile(filepath.Join(folder, "init-env"))
+	if !strings.Contains(string(initEnv), "MENAGERIE_TEST_ALLOWED=allowed-value") || !strings.Contains(string(initEnv), "\n"+imagePath(t, h)+"\n") || strings.Contains(string(initEnv), "secret-value") {
+		t.Errorf("initializeCommand environment:\n%s", initEnv)
+	}
+	if arg, _ := os.ReadFile(filepath.Join(folder, "init-arg")); strings.TrimSpace(string(arg)) != "" {
+		t.Errorf("initializeCommand substitution read the refused value: %q", arg)
+	}
+	if got := strings.Count(log.String(), "localEnv MENAGERIE_TEST_SECRET is not in local-env"); got != 1 {
+		t.Errorf("job log notes the refused variable %d times, want once:\n%s", got, log.String())
+	}
+	if strings.Contains(log.String(), "MENAGERIE_TEST_ALLOWED is not") {
+		t.Errorf("job log notes the allowed variable:\n%s", log.String())
+	}
+}
+
+// imagePath is baseImage's own PATH variable, PATH=...
+func imagePath(t *testing.T, h *harness) string {
+	t.Helper()
+	info, err := h.client.ImageInspect(h.ctx, baseImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range info.Config.Env {
+		if strings.HasPrefix(pair, "PATH=") {
+			return pair
+		}
+	}
+	t.Fatalf("%s has no PATH", baseImage)
+	return ""
+}
+
+// initializeProbe reports, one line each, what initializeCommand must not
+// reach: the Docker socket, the agent socket at $AGENT_PATH substituted
+// in, SSH_AUTH_SOCK and the variables local-env does not allow. It fails
+// when it found any, and writes into the workspace folder.
+const initializeProbe = `found=$(for p in /var/run/docker.sock /run/docker.sock "$1"; do [ -e "$p" ] && echo "reachable $p"; done
+[ -n "${SSH_AUTH_SOCK:-}" ] && echo "SSH_AUTH_SOCK is set"
+env | grep MENAGERIE_TEST_SECRET)
+env > init-env
+echo written > init-written
+[ -z "$found" ] || { echo "$found" > init-found; exit 1; }`
+
+// TestInitializeCommandCannotReachDockerTheAgentOrMenageriesEnvironment is
+// the done-when test of initializeCommand: in each of its parallel
+// containers it finds no Docker socket, no ssh-agent socket and no
+// Menagerie variable beyond local-env, while it still writes into the
+// workspace folder.
+func TestInitializeCommandCannotReachDockerTheAgentOrMenageriesEnvironment(t *testing.T) {
+	h := newHarness(t)
+	dir, err := os.MkdirTemp("", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	agent := filepath.Join(dir, "ssh-agent.sock")
+	l, err := net.Listen("unix", agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	t.Setenv("SSH_AUTH_SOCK", agent)
+	t.Setenv("MENAGERIE_TEST_SECRET", "secret-value")
+	t.Setenv("MENAGERIE_TEST_ALLOWED", "allowed-value")
+	rt := devcontainer.New(h.client, h.options(devcontainer.Options{LocalEnv: []string{"MENAGERIE_TEST_ALLOWED"}}))
+	probe, _ := json.Marshal([]string{"/bin/sh", "-c", initializeProbe, "sh", agent})
+	folder := h.workspace("init-space", map[string]string{
+		".devcontainer/devcontainer.json": `{"image": "` + baseImage + `", "initializeCommand": {"probe": ` + string(probe) + `, "write": "echo parallel > init-parallel"}}`,
+	})
+	if err := rt.Start(h.ctx, folder, &logProgress{t: t}); err != nil {
+		found, _ := os.ReadFile(filepath.Join(folder, "init-found"))
+		t.Fatalf("start: %v\n%s", err, found)
+	}
+	initEnv, _ := os.ReadFile(filepath.Join(folder, "init-env"))
+	for _, unwanted := range []string{"secret-value", "SSH_AUTH_SOCK", "DOCKER_HOST", "TMPDIR="} {
+		if strings.Contains(string(initEnv), unwanted) {
+			t.Errorf("initializeCommand environment holds %q:\n%s", unwanted, initEnv)
+		}
+	}
+	if !strings.Contains(string(initEnv), "MENAGERIE_TEST_ALLOWED=allowed-value") || !strings.Contains(string(initEnv), imagePath(t, h)) {
+		t.Errorf("initializeCommand environment:\n%s", initEnv)
+	}
+	for file, want := range map[string]string{"init-written": "written\n", "init-parallel": "parallel\n"} {
+		if got, err := os.ReadFile(filepath.Join(folder, file)); err != nil || string(got) != want {
+			t.Errorf("%s %q %v", file, got, err)
+		}
+	}
+	left, err := h.client.ContainerList(h.ctx, container.ListOptions{All: true, Filters: filters.NewArgs(filters.Arg("label", throwaway.LabelKind+"="+throwaway.KindInitializeCommand), filters.Arg("label", throwaway.LabelRoot+"="+h.root))})
+	if err != nil || len(left) != 0 {
+		t.Fatalf("%d initializeCommand containers remain: %v", len(left), err)
+	}
+}
+
+// recordProgress also keeps the operation's output.
+type recordProgress struct {
+	logProgress
+	out *strings.Builder
+}
+
+func (p *recordProgress) Log(prefix string) io.Writer {
+	inner := p.logProgress.Log(prefix)
+	return writerFunc(func(b []byte) (int, error) {
+		p.out.Write(b)
+		return inner.Write(b)
+	})
+}
+
 const composeFile = `services:
   app:
     image: ` + baseImage + `
@@ -445,7 +604,7 @@ func TestWorkspaceListShowsOnlyRootFolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := jobs.NewManager(h.ctx)
+	manager := jobs.NewManager(h.ctx, jobs.Options{})
 	srv := httptest.NewServer(api.New(api.Options{Root: root, Status: h.rt, Jobs: manager, Operations: api.ContainerOperations(root, h.rt)}))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/api/workspaces")
@@ -531,5 +690,60 @@ func TestFeatureLockfilePublishedOnlyAfterSuccess(t *testing.T) {
 				t.Fatalf("lockfile after success: %q (%v)", got, err)
 			}
 		})
+	}
+}
+
+func TestStopReachesTheComposeProjectWithoutItsPrimary(t *testing.T) {
+	h := newHarness(t)
+	folder := h.workspace("compose-left", map[string]string{
+		".devcontainer/compose.yml":       composeFile,
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/data"}`,
+	})
+	h.mustRun(h.rt.Start, folder)
+	primary := h.status(folder)
+	project := h.inspect(primary.ContainerID).Config.Labels[dockercompose.LabelProject]
+	sidecar := h.service(project, "sidecar")
+	if err := h.client.ContainerRemove(h.ctx, primary.ContainerID, container.RemoveOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !h.inspect(sidecar).State.Running {
+		t.Fatal("the sidecar stopped with its primary")
+	}
+	h.mustRun(h.rt.Stop, folder)
+	if h.inspect(sidecar).State.Running {
+		t.Fatal("the sidecar still runs after the stop")
+	}
+}
+
+func TestMountingListsTheRunningContainersThatMountTheFolder(t *testing.T) {
+	h := newHarness(t)
+	folder := h.workspace("mounted", map[string]string{"file.txt": "x\n"})
+	run := func(source string) string {
+		created, err := h.client.ContainerCreate(h.ctx,
+			&container.Config{Image: baseImage, Cmd: []string{"sleep", "infinity"}, Labels: map[string]string{"menagerie.test.run": h.runID}},
+			&container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: source, Target: "/mnt"}}}, nil, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.client.ContainerStart(h.ctx, created.ID, container.StartOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		return created.ID[:12]
+	}
+	inside, around := run(folder), run(h.root)
+	run(t.TempDir())
+	stopped := run(folder)
+	if err := h.client.ContainerStop(h.ctx, stopped, container.StopOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.rt.Mounting(h.ctx, folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(got)
+	want := []string{inside, around}
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mounting %v, want %v", got, want)
 	}
 }

@@ -4,9 +4,11 @@
 use crate::Service;
 use crate::api::{AnswerRequest, ApplyReply, ApplyRequest, InterviewReply, StartRequest};
 use crate::checks::{self, Operation};
-use crate::error::ServiceError;
+use crate::error::{ServiceError, ValueFree};
+use crate::hooks::CallbackRunner;
 use crate::host::{self, ProcessEnvironment};
 use crate::reply;
+use crate::seal::{self, Binding};
 use toha::RawAnswers;
 use toha::staging::{CanonicalTarget, StagedRecord};
 use toha::updates::{self, Environment, PrepareMode, UpdateBase, UpdateSession};
@@ -63,13 +65,19 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
     )
     .map_err(|e| ServiceError::from(e).with_warnings(warnings.clone()))?;
     let state = session.state()?;
-    reply::interview(&session.record, &selected.target, state, warnings)
+    let sealed = seal::seal(
+        &service.key,
+        Binding::new(Operation::Upgrade, &request.workspace, &request.template_id),
+        &session.record,
+    )?;
+    reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }
 
 /// Rebuild the upgrade session and submit one batch.
 pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
-    let record = checks::session(request.session)?;
+    let binding = Binding::new(Operation::Upgrade, &request.workspace, &request.template_id);
+    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, _) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;
@@ -88,13 +96,15 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     let warnings = session.prepared.warnings.clone();
     reply::asking(&session.state()?)?;
     let state = session.answer(answers)?;
-    reply::interview(&session.record, &selected.target, state, warnings)
+    let sealed = seal::seal(&service.key, binding, &session.record)?;
+    reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }
 
 /// Rebuild a completed upgrade session and merge it into the workspace.
 pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
-    let record = checks::session(request.session)?;
+    let binding = Binding::new(Operation::Upgrade, &request.workspace, &request.template_id);
+    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, _) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;
@@ -108,9 +118,18 @@ pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, Ser
     )?;
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);
-    let session = resume(service, record, &selected.target, &mut environment)?;
-    let done = reply::completed(session.state()?)?;
-    let (merged, report) = session.apply(&done, false, &toha::hook::ProcessRunner, None)?;
+    // From here Toha renders the template and runs its hooks, so every
+    // refusal is value-free.
+    let session = resume(service, record, &selected.target, &mut environment)
+        .map_err(ValueFree::value_free)?;
+    let done = reply::completed(session.state().map_err(ValueFree::value_free)?)?;
+    let runner = CallbackRunner {
+        socket: &service.settings.hook_runner_socket,
+        token: request.hook_token.as_deref(),
+    };
+    let (merged, report) = session
+        .apply(&done, false, &runner, None)
+        .map_err(ValueFree::value_free)?;
     Ok(reply::merged(merged, report))
 }
 
@@ -136,12 +155,12 @@ fn resume(
     record: StagedRecord,
     target: &CanonicalTarget,
     environment: &mut Environment<'_, ProcessEnvironment>,
-) -> Result<UpdateSession, ServiceError> {
-    Ok(UpdateSession::resume(
+) -> Result<UpdateSession, toha::updates::SessionError> {
+    UpdateSession::resume(
         record,
         target.clone(),
         &service.host.paths,
         true,
         environment,
-    )?)
+    )
 }

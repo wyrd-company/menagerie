@@ -93,6 +93,18 @@
   gap: 0.3rem;
 }
 
+.apply-branch {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.apply-branch input {
+  width: 14rem;
+  min-height: 2rem;
+  padding: 0.3rem 0.6rem;
+}
+
 .entry-error {
   grid-area: error;
   color: var(--danger);
@@ -189,6 +201,16 @@
 
   .entry-actions > * {
     flex: 1 1 calc(50% - 0.4rem);
+  }
+
+  .entry-actions > .apply-branch {
+    flex-basis: 100%;
+  }
+
+  .apply-branch input {
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .recent li {
