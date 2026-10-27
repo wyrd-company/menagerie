@@ -24,14 +24,16 @@ is stable; the message names what failed and what was left behind.
 | `upgrade-failed` | Toha failed while applying an upgrade. Files written before the failure remain; the state before the upgrade is on the backup branch, and the message names its commit. Recovery is manual. |
 | `merge-conflicted` | The upgrade wrote conflict markers. Resolve them in the named files, then **Rebuild**. |
 | `backup-failed` | A commit or push of the workspace failed. The message says what was changed: before an upgrade, nothing; after it, the devcontainer was not rebuilt. Check the workspace repository, that Menagerie's SSH key may push to it, and the Wyrwood binding. |
+| `timed-out` | The job passed a configured [time limit](configuration.md#job-time-limits); the message names the phase and the limit. A create keeps its folder, as every failed create does. A build or up can leave a half-created container: **Start** reuses it and **Rebuild** removes it. |
 | `initialize-command-failed` | The devcontainer's `initializeCommand` failed. The container was not started. |
 | `registry-credentials-unavailable` | A registry credential could not be read. The pull or build did not start. See below. |
 | `operation-failed` | Any other failure of a container operation, such as a failed build or pull; the message holds the cause. |
 | `internal-error` | A defect in Menagerie. Report it with the container's log. |
 
-A job that never ends keeps its workspace busy, because jobs have no time
-limit. Restart Menagerie to end it: the workspace folder stays as the job
-left it.
+Without [job time limits](configuration.md#job-time-limits), a job that
+never ends keeps its workspace busy. A timed-out job also keeps it busy
+until its cancelled work stops. Restart Menagerie to end such a job: the
+workspace folder stays as the job left it.
 
 ## Registry credentials
 

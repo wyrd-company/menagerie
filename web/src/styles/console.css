@@ -61,6 +61,17 @@
   font-weight: 600;
 }
 
+.job-clock {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 /* The log is a terminal in both color schemes. */
 .tape {
   background: var(--term-bg);

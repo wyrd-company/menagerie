@@ -189,7 +189,9 @@ the host by hand. Keep these limits in place:
   on the public internet.
 - Approve only templates you trust; Menagerie uses only the templates its
   configuration lists.
-- A job has no time limit. A hook or build that never ends keeps its
-  workspace busy until Menagerie restarts.
+- Without `job-limits`, a job has no time limit, and a hook or build that
+  never ends keeps its workspace busy until Menagerie restarts. Set
+  [job time limits](configuration.md#job-time-limits) and an alert webhook
+  to be told.
 - A backup is a force-push of the workspace's own branch. Commits pushed to
   that branch from elsewhere are lost at the next backup.

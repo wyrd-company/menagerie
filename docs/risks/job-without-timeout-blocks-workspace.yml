@@ -5,13 +5,21 @@ relationships:
 slug: job-without-timeout-blocks-workspace
 title: A hung job blocks its workspace until Menagerie restarts
 description: >-
-  Jobs have no timeout and a workspace runs one job at a time. A build,
-  template fetch, hook or `initializeCommand` that never finishes keeps the
-  workspace busy. Restarting Menagerie drops in-memory jobs and frees the
-  workspace.
+  A workspace runs one job at a time. A build, template fetch, hook or
+  `initializeCommand` that never finishes keeps the workspace busy, and
+  nobody is told. Mitigation: configured time limits cancel a job past its
+  limit and fail it as timed-out, and an alert webhook hears of every failed
+  job and of jobs that run past a threshold. Limits and alerts are opt-in:
+  without `job-limits` a job has no limit. A cancelled job keeps its slot
+  until its work returns, so work that ignores cancellation still holds the
+  workspace until Menagerie restarts, which drops in-memory jobs. The
+  template service does not stop a template fetch, generate or apply when
+  Menagerie cancels its request: after a timed-out create or upgrade, its
+  hooks can still write to the folder while the workspace takes another
+  job.
 categories:
   - operational
-likelihood: 3
+likelihood: 2
 impact: 2
-response-strategy: accept
-status: accepted
+response-strategy: mitigate
+status: mitigated

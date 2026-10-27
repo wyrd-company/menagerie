@@ -104,8 +104,12 @@ proposed-design:
   operations-and-jobs: >-
     Each create, upgrade, start, stop or rebuild is a job. A workspace has at
     most one job at a time. Jobs and their logs are held in memory and
-    streamed to the UI. A restart of Menagerie drops job history. No timeout
-    is applied to jobs.
+    streamed to the UI. A restart of Menagerie drops job history. Optional
+    time limits, a default, per operation and per phase, count running time
+    only, never time waiting for answers; a job past one is cancelled
+    through its context and fails as timed-out once its work returns. An
+    optional webhook hears of every failed job and, past a threshold, of a
+    long-running one.
   docker-access: >-
     The workspace service talks to the host Docker daemon through the mounted
     socket. Only the workspace service uses Docker.

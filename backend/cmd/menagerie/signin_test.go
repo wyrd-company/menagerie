@@ -96,7 +96,7 @@ func newMenagerie(t *testing.T) *menagerie {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	m.jobs = jobs.NewManager(ctx)
+	m.jobs = jobs.NewManager(ctx, jobs.Options{})
 	m.server = api.New(api.Options{
 		Root:       root,
 		Status:     m.runtime,

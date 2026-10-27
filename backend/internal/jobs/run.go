@@ -25,11 +25,12 @@ type Run struct {
 // JobID returns the identifier of the run's job.
 func (r *Run) JobID() string { return r.job.id }
 
-// Phase records the step the job is in. It keeps the job running.
-func (r *Run) Phase(name string) { r.job.setState(Running, name) }
+// Phase records the step the job is in. It keeps the job running, and the
+// phase's time limit counts from this call.
+func (r *Run) Phase(name string) { r.job.setState(Running, name, true) }
 
 // SetState records a nonterminal state, such as waiting-for-answers, with
-// the current phase. Terminal states are set by the runner's return.
+// the current phase. Time limits pause while the job waits. Terminal states are set by the runner's return.
 func (r *Run) SetState(state State) error {
 	if state.Terminal() {
 		return fmt.Errorf("state %s is terminal; return from the runner instead", state)
@@ -37,7 +38,7 @@ func (r *Run) SetState(state State) error {
 	r.job.mu.Lock()
 	phase := r.job.phase
 	r.job.mu.Unlock()
-	r.job.setState(state, phase)
+	r.job.setState(state, phase, false)
 	return nil
 }
 

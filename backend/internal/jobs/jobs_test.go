@@ -54,7 +54,7 @@ func eventText(t *testing.T, e Event) string {
 }
 
 func TestJobSucceedsWithOrderedEvents(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	job, err := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
 		run.Phase("build")
 		fmt.Fprintln(run.Log(""), "built")
@@ -90,7 +90,7 @@ func TestJobSucceedsWithOrderedEvents(t *testing.T) {
 // job for the same workspace is refused while another workspace completes,
 // and that the slot is free once the held job ends.
 func TestSameWorkspaceExclusion(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	release := make(chan struct{})
 	held, err := m.Start("alpha", "rebuild", func(_ context.Context, run *Run) error {
 		run.Phase("held")
@@ -149,7 +149,7 @@ func TestFailureAndPanicReleaseTheWorkspace(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := NewManager(context.Background())
+			m := NewManager(context.Background(), Options{})
 			job, err := m.Start("alpha", "start", tc.runner)
 			if err != nil {
 				t.Fatal(err)
@@ -172,7 +172,7 @@ func TestFailureAndPanicReleaseTheWorkspace(t *testing.T) {
 // TestResultImpliesReleased checks, for many jobs, that a client that has
 // seen the result event can start the next job on the same workspace.
 func TestResultImpliesReleased(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	for i := range 500 {
 		job, err := m.Start("alpha", "start", func(context.Context, *Run) error { return nil })
 		if err != nil {
@@ -183,7 +183,7 @@ func TestResultImpliesReleased(t *testing.T) {
 }
 
 func TestWaitingForAnswersHoldsTheSlot(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	release := make(chan struct{})
 	job, _ := m.Start("alpha", "create", func(_ context.Context, run *Run) error {
 		run.Phase("interview")
@@ -209,7 +209,7 @@ func TestWaitingForAnswersHoldsTheSlot(t *testing.T) {
 }
 
 func TestEmitCompactsAndRefusesInvalidJSON(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	job, _ := m.Start("alpha", "create", func(_ context.Context, run *Run) error {
 		if err := run.Emit("interview", json.RawMessage("{\n  \"state\": \"questions\",\n  \"n\": 12345678901234567890\n}")); err != nil {
 			return err
@@ -230,7 +230,7 @@ func TestEmitCompactsAndRefusesInvalidJSON(t *testing.T) {
 }
 
 func TestLogWriterSplitsLinesAndFlushesTheTail(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
 		w := run.Log("[init] ")
 		fmt.Fprint(w, "one\r\ntw")
@@ -254,7 +254,7 @@ func TestLogWriterSplitsLinesAndFlushesTheTail(t *testing.T) {
 }
 
 func TestEventsAfterReplaysFromCursor(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	job, _ := m.Start("alpha", "start", func(_ context.Context, run *Run) error {
 		fmt.Fprintln(run.Log(""), "a")
 		fmt.Fprintln(run.Log(""), "b")
@@ -272,7 +272,7 @@ func TestEventsAfterReplaysFromCursor(t *testing.T) {
 
 func TestRunnerUsesManagerContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := NewManager(ctx)
+	m := NewManager(ctx, Options{})
 	job, _ := m.Start("alpha", "start", func(ctx context.Context, _ *Run) error {
 		<-ctx.Done()
 		return ctx.Err()
@@ -284,7 +284,7 @@ func TestRunnerUsesManagerContext(t *testing.T) {
 }
 
 func TestListNewestFirst(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	var tick atomic.Int64
 	m.now = func() time.Time { return time.Unix(tick.Add(1), 0) }
 	a, _ := m.Start("alpha", "start", func(context.Context, *Run) error { return nil })
@@ -303,7 +303,7 @@ func TestListNewestFirst(t *testing.T) {
 }
 
 func TestEndedRunnerEndsTheJobAndReleasesTheWorkspace(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	job, err := m.Start("alpha", "create", func(context.Context, *Run) error {
 		return fmt.Errorf("flow stop: %w", ErrEnded)
 	})
@@ -325,7 +325,7 @@ func TestEndedRunnerEndsTheJobAndReleasesTheWorkspace(t *testing.T) {
 }
 
 func TestResultCarriesTheApplyOutcomeText(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	var id string
 	job, _ := m.Start("alpha", "upgrade", func(_ context.Context, run *Run) error {
 		id = run.JobID()
@@ -349,7 +349,7 @@ func TestResultCarriesTheApplyOutcomeText(t *testing.T) {
 }
 
 func TestFailedResultKeepsTheApplyOutcome(t *testing.T) {
-	m := NewManager(context.Background())
+	m := NewManager(context.Background(), Options{})
 	job, _ := m.Start("alpha", "upgrade", func(_ context.Context, run *Run) error {
 		if err := run.SetApply(json.RawMessage(`{"outcome":"conflicted"}`)); err != nil {
 			return err

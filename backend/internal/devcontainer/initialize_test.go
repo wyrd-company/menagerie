@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	dockerclient "github.com/docker/docker/client"
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
@@ -203,6 +204,25 @@ func TestCommandRunnerWaitsForAllMembersAndReportsFailures(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "finished")); statErr != nil {
 		t.Errorf("other member did not complete: %v", statErr)
+	}
+}
+
+// TestCancelledCommandReturnsDespiteAChildHoldingItsOutput cancels a shell
+// whose background child keeps the output pipe open: Wait gives up on the
+// pipe after commandWaitDelay, so a cancelled job is not held for the
+// child's lifetime.
+func TestCancelledCommandReturnsDespiteAChildHoldingItsOutput(t *testing.T) {
+	saved := commandWaitDelay
+	commandWaitDelay = 100 * time.Millisecond
+	t.Cleanup(func() { commandWaitDelay = saved })
+	rec := &recorder{}
+	runner := CommandRunner{Dir: t.TempDir(), Env: os.Environ(), Output: rec.writer}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := runner.Run(ctx, spec.Command{Shell: "sleep 20 & sleep 20"})
+	if elapsed := time.Since(start); err == nil || elapsed > 5*time.Second {
+		t.Fatalf("returned %v after %v", err, elapsed)
 	}
 }
 

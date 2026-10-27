@@ -28,3 +28,16 @@ templates:
 #   kv-mount: kv
 #   registries:
 #     - {registry: ghcr.io, path: menagerie/ghcr}
+
+# Time limits on a job's running time; waiting for answers does not count.
+# Without this section a job has no limit.
+# job-limits:
+#   default: 2h
+#   phases:
+#     build: 45m
+
+# A webhook told about failed jobs and, past long-running, slow ones. The
+# URL can carry a token; Menagerie never logs it.
+# alerts:
+#   webhook: https://ntfy.example.test/menagerie
+#   long-running: 45m

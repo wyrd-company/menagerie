@@ -43,6 +43,15 @@ export interface Job {
   finishedAt: string | null;
   lastEventId: number;
   error: ErrorBody | null;
+  /** When `limit` passes; null without a limit, while waiting for answers and once ended. */
+  deadline: string | null;
+  limit: JobLimit | null;
+}
+
+/** The time limit that ends first; limits count running time only. */
+export interface JobLimit {
+  seconds: number;
+  scope: "job" | "phase" | (string & {});
 }
 
 export const terminalStates: ReadonlySet<string> = new Set(["succeeded", "failed", "ended"]);
@@ -135,7 +144,11 @@ export interface JobResult {
 }
 
 export type JobEvent =
-  | { id: number; type: "state"; data: { state: string; phase: string } }
+  | {
+      id: number;
+      type: "state";
+      data: { state: string; phase: string; deadline: string | null; limit: JobLimit | null };
+    }
   | { id: number; type: "log"; data: { text: string } }
   | { id: number; type: "interview"; data: InterviewReply }
   | { id: number; type: "result"; data: JobResult }
