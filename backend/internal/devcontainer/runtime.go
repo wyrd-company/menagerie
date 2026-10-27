@@ -588,8 +588,14 @@ func (r *Runtime) dockerHost(p Progress, auth RegistryAuth) *hostdocker.Host {
 }
 
 func (r *Runtime) composeHost(p Progress, auth RegistryAuth) *dockercompose.Host {
+	return dockercompose.New(r.client, r.composeOptions(p, auth))
+}
+
+// composeOptions are a Compose operation's options: its output, its
+// credential source, and the staging folder of its configs and secrets.
+func (r *Runtime) composeOptions(p Progress, auth RegistryAuth) dockercompose.Options {
 	out := p.Log("")
-	return dockercompose.New(r.client, dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth, UserDataFolder: r.opts.ComposeStaging})
+	return dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth, UserDataFolder: r.opts.ComposeStaging}
 }
 
 // needsBuild reports whether the definition needs a derived image, as

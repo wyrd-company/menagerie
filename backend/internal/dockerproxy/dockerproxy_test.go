@@ -3,6 +3,7 @@ package dockerproxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -122,6 +123,11 @@ func TestOversizedDenialPassesUnchanged(t *testing.T) {
 func TestDenialOfNoError(t *testing.T) {
 	if Denial(nil) != nil {
 		t.Error("Denial(nil) is not nil")
+	}
+	// Only a 403 from the Engine API carries a denial: text that reads like
+	// one elsewhere is not.
+	if d := Denial(errors.New("up: " + marker + `"made up"`)); d != nil {
+		t.Errorf("Denial of a plain error = %+v", d)
 	}
 	if d := Denial(fmt.Errorf("x: %w", &Denied{Reason: "r"})); d == nil || d.Reason != "r" {
 		t.Errorf("Denial of a wrapped *Denied = %+v", d)

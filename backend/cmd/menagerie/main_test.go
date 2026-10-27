@@ -87,6 +87,14 @@ func TestRuntimeOptionsNameWorkspacesAndStageCompose(t *testing.T) {
 	}
 }
 
+// TestThrowawayContainersNameTheirWorkspaces checks that each throwaway
+// command gets a client of its own, for the Docker proxy's header.
+func TestThrowawayContainersNameTheirWorkspaces(t *testing.T) {
+	if o := throwawayOptions("/srv/workspaces", &devcontainer.Options{}); o.Client == nil || o.Root != "/srv/workspaces" {
+		t.Fatalf("options %+v", o)
+	}
+}
+
 // TestBackupsUseTheWyrwoodAgentSocket checks that the composed backup
 // remote authenticates SSH pushes through ssh-agent.sock in the configured
 // Wyrwood directory.

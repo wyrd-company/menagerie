@@ -236,12 +236,7 @@ type containers struct {
 // initializeCommand runner.
 func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspace.Root, docker *dockerclient.Client, opts *devcontainer.Options) containers {
 	images := runnerImages(cfg, docker)
-	runner := throwaway.NewDocker(docker, throwaway.DockerOptions{
-		Root:        root.Path(),
-		User:        throwaway.ServiceUser(),
-		Credentials: pullCredentials(opts.Credentials),
-		Client:      dockerproxy.NewClient,
-	})
+	runner := throwaway.NewDocker(docker, throwawayOptions(root.Path(), opts))
 	if n, err := runner.RemoveLeftovers(ctx); err != nil {
 		log.Printf("menagerie: removing leftover throwaway containers: %v", err)
 	} else if n > 0 {
@@ -249,6 +244,18 @@ func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspac
 	}
 	opts.Containers, opts.RunnerImage = runner, images.ForWorkspace
 	return containers{docker: runner, images: images, hooks: throwaway.NewHookRunner(runner, cfg.TemplateService.CandidateFolder)}
+}
+
+// throwawayOptions are the throwaway containers' options: the workspace
+// root's label, the services' user, the pulls' credentials, and a client
+// for each command that names its workspace to the Docker proxy.
+func throwawayOptions(root string, opts *devcontainer.Options) throwaway.DockerOptions {
+	return throwaway.DockerOptions{
+		Root:        root,
+		User:        throwaway.ServiceUser(),
+		Credentials: pullCredentials(opts.Credentials),
+		Client:      dockerproxy.NewClient,
+	}
 }
 
 // serveHooks serves the template service's routes on the hook runner
