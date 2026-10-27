@@ -9,12 +9,15 @@ pub mod api;
 pub mod checks;
 pub mod config;
 pub mod create;
+pub mod credentials;
 pub mod error;
 pub mod hooks;
 pub mod host;
 pub mod numbers;
 pub mod reply;
 pub mod revision;
+#[cfg(test)]
+mod scripted;
 pub mod seal;
 pub mod server;
 pub mod upgrade;

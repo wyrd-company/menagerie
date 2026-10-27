@@ -152,11 +152,16 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 }
 
 // acceptOptions run the template's hooks through containers in image,
-// under limits.
+// under limits. templates adds approved templates by id; credentials,
+// when set, serves the hook runner socket's credential route; env is added
+// to the template service's environment.
 type acceptOptions struct {
-	containers throwaway.Containers
-	image      string
-	limits     jobs.Limits
+	containers  throwaway.Containers
+	image       string
+	limits      jobs.Limits
+	templates   map[string]string
+	credentials http.Handler
+	env         []string
 }
 
 func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
@@ -225,7 +230,17 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hookServer := &http.Server{Handler: hooks}
+	var hookHandler http.Handler = hooks
+	if opts.credentials != nil {
+		hookHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/credentials/github" {
+				opts.credentials.ServeHTTP(w, r)
+				return
+			}
+			hooks.ServeHTTP(w, r)
+		})
+	}
+	hookServer := &http.Server{Handler: hookHandler}
 	go func() { _ = hookServer.Serve(hookListener) }()
 	t.Cleanup(func() { _ = hookServer.Close() })
 	t2 := filepath.Join(base, "templates")
@@ -240,8 +255,12 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 		config += fmt.Sprintf("  - {id: %s, name: Leaks, address: 'file://%s/%s'}\n", name, t2, name)
 		approved[name] = true
 	}
+	for id, address := range opts.templates {
+		config += fmt.Sprintf("  - {id: %s, name: %s, address: '%s'}\n", id, id, address)
+		approved[id] = true
+	}
 	writeFile(t, base, "config.yml", config)
-	startService(t, bin, filepath.Join(base, "config.yml"), filepath.Join(base, "data"), socket)
+	startService(t, bin, filepath.Join(base, "config.yml"), filepath.Join(base, "data"), socket, opts.env...)
 
 	root, err := workspace.NewRoot(a.root)
 	if err != nil {
@@ -287,9 +306,10 @@ func noCapturedValue(t *testing.T, job *jobs.Job, kind string) {
 }
 
 // startService runs the template service binary until the test ends.
-func startService(t *testing.T, bin, config, data, socket string) {
+func startService(t *testing.T, bin, config, data, socket string, env ...string) {
 	t.Helper()
 	cmd := exec.Command(bin, "-config", config, "-data", data)
+	cmd.Env = append(os.Environ(), env...)
 	out, _ := cmd.StdoutPipe()
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {

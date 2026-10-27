@@ -156,6 +156,31 @@ description: >-
   operating system error's text. No decoding error names an anchor: an
   unknown alias or an anchor that holds its own alias is reported with a
   fixed text.
+
+
+  Optional `github-app` names a GitHub App whose installation tokens
+  authenticate backups and template fetches to `https` repository URLs on
+  its server: a URL whose path is exactly `/{owner}/{repo}` or
+  `/{owner}/{repo}.git`, with no query or fragment. A backup URL must also
+  have no user information; one with a user name gets no token. A template
+  address may have a user name: the template service asks for the token by
+  the address without it, so a user name does not opt out. Other URLs keep their own authentication, so SSH and the App can both be
+  in use. `app-id`, a positive integer, and `transit-key`, the name of the
+  RSA Transit key at the mount `transit` that holds the App's private key
+  (letters, digits, `_`, `.` and `-`, starting with a letter or digit, at
+  most 128 characters), are required in the section. Optional
+  `installations` maps an account name to the App's installation id, a
+  positive integer; names are GitHub account names, compared in lower
+  case, and appear once. A repository whose owner is not listed has its
+  installation looked up. Optional `server` is the GitHub server's origin,
+  an `https` URL with a host and no user information, path, query or
+  fragment; absent or empty, `https://github.com`. The API is
+  `https://api.github.com` for `https://github.com` and `{server}/api/v3`
+  otherwise. The workspace service signs the App's JWT through the Wyrwood
+  vault socket, `unix://{wyrwood-directory}/vault.sock`, with
+  `transit/sign/{transit-key}/sha2-256`, sending no token and no
+  namespace. No error of the section names a value: an error names the
+  field and the rule. The template service ignores this section.
 validation-criteria: >-
   `go test ./backend/internal/config/` parses a valid document, applies the
   defaults, rejects each invalid field, and checks that the schema's keys
@@ -173,7 +198,9 @@ validation-criteria: >-
   makes it a key, and that an empty duration given through an alias or a merge
   key is refused. They parse `auto-commit`, `workspace-socket` and the
   `commit` limit, and check that no error of those fields quotes the
-  value given.
+  value given. They parse `github-app` with its default server and check
+  that no error of the section quotes the value given.
   `go test ./backend/cmd/menagerie/` checks that `local-env` reaches the
-  devcontainer runtime and that `job-limits` and `alerts` reach the jobs
-  manager.
+  devcontainer runtime, that `job-limits` and `alerts` reach the jobs
+  manager, and that `github-app` gives backups on its server a write token
+  and the hook runner socket's credential route read tokens.

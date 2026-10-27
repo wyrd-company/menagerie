@@ -58,6 +58,12 @@ auto-commit:
 workspace-socket:
   folder: /srv/menagerie/sockets
   min-interval: 1m
+
+github-app:
+  app-id: 123456
+  transit-key: menagerie-github-app
+  installations:
+    example-org: 7890
 ```
 
 ## Workspaces
@@ -71,6 +77,8 @@ is never `/`. Menagerie finds a workspace's container by the
 `workspace-repository` is the Git remote for backups. Each workspace is
 pushed, by force, to an orphan branch named after its folder. SSH remotes
 use the Wyrwood agent and the known hosts in `/etc/ssh/ssh_known_hosts`.
+An `https` remote on the [GitHub App](#github-app)'s server uses an
+installation token.
 
 `wyrwood-directory` is where the Wyrwood consumer directory is mounted in
 the container, `/run/wyrwood` in the deployment example.
@@ -86,7 +94,8 @@ dashes), a display `name`, and a Toha `address`:
 - `git@<host>:<path>.git@<ref>#<path>` or
   `ssh://git@<host>/<path>.git@<ref>#<path>`, over SSH with the Wyrwood
   agent, for private templates;
-- `https://<host>/<path>.git@<ref>#<path>`.
+- `https://<host>/<path>.git@<ref>#<path>`, with a
+  [GitHub App](#github-app) token for private templates on its server.
 
 `#<path>` names the template's folder in the repository and is optional.
 
@@ -161,6 +170,49 @@ Menagerie sends no token and no namespace; Wyrwood adds the binding's token
 and renews it. A registry no entry names is anonymous. When a credential
 cannot be read, the job fails with `registry-credentials-unavailable` and one
 of the reasons in [Troubleshooting](troubleshooting.md#registry-credentials).
+
+## GitHub App
+
+With `github-app`, Menagerie authenticates to GitHub with a GitHub App's
+installation tokens, for repositories on the App's server whose path is
+`/<owner>/<repository>` or `/<owner>/<repository>.git`:
+
+- Backups, with `contents: write` on the repository, when
+  `workspace-repository` is such an `https` URL with no user information,
+  query or fragment. A `workspace-repository` with a user name gets no
+  token and no other credential.
+- Template fetches, with `contents: read` on the repository, from every
+  `https` address of such a repository. A user name in the address does
+  not opt out: the template service asks for the token by the address
+  without it, and the fetch sends the token in its place.
+
+Every other URL keeps its own authentication: SSH URLs use the Wyrwood
+agent, and Menagerie gives other `https` URLs no credential. Both can be
+configured, for example backups and templates on GitHub through the App
+and templates on another host over SSH.
+
+| Key | Value |
+| --- | --- |
+| `app-id` | The App's id. |
+| `transit-key` | The Transit key, at the mount `transit`, that holds the App's private key: letters, digits, `_`, `.` and `-`. |
+| `installations` | Optional. The App's installation id by account name, compared in lower case. A repository whose owner is not listed has its installation looked up. |
+| `server` | Optional. The GitHub server's `https` origin; without it, `https://github.com`. The API is `https://api.github.com` for GitHub, `<server>/api/v3` for GitHub Enterprise Server. |
+
+Install the App on the backup repository with Contents read and write, and
+on each private template repository with Contents read. Import its private
+key into OpenBao's Transit engine as an RSA key, as
+[Installation](install.md#github-app) shows; the Wyrwood policy grants
+`update` on `transit/sign/<transit-key>/sha2-256`. For a `server` whose
+certificate a private authority signed, see
+[Git hosts](install.md#git-hosts). Menagerie signs the App's
+JWT through Wyrwood's `vault.sock`, sending no token, and exchanges it for a
+token that covers one repository and one permission. Tokens stay in
+Menagerie's memory until five minutes before they expire; nothing is written
+to disk. A push or fetch with a token follows no redirect: set
+`workspace-repository` to the repository's current address. A failure names
+a fixed reason, never a token, a URL or GitHub's answer, and the job console
+shows the remote's own text with the URL and the token replaced by
+`[redacted]`.
 
 ## Local environment
 

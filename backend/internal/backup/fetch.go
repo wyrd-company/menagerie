@@ -65,15 +65,12 @@ func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, pr
 	if len(shallow) > 0 {
 		return plumbing.ZeroHash, &NotApplicableError{Reason: "the workspace repository is shallow; Apply branch needs its whole history"}
 	}
-	var auth transport.AuthMethod
-	if r.Auth != nil {
-		var release func()
-		auth, release, err = r.Auth(ctx, r.URL)
-		if err != nil {
-			return plumbing.ZeroHash, err
-		}
-		defer release()
+	s, err := r.open(ctx, progress)
+	if err != nil {
+		return plumbing.ZeroHash, err
 	}
+	defer s.close()
+	ctx, auth, progress := s.ctx, s.auth, s.progress
 	remote := git.NewRemote(repo.Storer, &config.RemoteConfig{Name: remoteName, URLs: []string{r.URL}})
 	err = remote.FetchContext(ctx, &git.FetchOptions{
 		RemoteName: remoteName,
@@ -86,7 +83,7 @@ func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, pr
 	case errors.Is(err, git.NoMatchingRefSpecError{}), errors.Is(err, transport.ErrEmptyRemoteRepository):
 		return plumbing.ZeroHash, fmt.Errorf("%w: %s", ErrBranchNotFound, branch)
 	case err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate):
-		return plumbing.ZeroHash, fmt.Errorf("fetch %s: %w", branch, err)
+		return plumbing.ZeroHash, fmt.Errorf("fetch %s: %w", branch, transportFailure(ctx, r.URL, err))
 	}
 	ref, err := repo.Reference(FetchedRef, false)
 	if err != nil {

@@ -21,7 +21,7 @@ devcontainer asks through its own socket.
 [devcontainer-builder](https://github.com/wyrd-company/devcontainer-builder)
 builds and runs the devcontainers, and
 [Wyrwood](https://github.com/wyrd-company/wyrwood) gives Menagerie its SSH
-key and registry credentials.
+key or GitHub App key and registry credentials.
 
 ![Creating a workspace through its interview, then upgrading it](docs/assets/demo.gif)
 

@@ -22,6 +22,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 )
@@ -342,6 +343,45 @@ func (a *countingAuth) auth(_ context.Context, url string) (transport.AuthMethod
 	return nil, func() {}, nil
 }
 
+// sentinelTokens serves the URLs that start with prefix. Its token
+// carries the sentinel; from its wrongFrom-th call on, counted from 1, it
+// answers a token the host refuses, and with failed it answers an error.
+type sentinelTokens struct {
+	prefix    string
+	token     string
+	wrongFrom int
+	failed    bool
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *sentinelTokens) Serves(url string) bool { return strings.HasPrefix(url, s.prefix) }
+
+func (s *sentinelTokens) Token(context.Context, string) (string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	switch {
+	case s.failed:
+		return "", "", errors.New("GitHub App credentials are unavailable: GitHub could not be reached")
+	case s.wrongFrom > 0 && s.calls >= s.wrongFrom:
+		return "x-access-token", s.token + "-refused", nil
+	}
+	return "x-access-token", s.token, nil
+}
+
+// overHTTPS serves the workspace repository over HTTPS behind a token
+// that carries the sentinel, and makes the flows reach it with tokens.
+func (w *world) overHTTPS(t *testing.T, tokens *sentinelTokens) {
+	t.Helper()
+	tokens.token = filepath.Base(w.remote) + "-token"
+	host := backuptest.NewHTTPS(t, filepath.Dir(w.remote), "x-access-token", tokens.token)
+	tokens.prefix = host.Server.URL
+	w.flows.opts.Remote.URL = host.URL(filepath.Base(w.remote))
+	w.flows.opts.Remote.Auth = backup.TokenAuth(tokens, nil)
+}
+
 func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 	const sentinel = "sentinel-workspace-repository"
 	cases := map[string]struct {
@@ -383,6 +423,24 @@ func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 		"backup after the apply": {KindBackupFailed, func(t *testing.T, w *world, auth *countingAuth) string {
 			w.contribute(t, "alpha", "alpha", map[string]string{"new.txt": "new\n"})
 			auth.failAt = 2
+			return "alpha"
+		}},
+		"token refused by the repository": {KindFetchFailed, func(t *testing.T, w *world, auth *countingAuth) string {
+			w.overHTTPS(t, &sentinelTokens{wrongFrom: 1})
+			return "alpha"
+		}},
+		"token unavailable": {KindFetchFailed, func(t *testing.T, w *world, auth *countingAuth) string {
+			w.overHTTPS(t, &sentinelTokens{failed: true})
+			return "alpha"
+		}},
+		"https backup before the apply": {KindBackupFailed, func(t *testing.T, w *world, auth *countingAuth) string {
+			w.contribute(t, "alpha", "review/one", map[string]string{"new.txt": "new\n"})
+			w.overHTTPS(t, &sentinelTokens{wrongFrom: 2})
+			return "review/one"
+		}},
+		"https backup after the apply": {KindBackupFailed, func(t *testing.T, w *world, auth *countingAuth) string {
+			w.contribute(t, "alpha", "alpha", map[string]string{"new.txt": "new\n"})
+			w.overHTTPS(t, &sentinelTokens{wrongFrom: 2})
 			return "alpha"
 		}},
 		"rebuild": {"operation-failed", func(t *testing.T, w *world, auth *countingAuth) string {

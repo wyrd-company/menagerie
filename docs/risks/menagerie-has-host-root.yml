@@ -11,7 +11,9 @@ description: >-
   devcontainer-builder on the host. Mitigation: only members of the
   `menagerie_managers` group reach the UI; the UI is not exposed to the
   public internet; only templates on the approved template list are used;
-  Menagerie stores no keys or tokens; template hooks and `initializeCommand`
+  Menagerie stores no keys or tokens, and holds GitHub App installation
+  tokens, each for one repository, only in memory until shortly before they
+  expire; template hooks and `initializeCommand`
   run in throwaway containers that mount only their workspace folder, so
   they reach neither the Docker socket nor the Wyrwood sockets nor
   Menagerie's environment. They still reach the network, and a hook can
@@ -19,8 +21,9 @@ description: >-
   gets as asked. The copy back of an upgrade hook's candidate checks the
   candidate by its path, so a process running as the services' user can
   redirect the swap by replacing a folder above the candidate in between;
-  that user already holds the Docker socket. A body-inspecting Docker proxy reduces this exposure
-  further.
+  that user already holds the Docker socket, as it holds the hook runner
+  socket, whose credential route hands out read tokens. A body-inspecting
+  Docker proxy reduces this exposure further.
 categories:
   - security
 likelihood: 2

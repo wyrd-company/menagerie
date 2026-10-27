@@ -526,6 +526,12 @@ mod tests {
                 path: SECRET.into(),
                 message: SECRET.into(),
             }),
+            // A refused `git` question remote: the credential resolver's
+            // reason and the remote, which a hook's output can render.
+            A::Git(toha::git_target::GitTargetError::CredentialRefused {
+                url: format!("https://git.example.invalid/{SECRET}.git"),
+                reason: SECRET.into(),
+            }),
         ]
     }
 

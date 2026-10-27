@@ -198,12 +198,17 @@ description: >-
   the apply starts fails the job with nothing written, while a file written
   after that check and before the commit is committed with the output.
   Pushes use
-  go-git with the SSH agent at `ssh-agent.sock` in the Wyrwood directory
-  and the default known hosts files for host-key verification; they
-  replace the remote branch named after the workspace, write no remote to
-  the workspace's Git configuration and fetch nothing. A failed commit or
-  push fails as `backup-failed` and the container is not started or
-  rebuilt.
+  go-git, to an SSH remote with the SSH agent at `ssh-agent.sock` in the
+  Wyrwood directory and the default known hosts files for host-key
+  verification, and to an `https` repository on the configured GitHub
+  App's server with a contents write installation token for that
+  repository; they replace the remote branch named after the workspace,
+  write no remote to the workspace's Git configuration and fetch nothing.
+  A push or fetch with a token follows no redirect, to the same origin or
+  another. A failed commit or push fails as `backup-failed` and the
+  container is not started or rebuilt; a push to a remote that is not SSH
+  or a local path, a URL go-git cannot read included, names a fixed
+  reason, never the URL, a token or the server's answer.
 
 
   Apply branch. An `apply-branch` job brings a branch of the workspace
@@ -398,14 +403,21 @@ description: >-
 
   `GET /api/jobs/{id}/events` streams the job's events as Server-Sent Events.
   Event ids are the job's sequence numbers from 1. `state` carries
-  `{state, phase, deadline, limit}`, `log` carries one output line `{text}`, and `result`
+  `{state, phase, deadline, limit}`, `log` carries one output line
+  `{text}`, a line ending at a newline, a carriage return or both
+  together, so each progress update is its own event, and `result`
   carries `{state, error}` and ends the stream. An operation can add event
   types with opaque JSON data, such as `interview`; the service compacts
   each payload to one line without changing its text, numbers included, and
   frames every payload line as its own data field. `Last-Event-ID`, or the
   `lastEventId` query parameter, replays the events after that id, so a
   reconnecting client misses nothing. The stream has no keepalive and no
-  deadline.
+  deadline. A push's or fetch's `log` lines carry the remote's own text,
+  such as a hook's rejection; the workspace repository URL and the
+  transfer's token, as given and as its basic-authentication pair in
+  base64 or base64url, padded or not, are replaced by `[redacted]`, also
+  when the remote splits them across packets. Where one of these values
+  contains another, the longer is replaced whole.
 
 
   Jobs, events and logs are held only in the memory of the running process.
@@ -484,7 +496,8 @@ validation-criteria: >-
   with a held template service and a real local workspace repository,
   covering waiting, single answers, flow ends, failures and slot release;
   `go test ./backend/internal/backup/` pushes through an isolated SSH server
-  and agent; `go test -tags templateservice ./backend/internal/workflows/`
+  and agent, and pushes and fetches through an isolated HTTPS Git host
+  with a token, whose every failure names neither the URL nor the token; `go test -tags templateservice ./backend/internal/workflows/`
   runs create and upgrade against the real template service, with an
   upgrade whose hook changes a tracked file's content that only Toha's
   merge brings into the workspace folder. `go test

@@ -19,9 +19,9 @@ Before the container starts, you need:
 
 - an OpenID Connect provider with a public client for Menagerie and a group
   named `menagerie_managers`;
-- a Git repository that Menagerie may push workspace backups to, and one SSH
-  identity for it that Wyrwood holds as an OpenBao Transit key (see
-  [One SSH identity](#one-ssh-identity));
+- a Git repository that Menagerie may push workspace backups to, and a Git
+  identity for it that Wyrwood holds as an OpenBao Transit key: a GitHub
+  App, an SSH key, or both (see [Git identity](#git-identity));
 - a Wyrwood agent on the host, and a policy for Menagerie;
 - the workspace root: one folder on the host for every workspace.
 
@@ -45,32 +45,50 @@ configuration. See [Configuration](configuration.md#identity-provider).
 Menagerie holds no key, token or password. Wyrwood gives the container a
 directory of sockets:
 
-- `ssh-agent.sock` signs Toha's private template fetches and Menagerie's
-  backup pushes with Menagerie's SSH key;
-- `vault.sock` reads registry credentials from OpenBao with the binding's
-  own token, when `registry-credentials` is configured.
+- `vault.sock` signs the GitHub App's JWTs with the App's Transit key, when
+  `github-app` is configured, and reads registry credentials from OpenBao,
+  when `registry-credentials` is configured. Both use the binding's own
+  token.
+- `ssh-agent.sock` signs Toha's SSH template fetches and Menagerie's SSH
+  backup pushes with Menagerie's SSH key, when the policy offers one.
 
-Write a Wyrwood policy for Menagerie. It offers exactly one Transit key,
-Menagerie's SSH key, grants `read` on `<kv-mount>/data/<path>` for each
-configured registry secret, and mounts the consumer directory at
-`/run/wyrwood`:
+### Git identity
 
-```yaml
-name: menagerie
-openbao:
-  agent-token-renewal: true
-  policy: |
-    path "transit/keys/menagerie-github" { capabilities = ["read"] }
-    path "transit/sign/menagerie-github" { capabilities = ["update"] }
-    path "kv/data/menagerie/ghcr" { capabilities = ["read"] }
-ssh:
-  transit-keys:
-    - menagerie-github
-contract:
-  mount-target: /run/wyrwood
+Choose how Menagerie authenticates to its Git hosts:
+
+- **GitHub App**: the recommended way for GitHub. Install one App on the
+  backup repository and on each private template repository, with the
+  Contents permission set to read and write. Menagerie mints a short-lived
+  token for one repository at a time: write for backups, read for
+  templates. No machine user is needed. Backups and private templates use
+  `https://` URLs. See [Configuration](configuration.md#github-app).
+- **SSH identity**: for other Git hosts, or for GitHub without an App. One
+  SSH key must reach every repository Menagerie uses over SSH; see below.
+- **Both**: the App for repositories on GitHub, and SSH for other hosts.
+  Each URL uses the identity its scheme and host select.
+
+#### GitHub App
+
+Create a GitHub App on the account that owns the repositories. Give it the
+repository permission **Contents: Read and write** and no other permission,
+and turn its webhook off. Install it on the backup repository and on each
+private template repository. Generate a private key, then import it into
+OpenBao's Transit engine as a key that cannot be exported. The import wraps
+the key with Transit's wrapping key, so the key is never sent in clear:
+
+```sh
+openssl pkcs8 -topk8 -nocrypt -in app.private-key.pem -outform DER | base64 -w0 > app-key.b64
+bao transit import transit/keys/menagerie-github-app @app-key.b64 type=rsa-2048
+rm app-key.b64 app.private-key.pem
 ```
 
-### One SSH identity
+The `vault` CLI takes the same arguments. The importing token needs `read`
+on `transit/wrapping_key` and `update` on
+`transit/keys/menagerie-github-app/import`. If the key is lost, generate a
+new one in the App's settings and import it again. Set `github-app.app-id`
+and `github-app.transit-key` in the configuration.
+
+#### SSH identity
 
 Toha's template fetches and Menagerie's backup pushes use the same agent, so
 the agent must offer one key, and that key must reach every repository
@@ -80,14 +98,40 @@ reach the repository. A second key in the agent does not select a second
 repository. GitHub accepts a deploy key on one repository only, and the same
 key cannot be registered twice.
 
-- **Every template is public** (`gh:` or `https://` addresses): only backups
-  use SSH. Add the Transit key's public key to the backup repository as a
-  deploy key with write access.
-- **Any template is private:** create a machine user, a GitHub account for
-  automation, and add the Transit key's public key as that account's SSH
-  key. Give the machine user write access to the backup repository and read
-  access to each private template repository. Do not also add the key as a
-  deploy key.
+- **Only the backup repository is on SSH**: add the Transit key's public
+  key to the backup repository as a deploy key with write access.
+- **A private template is on SSH too**: create a machine user, an account
+  for automation, and add the Transit key's public key as that account's
+  SSH key. Give the machine user write access to the backup repository and
+  read access to each private template repository. Do not also add the key
+  as a deploy key.
+
+### Policy
+
+Write a Wyrwood policy for Menagerie. It grants `update` on
+`transit/sign/<key>/sha2-256` for the GitHub App's key, offers exactly one
+Transit key as Menagerie's SSH key, grants `read` on
+`<kv-mount>/data/<path>` for each configured registry secret, and mounts the
+consumer directory at `/run/wyrwood`. This example uses both identities:
+
+```yaml
+name: menagerie
+openbao:
+  agent-token-renewal: true
+  policy: |
+    path "transit/sign/menagerie-github-app/sha2-256" { capabilities = ["update"] }
+    path "transit/keys/menagerie-ssh" { capabilities = ["read"] }
+    path "transit/sign/menagerie-ssh" { capabilities = ["update"] }
+    path "kv/data/menagerie/ghcr" { capabilities = ["read"] }
+ssh:
+  transit-keys:
+    - menagerie-ssh
+contract:
+  mount-target: /run/wyrwood
+```
+
+With only the GitHub App, leave out the SSH key's two paths and the `ssh`
+section. With only SSH, leave out the App key's path.
 
 Bind the container `menagerie` (the name `deploy/compose.yml` gives it) to
 the policy. Give the binding an **access group** that Menagerie's user has,
@@ -107,9 +151,10 @@ edit both files.
 | The workspace root at the same path on the host and in the container | Devcontainers bind-mount their workspace folder. The host daemon resolves that path, so it must be the host path. Set `MENAGERIE_WORKSPACE_ROOT` and `workspace-root` to the same value. |
 | The workspace socket folder at the same path on the host and in the container | Each devcontainer mounts its own socket folder from it, so it must be the host path. Set `MENAGERIE_WORKSPACE_SOCKETS` and `workspace-socket.folder` to the same value; leave both out to run without [workspace sockets](configuration.md#workspace-sockets). |
 | `/var/run/docker.sock` | The workspace service drives the host Docker daemon: devcontainers, and the throwaway containers that run template hooks and `initializeCommand`. |
-| The Wyrwood consumer directory at `/run/wyrwood` | `ssh-agent.sock` and `vault.sock`. `wyrwood-directory` names the mount target. |
-| `SSH_AUTH_SOCK=/run/wyrwood/ssh-agent.sock` | Toha's Git transport runs the image's `ssh` client with this agent. |
+| The Wyrwood consumer directory at `/run/wyrwood` | `vault.sock` and `ssh-agent.sock`. `wyrwood-directory` names the mount target. |
+| `SSH_AUTH_SOCK=/run/wyrwood/ssh-agent.sock` | With an SSH identity: Toha's Git transport runs the image's `ssh` client with this agent. Leave it out with only a GitHub App. |
 | `config.yml` at `/etc/menagerie/config.yml` | Both services read it. |
+| `SSL_CERT_FILE` and the bundle it names | Optional: a Git server whose certificate a private authority signed. See [Git hosts](#git-hosts). |
 | A volume at `/var/lib/menagerie` | Toha's template cache, the template service's session key, the services' home and the folder Toha builds an upgrade's candidate in. Without it they are lost when the container is recreated. |
 | `restart: unless-stopped` | Docker starts Menagerie after a host restart, and restarts it after either service stops. |
 | Port `8080` | The web UI and workspace API. Publish it on a private address only. |
@@ -160,13 +205,40 @@ group. The template service never talks to Docker. For a non-root owner:
 
 ### Git hosts
 
-`/etc/ssh/ssh_known_hosts` holds GitHub's published SSH host keys. For other
-Git hosts, mount a known hosts file that also names them:
+| Host | Identity | What the container needs |
+| --- | --- | --- |
+| GitHub, `https://` | GitHub App | Nothing more: the image trusts GitHub's certificates. |
+| GitHub Enterprise Server, `https://` | GitHub App, with `github-app.server` | The server's certificate authority, when it is not a public one; see below. |
+| GitHub, SSH | SSH identity | Nothing more: `/etc/ssh/ssh_known_hosts` holds GitHub's published SSH host keys. |
+| Another host, SSH | SSH identity | A known hosts file that also names the host. |
+| Another host, `https://` | None | Public templates only: Menagerie gives these URLs no credential. |
+
+For other SSH hosts, mount a known hosts file that also names them:
 
 ```yaml
     volumes:
       - ./ssh_known_hosts:/etc/ssh/ssh_known_hosts:ro
 ```
+
+For a server whose certificate a private authority signed, mount a bundle
+that holds that authority and set `SSL_CERT_FILE` to it. The template
+service then trusts only the certificates in that file, so build the bundle
+from the image's own and the authority:
+
+```sh
+docker run --rm --entrypoint cat ghcr.io/wyrd-company/menagerie:<version> /etc/ssl/certs/ca-certificates.crt > ca-bundle.pem
+cat private-authority.pem >> ca-bundle.pem
+```
+
+```yaml
+    environment:
+      SSL_CERT_FILE: /etc/menagerie/ca-bundle.pem
+    volumes:
+      - ./ca-bundle.pem:/etc/menagerie/ca-bundle.pem:ro
+```
+
+The workspace service reads the same file, beside the image's certificate
+folder.
 
 ### Throwaway containers
 

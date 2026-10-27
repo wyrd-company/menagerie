@@ -25,6 +25,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/alerts"
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
+	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 )
@@ -83,6 +84,28 @@ type Config struct {
 	// WorkspaceSocket gives each workspace's devcontainer a socket that
 	// commits and backs up its own workspace. Absent, no socket.
 	WorkspaceSocket *WorkspaceSocket `yaml:"workspace-socket"`
+	// GitHubApp authenticates backups and template fetches over https to
+	// repositories on its server with installation tokens. Absent, no
+	// token is minted.
+	GitHubApp *GitHubApp `yaml:"github-app"`
+}
+
+// GitHubApp names the GitHub App whose installation tokens Menagerie uses
+// for https repository URLs on its server. The App's private key is a
+// Transit key in OpenBao, used through the Wyrwood vault socket.
+type GitHubApp struct {
+	// AppID is the App's id.
+	AppID int64 `yaml:"app-id"`
+	// TransitKey is the name of the Transit key that holds the App's
+	// private key.
+	TransitKey string `yaml:"transit-key"`
+	// Installations maps an account name to the App's installation on it.
+	// A repository whose owner is not listed has its installation looked
+	// up.
+	Installations map[string]int64 `yaml:"installations"`
+	// Server is the GitHub server's https origin. Absent,
+	// githubapp.DefaultServer.
+	Server string `yaml:"server"`
 }
 
 // AutoCommit is the schedule of automatic commits.
@@ -388,6 +411,9 @@ func (c *Config) applyDefaults() {
 	if c.WorkspaceRoot != "" {
 		c.WorkspaceRoot = filepath.Clean(c.WorkspaceRoot)
 	}
+	if c.GitHubApp != nil && c.GitHubApp.Server == "" {
+		c.GitHubApp.Server = githubapp.DefaultServer
+	}
 }
 
 func (c *Config) validate() error {
@@ -480,6 +506,9 @@ func (c *Config) validate() error {
 	if c.WorkspaceSocket != nil {
 		errs = append(errs, c.WorkspaceSocket.validate(c)...)
 	}
+	if c.GitHubApp != nil {
+		errs = append(errs, c.GitHubApp.validate()...)
+	}
 	names := map[string]int{}
 	for i, name := range c.LocalEnv {
 		if !envNamePattern.MatchString(name) {
@@ -545,6 +574,40 @@ func (w *WorkspaceSocket) validate(c *Config) []error {
 		if err := w.MinInterval.validate("workspace-socket.min-interval"); err != nil {
 			errs = append(errs, fmt.Errorf("%w, or 0 for none", err))
 		}
+	}
+	return errs
+}
+
+// validate checks the GitHub App block. No error names a value.
+func (g *GitHubApp) validate() []error {
+	var errs []error
+	if g.AppID <= 0 {
+		errs = append(errs, errors.New("github-app.app-id must be a positive integer"))
+	}
+	if g.TransitKey == "" {
+		errs = append(errs, errors.New("github-app.transit-key is required"))
+	} else if !githubapp.ValidTransitKey(g.TransitKey) {
+		errs = append(errs, errors.New("github-app.transit-key must be one Transit key name: letters, digits, '_', '.' and '-', starting with a letter or digit"))
+	}
+	if err := githubapp.ValidServer(g.Server); err != nil {
+		errs = append(errs, fmt.Errorf("github-app.server %w", err))
+	}
+	owners := map[string]bool{}
+	var badOwner, badID, twice bool
+	for owner, id := range g.Installations {
+		badOwner = badOwner || !githubapp.ValidOwner(owner)
+		badID = badID || id <= 0
+		twice = twice || owners[strings.ToLower(owner)]
+		owners[strings.ToLower(owner)] = true
+	}
+	if badOwner {
+		errs = append(errs, errors.New("github-app.installations has a key that is not a GitHub account name"))
+	}
+	if badID {
+		errs = append(errs, errors.New("github-app.installations has an installation id that is not a positive integer"))
+	}
+	if twice {
+		errs = append(errs, errors.New("github-app.installations names one account twice; account names are compared in lower case"))
 	}
 	return errs
 }
