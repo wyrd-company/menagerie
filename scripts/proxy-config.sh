@@ -8,18 +8,12 @@
 # Menagerie uid. Every allowed bind root
 # becomes <bind-root>, the folder the suites' workspaces, socket folders
 # and Compose staging live in, and workspace_exceptions.workspace_root
-# becomes <workspace-root>. Nothing else of the profile changes, except a
-# stand-in for each pending Sockguard fork change, named by its issue
-# number, whose key the pinned proxy does not know yet:
-#
-#   1819  label filters kept under ownership -> no ownership block, so
-#         devcontainer-builder's label lookups select the right containers
-#
-# Pending 1571, 1814, 1822 (deny reasons in a profile's denials),
-# missing-roots (refusing to start without a root) and network-drivers
-# (allowed_network_drivers) have no stand-in: the
-# pinned proxy ignores their keys or lacks the behavior, and the cases that
-# need them wait.
+# becomes <workspace-root>. Nothing else of the profile changes. [pending...]
+# names the Sockguard fork changes the pinned proxy lacks, each by its issue
+# number or name: 1571, 1814, missing-roots (refusing to start without a
+# root) and network-drivers (allowed_network_drivers). None has a stand-in:
+# the pinned proxy ignores their keys or lacks the behavior, and the cases
+# that need them wait.
 set -euo pipefail
 
 [ $# -ge 3 ] || {
@@ -44,8 +38,7 @@ script=(
 )
 for issue in "$@"; do
   case "$issue" in
-    1819) script+=(-e '/^ownership:$/,/^$/d') ;;
-    1571 | 1814 | 1822 | missing-roots | network-drivers) ;;
+    1571 | 1814 | missing-roots | network-drivers) ;;
     *) echo "no stand-in is known for pending issue $issue" >&2; exit 2 ;;
   esac
 done

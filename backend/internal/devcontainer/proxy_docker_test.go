@@ -46,8 +46,6 @@ import (
 var pendingChanges = map[string]string{
 	"1571":            "per-workspace exceptions, roots, identity headers and the restart-policy setting",
 	"1814":            "the LLBBridge passthrough that devcontainer builds need",
-	"1819":            "label filters kept under ownership",
-	"1822":            "deny reasons in a profile's denials (response.deny_verbosity)",
 	"missing-roots":   "refusing to start when a bind root or the workspace root is missing",
 	"network-drivers": "network.allowed_network_drivers",
 }
@@ -157,7 +155,7 @@ func (p *proxyHarness) startDenied(folder, want string) {
 	if d == nil {
 		p.t.Fatalf("start error %v names no denial", err)
 	}
-	if !proxyPending("1822") && !strings.Contains(d.Reason, want) {
+	if !strings.Contains(d.Reason, want) {
 		p.t.Errorf("deny reason %q, want it to name %q", d.Reason, want)
 	}
 	if s := p.status(folder); s.State != devcontainer.StateNoContainer {
@@ -179,10 +177,6 @@ func (p *proxyHarness) startAfterReload(folder string) {
 	if err != nil {
 		p.t.Fatalf("start with the exception: %v", err)
 	}
-}
-
-func proxyPending(change string) bool {
-	return slices.Contains(strings.Fields(os.Getenv("MENAGERIE_TEST_PROXY_PENDING")), change)
 }
 
 // TestTheProxyDeniesPrivilegedUntilAnExceptionNamesIt is the proxy's

@@ -746,14 +746,20 @@ func TestStopReachesTheComposeProjectWithoutItsPrimary(t *testing.T) {
 func TestMountingListsTheRunningContainersThatMountTheFolder(t *testing.T) {
 	h := newHarness(t)
 	folder := h.workspace("mounted", map[string]string{"file.txt": "x\n"})
+	// Through the Docker proxy, Menagerie sees only the containers created
+	// through it, so the test creates them there.
+	creator := h.client
+	if proxied() {
+		creator = h.proxied
+	}
 	run := func(source string) string {
-		created, err := h.client.ContainerCreate(h.ctx,
+		created, err := creator.ContainerCreate(h.ctx,
 			&container.Config{Image: baseImage, Cmd: []string{"sleep", "infinity"}, Labels: map[string]string{"menagerie.test.run": h.runID}},
 			&container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: source, Target: "/mnt"}}}, nil, nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := h.client.ContainerStart(h.ctx, created.ID, container.StartOptions{}); err != nil {
+		if err := creator.ContainerStart(h.ctx, created.ID, container.StartOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		return created.ID[:12]
