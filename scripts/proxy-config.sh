@@ -10,8 +10,8 @@
 # and Compose staging live in, and workspace_exceptions.workspace_root
 # becomes <workspace-root>. Nothing else of the profile changes. [pending...]
 # names the Sockguard fork changes the pinned proxy lacks, each by its issue
-# number or name: 1571, 1814, missing-roots (refusing to start without a
-# root) and 1824 (network.allowed_drivers). None has a stand-in:
+# number: 1571, 1814, 1821 (refusing to start without a root) and 1824
+# (network.allowed_drivers). None has a stand-in:
 # the pinned proxy ignores their keys or lacks the behavior, and the cases
 # that need them wait.
 set -euo pipefail
@@ -38,7 +38,7 @@ script=(
 )
 for issue in "$@"; do
   case "$issue" in
-    1571 | 1814 | missing-roots | 1824) ;;
+    1571 | 1814 | 1821 | 1824) ;;
     *) echo "no stand-in is known for pending issue $issue" >&2; exit 2 ;;
   esac
 done

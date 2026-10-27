@@ -55,7 +55,7 @@ vars:
   SOCKGUARD: cc2459bcf6d21bc2d82f882c666df08f349ff41c
   # The Sockguard fork changes SOCKGUARD lacks; the cases that need one
   # wait.
-  SOCKGUARD_PENDING: 1571 1814 missing-roots 1824
+  SOCKGUARD_PENDING: 1571 1814 1821 1824
   # The YAML this repository's tooling owns; package documents have their
   # own owners and checks.
   REPOSITORY_YAML: >-

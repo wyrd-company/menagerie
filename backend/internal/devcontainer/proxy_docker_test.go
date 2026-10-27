@@ -45,10 +45,10 @@ import (
 
 // pendingChanges names what each pending fork change holds back.
 var pendingChanges = map[string]string{
-	"1571":          "per-workspace exceptions, roots, identity headers and the restart-policy setting",
-	"1814":          "the LLBBridge passthrough that devcontainer builds need",
-	"missing-roots": "refusing to start when a bind root or the workspace root is missing",
-	"1824":          "network.allowed_drivers, on create and on attach",
+	"1571": "per-workspace exceptions, roots, identity headers and the restart-policy setting",
+	"1814": "the LLBBridge passthrough that devcontainer builds need",
+	"1821": "refusing to start when a bind root or the workspace root is missing",
+	"1824": "network.allowed_drivers, on create and on attach",
 }
 
 // proxied reports whether the suite runs through the Docker proxy.
@@ -295,7 +295,7 @@ func TestTheShippedProfileDeniesHostNetworkAndRestartPolicies(t *testing.T) {
 // workspace root. It exits rather than fall back to a lexical check.
 func TestTheProxyDoesNotStartWithoutARoot(t *testing.T) {
 	p := newProxyHarness(t)
-	waitsOn(t, "missing-roots")
+	waitsOn(t, "1821")
 	running, err := p.client.ContainerInspect(p.ctx, "sockguard")
 	if err != nil {
 		t.Fatalf("the suite's proxy: %v", err)
