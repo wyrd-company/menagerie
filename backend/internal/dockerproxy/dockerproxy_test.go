@@ -89,10 +89,19 @@ func TestDenialReasonStaysOnOneLine(t *testing.T) {
 	}
 }
 
+// TestAnOwnershipDenialIsADenial reads a 403 whose message is the reason,
+// as the proxy's ownership check answers.
+func TestAnOwnershipDenialIsADenial(t *testing.T) {
+	err, _ := create(t, `{"message":"owner policy denied access to network \"sample-net\"\nreferenced by container"}`, nil)
+	if d := Denial(err); d == nil || d.Reason != `owner policy denied access to network "sample-net" referenced by container` {
+		t.Fatalf("Denial = %+v, want the message, on one line", d)
+	}
+}
+
 func TestOtherForbiddenResponsesAreNotDenials(t *testing.T) {
 	for name, body := range map[string]string{
-		"engine message": `{"message":"forbidden by the daemon"}`,
-		"not json":       `denied`,
+		"no message": `{"error":"forbidden"}`,
+		"not json":   `denied`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			err, _ := create(t, body, nil)

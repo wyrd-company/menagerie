@@ -331,23 +331,9 @@ func TestTheProxyDoesNotStartWithoutARoot(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "sockguard.yaml"), []byte(edited), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			created, err := p.client.ContainerCreate(p.ctx,
-				&container.Config{Image: running.Config.Image, User: "0:0", Labels: map[string]string{"menagerie.test.run": p.runID}},
-				&container.HostConfig{
-					GroupAdd: []string{"2375"}, CapDrop: []string{"ALL"}, CapAdd: []string{"DAC_READ_SEARCH"}, ReadonlyRootfs: true,
-					Tmpfs: map[string]string{"/tmp": ""}, NetworkMode: "none", SecurityOpt: []string{"no-new-privileges"},
-					Binds: []string{
-						"/var/run/docker.sock:/var/run/docker.sock", "/menagerie-work:/menagerie-work:ro",
-						filepath.Join(dir, "socket") + ":/run/sockguard",
-						filepath.Join(dir, "sockguard.yaml") + ":/etc/sockguard/sockguard.yaml:ro",
-						p.exceptions + ":/etc/sockguard/exceptions:ro",
-					},
-				}, nil, nil, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			waited, waitErr := p.client.ContainerWait(p.ctx, created.ID, container.WaitConditionNextExit)
-			if err := p.client.ContainerStart(p.ctx, created.ID, container.StartOptions{}); err != nil {
+			created := p.createProxy(t, running.Config.Image, dir)
+			waited, waitErr := p.client.ContainerWait(p.ctx, created, container.WaitConditionNextExit)
+			if err := p.client.ContainerStart(p.ctx, created, container.StartOptions{}); err != nil {
 				t.Fatal(err)
 			}
 			// Test-only bound: the suite's proxy binds its socket within a
@@ -355,7 +341,7 @@ func TestTheProxyDoesNotStartWithoutARoot(t *testing.T) {
 			select {
 			case res := <-waited:
 				if name == "control" || res.StatusCode == 0 {
-					t.Errorf("the proxy exited %d with the %s configuration:\n%s", res.StatusCode, name, p.logsOf(created.ID))
+					t.Errorf("the proxy exited %d with the %s configuration:\n%s", res.StatusCode, name, p.logsOf(created))
 				}
 			case err := <-waitErr:
 				t.Fatal(err)
@@ -490,11 +476,11 @@ networks:
 // TestTheProxyDeniesAttachingToAnExistingNonBridgeNetwork makes a macvlan
 // or ipvlan network on the Engine itself, outside the proxy, and brings up a
 // Compose workspace whose service joins it as an external network: the
-// shipped profile checks the driver of a network a container attaches to,
-// as well as of one it creates.
+// network is not Menagerie's, so the proxy's ownership check denies the
+// create before its driver is read; with #1824 the driver check denies it
+// too.
 func TestTheProxyDeniesAttachingToAnExistingNonBridgeNetwork(t *testing.T) {
 	p := newProxyHarness(t)
-	waitsOn(t, "1824")
 	// The network is made where the proxy does not look; a kernel without
 	// the macvlan and ipvlan drivers, such as the disposable daemon's on a
 	// hosted runner, cannot make one at all.
@@ -523,5 +509,123 @@ networks:
 `,
 		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/"}`,
 	})
-	p.startDenied(folder, "driver")
+	p.startDenied(folder, "owner policy denied access to network")
+}
+
+// createProxy creates a second proxy of image, as the suite's own runs,
+// with the configuration dir/sockguard.yaml and its socket in dir/socket,
+// and returns its id. The test's cleanup removes it by its run label.
+func (p *proxyHarness) createProxy(t *testing.T, image, dir string) string {
+	t.Helper()
+	created, err := p.client.ContainerCreate(p.ctx,
+		&container.Config{Image: image, User: "0:0", Labels: map[string]string{"menagerie.test.run": p.runID}},
+		&container.HostConfig{
+			GroupAdd: []string{"2375"}, CapDrop: []string{"ALL"}, CapAdd: []string{"DAC_READ_SEARCH"}, ReadonlyRootfs: true,
+			Tmpfs: map[string]string{"/tmp": ""}, NetworkMode: "none", SecurityOpt: []string{"no-new-privileges"},
+			Binds: []string{
+				"/var/run/docker.sock:/var/run/docker.sock", "/menagerie-work:/menagerie-work:ro",
+				filepath.Join(dir, "socket") + ":/run/sockguard",
+				filepath.Join(dir, "sockguard.yaml") + ":/etc/sockguard/sockguard.yaml:ro",
+				p.exceptions + ":/etc/sockguard/exceptions:ro",
+			},
+		}, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return created.ID
+}
+
+// TestTheProxyChecksTheDriverOfAnExistingNetwork proves the driver check
+// on attaching without a kernel that has any driver but bridge: a second
+// proxy whose render admits only ipvlan, and a bridge network made on the
+// Engine itself. A create that names the network and a connect to it are
+// denied with the driver reason. The render also admits network connect,
+// which Menagerie never calls and the shipped profile does not admit.
+func TestTheProxyChecksTheDriverOfAnExistingNetwork(t *testing.T) {
+	p := newProxyHarness(t)
+	waitsOn(t, "1824")
+	running, err := p.client.ContainerInspect(p.ctx, "sockguard")
+	if err != nil {
+		t.Fatalf("the suite's proxy: %v", err)
+	}
+	raw, err := os.ReadFile("/menagerie-work/proxy/config/sockguard.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(raw)
+	for _, edit := range [][2]string{
+		{"allowed_drivers: [bridge]", "allowed_drivers: [ipvlan]"},
+		{`        - match: {method: "*", path: "/**"}
+          action: deny
+          reason: "menagerie: not in the Menagerie profile"`, `        - match: {method: POST, path: "/networks/*/connect"}
+          action: allow
+        - match: {method: "*", path: "/**"}
+          action: deny
+          reason: "menagerie: not in the Menagerie profile"`},
+	} {
+		if !strings.Contains(config, edit[0]) {
+			t.Fatalf("the profile has no %q", edit[0])
+		}
+		config = strings.Replace(config, edit[0], edit[1], 1)
+	}
+	dir := filepath.Join(os.TempDir(), p.runID+"-drivers")
+	if err := os.MkdirAll(filepath.Join(dir, "socket"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if err := os.WriteFile(filepath.Join(dir, "sockguard.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id := p.createProxy(t, running.Config.Image, dir)
+	if err := p.client.ContainerStart(p.ctx, id, container.StartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "socket", "menagerie.sock")
+	// Test-only bound: the suite's proxy binds its socket within a second.
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+	}
+
+	folder := p.workspace("drivers", map[string]string{"marker": "x"})
+	w, err := dockerproxy.Workspace(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The network and a container to connect are made through the suite's
+	// proxy for the workspace, so they carry the owner label the second
+	// proxy shares: a network made outside the proxy is denied by
+	// ownership before its driver is read.
+	suite, err := dockerproxy.NewClient(map[string]string{dockerproxy.HeaderWorkspace: w})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer suite.Close()
+	name := p.runID + "-bridge"
+	bridge, err := suite.NetworkCreate(p.ctx, name, network.CreateOptions{Driver: "bridge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.client.NetworkRemove(context.Background(), bridge.ID) })
+	target, err := suite.ContainerCreate(p.ctx, &container.Config{Image: baseImage, Cmd: []string{"sleep", "infinity"}, Labels: map[string]string{"menagerie.test.run": p.runID}}, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_HOST", "unix://"+socket)
+	client, err := dockerproxy.NewClient(map[string]string{dockerproxy.HeaderWorkspace: w})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for _, ref := range []string{name, bridge.ID} {
+		_, err := client.ContainerCreate(p.ctx, &container.Config{Image: baseImage, Labels: map[string]string{"menagerie.test.run": p.runID}}, &container.HostConfig{NetworkMode: container.NetworkMode(ref)}, nil, nil, "")
+		if d := dockerproxy.Denial(err); d == nil || !strings.Contains(d.Reason, "driver") {
+			t.Errorf("a create on network %s: %v, want a denial naming the driver", ref, err)
+		}
+		err = client.NetworkConnect(p.ctx, ref, target.ID, nil)
+		if d := dockerproxy.Denial(err); d == nil || !strings.Contains(d.Reason, "driver") {
+			t.Errorf("a connect to network %s: %v, want a denial naming the driver", ref, err)
+		}
+	}
 }

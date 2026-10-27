@@ -82,9 +82,11 @@ func withDenialReasons() dockerclient.Opt {
 	}
 }
 
-// denials rewrites the proxy's denial body so the Engine API error the
-// client makes of it carries the reason. Every other response passes
-// unchanged.
+// denials rewrites the proxy's denial bodies so the Engine API error the
+// client makes of each carries the reason: its policy denials, whose reason
+// is a field of their own, and its other 403 answers, such as an ownership
+// denial, whose message is the reason. Menagerie talks to the Engine only
+// through the proxy. Every other response passes unchanged.
 type denials struct{ base http.RoundTripper }
 
 func (d *denials) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -102,10 +104,13 @@ func (d *denials) RoundTrip(req *http.Request) (*http.Response, error) {
 		Message string `json:"message"`
 		Reason  string `json:"reason"`
 	}
-	if len(raw) <= maxDenial && json.Unmarshal(raw, &denial) == nil && denial.Message == proxyMessage {
-		reason := oneLine(denial.Reason)
-		if reason == "" {
-			reason = noReason
+	if len(raw) <= maxDenial && json.Unmarshal(raw, &denial) == nil && denial.Message != "" {
+		reason := oneLine(denial.Message)
+		if denial.Message == proxyMessage {
+			reason = oneLine(denial.Reason)
+			if reason == "" {
+				reason = noReason
+			}
 		}
 		body, _ = json.Marshal(map[string]string{"message": marker + strconv.Quote(reason)})
 	}
