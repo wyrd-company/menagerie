@@ -28,6 +28,8 @@ Before the container starts, you need:
   identity for it that Wyrwood holds as an OpenBao Transit key: a GitHub
   App, an SSH key, or both (see [Git identity](#git-identity));
 - a Wyrwood agent on the host, and a policy for Menagerie;
+- a Docker host that is not a Swarm manager (see
+  [The Docker proxy](#the-docker-proxy));
 - the workspace root: one folder on the host for every workspace, at a
   path with no symbolic link in it.
 
@@ -320,6 +322,12 @@ Edit these values of `sockguard.yml` to match the host:
 | `allowed_bind_mounts` | The workspace root, the workspace socket folder and the Compose staging folder: the values in `config.yml`. |
 | `workspace_exceptions.workspace_root` | The workspace root. |
 | `image_pull.allowed_registries` and `buildkit.session.auth.allowed_registries` | Every registry the workspaces pull from. |
+
+The Docker host must not be a Swarm manager. On a manager, the daemon's
+volume list holds the cluster's volumes, and the proxy's owner filter does
+not apply to them, so Menagerie would see and could remove volumes it did
+not create. When the daemon reports a Swarm manager, the workspace service
+logs a warning at start-up and starts anyway.
 
 Sockguard ignores keys it does not know: a misspelled key keeps its
 default without an error. Change values of the shipped file, not keys.

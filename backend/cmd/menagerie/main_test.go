@@ -3,15 +3,21 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/api/types/system"
 
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
@@ -92,6 +98,37 @@ func TestRuntimeOptionsNameWorkspacesAndStageCompose(t *testing.T) {
 func TestThrowawayContainersNameTheirWorkspaces(t *testing.T) {
 	if o := throwawayOptions("/srv/workspaces", &devcontainer.Options{}); o.Client == nil || o.Root != "/srv/workspaces" {
 		t.Fatalf("options %+v", o)
+	}
+}
+
+type fakeInfo struct {
+	info system.Info
+	err  error
+}
+
+func (f fakeInfo) Info(context.Context) (system.Info, error) { return f.info, f.err }
+
+// TestASwarmManagerHostIsWarnedAbout logs one warning, and only for a
+// Swarm manager.
+func TestASwarmManagerHostIsWarnedAbout(t *testing.T) {
+	manager := system.Info{Swarm: swarm.Info{ControlAvailable: true, LocalNodeState: swarm.LocalNodeStateActive}}
+	worker := system.Info{Swarm: swarm.Info{ControlAvailable: false, LocalNodeState: swarm.LocalNodeStateActive}}
+	for name, tc := range map[string]struct {
+		engine fakeInfo
+		want   []string
+	}{
+		"manager":     {fakeInfo{info: manager}, []string{swarmManagerWarning}},
+		"worker":      {fakeInfo{info: worker}, nil},
+		"no swarm":    {fakeInfo{}, nil},
+		"info failed": {fakeInfo{info: manager, err: errors.New("unreachable")}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var logged []string
+			warnSwarmManager(context.Background(), tc.engine, func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) })
+			if !slices.Equal(logged, tc.want) {
+				t.Errorf("logged %q, want %q", logged, tc.want)
+			}
+		})
 	}
 }
 
