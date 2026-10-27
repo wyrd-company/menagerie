@@ -4,7 +4,7 @@ name: menagerie
 
 services:
   menagerie:
-    image: ${MENAGERIE_IMAGE:-ghcr.io/wyrd-company/menagerie:0.1.0}
+    image: ${MENAGERIE_IMAGE:-ghcr.io/wyrd-company/menagerie:0.3.0}
     # Wyrwood binds the container by this name and names its consumer
     # directory after it.
     container_name: menagerie
