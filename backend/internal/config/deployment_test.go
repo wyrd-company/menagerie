@@ -29,6 +29,7 @@ type composeService struct {
 	User          string            `yaml:"user"`
 	CapDrop       []string          `yaml:"cap_drop"`
 	CapAdd        []string          `yaml:"cap_add"`
+	GroupAdd      []string          `yaml:"group_add"`
 	ReadOnly      bool              `yaml:"read_only"`
 	NetworkMode   string            `yaml:"network_mode"`
 	Ports         []string          `yaml:"ports"`
@@ -297,7 +298,8 @@ func checkProxy(t *testing.T, cfg *Config, services map[string]composeService, s
 	if len(profile.Rules) != 1 || profile.Rules[0].Action != "deny" {
 		t.Errorf("root rules %+v, want one deny", profile.Rules)
 	}
-	if proxy.User != "0:0" || !slices.Equal(proxy.CapDrop, []string{"ALL"}) || !slices.Equal(proxy.CapAdd, []string{"CHOWN", "DAC_READ_SEARCH"}) || !proxy.ReadOnly || proxy.NetworkMode != "none" || proxy.Restart != "unless-stopped" {
+	// The proxy gives its socket the listener's group by being in it.
+	if proxy.User != "0:0" || !slices.Equal(proxy.GroupAdd, []string{fmt.Sprint(*listener.SocketGID)}) || !slices.Equal(proxy.CapDrop, []string{"ALL"}) || !slices.Equal(proxy.CapAdd, []string{"DAC_READ_SEARCH"}) || !proxy.ReadOnly || proxy.NetworkMode != "none" || proxy.Restart != "unless-stopped" {
 		t.Errorf("the proxy runs as %+v", proxy)
 	}
 }

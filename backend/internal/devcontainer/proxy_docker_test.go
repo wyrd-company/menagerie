@@ -331,7 +331,7 @@ func TestTheProxyDoesNotStartWithoutARoot(t *testing.T) {
 			created, err := p.client.ContainerCreate(p.ctx,
 				&container.Config{Image: running.Config.Image, User: "0:0", Labels: map[string]string{"menagerie.test.run": p.runID}},
 				&container.HostConfig{
-					CapDrop: []string{"ALL"}, CapAdd: []string{"CHOWN", "DAC_READ_SEARCH"}, ReadonlyRootfs: true,
+					GroupAdd: []string{"2375"}, CapDrop: []string{"ALL"}, CapAdd: []string{"DAC_READ_SEARCH"}, ReadonlyRootfs: true,
 					Tmpfs: map[string]string{"/tmp": ""}, NetworkMode: "none", SecurityOpt: []string{"no-new-privileges"},
 					Binds: []string{
 						"/var/run/docker.sock:/var/run/docker.sock", "/menagerie-work:/menagerie-work:ro",

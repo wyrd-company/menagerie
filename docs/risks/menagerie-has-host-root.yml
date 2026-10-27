@@ -23,8 +23,13 @@ description: >-
   workspace. What remains: the operator's exceptions file grants a named
   workspace more, and that grant then reaches anyone who can change that
   workspace's definition; build steps pass the proxy uninspected
-  (buildkit-traffic-not-inspectable); Menagerie may exec as root in, and
-  read the output and files of, the containers it created; and the proxy
+  (buildkit-traffic-not-inspectable); Menagerie may exec as root in the
+  containers it created, and the profile's proxy-wide
+  `insecure_allow_read_exfiltration` admits attach and archive reads of
+  them, which throwaway containers need for their output and an upgrade
+  candidate's copy back, so Menagerie can read their output and files;
+  ownership keeps both to the containers the proxy marks as Menagerie's,
+  and Menagerie is the proxy's only client; and the proxy
   ignores unknown configuration keys (proxy-ignores-unknown-config-keys).
   Mitigation besides the proxy: only members of the `menagerie_managers`
   group reach the UI; the UI is not exposed to the public internet; only

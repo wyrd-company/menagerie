@@ -10,13 +10,21 @@ services:
     image: ${SOCKGUARD_IMAGE:-ghcr.io/wyrd-company/sockguard:2.2.11-wyrd.1}
     container_name: menagerie-sockguard
     restart: unless-stopped
-    # Root with two capabilities: CHOWN gives the listener socket its
-    # group, and DAC_READ_SEARCH lets it resolve every bind source, whoever
-    # owns the folders on the way. Nothing else: no network, a read-only
-    # file system, and /tmp for the archives it inspects.
+    # Root, for the Docker socket, with one capability. DAC_READ_SEARCH lets
+    # the bind-source resolver walk folders it cannot otherwise read: the
+    # workspace socket folder is 0700 and the services' user's, and so are
+    # Compose's staging folders and any private folder in a workspace.
+    # Without it, as the image's own user 65532 or as root with no
+    # capability, every devcontainer that mounts its workspace socket is
+    # denied ("cannot be resolved: permission denied"). The listener
+    # socket's group, 2375 in sockguard.yml, comes from group_add: an owner
+    # may give its file a group it is in, so no CHOWN. Nothing else: no
+    # network, a read-only file system, and /tmp for the archives it
+    # inspects.
     user: "0:0"
+    group_add: ["2375"]
     cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_READ_SEARCH]
+    cap_add: [DAC_READ_SEARCH]
     security_opt: [no-new-privileges:true]
     read_only: true
     network_mode: none

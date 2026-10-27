@@ -294,9 +294,14 @@ fails as `proxy-denied`.
 
 The `sockguard` service in `deploy/compose.yml` is the Docker proxy. It is
 the only container that mounts `/var/run/docker.sock`. It runs as root with
-the `CHOWN` and `DAC_READ_SEARCH` capabilities only, no network and a
-read-only file system. `deploy/sockguard.yml` is its configuration, with
-one Unix listener and one profile, `menagerie`.
+the `DAC_READ_SEARCH` capability only, no network and a read-only file
+system. Root reaches the Docker socket; `DAC_READ_SEARCH` lets it resolve
+a bind source below a folder it could not otherwise read, such as the
+workspace socket folder, which is `0700` and the services' user's. As the
+image's own user, every devcontainer that mounts its workspace socket
+would be denied. It is in the listener socket's group (`group_add`), so it
+gives the socket that group without `CHOWN`. `deploy/sockguard.yml` is its
+configuration, with one Unix listener and one profile, `menagerie`.
 
 | Proxy mount | Why |
 | --- | --- |
@@ -311,7 +316,7 @@ Edit these values of `sockguard.yml` to match the host:
 | Setting | Value |
 | --- | --- |
 | `clients.unix_peer_profiles[0].uids` | The workspace root's owner: `stat -c %u /srv/menagerie/workspaces`. The proxy selects Menagerie's profile by the connecting process's uid; any other uid is denied. |
-| `listeners[0].socket_gid` | A group no Menagerie service has otherwise: not the workspace root's group. Menagerie gives it to the workspace service only. |
+| `listeners[0].socket_gid` | A group no Menagerie service has otherwise: not the workspace root's group. Menagerie gives it to the workspace service only. Set the proxy's `group_add` in `compose.yml` to the same number. |
 | `allowed_bind_mounts` | The workspace root, the workspace socket folder and the Compose staging folder: the values in `config.yml`. |
 | `workspace_exceptions.workspace_root` | The workspace root. |
 | `image_pull.allowed_registries` and `buildkit.session.auth.allowed_registries` | Every registry the workspaces pull from. |
@@ -334,6 +339,15 @@ After an edit, restart the proxy with `docker compose restart sockguard`.
   workspace's folder or socket folder is denied.
 - No privileged container, no host network, PID or IPC namespace and no
   restart policy, unless a workspace exception grants it.
+
+The profile sets the proxy-wide `insecure_allow_read_exfiltration: true`.
+It admits `POST /containers/{id}/attach` and `GET
+/containers/{id}/archive`, requests that read a container's output and
+files, on the containers the proxy marks as Menagerie's. Throwaway
+containers need both: attach streams a hook's or `initializeCommand`'s
+output to the job console, and the archive read copies an upgrade's
+candidate back out. Without it the proxy refuses the profile. Menagerie is
+the proxy's only client.
 
 Every container, network and volume Menagerie creates carries the proxy's
 owner label, and Menagerie sees only those: a container that another tool

@@ -157,10 +157,10 @@ case "$cmd" in
     esac
     docker exec "$run-runner" mkdir -p "$work/proxy/socket" "$work/proxy/config" "$proxy_exceptions"
     docker cp "$config" "$run-runner:$work/proxy/config/sockguard.yaml" >/dev/null
-    # As compose.yml runs it: root with only the capabilities to give its
-    # socket a group and to resolve every bind source, no network, and a
-    # writable /tmp only, where it spools a copy's archive to inspect it.
-    dind_exec run -d --name sockguard --user 0:0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH \
+    # As compose.yml runs it: root in the socket's group, with only the
+    # capability to resolve every bind source, no network, and a writable
+    # /tmp only, where it spools a copy's archive to inspect it.
+    dind_exec run -d --name sockguard --user 0:0 --group-add 2375 --cap-drop ALL --cap-add DAC_READ_SEARCH \
       --read-only --tmpfs /tmp --security-opt no-new-privileges --network none \
       -v /var/run/docker.sock:/var/run/docker.sock -v "$work:$work:ro" \
       -v "$work/proxy/socket:/run/sockguard" \
