@@ -386,8 +386,11 @@ Compose workspaces work through the proxy, with these limits:
   Compose file sets that label on it, which Menagerie refuses: a sidecar
   needs no grant.
 - A service that mounts a Compose config or secret mounts it from the
-  staging folder. With an exception, add the staging folder to its
-  `extraBindSources`.
+  workspace's own folder in the staging folder, which Menagerie names
+  after the workspace and creates before a start or rebuild. With an
+  exception, add that folder to its `extraBindSources`.
+- Networks use the `bridge` driver. A network with another driver, such as
+  `macvlan`, fails as `proxy-denied`.
 - Compose networks stay on the host after a workspace's devcontainer is
   removed; remove them with `docker network rm`.
 
@@ -426,21 +429,43 @@ the proxy writes it.
   not granted. The grants are `privileged`, `capAdd`, `namespaces`,
   `devices`, `deviceCgroupRules`, `gpus`, `extraBindSources`,
   `securityOpt`, `runtimes`, `sysctls` and `restartPolicy`; Sockguard's
-  workspace exceptions documentation describes each.
+  workspace exceptions documentation describes each, and its schema is
+  `docs/public/workspace-exceptions.schema.json` in the Sockguard
+  repository. A `securityOpt` entry uses the `=` form, such as
+  `seccomp=unconfined`.
+- The workspace folder itself must be inside `allowed_bind_mounts`; the
+  workspace root there covers every workspace.
 - `approval` records who approved the entry and when: the OIDC issuer and
   subject of the approver, a UTC time ending in `Z`, and an optional name
   and note. The proxy checks their shape, not their truth.
 
 To grant, add or change an entry. To revoke, remove the entry or a grant.
-Write the whole file to a temporary file in the same folder and rename it
-over `workspace-exceptions.json`, so the proxy never reads half a file.
-The proxy reloads it at once; an invalid file means no exceptions until a
-valid one is written.
+Never edit the file in place: write the whole new file to a temporary file
+in the same folder, then move it over `workspace-exceptions.json`, so the
+proxy never reads half a file:
+
+```sh
+cp workspace-exceptions.json workspace-exceptions.json.new
+# edit workspace-exceptions.json.new
+mv workspace-exceptions.json.new workspace-exceptions.json
+```
+
+The proxy reloads the file when it is replaced; an invalid file means no
+exceptions until a valid one is written. The proxy does not always notice
+a deleted file: after you delete it, send the proxy `SIGHUP`, with
+`docker compose kill -s HUP sockguard`.
 
 A grant applies when the proxy creates a container. A revoked grant ends
 for the workspace at its next rebuild, which creates the container again;
 until then the existing container keeps it. Stop the workspace to stop
 using the grant at once, and rebuild it before the next start.
+
+### Removing a workspace
+
+Menagerie does not remove workspaces. To remove one, stop it, then remove
+its folder from the workspace root, its folder from the workspace socket
+folder and its folder from the Compose staging folder, each named after
+the workspace, and its entry from the exceptions file.
 
 ## Upgrades
 

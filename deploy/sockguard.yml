@@ -101,6 +101,10 @@ clients:
           allow_device_nodes: false
           allow_escaping_links: false
 
+        network:
+          # Compose networks use the bridge driver only.
+          allowed_network_drivers: [bridge]
+
         container_remove:
           # Rebuild removes with force and anonymous volumes; Compose
           # recreates with force.

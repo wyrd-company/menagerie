@@ -292,7 +292,9 @@ proposed-design:
     else. The profile, `deploy/sockguard.yml`, and the operator's
     exceptions file are the proxy's; Menagerie mounts the exceptions folder
     read-only and never writes it. Compose configs and secrets are staged in
-    `compose-staging-folder`, a host path the proxy allows as a bind root.
+    the workspace's own folder of `compose-staging-folder`, named after the
+    workspace and created before a start or rebuild: a host path inside a
+    root the proxy allows.
   registry-credentials: >-
     Container registry credentials for pulls, builds, feature downloads and
     Compose services come from OpenBao. Configuration names, per registry, a

@@ -15,8 +15,9 @@
 #   1819  label filters kept under ownership -> no ownership block, so
 #         devcontainer-builder's label lookups select the right containers
 #
-# Pending 1571, 1814, 1822 (deny reasons in a profile's denials) and
-# missing-roots (refusing to start without a root) have no stand-in: the
+# Pending 1571, 1814, 1822 (deny reasons in a profile's denials),
+# missing-roots (refusing to start without a root) and network-drivers
+# (allowed_network_drivers) have no stand-in: the
 # pinned proxy ignores their keys or lacks the behavior, and the cases that
 # need them wait.
 set -euo pipefail
@@ -44,7 +45,7 @@ script=(
 for issue in "$@"; do
   case "$issue" in
     1819) script+=(-e '/^ownership:$/,/^$/d') ;;
-    1571 | 1814 | 1822 | missing-roots) ;;
+    1571 | 1814 | 1822 | missing-roots | network-drivers) ;;
     *) echo "no stand-in is known for pending issue $issue" >&2; exit 2 ;;
   esac
 done

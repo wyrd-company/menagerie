@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -111,7 +112,8 @@ type Options struct {
 	// start, stop and rebuild goes through one that names its workspace to
 	// the Docker proxy. Nil uses the shared client without headers.
 	Client func(headers map[string]string) (*dockerclient.Client, error)
-	// ComposeStaging is the folder Compose's configs and secrets are
+	// ComposeStaging is the folder that holds one folder per workspace,
+	// named after it, that the workspace's Compose configs and secrets are
 	// written to for their bind mounts: a path the Engine resolves on the
 	// host. Empty is devcontainer-builder's default under TMPDIR.
 	ComposeStaging string
@@ -464,7 +466,10 @@ func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) er
 	if op.socket != "" {
 		req.Mounts = append(req.Mounts, "type=bind,source="+op.socket+",target="+WorkspaceSocketTarget+",readonly")
 	}
-	res, err := r.composeHost(p, op.auth).Up(ctx, req)
+	if err := r.ensureStaging(folder); err != nil {
+		return err
+	}
+	res, err := r.composeHost(p, op.auth, folder).Up(ctx, req)
 	// Up can recreate the primary and then fail, in a lifecycle command
 	// for example; its result still says so.
 	if res != nil {
@@ -505,7 +510,7 @@ func (r *Runtime) stop(ctx context.Context, folder string, p Progress) error {
 	if errors.Is(err, hostdocker.ErrContainerNotFound) {
 		// A Compose project keeps its other services running without its
 		// primary; its project label still finds them.
-		err := r.composeHost(p, anonymous).Stop(ctx, folder)
+		err := r.composeHost(p, anonymous, folder).Stop(ctx, folder)
 		if errors.Is(err, dockercompose.ErrProjectNotFound) {
 			fmt.Fprintln(p.Log(""), "workspace has no container")
 			return nil
@@ -520,7 +525,7 @@ func (r *Runtime) stop(ctx context.Context, folder string, p Progress) error {
 	}
 	if project := info.Labels[dockercompose.LabelProject]; project != "" {
 		fmt.Fprintf(p.Log(""), "stopping compose project %s\n", project)
-		return r.composeHost(p, anonymous).Stop(ctx, folder)
+		return r.composeHost(p, anonymous, folder).Stop(ctx, folder)
 	}
 	fmt.Fprintf(p.Log(""), "stopping container %s\n", shortID(info.ID))
 	return host.StopByID(ctx, info.ID)
@@ -587,15 +592,50 @@ func (r *Runtime) dockerHost(p Progress, auth RegistryAuth) *hostdocker.Host {
 	return hostdocker.New(r.client, hostdocker.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth})
 }
 
-func (r *Runtime) composeHost(p Progress, auth RegistryAuth) *dockercompose.Host {
-	return dockercompose.New(r.client, r.composeOptions(p, auth))
+func (r *Runtime) composeHost(p Progress, auth RegistryAuth, folder string) *dockercompose.Host {
+	return dockercompose.New(r.client, r.composeOptions(p, auth, folder))
 }
 
 // composeOptions are a Compose operation's options: its output, its
-// credential source, and the staging folder of its configs and secrets.
-func (r *Runtime) composeOptions(p Progress, auth RegistryAuth) dockercompose.Options {
+// credential source, and the staging folder of the configs and secrets of
+// the workspace in folder.
+func (r *Runtime) composeOptions(p Progress, auth RegistryAuth, folder string) dockercompose.Options {
 	out := p.Log("")
-	return dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth, UserDataFolder: r.opts.ComposeStaging}
+	return dockercompose.Options{Logger: logger(p), Stdout: out, Stderr: out, RegistryAuth: auth, UserDataFolder: r.stagingFolder(folder)}
+}
+
+// stagingFolder is the workspace's own folder in ComposeStaging, named
+// after the workspace, as the Docker proxy expects of a per-workspace
+// root; empty without ComposeStaging.
+func (r *Runtime) stagingFolder(folder string) string {
+	if r.opts.ComposeStaging == "" {
+		return ""
+	}
+	return filepath.Join(r.opts.ComposeStaging, filepath.Base(folder))
+}
+
+// errStaging is a staging folder that cannot be used. It names no path.
+var errStaging = errors.New("the workspace's Compose staging folder is not a folder of the services' user")
+
+// ensureStaging creates the workspace's staging folder, private to the
+// services' user, before Up writes into it. An existing entry must be a
+// real folder of this user, never a link.
+func (r *Runtime) ensureStaging(folder string) error {
+	dir := r.stagingFolder(folder)
+	if dir == "" {
+		return nil
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return errStaging
+	}
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		return errStaging
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
+		return errStaging
+	}
+	return nil
 }
 
 // needsBuild reports whether the definition needs a derived image, as

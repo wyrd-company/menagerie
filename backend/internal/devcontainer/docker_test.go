@@ -775,3 +775,53 @@ func TestMountingListsTheRunningContainersThatMountTheFolder(t *testing.T) {
 		t.Fatalf("mounting %v, want %v", got, want)
 	}
 }
+
+// TestComposeConfigsAndSecretsStageInTheWorkspacesFolder brings up a
+// Compose workspace whose service mounts a config and a secret: both are
+// written into the workspace's own folder of the staging folder, a host
+// path, and the service reads them.
+func TestComposeConfigsAndSecretsStageInTheWorkspacesFolder(t *testing.T) {
+	h := newHarness(t)
+	staging := t.TempDir()
+	h.rt = devcontainer.New(h.proxied, h.options(devcontainer.Options{ComposeStaging: staging}))
+	folder := h.workspace("staged-space", map[string]string{
+		".devcontainer/compose.yml": `services:
+  app:
+    image: ` + baseImage + `
+    command: ["sleep", "infinity"]
+    configs: [sample-config]
+    secrets: [sample-secret]
+configs:
+  sample-config:
+    content: config-value
+secrets:
+  sample-secret:
+    file: ./secret.txt
+`,
+		".devcontainer/secret.txt":        "secret-value\n",
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/"}`,
+	})
+	h.mustRun(h.rt.Start, folder)
+	id := h.status(folder).ContainerID
+	if got := h.exec(id, "cat", "/sample-config"); got != "config-value" {
+		t.Errorf("config %q", got)
+	}
+	if got := h.exec(id, "cat", "/run/secrets/sample-secret"); got != "secret-value" {
+		t.Errorf("secret %q", got)
+	}
+	var staged []string
+	for _, m := range h.inspect(id).Mounts {
+		if m.Type == "bind" && strings.HasPrefix(m.Source, staging+"/") {
+			staged = append(staged, m.Source)
+		}
+	}
+	own := filepath.Join(staging, filepath.Base(folder)) + "/"
+	if len(staged) == 0 {
+		t.Fatalf("no mount comes from the staging folder %s", staging)
+	}
+	for _, src := range staged {
+		if !strings.HasPrefix(src, own) {
+			t.Errorf("mount source %s is outside the workspace's staging folder %s", src, own)
+		}
+	}
+}

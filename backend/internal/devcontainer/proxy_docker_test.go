@@ -44,11 +44,12 @@ import (
 
 // pendingChanges names what each pending fork change holds back.
 var pendingChanges = map[string]string{
-	"1571":          "per-workspace exceptions, roots, identity headers and the restart-policy setting",
-	"1814":          "the LLBBridge passthrough that devcontainer builds need",
-	"1819":          "label filters kept under ownership",
-	"1822":          "deny reasons in a profile's denials (response.deny_verbosity)",
-	"missing-roots": "refusing to start when a bind root or the workspace root is missing",
+	"1571":            "per-workspace exceptions, roots, identity headers and the restart-policy setting",
+	"1814":            "the LLBBridge passthrough that devcontainer builds need",
+	"1819":            "label filters kept under ownership",
+	"1822":            "deny reasons in a profile's denials (response.deny_verbosity)",
+	"missing-roots":   "refusing to start when a bind root or the workspace root is missing",
+	"network-drivers": "network.allowed_network_drivers",
 }
 
 // proxied reports whether the suite runs through the Docker proxy.
@@ -468,4 +469,25 @@ func TestProxyPingHelper(t *testing.T) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	fmt.Printf("%s\n%s\n", resp.Status, body)
+}
+
+// TestTheProxyDeniesANonBridgeComposeNetwork brings up a Compose workspace
+// whose network uses the macvlan driver: the shipped profile admits only
+// bridge networks.
+func TestTheProxyDeniesANonBridgeComposeNetwork(t *testing.T) {
+	p := newProxyHarness(t)
+	waitsOn(t, "network-drivers")
+	folder := p.workspace("macvlan", map[string]string{
+		".devcontainer/compose.yml": `services:
+  app:
+    image: ` + baseImage + `
+    command: ["sleep", "infinity"]
+    networks: [outside]
+networks:
+  outside:
+    driver: macvlan
+`,
+		".devcontainer/devcontainer.json": `{"dockerComposeFile": "compose.yml", "service": "app", "workspaceFolder": "/"}`,
+	})
+	p.startDenied(folder, "driver")
 }

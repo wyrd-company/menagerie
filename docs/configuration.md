@@ -76,8 +76,10 @@ is never `/`. Menagerie finds a workspace's container by the
 Docker proxy, give the root's path with no symbolic link in it: the proxy
 compares that label with the workspace's folder with links resolved.
 
-`compose-staging-folder` is the folder a Compose workspace's configs and
-secrets are written to, which its services bind-mount. It is an absolute
+`compose-staging-folder` holds one folder per Compose workspace, named
+after it, that its configs and secrets are written to and its services
+bind-mount. Menagerie creates a workspace's folder, private to the
+services' user, before a start or rebuild. It is an absolute
 folder at the same path on the host and in the container, belongs to the
 workspace root's owner, and is one of the proxy's allowed bind roots. It
 must be neither inside nor around the workspace root, the Wyrwood
