@@ -94,12 +94,16 @@ clients:
 
         container_archive:
           # Throwaway containers copy a candidate or a template in at /,
-          # named by its absolute paths: the Engine makes the folders.
-          # The entry checks apply.
+          # its entries named from the root: the Engine makes the folders.
           allowed_paths: ["/"]
           allow_setid: false
           allow_device_nodes: false
-          allow_escaping_links: false
+          # Templates and workspaces hold absolute links, such as a virtual
+          # environment's bin/python, and the proxy counts every absolute
+          # link as escaping. Admitting them lets a later entry write through
+          # a link into the throwaway container's own file system and its
+          # workspace bind, which the hook itself can already write.
+          allow_escaping_links: true
 
         network:
           # Compose networks use the bridge driver only.

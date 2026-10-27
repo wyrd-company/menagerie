@@ -14,7 +14,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -516,19 +515,19 @@ func TestNoCapturedValueLeavesARealRun(t *testing.T) {
 // TestCopiedLinksThroughTheDockerProxy copies folders that hold symbolic
 // links into throwaway containers: a template with an absolute link, as a
 // script hook's template root, and an upgrade candidate, a checkout of the
-// workspace's committed tree, with a virtual environment's absolute link.
-// A relative link that stays in its folder is the control.
+// workspace's committed tree, with a virtual environment's absolute link,
+// beside a relative link that stays in its folder. The shipped profile's
+// allow_escaping_links admits all three; the proxy counts the absolute ones
+// as escaping.
 func TestCopiedLinksThroughTheDockerProxy(t *testing.T) {
 	h := newHarness(t)
-	proxied := os.Getenv("MENAGERIE_TEST_PROXY_ROOT") != ""
 	for _, tc := range []struct {
 		name, link, to string
 		copied         bool // a template root, else a candidate target
-		refused        bool // through the proxy
 	}{
-		{"template-absolute", "link", "/usr/bin/env", true, true},
-		{"candidate-venv-absolute", ".venv/bin/python", "/usr/bin/python3", false, true},
-		{"candidate-relative", ".venv/bin/python3", "python", false, false},
+		{"template-absolute", "link", "/usr/bin/env", true},
+		{"candidate-venv-absolute", ".venv/bin/python", "/usr/bin/python3", false},
+		{"candidate-relative", ".venv/bin/python3", "python", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := h.folder(tc.name)
@@ -548,16 +547,13 @@ func TestCopiedLinksThroughTheDockerProxy(t *testing.T) {
 			} else {
 				c.Workspace, c.Target, c.Dir = h.folder(tc.name+"-workspace"), src, src
 			}
-			code, err := h.docker.Run(context.Background(), c)
-			var re *throwaway.RunError
-			switch {
-			case proxied && tc.refused:
-				if !errors.As(err, &re) || re.Stage != throwaway.StageCopy || re.Denial == "" {
-					t.Fatalf("run %d %v, want the proxy to refuse the copy", code, err)
-				}
-				t.Logf("refused: %v", err)
-			case err != nil || code != 0:
+			if code, err := h.docker.Run(context.Background(), c); err != nil || code != 0 {
 				t.Fatalf("run %d %v, want the copy admitted", code, err)
+			}
+			if !tc.copied {
+				if got, err := os.Readlink(filepath.Join(src, tc.link)); err != nil || got != tc.to {
+					t.Errorf("the copied back link points to %q, %v; want %q", got, err, tc.to)
+				}
 			}
 		})
 	}

@@ -277,13 +277,13 @@ the labels `menagerie.throwaway` and `menagerie.throwaway.workspace`, never
 removed when its command ends; any left by a stopped Menagerie are removed
 when it starts.
 
-The proxy inspects what Menagerie copies into a throwaway container, a
-template's files for a script hook or an upgrade's candidate. It refuses
-set-user-id and set-group-id files, device nodes and symbolic links that
-point out of their folder, absolute or through `..`. A template that holds
-such a link is not supported: its script hooks and its upgrades' hooks
-fail, and the console line `a template hook's throwaway container
-failed:` names the copy stage and the proxy's reason.
+The proxy inspects what Menagerie copies into a throwaway container: a
+template's files for a script hook, or an upgrade's candidate, which holds
+the workspace's committed files. It refuses set-user-id and set-group-id
+files and device nodes; symbolic links are copied as they are, absolute
+ones included, such as a virtual environment's `bin/python`. A refused
+copy fails the hook, and the console line `a template hook's throwaway
+container failed:` names the copy stage and the proxy's reason.
 
 ### Container registries
 
