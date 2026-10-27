@@ -13,9 +13,12 @@ description: >-
   `workspace-root`, `templates` and `template-service.socket`, with the
   workspace service's rules for them, and ignores its other members. Toha's
   configuration, registry, cache and state live under the folder named by
-  `-data`, default `/var/lib/menagerie/toha`. On start it replaces a socket
-  file left by an ended process and refuses a live socket or another file.
-  It keeps no state between requests.
+  `-data`, default `/var/lib/menagerie/toha`, with the session key
+  `session-key`: 32 random bytes, readable only by the service, written on
+  the first start and read on every later one. A key file of another
+  length, or one its group or others may read, stops the start. On start it replaces a socket file left by an ended
+  process and refuses a live socket or another file. It keeps no state
+  between requests.
 
 
   Routes. Every route is `POST` with a JSON body and answers JSON.
@@ -34,8 +37,11 @@ description: >-
   `workspace` is a plain folder name, that `target` is lexically the
   workspace root joined with it, that the folder's real path, with symbolic
   links resolved, is a direct child of the root's real path, and that
-  `templateId` is approved. A route that carries a session then checks that
-  the session's template and named flag are the approved address's formal
+  `templateId` is approved. A route that carries a session then verifies its
+  signature for this flow (create or upgrade), `workspace` and `templateId`,
+  and refuses an unsigned value, an altered record or signature, and a value
+  issued for another flow, workspace or template as `session-tampered`. Only
+  then does it read the record and check that the session's template and named flag are the approved address's formal
   identity, computed without fetching, that it was started for this target,
   and that it belongs to this flow: a create session has no update base, and
   an upgrade session's base is a recorded application. A submission is
@@ -44,10 +50,14 @@ description: >-
 
 
   Interview replies. Start and answer routes answer 200 with
-  `{"session","state","document","warnings"}`. `session` is Toha's whole
-  staged record: the pinned template and revision, the invocation context,
-  admitted documents and accepted submissions. The workspace service returns
-  it unchanged with the next request. `state` is `questions`, `completed` or
+  `{"session","state","document","warnings"}`. `session` is
+  `{"record","signature"}`. `record` is Toha's whole staged record: the
+  pinned template and revision, the invocation context, admitted documents
+  and accepted submissions. `signature` is the unpadded base64url
+  HMAC-SHA256, under the session key, of the flow, `workspace`,
+  `templateId` and the record's JSON serialization, each prefixed by its
+  length. The workspace service returns the session unchanged with the next
+  request. `state` is `questions`, `completed` or
   `ended`. `document` is Toha's batch document while questions remain,
   Toha's ended document after a flow `stop` or `abort`, and `null` once the
   interview completed. A rejected submission answers 200 with the same
@@ -124,7 +134,8 @@ description: >-
   Errors. A refusal answers `{"error":{"kind","message"}}`, adding `paths`
   for refused files, `locations` and `questions` for refused request values,
   and `warnings`. Request and session: `malformed-request` (400),
-  `malformed-session` (400), `malformed-submission` (400),
+  `malformed-session` (400), `session-tampered` (400),
+  `malformed-submission` (400),
   `submission-template-mismatch` (400), `number-not-representable` (400),
   `nesting-too-deep` (400),
   `invalid-workspace` (400), `target-mismatch` (400), `unknown-template`
@@ -176,7 +187,10 @@ validation-criteria: >-
   upgrade between two template versions that asks only the new question and
   keeps local edits, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;
-  `tests/requests.rs` covers every request check; `tests/restart.rs` runs
+  `tests/requests.rs` covers every request check, and refuses a session
+  with any record member altered, without its signature, signed with
+  another key, or replayed into another workspace, template or flow, while
+  the untouched session completes and generates; `tests/restart.rs` runs
   the binary across a restart; `tests/limits.rs` sends the binary a request
   nested far deeper than any value; `tests/contract.rs` checks that this
   specification names every route and error kind the service uses.

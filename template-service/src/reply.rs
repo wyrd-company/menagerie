@@ -5,8 +5,10 @@ use serde_json::Value;
 use toha::operations::SessionState;
 use toha::staging::{CanonicalTarget, StagedRecord};
 
+/// The reply to a start or answer. `session` is the record's signed value.
 pub fn interview(
     record: &StagedRecord,
+    session: Value,
     target: &CanonicalTarget,
     state: SessionState,
     warnings: Vec<String>,
@@ -25,8 +27,7 @@ pub fn interview(
         }
     };
     Ok(InterviewReply {
-        session: serde_json::to_value(record)
-            .map_err(|e| ServiceError::internal(format!("session does not serialize: {e}")))?,
+        session,
         state,
         document,
         warnings,

@@ -6,6 +6,7 @@ use crate::checks::{self, Operation};
 use crate::error::ServiceError;
 use crate::host::{self, ProcessEnvironment};
 use crate::reply;
+use crate::seal::{self, Binding};
 use toha::context::{EnvironmentDecision, ExecutionFacts};
 use toha::operations::{Preparation, Session};
 use toha::{ApplyOptions, RawAnswers, Template};
@@ -67,14 +68,20 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
     )?;
     warnings.extend(session.warnings()?);
     let state = session.state()?;
-    reply::interview(&session.record, &selected.target, state, warnings)
+    let sealed = seal::seal(
+        &service.key,
+        Binding::new(Operation::Create, &request.workspace, &request.template_id),
+        &session.record,
+    )?;
+    reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }
 
 /// Rebuild the session and submit one batch. A rejected batch returns the same
 /// questions with their errors and an unchanged session.
 pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
-    let record = checks::session(request.session)?;
+    let binding = Binding::new(Operation::Create, &request.workspace, &request.template_id);
+    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, warnings) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;
@@ -90,7 +97,8 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     let mut session = resume(service, record, &selected.target, config, &registry)?;
     reply::asking(&session.state()?)?;
     let state = session.answer(answers)?;
-    reply::interview(&session.record, &selected.target, state, warnings)
+    let sealed = seal::seal(&service.key, binding, &session.record)?;
+    reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }
 
 /// Rebuild a completed session and apply it into the folder the workspace
@@ -98,7 +106,8 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
 /// written.
 pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
-    let record = checks::session(request.session)?;
+    let binding = Binding::new(Operation::Create, &request.workspace, &request.template_id);
+    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, _) = service.host.context()?;
     let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;

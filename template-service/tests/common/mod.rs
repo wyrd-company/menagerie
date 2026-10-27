@@ -5,6 +5,8 @@
 #![allow(dead_code)]
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
+pub use menagerie_template_service::checks::Operation;
+use menagerie_template_service::seal::{self, Binding, SessionKey};
 use menagerie_template_service::{Service, config::Settings, server};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
@@ -267,6 +269,37 @@ impl World {
     pub fn select(&self, workspace: &str, template: &str) -> Value {
         json!({"workspace": workspace, "target": self.folder(workspace), "templateId": template})
     }
+
+    /// The service's session key, from its data folder.
+    pub fn key(&self) -> SessionKey {
+        SessionKey::load_or_create(&self.data).unwrap()
+    }
+
+    /// Sign `record` for the selector's workspace and template in this flow,
+    /// as only a holder of the service's key can, so that a test reaches the
+    /// checks behind the signature.
+    pub fn signed(&self, operation: Operation, selector: &Value, record: Value) -> Value {
+        let binding = Binding::new(
+            operation,
+            selector["workspace"].as_str().unwrap(),
+            selector["templateId"].as_str().unwrap(),
+        );
+        seal::sealed(&self.key(), binding, record).unwrap()
+    }
+
+    /// A session whose record `edit` changed, signed again for the selector
+    /// in this flow.
+    pub fn resigned(
+        &self,
+        operation: Operation,
+        selector: &Value,
+        session: &Value,
+        edit: impl FnOnce(&mut Value),
+    ) -> Value {
+        let mut record = session["record"].clone();
+        edit(&mut record);
+        self.signed(operation, selector, record)
+    }
 }
 
 /// The service running in this process on the world's socket.
@@ -278,7 +311,10 @@ pub struct Running {
 
 impl Running {
     pub async fn start(world: &World) -> Self {
-        let service = Arc::new(Service::new(world.settings()));
+        let service = Arc::new(Service::new(
+            world.settings(),
+            menagerie_template_service::seal::SessionKey::load_or_create(&world.data).unwrap(),
+        ));
         service.host.prepare().unwrap();
         let listener = server::bind(&world.socket).await.unwrap();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -326,6 +362,10 @@ impl Reply {
     /// The reply's session as the exact bytes the service sent.
     pub fn session_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(&self.json["session"]).unwrap()
+    }
+    /// The Toha staged record inside the reply's signed session.
+    pub fn record(&self) -> &Value {
+        &self.json["session"]["record"]
     }
 }
 

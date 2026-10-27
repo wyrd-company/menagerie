@@ -109,7 +109,7 @@ edit both files.
 | The Wyrwood consumer directory at `/run/wyrwood` | `ssh-agent.sock` and `vault.sock`. `wyrwood-directory` names the mount target. |
 | `SSH_AUTH_SOCK=/run/wyrwood/ssh-agent.sock` | Toha's Git transport runs the image's `ssh` client with this agent. |
 | `config.yml` at `/etc/menagerie/config.yml` | Both services read it. |
-| A volume at `/var/lib/menagerie` | Toha's template cache and the services' home. Without it they are lost when the container is recreated. |
+| A volume at `/var/lib/menagerie` | Toha's template cache, the template service's session key and the services' home. Without it they are lost when the container is recreated. |
 | `restart: unless-stopped` | Docker starts Menagerie after a host restart, and restarts it after either service stops. |
 | Port `8080` | The web UI and workspace API. Publish it on a private address only. |
 
