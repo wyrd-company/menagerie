@@ -341,6 +341,7 @@ components:
             - operation-failed
             - initialize-command-failed
             - registry-credentials-unavailable
+            - runner-image-unavailable
             - internal-error
             - workspace-exists
             - template-refused

@@ -60,6 +60,8 @@ type fakeTemplates struct {
 	mu       sync.Mutex
 	calls    []string
 	sessions map[string]string
+	// tokens holds the hook token of each generate and apply call.
+	tokens map[string]string
 
 	startInterview  func(templates.Selector) (*templates.Reply, error)
 	answerInterview func(templates.Selector, json.RawMessage, json.RawMessage) (*templates.Reply, error)
@@ -98,8 +100,9 @@ func (f *fakeTemplates) AnswerInterview(_ context.Context, s templates.Selector,
 	f.record("answer-interview", session)
 	return f.answerInterview(s, session, submission)
 }
-func (f *fakeTemplates) Generate(_ context.Context, s templates.Selector, session json.RawMessage) (*templates.Applied, error) {
+func (f *fakeTemplates) Generate(_ context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error) {
 	f.record("generate", session)
+	f.keepToken("generate", hookToken)
 	return f.generate(s)
 }
 func (f *fakeTemplates) StartUpgrade(_ context.Context, s templates.Selector) (*templates.Reply, error) {
@@ -110,9 +113,25 @@ func (f *fakeTemplates) AnswerUpgrade(_ context.Context, s templates.Selector, s
 	f.record("answer-upgrade", session)
 	return f.answerUpgrade(s, session, submission)
 }
-func (f *fakeTemplates) ApplyUpgrade(_ context.Context, s templates.Selector, session json.RawMessage) (*templates.Applied, error) {
+func (f *fakeTemplates) ApplyUpgrade(_ context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error) {
 	f.record("apply-upgrade", session)
+	f.keepToken("apply-upgrade", hookToken)
 	return f.applyUpgrade(s)
+}
+
+func (f *fakeTemplates) keepToken(call, token string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tokens == nil {
+		f.tokens = map[string]string{}
+	}
+	f.tokens[call] = token
+}
+
+func (f *fakeTemplates) token(call string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tokens[call]
 }
 
 func writeFile(t *testing.T, root, rel, body string) {

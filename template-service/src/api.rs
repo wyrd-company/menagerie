@@ -26,6 +26,8 @@ pub struct AnswerRequest {
 }
 
 /// Generates a workspace or applies an upgrade from a completed session.
+/// `hookToken` is the workspace service's grant for this request's hooks;
+/// without it every hook fails.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ApplyRequest {
@@ -33,6 +35,8 @@ pub struct ApplyRequest {
     pub target: PathBuf,
     pub template_id: String,
     pub session: Value,
+    #[serde(default)]
+    pub hook_token: Option<String>,
 }
 
 /// The request members every route checks before any Toha work.

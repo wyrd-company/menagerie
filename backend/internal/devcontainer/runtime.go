@@ -6,8 +6,8 @@
 
 // Package devcontainer starts, stops and rebuilds a workspace's
 // devcontainer through the devcontainer-builder library, and runs the
-// workspace's initializeCommand inside Menagerie before each start or
-// rebuild. Single-container and Compose definitions are both supported;
+// workspace's initializeCommand in throwaway containers before each start
+// or rebuild. Single-container and Compose definitions are both supported;
 // the mode branch is explicit in each operation.
 package devcontainer
 
@@ -29,6 +29,8 @@ import (
 	"github.com/wyrd-company/devcontainer-builder/pkg/host/dockercompose"
 	"github.com/wyrd-company/devcontainer-builder/pkg/registryauth"
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
+
+	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
 const (
@@ -75,6 +77,11 @@ type Options struct {
 	// initializeCommand receive. Nil allows none. Any other reference
 	// resolves to its default value, or empty, and the job log notes it.
 	LocalEnv []string
+	// Containers runs initializeCommand in throwaway containers. Nil fails
+	// a definition that has one.
+	Containers throwaway.Containers
+	// RunnerImage returns the image initializeCommand runs in.
+	RunnerImage func(ctx context.Context) (string, error)
 }
 
 // Runtime operates workspace devcontainers on one Docker Engine.
@@ -200,11 +207,30 @@ func (r *Runtime) initialize(ctx context.Context, dc *spec.DevContainer, folder 
 	}
 	p.Phase("initialize-command")
 	cmd = SubstituteCommand(SubstitutionContext(dc, folder, env), cmd)
-	runner := CommandRunner{Dir: folder, Env: environ, Output: func(prefix string) io.Writer { return p.Log("initializeCommand: " + prefix) }}
+	if r.opts.Containers == nil || r.opts.RunnerImage == nil {
+		return &InitializeError{Err: errors.New("no container runner is configured")}
+	}
+	image, err := r.opts.RunnerImage(ctx)
+	if err != nil {
+		return &InitializeError{Err: err}
+	}
+	fmt.Fprintf(p.Log(""), "running initializeCommand in throwaway containers of %s\n", image)
+	runner := CommandRunner{
+		Containers: r.opts.Containers, Image: image, Folder: folder, Env: environ, Job: jobID(p),
+		Output: func(prefix string) io.Writer { return p.Log("initializeCommand: " + prefix) },
+	}
 	if err := runner.Run(ctx, cmd); err != nil {
 		return &InitializeError{Err: err}
 	}
 	return nil
+}
+
+// jobID is the id of the job p reports to, when it has one.
+func jobID(p Progress) string {
+	if j, ok := p.(interface{ JobID() string }); ok {
+		return j.JobID()
+	}
+	return ""
 }
 
 func (r *Runtime) upSingle(ctx context.Context, op *operation, replace bool) error {

@@ -21,6 +21,14 @@ templates:
   - id: sample-workspace
     name: Sample workspace
     address: gh:example-org/workspace-templates@1.0.0#sample-workspace
+    # The image this template's hooks run in. Without it, the top-level
+    # runner-image.
+    # runner-image: ghcr.io/example-org/sample-workspace-runner:1.0.0
+
+# The image of the throwaway containers that run initializeCommand and the
+# hooks of templates without their own runner-image. Without it, Menagerie's
+# own image.
+# runner-image: ghcr.io/example-org/workspace-runner:1.0.0
 
 # Registry credentials read from OpenBao through the Wyrwood vault socket.
 # Without this section every registry is anonymous.

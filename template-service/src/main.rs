@@ -39,6 +39,15 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Toha builds an upgrade's candidate in its temporary folder, the one
+    // folder the workspace service accepts an upgrade's hook target in.
+    if let Err(e) = config::prepare_candidate_folder(&settings.candidate_folder) {
+        eprintln!(
+            "template service: {}: {e}",
+            settings.candidate_folder.display()
+        );
+        return ExitCode::FAILURE;
+    }
     let key = match seal::SessionKey::load_or_create(&settings.data) {
         Ok(key) => key,
         Err(e) => {

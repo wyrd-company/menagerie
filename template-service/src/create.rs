@@ -3,7 +3,8 @@
 use crate::Service;
 use crate::api::{AnswerRequest, ApplyReply, ApplyRequest, InterviewReply, Outcome, StartRequest};
 use crate::checks::{self, Operation};
-use crate::error::ServiceError;
+use crate::error::{ServiceError, ValueFree};
+use crate::hooks::CallbackRunner;
 use crate::host::{self, ProcessEnvironment};
 use crate::reply;
 use crate::seal::{self, Binding};
@@ -120,9 +121,12 @@ pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, 
         &registry,
     )?;
     checks::fresh_repository(&selected.folder, &selected.target)?;
-    let session = resume(service, record, &selected.target, config, &registry)?;
-    let done = reply::completed(session.state()?)?;
-    let plan = session.plan(&done)?;
+    // From here Toha renders the template and runs its hooks, so every
+    // refusal is value-free.
+    let session = resume(service, record, &selected.target, config, &registry)
+        .map_err(ValueFree::value_free)?;
+    let done = reply::completed(session.state().map_err(ValueFree::value_free)?)?;
+    let plan = session.plan(&done).map_err(ValueFree::value_free)?;
     let actions = toha::operations::classify_paths(&plan, &selected.target, false)?;
     let messages = done.messages.clone();
     if toha::updates::effective_dry_run(false, &done) {
@@ -132,16 +136,21 @@ pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, 
             messages,
         ));
     }
-    let applied = session.apply_plan(
-        plan,
-        ApplyOptions {
-            force: false,
-            trusted: true,
-        },
-        &toha::hook::ProcessRunner,
-        None,
-        &mut |_| {},
-    )?;
+    let applied = session
+        .apply_plan(
+            plan,
+            ApplyOptions {
+                force: false,
+                trusted: true,
+            },
+            &CallbackRunner {
+                socket: &service.settings.hook_runner_socket,
+                token: request.hook_token.as_deref(),
+            },
+            None,
+            &mut |_| {},
+        )
+        .map_err(ValueFree::value_free)?;
     reply::generated(applied, &actions, messages)
 }
 
@@ -151,13 +160,13 @@ fn resume(
     target: &toha::staging::CanonicalTarget,
     config: toha::config::Config,
     registry: &toha::registry::Registry,
-) -> Result<Session, ServiceError> {
-    Ok(Session::resume(
+) -> Result<Session, toha::operations::OperationError> {
+    Session::resume(
         record,
         target.clone(),
         &service.host.paths,
         config,
         registry,
         &service.host.cwd,
-    )?)
+    )
 }

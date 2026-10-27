@@ -9,6 +9,11 @@ use std::process::Command;
 async fn an_interview_continues_after_the_service_restarts() {
     let world = World::new();
     let mut first = launch(&world);
+    // The service makes its candidate folder, private to its user.
+    use std::os::unix::fs::PermissionsExt;
+    let candidates = std::fs::symlink_metadata(world.root.join("candidates")).unwrap();
+    assert!(candidates.is_dir());
+    assert_eq!(candidates.permissions().mode() & 0o777, 0o700);
 
     let (mut duplicate, line) = start(&world);
     assert!(line.contains("another process is listening"), "{line}");
@@ -39,7 +44,7 @@ async fn an_interview_continues_after_the_service_restarts() {
     let generated = post_bytes(
         &world.socket,
         "/v1/workspaces/generate",
-        serde_json::to_vec(&generate).unwrap(),
+        body_of("/v1/workspaces/generate", &generate),
     )
     .await;
     assert_eq!(generated.json["outcome"], "written", "{}", generated.json);

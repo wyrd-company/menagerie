@@ -369,10 +369,18 @@ templates:
 		if !strings.Contains(logs, want) || !strings.Contains(logs, fmt.Sprintf(",%d)", wyrwoodGID)) && !strings.Contains(logs, fmt.Sprintf(",%d,", wyrwoodGID)) {
 			t.Errorf("logs lack %q with group %d:\n%s", want, wyrwoodGID, logs)
 		}
+		// Only the workspace service has the Docker socket's group.
+		socketGID := c.mustExec("stat", "-L", "-c", "%g", "/var/run/docker.sock")
+		if socketGID == fmt.Sprint(operatorGID) || socketGID == fmt.Sprint(wyrwoodGID) {
+			t.Fatalf("the Docker socket's group %s is also the owner's or the access group", socketGID)
+		}
 		for _, service := range []string{"template-service", "workspace-service"} {
 			out := c.mustExec("sh", "-c", "grep '^Groups:' /proc/$(/command/s6-svstat -o pid /run/service/"+service+")/status")
 			if !strings.Contains(" "+out+" ", fmt.Sprintf(" %d ", wyrwoodGID)) {
 				t.Errorf("%s groups %q lack the access group %d", service, out, wyrwoodGID)
+			}
+			if has := strings.Contains(" "+out+" ", " "+socketGID+" "); has != (service == "workspace-service") {
+				t.Errorf("%s groups %q: the Docker socket's group %s present %v", service, out, socketGID, has)
 			}
 		}
 	})

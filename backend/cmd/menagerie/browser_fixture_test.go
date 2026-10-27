@@ -161,11 +161,12 @@ oidc:
   issuer: %s
   client-id: %s
   redirect-url: %s
-template-service: {socket: %s}
+template-service: {socket: %s, hook-runner-socket: %s, candidate-folder: %s}
+runner-image: busybox:1.37
 templates:
   - {id: sample-kit-v1, name: "Sample kit, version 1", address: 'file://%s@v1'}
   - {id: sample-kit-v2, name: "Sample kit, version 2", address: 'file://%s@v2'}
-`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, socket, repo, repo))
+`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, socket, filepath.Join(sockDir, "hook-runner.sock"), filepath.Join(base, "candidates"), repo, repo))
 	runTemplateService(t, bin, cfgPath, filepath.Join(base, "template-data"), socket)
 
 	cfg, err := config.Load(cfgPath)
@@ -183,7 +184,14 @@ templates:
 	t.Cleanup(func() { docker.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := jobs.NewManager(ctx, jobs.Options{})
-	handler, err := newHandler(cfg, root, devcontainer.New(docker, devcontainer.Options{}), manager)
+	var opts devcontainer.Options
+	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
+	_, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stopHooks)
+	handler, err := newHandler(cfg, root, devcontainer.New(docker, opts), manager, parts.hooks, parts.images)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,6 +218,10 @@ templates:
 	<-done
 }
 
+// heldRelease is the file in its workspace folder that a held hook waits
+// for and then removes.
+const heldRelease = ".release"
+
 type controlFixture struct {
 	p       *pocketID
 	rootDir string
@@ -217,8 +229,8 @@ type controlFixture struct {
 	docker  *dockerclient.Client
 	done    chan struct{}
 	// The image run's controls; the in-process run leaves them unset.
-	restart    func() error
-	releaseDir string
+	restart func() error
+	release bool
 }
 
 func controlServer(t *testing.T, f controlFixture) http.Handler {
@@ -357,10 +369,11 @@ func controlServer(t *testing.T, f controlFixture) http.Handler {
 			writeJSON(w, map[string]bool{"ok": true})
 		})
 	}
-	// Let a template hook held on a release file finish.
-	if f.releaseDir != "" {
+	// Let a template hook held on a release file in its workspace folder,
+	// the only folder a hook sees, finish.
+	if f.release {
 		mux.HandleFunc("POST /release", func(w http.ResponseWriter, r *http.Request) {
-			path := filepath.Join(f.releaseDir, filepath.Base(r.URL.Query().Get("name")))
+			path := filepath.Join(f.rootDir, filepath.Base(r.URL.Query().Get("name")), heldRelease)
 			if err := os.WriteFile(path, []byte("released\n"), 0o644); err != nil {
 				http.Error(w, err.Error(), 500)
 				return

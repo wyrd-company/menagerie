@@ -10,6 +10,7 @@ pub mod checks;
 pub mod config;
 pub mod create;
 pub mod error;
+pub mod hooks;
 pub mod host;
 pub mod numbers;
 pub mod reply;

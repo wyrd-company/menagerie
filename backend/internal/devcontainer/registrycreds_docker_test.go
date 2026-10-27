@@ -60,9 +60,9 @@ func credentialRuntime(t *testing.T, h *harness, reg *testRegistry, fetcher regi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return devcontainer.New(h.client, devcontainer.Options{Credentials: func(ctx context.Context) devcontainer.RegistryAuth {
+	return devcontainer.New(h.client, h.options(devcontainer.Options{Credentials: func(ctx context.Context) devcontainer.RegistryAuth {
 		return registries.Operation(ctx)
-	}})
+	}}))
 }
 
 // helperTrap makes the Docker client configuration name a credential
@@ -199,7 +199,7 @@ func TestRegistryCredentialsFailClosed(t *testing.T) {
 		".devcontainer/Dockerfile":        "FROM " + private + "\nRUN true\n",
 	}
 
-	anonymous := devcontainer.New(h.client, devcontainer.Options{})
+	anonymous := devcontainer.New(h.client, h.options(devcontainer.Options{}))
 	for name, files := range map[string]map[string]string{"anonymous-pull": pull, "anonymous-build": build} {
 		folder := h.workspace(name, files)
 		unauthorized := reg.unauthorized.Load()

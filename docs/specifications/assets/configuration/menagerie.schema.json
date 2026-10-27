@@ -54,6 +54,10 @@
             "type": "string",
             "minLength": 1,
             "description": "Toha template address."
+          },
+          "runner-image": {
+            "type": "string",
+            "description": "Image of the throwaway containers that run the template's hooks. Absent, the global runner-image."
           }
         }
       }
@@ -111,8 +115,24 @@
           "pattern": "^/",
           "default": "/run/menagerie/template.sock",
           "description": "Unix socket of the template service."
+        },
+        "hook-runner-socket": {
+          "type": "string",
+          "pattern": "^/",
+          "default": "/run/menagerie/hook-runner.sock",
+          "description": "Unix socket on which the workspace service runs the template service's hooks in throwaway containers. Differs from socket."
+        },
+        "candidate-folder": {
+          "type": "string",
+          "pattern": "^/",
+          "default": "/var/lib/menagerie/candidates",
+          "description": "The template service's temporary folder, where Toha builds an upgrade's candidate. The workspace service runs an upgrade's hooks only against a folder inside it. Absolute and clean, not /, and neither inside workspace-root nor containing it."
         }
       }
+    },
+    "runner-image": {
+      "type": "string",
+      "description": "Image of the throwaway containers that run initializeCommand and the hooks of templates without their own runner-image. Absent, Menagerie's own image."
     },
     "local-env": {
       "type": "array",

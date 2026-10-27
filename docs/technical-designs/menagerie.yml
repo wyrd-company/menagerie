@@ -26,6 +26,10 @@ design-challenges:
   template-hooks: >-
     Toha template hooks and a workspace's `initializeCommand` run commands the
     template author wrote. devcontainer-builder runs no commands on the host.
+    A command run inside the Menagerie container would reach the Docker
+    socket, the Wyrwood sockets and Menagerie's environment, and
+    `initializeCommand` comes from a definition the workspace's own
+    devcontainer may be able to edit.
   git-credentials: >-
     Menagerie backs up each workspace to GitHub. No credential may be stored
     in the Menagerie container.
@@ -39,10 +43,11 @@ proposed-design:
     users through OIDC, discovers workspaces, drives Docker through
     devcontainer-builder, and owns git. The template service is written in
     Rust. It embeds Toha and serves template interviews, generation and
-    upgrades to the workspace service over an internal API. The container
-    mounts the host Docker socket. Git access goes through Wyrwood's
-    SSH-agent socket. The workspace root is mounted at the same path on the
-    host and in the container.
+    upgrades to the workspace service over an internal API. Template hooks
+    and `initializeCommand` run in throwaway containers that the workspace
+    service starts. The container mounts the host Docker socket. Git access
+    goes through Wyrwood's SSH-agent socket. The workspace root is mounted at
+    the same path on the host and in the container.
   terms: >-
     A workspace is a folder under the workspace root, generated from a Toha
     template, together with the devcontainer it defines. Every folder directly
@@ -112,7 +117,10 @@ proposed-design:
     long-running one.
   docker-access: >-
     The workspace service talks to the host Docker daemon through the mounted
-    socket. Only the workspace service uses Docker.
+    socket, with devcontainer-builder for devcontainers and the Docker
+    library for throwaway containers. Only the workspace service uses
+    Docker: the template service reaches a container only by asking the
+    workspace service to run a hook.
   registry-credentials: >-
     Container registry credentials for pulls, builds, feature downloads and
     Compose services come from OpenBao. Configuration names, per registry, a
@@ -123,25 +131,104 @@ proposed-design:
     configuration is read and no credential helper runs. A registry that
     configuration does not name is anonymous; a named registry whose secret
     cannot be read fails the operation.
+  throwaway-containers: >-
+    Each template hook and each `initializeCommand` runs in its own
+    throwaway container that the workspace service creates through the
+    Docker library. The workspace folder is bind-mounted read-write at its
+    own path, which is the host path, except for an upgrade's hook, which
+    gets no mount at all: its candidate is copied in instead. Nothing else
+    is mounted, so no Docker socket and no Wyrwood socket is reachable. The environment holds only
+    what the specification defines and the runner image's own variables,
+    its `PATH` included. The container runs as the services' user, the owner
+    of the workspace root, with `no-new-privileges`, on the default bridge
+    network, without an SSH agent. Its program runs as given, never through
+    the image's entrypoint. Menagerie's own notes on a run, such as an image
+    pull, go to the job console, never into a stream a hook captures. Every
+    container carries Menagerie's labels, with the workspace root, the job
+    and a random id of its own, and is force-removed when its command ends.
+    A container's creation runs to the Engine's reply, which a cancellation
+    does not interrupt; a creation that fails is followed by a search for
+    its id label, so a lost reply leaves no container. The workspace
+    service removes its leftovers when it starts. A cancelled job kills and
+    removes its running containers before it ends.
+  runner-images: >-
+    A throwaway container runs the template entry's `runner-image`, else the
+    global `runner-image`, else Menagerie's own image, which the workspace
+    service finds by inspecting its own container: the container its mounts
+    name, else, only when they name none, the container its hostname names
+    when that container carries the hostname. One search runs at a time and
+    each job stops waiting for it when the job ends. `initializeCommand` has
+    no template entry and uses the global choice. A missing image is pulled
+    with the registry credentials; when no image can be found or pulled, the
+    job fails as `runner-image-unavailable`.
   template-hooks: >-
-    The template service runs Toha template hooks with Toha's process hook
-    runner, inside the Menagerie container, in the hook's target-relative
-    working directory.
+    Toha runs a generate's or apply's hooks through the template service's
+    hook runner, which sends each hook with Toha's target to the workspace
+    service over the hook runner socket, a private Unix socket in the same
+    folder as the template service's socket. Each generate or apply request
+    carries a random token that the workspace service grants for that
+    request alone and maps to the job's context, workspace folder, runner
+    image, console and kind of target; an unknown or revoked token is
+    refused. A generate's target is the workspace folder, or a folder inside
+    it, and its hooks run in the mounted folder. An upgrade's target is
+    Toha's candidate: Toha checks out the workspace's `HEAD` into a
+    temporary folder, applies the new version and runs its hooks there,
+    then merges the result into the workspace. The template service's
+    temporary folder is the candidate folder, which both services read from
+    configuration and which is private to the services' user; an upgrade's
+    token admits only a folder inside it, named by its own path without a
+    symbolic link and never the workspace folder, and a generate's token
+    admits no candidate. The candidate is not a host path, so the workspace
+    service copies it into the container at its own path, without mounting
+    the workspace folder. When the hook exits, with any exit code, the
+    service copies the candidate back out and makes the candidate on disk
+    match it exactly, symbolic and hard links as links and entries owned
+    by the services' user; a cancelled hook's candidate is not copied
+    back. The copy back extracts into a fresh folder beside the candidate,
+    opens every path without following a symbolic link, refuses an
+    absolute name, a `..`, a name outside the candidate, a hard link to
+    anything but a file it already wrote, and any entry other than a
+    folder, a file or a link, and then swaps the folder in, so a refused
+    copy leaves the candidate as it was. The old candidate is then
+    removed, read-only folders included; one that cannot be removed
+    completely adds a note to the job console and does not fail the hook.
+    The hook runs in a throwaway container with an
+    empty environment, in its target-relative working directory, resolved
+    with symbolic links followed; one that is missing or resolves outside
+    its target is refused before any container exists. A script hook's
+    template folder is copied into the container at its own path before it
+    starts. Streams the hook captures
+    return to Toha and never reach a log or an error; the others go to the
+    job console. A captured value can reach any value Toha renders after
+    the hook ran, so no error carries a rendered value: the template
+    service builds every generate and apply refusal from a fixed message
+    per error variant, and the workspace service reports a failed throwaway
+    container by its stage and the Engine error's class, never by the
+    Engine's message. For a hook, that report goes to the job console,
+    with the runner image when no image was found; the template service
+    hears only the refusal's kind. When the job is cancelled or its request ends, the token is
+    revoked and the hook's container killed and removed before the job ends,
+    so no hook writes to the folder afterwards. Toha's `requires` check
+    resolves programs on the template service's `PATH`, which agrees with a
+    hook's only when the hook runs in Menagerie's own image.
   initialize-command: >-
     devcontainer-builder runs no commands on the host, so the workspace
     service runs `initializeCommand` itself. Before each start or rebuild it
     reads `initializeCommand` from the resolved devcontainer configuration
-    and, when present, runs it inside the Menagerie container with the
-    workspace folder as the working directory. A failing command fails the
-    job before the devcontainer starts.
+    and, when present, runs it in throwaway containers with the workspace
+    folder as the working directory: a string through `/bin/sh -c`, an
+    array as given, and each member of an object in a container of its own,
+    in parallel. A failing command fails the job before the devcontainer
+    starts.
   local-environment: >-
     A definition reads Menagerie's own environment only through the
     configured `local-env` allowlist, empty by default, so a definition
     cannot copy Menagerie's environment into a devcontainer, a build or a
     Compose project. `${localEnv:...}` substitution and Compose
-    interpolation see only the allowed variables; `initializeCommand` gets
-    them and `PATH`. A refused reference resolves as an unset variable does
-    and is named in the job log.
+    interpolation see only the allowed variables, and `initializeCommand`
+    gets only them, `PATH` excepted, so its `PATH` is always the runner
+    image's own. A refused reference resolves as an unset variable does and
+    is named in the job log.
   git-and-credentials: >-
     The workspace repository is a backup, not a synchronized copy. The local
     workspace is the source of truth; the workspace service uses go-git to
@@ -163,22 +250,29 @@ proposed-design:
     manager.
   configuration: >-
     Configuration names the workspace root, the workspace repository, the
-    approved template list, the OIDC issuer and client, the Wyrwood
-    consumer directory and the registry credential secrets.
+    approved template list with optional runner images, the OIDC issuer and
+    client, the Wyrwood consumer directory, the registry credential secrets
+    and the default runner image.
   deployment: >-
     The Menagerie container mounts the workspace root at the same path as on
-    the host, the host Docker socket and the Wyrwood consumer directory. It
-    has a Docker restart policy, so it returns after a host restart. Its UI is
+    the host, the host Docker socket and the Wyrwood consumer directory.
+    Throwaway containers need nothing more: the root's host path is their
+    bind source, and Menagerie's own image is their default image. It has a
+    Docker restart policy, so it returns after a host restart. Its UI is
     not exposed to the public internet. Menagerie is bound to a Wyrwood policy
     that grants only that one Transit key and read access to the registry
     credential secrets.
   dependencies: >-
     Toha exposes template resolution, fetching and caching, and the upgrade
-    driver from its library, and records answers in `.toha.json`.
+    driver from its library, takes the hook runner from its caller, and
+    records answers in `.toha.json`.
   verification: >-
     The acceptance scenario uses a test template with a hook and an
     `initializeCommand`. A manager signs in, creates a workspace, sees it
     running in the list, stops and starts it, rebuilds it, and upgrades it to
     a newer template version that adds one question. Only that question is
     asked, and the pushed branch contains the upgraded files. A container not
-    created by Menagerie never appears in the list.
+    created by Menagerie never appears in the list. A hook and an
+    `initializeCommand` that look for the Docker socket, the SSH agent or
+    Menagerie's environment find none of them, and still write into the
+    workspace folder.

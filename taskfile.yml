@@ -158,7 +158,7 @@ tasks:
       - task: test:acceptance
 
   test:docker:
-    desc: Run the devcontainer runtime's Docker suite on a disposable Docker daemon
+    desc: Run the devcontainer runtime's and the throwaway containers' Docker suites on a disposable Docker daemon
     vars:
       STATE: '{{.SCRATCH}}/docker'
       OWNER:
@@ -167,7 +167,9 @@ tasks:
       - defer: scripts/isolated-docker.sh down '{{.STATE}}' '{{.OWNER}}'
       - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
       - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/devcontainer.test' ./backend/internal/devcontainer/
+      - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/throwaway.test' ./backend/internal/throwaway/
       - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/devcontainer.test' -test.v -test.count=1 -test.timeout 10m
+      - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/throwaway.test' -test.v -test.count=1 -test.timeout 10m
 
   test:openbao:
     desc: Read registry credentials from a disposable OpenBao dev server (needs bao on PATH)
