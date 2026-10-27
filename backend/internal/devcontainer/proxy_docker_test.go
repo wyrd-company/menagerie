@@ -38,7 +38,6 @@ import (
 var pendingChanges = map[string]string{
 	"1571":          "per-workspace exceptions, roots, identity headers and the restart-policy setting",
 	"1814":          "the LLBBridge passthrough that devcontainer builds need",
-	"1815":          "exec.allow_any_command",
 	"1819":          "label filters kept under ownership",
 	"verbosity":     "deny reasons in a profile's denials (response.deny_verbosity)",
 	"missing-roots": "refusing to start when a bind root or the workspace root is missing",

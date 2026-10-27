@@ -11,13 +11,13 @@
 # stand-in for each pending Sockguard fork change, named by its issue
 # number, whose key the pinned proxy does not know yet:
 #
-#   1815  allow_any_command  -> the global insecure_allow_body_blind_writes,
-#         which lifts the same exec argv gate
 #   1819  label filters kept under ownership -> no ownership block, so
 #         devcontainer-builder's label lookups select the right containers
 #
-# Pending 1571 and 1814 have no stand-in: the pinned proxy ignores their
-# keys, and the suites that need them wait.
+# Pending 1571, 1814, verbosity (deny reasons in a profile's denials) and
+# missing-roots (refusing to start without a root) have no stand-in: the
+# pinned proxy ignores their keys or lacks the behavior, and the cases that
+# need them wait.
 set -euo pipefail
 
 [ $# -ge 3 ] || {
@@ -39,13 +39,8 @@ script=(
   -e "s|^\(  workspace_root: \)/srv/menagerie/workspaces$|\1$workspace_root|"
   -e "s|^\(            - \)/srv/menagerie/[a-z-]*$|\1$bind_root|"
 )
-prelude=""
 for issue in "$@"; do
   case "$issue" in
-    1815)
-      script+=(-e '/^          allow_any_command: true$/d')
-      prelude="insecure_allow_body_blind_writes: true"
-      ;;
     1819) script+=(-e '/^ownership:$/,/^$/d') ;;
     1571 | 1814 | verbosity | missing-roots) ;;
     *) echo "no stand-in is known for pending issue $issue" >&2; exit 2 ;;
@@ -61,5 +56,4 @@ if grep -q "/srv/menagerie/" <<<"$rendered"; then
   echo "the profile holds a host path this script does not replace" >&2
   exit 1
 fi
-[ -z "$prelude" ] || echo "$prelude"
 echo "$rendered"

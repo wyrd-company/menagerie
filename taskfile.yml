@@ -52,10 +52,10 @@ vars:
   # The Docker proxy the proxy suite runs: a commit of
   # github.com/wyrd-company/sockguard, built on the disposable daemon, or an
   # image reference, pulled.
-  SOCKGUARD: 9e9ee3ab61bfdc93e8a9865303feeda6705dda86
+  SOCKGUARD: c9891b35568c2323da7750b747bf7aea1ba795f8
   # The Sockguard fork changes SOCKGUARD lacks. scripts/proxy-config.sh puts
   # a stand-in for some in the profile; the cases that need the others wait.
-  SOCKGUARD_PENDING: 1571 1814 1815 1819 verbosity missing-roots
+  SOCKGUARD_PENDING: 1571 1814 1819 verbosity missing-roots
   # The YAML this repository's tooling owns; package documents have their
   # own owners and checks.
   REPOSITORY_YAML: >-

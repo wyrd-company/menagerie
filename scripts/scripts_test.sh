@@ -254,9 +254,8 @@ render() { "$repo/scripts/proxy-config.sh" 0 /work/tmp /work/tmp/proxy/workspace
 expect "the proxy profile takes the runner's uid" 0 '^      uids: \[0\]$' render
 expect "the proxy profile allows only the test bind root" 0 '^3$' sh -c "'$repo/scripts/proxy-config.sh' 0 /work/tmp /work/tmp/proxy/workspaces | grep -c '^            - /work/tmp\$'"
 expect "the proxy profile's exceptions root is the test workspace root" 0 '^  workspace_root: /work/tmp/proxy/workspaces$' render
-expect "the proxy profile keeps exec's setting without a pending change" 0 'allow_any_command: true' render
-expect "pending 1815 swaps exec's setting for blind writes" 0 '^insecure_allow_body_blind_writes: true$' render 1815
-expect "pending 1815 drops allow_any_command" 1 '' sh -c "'$repo/scripts/proxy-config.sh' 0 /work/tmp /work/tmp/p 1815 | grep -q allow_any_command"
+expect "the proxy profile keeps exec's allow_any_command" 0 '^          allow_any_command: true$' render 1571 1814 1819
+expect "pending 1815, merged, has no stand-in" 2 'no stand-in is known for pending issue 1815' render 1815
 expect "pending 1819 drops the ownership block" 1 '' sh -c "'$repo/scripts/proxy-config.sh' 0 /work/tmp /work/tmp/p 1819 | grep -q '^ownership:'"
 expect "the proxy profile keeps ownership without pending 1819" 0 '^ownership:$' render 1571 1814 verbosity
 expect "an unknown pending change is refused" 2 'no stand-in is known for pending issue 9999' render 9999
