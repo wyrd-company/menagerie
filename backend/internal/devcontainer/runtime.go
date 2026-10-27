@@ -1,7 +1,7 @@
 // ---
 // relationships:
 //   implements: menagerie
-//   references: [workspace, menagerie-has-host-root]
+//   references: [workspace, menagerie-has-host-root, buildkit-traffic-not-inspectable]
 // ---
 
 // Package devcontainer starts, stops and rebuilds a workspace's

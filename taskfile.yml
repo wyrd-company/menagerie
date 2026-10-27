@@ -60,7 +60,7 @@ vars:
   # own owners and checks.
   REPOSITORY_YAML: >-
     taskfile.yml backend/taskfile.yml template-service/taskfile.yml web/taskfile.yml
-    deploy/compose.yml deploy/config.yml .github/*.yml .github/workflows/*.yml
+    deploy/compose.yml deploy/config.yml deploy/sockguard.yml .github/*.yml .github/workflows/*.yml
     .config/lefthook.yml .ryl.yml
 
 tasks:

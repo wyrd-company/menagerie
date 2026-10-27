@@ -1,0 +1,30 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+  references:
+    - menagerie-has-host-root
+slug: proxy-ignores-unknown-config-keys
+title: A misspelled Docker proxy key fails open
+description: >-
+  Sockguard ignores configuration keys it does not know, at the top level
+  and inside a profile. A misspelled or misplaced security key keeps its
+  default without an error, and where the default admits more, the proxy
+  admits more than the operator meant. Mitigation: the deployment uses the
+  shipped deploy/sockguard.yml, whose keys the operator does not change,
+  only values; the live suite (task test:docker:proxy) loads that file, as
+  scripts/proxy-config.sh renders it with test paths, and asserts the
+  effect of its security settings: privileged mode, the host network and
+  PID modes, bind sources outside the roots and another workspace's
+  folders are denied, and an exception admits what it names; the
+  deployment test checks the file's listener, bind roots, exceptions file
+  and ownership against compose.yml and config.yml. An operator who edits
+  keys by hand, or a key the pinned proxy does not yet know, is not
+  covered.
+categories:
+  - security
+  - operational
+likelihood: 2
+impact: 4
+response-strategy: mitigate
+status: mitigated

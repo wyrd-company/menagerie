@@ -1,7 +1,7 @@
 // ---
 // relationships:
 //   implements: menagerie
-//   references: [workspace, menagerie-has-host-root]
+//   references: [workspace, menagerie-has-host-root, proxy-ignores-unknown-config-keys]
 // ---
 
 // Package dockerproxy makes the Docker clients Menagerie talks to the

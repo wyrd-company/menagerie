@@ -8,12 +8,17 @@ relationships:
     - configuration
     - authentication
     - menagerie-has-host-root
+    - buildkit-traffic-not-inspectable
+    - proxy-ignores-unknown-config-keys
 ---
 
 Menagerie runs as one container on a Linux host with Docker Engine, on
 `amd64` or `arm64`. The image is `ghcr.io/wyrd-company/menagerie:<version>`.
-Both of its services use the host's Docker daemon and a Unix socket inside
-the container, so there is no standalone service for macOS or Windows.
+Beside it runs a Docker proxy, Sockguard
+(`ghcr.io/wyrd-company/sockguard:<version>`): Menagerie reaches the host's
+Docker daemon only through the proxy, which admits what Menagerie's
+profile allows and denies the rest. Both use Unix sockets and host paths,
+so there is no standalone service for macOS or Windows.
 
 Before the container starts, you need:
 
@@ -23,7 +28,8 @@ Before the container starts, you need:
   identity for it that Wyrwood holds as an OpenBao Transit key: a GitHub
   App, an SSH key, or both (see [Git identity](#git-identity));
 - a Wyrwood agent on the host, and a policy for Menagerie;
-- the workspace root: one folder on the host for every workspace.
+- the workspace root: one folder on the host for every workspace, at a
+  path with no symbolic link in it.
 
 ## Identity provider
 
@@ -144,13 +150,16 @@ Create the container first, bind it, then start it.
 ## The host
 
 `deploy/compose.yml` is a complete example. Copy the `deploy` folder and
-edit both files.
+edit `config.yml` and `sockguard.yml`; [The Docker proxy](#the-docker-proxy)
+explains the second.
 
 | Mount or setting | Why |
 | --- | --- |
 | The workspace root at the same path on the host and in the container | Devcontainers bind-mount their workspace folder. The host daemon resolves that path, so it must be the host path. Set `MENAGERIE_WORKSPACE_ROOT` and `workspace-root` to the same value. |
 | The workspace socket folder at the same path on the host and in the container | Each devcontainer mounts its own socket folder from it, so it must be the host path. Set `MENAGERIE_WORKSPACE_SOCKETS` and `workspace-socket.folder` to the same value; leave both out to run without [workspace sockets](configuration.md#workspace-sockets). |
-| `/var/run/docker.sock` | The workspace service drives the host Docker daemon: devcontainers, and the throwaway containers that run template hooks and `initializeCommand`. |
+| The Compose staging folder at the same path on the host and in the container | A Compose workspace's services bind-mount their configs and secrets from it, so it must be the host path. Set `MENAGERIE_COMPOSE_STAGING` and `compose-staging-folder` to the same value. |
+| `DOCKER_HOST=unix:///run/sockguard/menagerie.sock` and the proxy's socket volume at `/run/sockguard`, read-only | The workspace service drives the host Docker daemon through the proxy: devcontainers, and the throwaway containers that run template hooks and `initializeCommand`. Menagerie never mounts `/var/run/docker.sock`. |
+| The exceptions folder at `/etc/sockguard/exceptions`, read-only | The [workspace exceptions](#workspace-exceptions) the proxy applies. Menagerie never writes it. |
 | The Wyrwood consumer directory at `/run/wyrwood` | `vault.sock` and `ssh-agent.sock`. `wyrwood-directory` names the mount target. |
 | `SSH_AUTH_SOCK=/run/wyrwood/ssh-agent.sock` | With an SSH identity: Toha's Git transport runs the image's `ssh` client with this agent. Leave it out with only a GitHub App. |
 | `config.yml` at `/etc/menagerie/config.yml` | Both services read it. |
@@ -159,12 +168,15 @@ edit both files.
 | `restart: unless-stopped` | Docker starts Menagerie after a host restart, and restarts it after either service stops. |
 | Port `8080` | The web UI and workspace API. Publish it on a private address only. |
 
-Create the socket folder before the first start, owned by the workspace
-root's owner; Docker would create a missing one owned by root, and
-Menagerie then refuses to start:
+Create the socket folder and the Compose staging folder before the first
+start, owned by the workspace root's owner; Docker would create a missing
+one owned by root, and Menagerie then refuses to start or cannot write it:
 
 ```sh
-sudo install -d -m 0700 -o "$(stat -c %u /srv/menagerie/workspaces)" -g "$(stat -c %g /srv/menagerie/workspaces)" /srv/menagerie/sockets
+owner="$(stat -c %u /srv/menagerie/workspaces)"
+group="$(stat -c %g /srv/menagerie/workspaces)"
+sudo install -d -m 0700 -o "$owner" -g "$group" /srv/menagerie/sockets
+sudo install -d -m 0700 -o "$owner" -g "$group" /srv/menagerie/compose-staging
 ```
 
 ```sh
@@ -192,8 +204,11 @@ workspace root, the services run as root. When `workspace-root` or
 `wyrwood-directory` is a symbolic link, its target's owner and group count.
 
 The services' groups are the owner's group and the Wyrwood consumer
-directory's group; the workspace service also has the Docker socket's
-group. The template service never talks to Docker. For a non-root owner:
+directory's group; the workspace service also has the group of the Docker
+proxy's socket, which `DOCKER_HOST` names. The template service never
+talks to Docker, and without that group it cannot reach the proxy's
+socket. At start-up Menagerie waits up to 30 seconds for the proxy to bind
+its socket. For a non-root owner:
 
 - the Wyrwood binding needs an access group this user has;
 - `config.yml` must be readable by this user;
@@ -243,14 +258,17 @@ folder.
 ### Throwaway containers
 
 Template hooks and `initializeCommand` run in throwaway containers on the
-host daemon, which need no extra mount or setting. By default they run
-Menagerie's own image, which Menagerie finds by inspecting its own
+host daemon, through the proxy, which need no extra mount or setting. By
+default they run Menagerie's own image, which Menagerie finds by
+inspecting its own
 container: by the container id in its mounts or, when they name none, by
 its hostname, Docker's default. When it cannot, a job with a hook or an `initializeCommand`
 fails as `runner-image-unavailable`; set
 [`runner-image`](configuration.md#runner-images). Each container carries
-the label `menagerie.throwaway` and is removed when its command ends; any
-left by a stopped Menagerie are removed when it starts.
+the labels `menagerie.throwaway` and `menagerie.throwaway.workspace`, never
+`devcontainer.local_folder`, so no workspace exception applies to it. It is
+removed when its command ends; any left by a stopped Menagerie are removed
+when it starts.
 
 ### Container registries
 
@@ -262,6 +280,141 @@ limit, needs an entry for that registry; for Docker Hub use `docker.io` and
 a Docker Hub access token as the password. See
 [Configuration](configuration.md#registry-credentials).
 
+The proxy pulls only from the registries its profile lists: add each
+registry your workspaces' images, base images and runner images come from
+to both registry lists in `sockguard.yml`. A pull from another registry
+fails as `proxy-denied`.
+
+## The Docker proxy
+
+The `sockguard` service in `deploy/compose.yml` is the Docker proxy. It is
+the only container that mounts `/var/run/docker.sock`. It runs as root with
+the `CHOWN` and `DAC_READ_SEARCH` capabilities only, no network and a
+read-only file system. `deploy/sockguard.yml` is its configuration, with
+one Unix listener and one profile, `menagerie`.
+
+| Proxy mount | Why |
+| --- | --- |
+| `/var/run/docker.sock` | The host Docker daemon. |
+| The `menagerie-proxy` volume at `/run/sockguard` | The listener socket `menagerie.sock`, which Menagerie mounts read-only. |
+| `sockguard.yml` at `/etc/sockguard/sockguard.yaml`, read-only | The configuration. |
+| The exceptions folder at `/etc/sockguard/exceptions`, read-only | The folder, not the file, so the proxy sees a replaced file. |
+| The workspace root, the workspace socket folder and the Compose staging folder, each read-only at its host path | The proxy resolves every bind source in its own mount namespace, as the daemon does. |
+
+Edit these values of `sockguard.yml` to match the host:
+
+| Setting | Value |
+| --- | --- |
+| `clients.unix_peer_profiles[0].uids` | The workspace root's owner: `stat -c %u /srv/menagerie/workspaces`. The proxy selects Menagerie's profile by the connecting process's uid; any other uid is denied. |
+| `listeners[0].socket_gid` | A group no Menagerie service has otherwise: not the workspace root's group. Menagerie gives it to the workspace service only. |
+| `allowed_bind_mounts` | The workspace root, the workspace socket folder and the Compose staging folder: the values in `config.yml`. |
+| `workspace_exceptions.workspace_root` | The workspace root. |
+| `image_pull.allowed_registries` and `buildkit.session.auth.allowed_registries` | Every registry the workspaces pull from. |
+
+Sockguard ignores keys it does not know: a misspelled key keeps its
+default without an error. Change values of the shipped file, not keys.
+After an edit, restart the proxy with `docker compose restart sockguard`.
+
+### What the profile admits
+
+- Devcontainers: build, create, start, stop, exec and remove, for single
+  containers and Compose. Builds run on the daemon's BuildKit through the
+  proxy. The build's own requests pass the proxy uninspected; the proxy
+  still denies insecure entitlements and the host network for a build.
+- Throwaway containers: create, attach, wait, copy in and out, and remove.
+- Pulls from the listed registries. Image push, save and load, and every
+  path the profile does not name, are denied.
+- Bind mounts from the workspace root, the socket folder and the staging
+  folder. A devcontainer binds only its own workspace's folders; another
+  workspace's folder or socket folder is denied.
+- No privileged container, no host network, PID or IPC namespace and no
+  restart policy, unless a workspace exception grants it.
+
+Every container, network and volume Menagerie creates carries the proxy's
+owner label, and Menagerie sees only those: a container that another tool
+started is not in Menagerie's lists. Each request also names its workspace
+in a header that Menagerie sets from the workspace root and the
+workspace's name, never from the workspace's definition. A definition that
+sets a label Menagerie or Compose uses to find containers
+(`devcontainer.local_folder`, `devcontainer.config_file`, `menagerie.*`,
+`com.docker.compose.*` or `com.sockguard.*`), in `runArgs` or in a Compose
+service's `labels:`, fails as `identity-label-refused` before anything
+runs.
+
+A denied request fails the job as `proxy-denied`. The job's error names
+the proxy's reason, such as `container create denied: privileged
+containers are not allowed` or the bind source that is outside the
+allowed folders.
+
+### Compose workspaces
+
+Compose workspaces work through the proxy, with these limits:
+
+- `extra_hosts` and `group_add` are always denied, and so are fixed
+  addresses (`ipv4_address`, `ipv6_address`) and `mac_address`.
+- `restart:` is denied unless the workspace's exception grants that
+  restart policy. Menagerie never restarts a container itself.
+- Only the primary service carries `devcontainer.local_folder`, so only it
+  gets the workspace's exception. A sidecar service gets one only when its
+  Compose file sets that label on it, which Menagerie refuses: a sidecar
+  needs no grant.
+- A service that mounts a Compose config or secret mounts it from the
+  staging folder. With an exception, add the staging folder to its
+  `extraBindSources`.
+- Compose networks stay on the host after a workspace's devcontainer is
+  removed; remove them with `docker network rm`.
+
+### Workspace exceptions
+
+A workspace whose definition needs more than the profile admits, such as a
+privileged container or a bind mount of a host path outside the allowed
+folders, needs an exception. You, the operator, write the exceptions file
+`sockguard-exceptions/workspace-exceptions.json`; neither Menagerie nor
+the proxy writes it.
+
+```json
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "workspace": "/srv/menagerie/workspaces/alpha",
+      "grants": {
+        "privileged": true,
+        "extraBindSources": ["/var/run/docker.sock"],
+        "restartPolicy": ["unless-stopped"]
+      },
+      "approval": {
+        "by": {"issuer": "https://id.example.org", "subject": "user-0001", "name": "Manager One"},
+        "at": "2026-01-01T09:00:00Z",
+        "note": "docker-in-docker feature"
+      }
+    }
+  ]
+}
+```
+
+- `workspace` is the workspace's folder: the workspace root and the
+  workspace's name, with no symbolic link and no trailing slash.
+- `grants` opens gates for that workspace only. A grant that is absent is
+  not granted. The grants are `privileged`, `capAdd`, `namespaces`,
+  `devices`, `deviceCgroupRules`, `gpus`, `extraBindSources`,
+  `securityOpt`, `runtimes`, `sysctls` and `restartPolicy`; Sockguard's
+  workspace exceptions documentation describes each.
+- `approval` records who approved the entry and when: the OIDC issuer and
+  subject of the approver, a UTC time ending in `Z`, and an optional name
+  and note. The proxy checks their shape, not their truth.
+
+To grant, add or change an entry. To revoke, remove the entry or a grant.
+Write the whole file to a temporary file in the same folder and rename it
+over `workspace-exceptions.json`, so the proxy never reads half a file.
+The proxy reloads it at once; an invalid file means no exceptions until a
+valid one is written.
+
+A grant applies when the proxy creates a container. A revoked grant ends
+for the workspace at its next rebuild, which creates the container again;
+until then the existing container keeps it. Stop the workspace to stop
+using the grant at once, and rebuild it before the next start.
+
 ## Upgrades
 
 Pull the new image tag and recreate the container. Running jobs end with the
@@ -271,14 +424,43 @@ Everyone signs in again.
 
 ## What Menagerie can do to the host
 
-Menagerie mounts the rootful Docker socket, so whoever controls Menagerie
-controls the host: a manager and anyone who gets past sign-in. This is the
-access a manager has when running devcontainers on the host by hand.
-Template hooks and `initializeCommand` run in throwaway containers that
-cannot reach the Docker socket, the Wyrwood sockets or Menagerie's
-environment; they can write to their workspace folder and reach the
-network. Keep these limits in place:
+Menagerie does not mount the Docker socket. It reaches the daemon through
+the Docker proxy, so what Menagerie can do to the host is what the proxy's
+profile and the exceptions file admit:
 
+- A devcontainer, and so a definition in a workspace, gets no privileged
+  mode, no host network, PID or IPC namespace, no added capability or
+  device, no restart policy and no bind mount outside its own workspace's
+  folders, unless an exception names that workspace. An exception is a
+  grant of host access to that workspace's definition: anyone who can
+  change the definition, in the workspace or through a backup branch
+  Apply branch brings in, uses it.
+- A workspace cannot mount another workspace's folder or socket folder,
+  and Menagerie names each request's workspace from its own root and the
+  workspace's name, so a definition cannot pass itself off as another
+  workspace.
+- Builds still run on the host daemon's BuildKit. A build's steps pass the
+  proxy uninspected; the proxy keeps the build from the host network and
+  from insecure entitlements, and BuildKit enforces those. A build step
+  runs code from the definition's Dockerfile and features with the
+  network the daemon gives builds.
+- Menagerie can read the output and files of the containers it created,
+  and run commands in them as root: that is how lifecycle commands, hooks
+  and upgrades work.
+
+Whoever controls Menagerie, a manager or anyone who gets past sign-in,
+controls what this admits. Whoever can write the exceptions file, or the
+proxy's configuration, controls the host. Template hooks and
+`initializeCommand` run in throwaway containers that cannot reach the
+proxy's socket, the Wyrwood sockets or Menagerie's environment; they can
+write to their workspace folder and reach the network. Keep these limits
+in place:
+
+- Grant an exception only to a workspace whose definition you trust, and
+  remove it when the workspace no longer needs it. Keep the exceptions
+  file and `sockguard.yml` writable by the host's administrators only.
+- Use the shipped `sockguard.yml` and change values, not keys: the proxy
+  ignores a key it does not know.
 - Only members of `menagerie_managers` reach the UI. Membership is checked
   at every sign-in; remove someone from the group and restart Menagerie to
   end their session at once.

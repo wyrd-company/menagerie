@@ -149,94 +149,94 @@ clients:
                 - quay.io
 
       rules:
-        - match: { method: POST, path: "/images/**/push" }
+        - match: {method: POST, path: "/images/**/push"}
           action: deny
           reason: "menagerie: image push is not permitted"
-        - match: { method: GET, path: "/images/get" }
+        - match: {method: GET, path: "/images/get"}
           action: deny
           reason: "menagerie: image save is not permitted"
-        - match: { method: GET, path: "/images/**/get" }
+        - match: {method: GET, path: "/images/**/get"}
           action: deny
           reason: "menagerie: image save is not permitted"
-        - match: { method: POST, path: "/images/load" }
+        - match: {method: POST, path: "/images/load"}
           action: deny
           reason: "menagerie: image load is not permitted"
-        - match: { method: "*", path: "/libpod/**" }
+        - match: {method: "*", path: "/libpod/**"}
           action: deny
           reason: "menagerie: libpod API is not permitted"
 
         # Version negotiation, and the host's OS, architecture and runtimes.
-        - match: { method: HEAD, path: "/_ping" }
+        - match: {method: HEAD, path: "/_ping"}
           action: allow
-        - match: { method: GET, path: "/_ping" }
+        - match: {method: GET, path: "/_ping"}
           action: allow
-        - match: { method: GET, path: "/info" }
+        - match: {method: GET, path: "/info"}
           action: allow
 
         # Containers: lookup, inspect, lifecycle, rebuild.
-        - match: { method: GET, path: "/containers/json" }
+        - match: {method: GET, path: "/containers/json"}
           action: allow
-        - match: { method: GET, path: "/containers/*/json" }
+        - match: {method: GET, path: "/containers/*/json"}
           action: allow
-        - match: { method: POST, path: "/containers/create" }
+        - match: {method: POST, path: "/containers/create"}
           action: allow
-        - match: { method: POST, path: "/containers/*/start" }
+        - match: {method: POST, path: "/containers/*/start"}
           action: allow
-        - match: { method: POST, path: "/containers/*/stop" }
+        - match: {method: POST, path: "/containers/*/stop"}
           action: allow
-        - match: { method: DELETE, path: "/containers/*" }
+        - match: {method: DELETE, path: "/containers/*"}
           action: allow
 
         # Throwaway command containers: output, exit, and the copy of a
         # template candidate in and back.
-        - match: { method: POST, path: "/containers/*/attach" }
+        - match: {method: POST, path: "/containers/*/attach"}
           action: allow
-        - match: { method: POST, path: "/containers/*/wait" }
+        - match: {method: POST, path: "/containers/*/wait"}
           action: allow
-        - match: { method: PUT, path: "/containers/*/archive" }
+        - match: {method: PUT, path: "/containers/*/archive"}
           action: allow
-        - match: { method: GET, path: "/containers/*/archive" }
+        - match: {method: GET, path: "/containers/*/archive"}
           action: allow
 
         # Exec: lifecycle commands and environment probes.
-        - match: { method: POST, path: "/containers/*/exec" }
+        - match: {method: POST, path: "/containers/*/exec"}
           action: allow
-        - match: { method: POST, path: "/exec/*/start" }
+        - match: {method: POST, path: "/exec/*/start"}
           action: allow
-        - match: { method: GET, path: "/exec/*/json" }
+        - match: {method: GET, path: "/exec/*/json"}
           action: allow
 
         # Images: inspect, slash-bearing names included, and pull.
-        - match: { method: GET, path: "/images/**/json" }
+        - match: {method: GET, path: "/images/**/json"}
           action: allow
-        - match: { method: POST, path: "/images/create" }
+        - match: {method: POST, path: "/images/create"}
           action: allow
 
         # Mediated BuildKit.
-        - match: { method: POST, path: "/grpc" }
+        - match: {method: POST, path: "/grpc"}
           action: allow
-        - match: { method: POST, path: "/session" }
+        - match: {method: POST, path: "/session"}
           action: allow
 
         # Compose networks and volumes. Networks stay until removed by hand.
-        - match: { method: GET, path: "/networks" }
+        - match: {method: GET, path: "/networks"}
           action: allow
-        - match: { method: POST, path: "/networks/create" }
+        - match: {method: POST, path: "/networks/create"}
           action: allow
-        - match: { method: GET, path: "/volumes" }
+        - match: {method: GET, path: "/volumes"}
           action: allow
-        - match: { method: POST, path: "/volumes/create" }
+        - match: {method: POST, path: "/volumes/create"}
           action: allow
         # Up retires old object-record volumes.
-        - match: { method: DELETE, path: "/volumes/*" }
+        - match: {method: DELETE, path: "/volumes/*"}
           action: allow
 
-        - match: { method: "*", path: "/**" }
+        - match: {method: "*", path: "/**"}
           action: deny
           reason: "menagerie: not in the Menagerie profile"
 
 # No client reaches the root policy through the menagerie listener.
 rules:
-  - match: { method: "*", path: "/**" }
+  - match: {method: "*", path: "/**"}
     action: deny
     reason: "no profile"

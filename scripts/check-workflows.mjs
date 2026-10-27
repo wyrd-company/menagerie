@@ -41,6 +41,7 @@ const needs = {
   "tools:install:openbao": [],
   "test:scripts:docker": [],
   "test:docker": [go],
+  "test:docker:proxy": [go],
   "test:openbao": [go, task("tools:install:openbao")],
   "test:pocketid": [go],
   "test:templateservice": [go, rust],

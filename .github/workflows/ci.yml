@@ -139,6 +139,21 @@ jobs:
       - run: task test:scripts:docker
       - run: task test:docker
 
+  docker-proxy:
+    name: Docker runtime through the Docker proxy
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      - run: task test:docker:proxy
+
   openbao:
     name: OpenBao registry credentials
     runs-on: ubuntu-24.04
