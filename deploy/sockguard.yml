@@ -98,11 +98,14 @@ clients:
           allowed_paths: ["/"]
           allow_setid: false
           allow_device_nodes: false
-          # Templates and workspaces hold absolute links, such as a virtual
-          # environment's bin/python, and the proxy counts every absolute
-          # link as escaping. Admitting them lets a later entry write through
-          # a link into the throwaway container's own file system and its
-          # workspace bind, which the hook itself can already write.
+          # An upgrade's candidate is a checkout of the workspace, and its
+          # committed absolute links, such as a virtual environment's
+          # bin/python, are legitimate; templates hold them too. The proxy
+          # counts every absolute link as escaping. Admitting them lets a
+          # later entry write through a link only inside the throwaway
+          # container and its workspace bind, which the hook itself can
+          # already write. Set-id bits, device nodes and absolute or ".."
+          # entry names stay refused.
           allow_escaping_links: true
 
         network:
