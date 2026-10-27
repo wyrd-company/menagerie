@@ -20,7 +20,12 @@ description: >-
   its workspace in a header that Menagerie sets from its root and the
   workspace's name, and Menagerie refuses a definition that sets an
   identity label, so a definition cannot pass itself off as another
-  workspace. What remains: the operator's exceptions file grants a named
+  workspace. The proxy runs as root with only `CAP_DAC_READ_SEARCH`, so it
+  can read any file under its mounts, which are all read-only: the
+  workspace root, the workspace socket folder, the Compose staging folder,
+  its configuration and the exceptions folder; that is bounded by what it
+  mounts, and it already holds the Docker socket. What remains: the
+  operator's exceptions file grants a named
   workspace more, and that grant then reaches anyone who can change that
   workspace's definition; build steps pass the proxy uninspected
   (buildkit-traffic-not-inspectable); Menagerie may exec as root in the
