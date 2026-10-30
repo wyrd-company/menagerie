@@ -53,7 +53,7 @@ clone_at_head() {
   git -C "$1" add scripts docs/user/docs.yml
   git -C "$1" ls-files -z '.intentional/intents/*.md' | xargs -r -0 git -C "$1" rm -q
   git -C "$1" rm -q --ignore-unmatch CHANGELOG.md docs/user/CHANGELOG.md
-  (cd "$1" && intentional add --release-unit menagerie:minor --message "A fixture change." >/dev/null)
+  (cd "$1" && intentional add --release-unit menagerie:major --message "A fixture change." >/dev/null)
   git -C "$1" add .intentional/intents
   git_test -C "$1" commit -q -m "test: scripts and a fixture intent"
 }
@@ -98,7 +98,7 @@ git_test -C "$r" commit -q --allow-empty -m "test: an ordinary commit after the 
 expect "the rehearsal at a later commit without intents finds nothing to release" 0 'nothing to release' "$r/scripts/release.sh" rehearse
 
 # A second release has no new baseline.
-(cd "$r" && intentional add --release-unit menagerie:minor --message "A second fixture change." >/dev/null)
+(cd "$r" && intentional add --release-unit menagerie:major --message "A second fixture change." >/dev/null)
 git -C "$r" add .intentional/intents
 git_test -C "$r" commit -q -m "test: a second fixture intent"
 expect "a second release tags only its own version" 0 'released 0\.2\.0 at [0-9a-f]{40}; tags: 0\.2\.0$' \
