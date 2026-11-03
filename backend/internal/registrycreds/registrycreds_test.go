@@ -322,7 +322,7 @@ func TestOpenBaoFailuresAreTypedWithoutResponseText(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			src.client.SetMaxRetries(0)
+			src.reader.SetMaxRetries(0)
 			_, err = src.Fetch(context.Background(), "x")
 			var e *Error
 			if !errors.As(err, &e) || e.Reason != tc.reason {
@@ -338,7 +338,7 @@ func TestOpenBaoUnreachableSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src.client.SetMaxRetries(0)
+	src.reader.SetMaxRetries(0)
 	_, err = src.Fetch(context.Background(), "x")
 	var e *Error
 	if !errors.As(err, &e) || e.Reason != "the Wyrwood vault socket could not be reached" {
