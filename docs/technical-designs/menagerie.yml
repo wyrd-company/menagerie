@@ -208,7 +208,8 @@ proposed-design:
     defines. It declares the access group, the policies and the per-binding
     values of the Wyrwood binding and, optionally, the policy and name of
     the Xolotl client key. A template opts in by rendering the block. Absent,
-    no step of provisioning runs and the workspace works as any other. Only
+    no step of provisioning runs and the workspace works as any other, apart
+    from consuming a retirement record that the block's removal left. Only
     the definition file counts, never metadata from its image or features.
     The container name is the `--name` value of `runArgs`, read as
     devcontainer-builder reads it, so the name has one source. A declaration
@@ -264,8 +265,8 @@ proposed-design:
     1. `read-definition` reads the declaration and the container name and
     refuses, as `provisioning-invalid`, a declaration the schema refuses, a
     definition with no `--name`, and a container name or Xolotl key that
-    another workspace's definition declares or a container of another
-    workspace holds. The last check keeps the delete of one workspace from
+    another workspace's definition declares, its retirement record
+    names, or a container of another workspace holds. The last check keeps the delete of one workspace from
     revoking another's key. A provisioning section that configuration lacks
     fails as `provisioning-unavailable`. Host prerequisites are
     checked here, so nothing is issued for a workspace that cannot start. 2. `issue-key` issues the Xolotl key, and treats the answer that
@@ -319,10 +320,12 @@ proposed-design:
     workspace's definition no longer declares, removes those entries as each
     is confirmed gone, and removes the record when it is empty. A job that
     fails, or a Menagerie that restarts, leaves the record for the next one.
+    A failure while consuming fails the job, with the devcontainer running.
     `read-definition` treats a name or key in another workspace's record as
-    taken, as it treats one that workspace declares, and consumption keeps an
-    entry another workspace declares and removes it without acting, so one
-    workspace's retirement never takes what another uses. A definition edited by other means has no record; what
+    taken, as it treats one that workspace declares. An entry the workspace
+    declares again, or another workspace declares, is removed without acting,
+    so one workspace's retirement never takes what another uses. A definition
+    edited by other means has no record; what
     it stops declaring, or what a lost data volume's record named, stays until
     an operator removes it, visible in the Wyrwood and Xolotl web interfaces.
     A definition a devcontainer can edit
@@ -724,4 +727,7 @@ proposed-design:
     host-specific unit. A rebuild and an upgrade keep the binding and use
     fresh sockets. Delete leaves no binding and no live client key, and a
     delete stopped at each step can be retried. A workspace with no
-    declaration calls neither Wyrwood's operator interface nor Xolotl.
+    declaration and no retirement record calls neither Wyrwood's operator
+    interface nor Xolotl. An upgrade that fails after changing a declaration,
+    then a second such upgrade, then a start retires both old names and keys,
+    and an upgrade that removes the declaration retires them at its end.
