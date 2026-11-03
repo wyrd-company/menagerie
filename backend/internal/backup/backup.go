@@ -98,9 +98,11 @@ func MarkCreate(folder string) error {
 	return file.Close()
 }
 
-// CreateCommit returns the root commit an unfinished create has made, or the
-// zero hash when it has made none.
-func CreateCommit(folder string) (plumbing.Hash, error) {
+// CreateCommit returns the commit a retry of an unfinished create backs up:
+// the workspace branch's, which a job can have moved past the root commit. It
+// is the zero hash when the create has made no root commit, or its branch has
+// no commit, so that the retry commits again.
+func CreateCommit(folder, workspace string) (plumbing.Hash, error) {
 	data, err := os.ReadFile(markerPath(folder))
 	if errors.Is(err, os.ErrNotExist) {
 		return plumbing.ZeroHash, nil
@@ -108,7 +110,21 @@ func CreateCommit(folder string) (plumbing.Hash, error) {
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("read the unfinished create: %w", err)
 	}
-	return plumbing.NewHash(strings.TrimSpace(string(data))), nil
+	if plumbing.NewHash(strings.TrimSpace(string(data))).IsZero() {
+		return plumbing.ZeroHash, nil
+	}
+	repo, branch, err := open(folder, workspace)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	head, err := repo.Reference(branch, false)
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return plumbing.ZeroHash, nil
+	}
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return head.Hash(), nil
 }
 
 // RecordCreateCommit keeps the create's root commit, so that a retry backs it

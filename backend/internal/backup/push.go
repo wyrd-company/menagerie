@@ -18,6 +18,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
@@ -230,6 +231,10 @@ func basicForms(username, password string) []string {
 	}
 }
 
+// archiveRef keeps the commit Archive copies while it copies it. It is not
+// FetchedRef, which an apply-branch job holds across its own first push.
+const archiveRef plumbing.ReferenceName = "refs/menagerie/archive"
+
 // ArchivePrefix starts the branch that keeps an earlier workspace's backup.
 const ArchivePrefix = "archive/"
 
@@ -244,14 +249,14 @@ func (r *Remote) Archive(ctx context.Context, folder, workspace string, now time
 	if err != nil {
 		return "", err
 	}
-	fetched, err := r.Fetch(ctx, folder, workspace, branch.Short(), progress)
+	fetched, err := r.fetchInto(ctx, folder, workspace, branch.Short(), archiveRef, progress)
 	if errors.Is(err, ErrBranchNotFound) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = RemoveFetched(folder, workspace) }()
+	defer func() { _ = repo.Storer.RemoveReference(archiveRef) }()
 	if local, err := repo.Reference(branch, false); err == nil && local.Hash() == fetched {
 		return "", nil
 	}
@@ -264,7 +269,7 @@ func (r *Remote) Archive(ctx context.Context, folder, workspace string, now time
 	remote := git.NewRemote(repo.Storer, &config.RemoteConfig{Name: remoteName, URLs: []string{r.URL}})
 	err = remote.PushContext(s.ctx, &git.PushOptions{
 		RemoteName: remoteName,
-		RefSpecs:   []config.RefSpec{config.RefSpec(FetchedRef.String() + ":refs/heads/" + name)},
+		RefSpecs:   []config.RefSpec{config.RefSpec(archiveRef.String() + ":refs/heads/" + name)},
 		Auth:       s.auth,
 		Progress:   s.progress,
 	})

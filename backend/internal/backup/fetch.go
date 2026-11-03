@@ -50,6 +50,11 @@ func ApplyBranch(name string) (plumbing.ReferenceName, error) {
 // repository, which lacks the history an apply walks, is refused with
 // *NotApplicableError before anything is fetched.
 func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, progress io.Writer) (plumbing.Hash, error) {
+	return r.fetchInto(ctx, folder, workspace, branch, FetchedRef, progress)
+}
+
+// fetchInto is Fetch into the private ref target.
+func (r *Remote) fetchInto(ctx context.Context, folder, workspace, branch string, target plumbing.ReferenceName, progress io.Writer) (plumbing.Hash, error) {
 	name, err := ApplyBranch(branch)
 	if err != nil {
 		return plumbing.ZeroHash, err
@@ -74,7 +79,7 @@ func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, pr
 	remote := git.NewRemote(repo.Storer, &config.RemoteConfig{Name: remoteName, URLs: []string{r.URL}})
 	err = remote.FetchContext(ctx, &git.FetchOptions{
 		RemoteName: remoteName,
-		RefSpecs:   []config.RefSpec{config.RefSpec("+" + name.String() + ":" + FetchedRef.String())},
+		RefSpecs:   []config.RefSpec{config.RefSpec("+" + name.String() + ":" + target.String())},
 		Auth:       auth,
 		Progress:   progress,
 		Force:      true,
@@ -85,7 +90,7 @@ func (r *Remote) Fetch(ctx context.Context, folder, workspace, branch string, pr
 	case err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate):
 		return plumbing.ZeroHash, fmt.Errorf("fetch %s: %w", branch, transportFailure(ctx, r.URL, err))
 	}
-	ref, err := repo.Reference(FetchedRef, false)
+	ref, err := repo.Reference(target, false)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("fetch %s: %w", branch, err)
 	}

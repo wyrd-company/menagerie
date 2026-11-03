@@ -125,20 +125,71 @@ func TestAPushThatFailsKeepsTheCreateUnfinished(t *testing.T) {
 	}
 }
 
-func TestACreateKeepsItsRootCommit(t *testing.T) {
+func TestARetryBacksUpTheBranchAsItIs(t *testing.T) {
 	folder := generated(t, "sample")
-	if made, err := CreateCommit(folder); err != nil || !made.IsZero() {
-		t.Fatalf("%s %v", made, err)
+	if made, err := CreateCommit(folder, "sample"); err != nil || !made.IsZero() {
+		t.Fatalf("no root: %s %v", made, err)
 	}
-	hash := plumbing.NewHash("0123456789012345678901234567890123456789")
-	if err := RecordCreateCommit(folder, hash); err != nil {
+	// A recorded root with no branch commits again.
+	gone := plumbing.NewHash("0123456789012345678901234567890123456789")
+	if err := RecordCreateCommit(folder, gone); err != nil {
+		t.Fatal(err)
+	}
+	if made, err := CreateCommit(folder, "sample"); err != nil || !made.IsZero() {
+		t.Fatalf("no branch: %s %v", made, err)
+	}
+	c, err := CommitRoot(folder, "sample", Output{Record: RecordName}, "first", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordCreateCommit(folder, c.Hash); err != nil {
 		t.Fatal(err)
 	}
 	if err := MarkCreate(folder); err != nil {
 		t.Fatal(err)
 	}
-	if made, err := CreateCommit(folder); err != nil || made != hash {
-		t.Fatalf("%s %v", made, err)
+	if made, err := CreateCommit(folder, "sample"); err != nil || made != c.Hash {
+		t.Fatalf("root: %s %v", made, err)
+	}
+	// A job moved the branch: the retry reports what it pushes.
+	if err := os.WriteFile(filepath.Join(folder, "later"), []byte("later"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	later, err := CommitAll(folder, "sample", "later", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if made, err := CreateCommit(folder, "sample"); err != nil || made != later.Hash {
+		t.Fatalf("moved: %s %v, want %s", made, err, later.Hash)
+	}
+}
+
+// An apply-branch job holds FetchedRef across its first push.
+func TestArchiveLeavesAnApplysFetchedRefAlone(t *testing.T) {
+	remote := bareRemote(t)
+	ctx := context.Background()
+	first, _ := pushable(t, remote, "sample", "first")
+	if _, err := remote.Push(ctx, first, "sample", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := pushable(t, remote, "sample", "second")
+	held, err := remote.Fetch(ctx, second, "sample", "sample", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.Push(ctx, second, "sample", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := git.PlainOpen(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Reference(FetchedRef, false)
+	if err != nil || ref.Hash() != held {
+		t.Fatalf("fetched ref %v %v, want %s", ref, err, held)
+	}
+	if _, err := repo.Reference(archiveRef, false); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Errorf("the archive's ref stays: %v", err)
 	}
 }
 
@@ -248,8 +299,8 @@ func TestArchiveKeepsADeletedWorkspacesBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.Reference(FetchedRef, false); !errors.Is(err, plumbing.ErrReferenceNotFound) {
-		t.Errorf("the fetched ref stays: %v", err)
+	if _, err := repo.Reference(archiveRef, false); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Errorf("the archive's ref stays: %v", err)
 	}
 }
 

@@ -145,12 +145,12 @@ func (s *saving) rootCommit(run *jobs.Run) (plumbing.Hash, error) {
 	if err := backup.MarkCreate(s.folder); err != nil {
 		return plumbing.ZeroHash, err
 	}
-	made, err := backup.CreateCommit(s.folder)
+	made, err := backup.CreateCommit(s.folder, s.name)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
 	if !made.IsZero() {
-		fmt.Fprintf(run.Log(""), "the root of branch %s is already committed as %s\n", s.name, made)
+		fmt.Fprintf(run.Log(""), "branch %s is already committed, at %s\n", s.name, made)
 		return made, nil
 	}
 	run.Phase("commit")
