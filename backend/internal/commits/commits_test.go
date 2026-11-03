@@ -270,6 +270,10 @@ func TestASweepCommitsOnlyIdleWorkspacesWithChanges(t *testing.T) {
 	f.workspace(t, "clean")
 	ignored := f.workspace(t, "ignored")
 	busy := f.workspace(t, "busy")
+	if err := os.Rename(f.workspace(t, "shared"), filepath.Join(filepath.Dir(dirty), ".shared")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(filepath.Dir(dirty), ".shared"), "new.txt", "new\n")
 	write(t, dirty, "new.txt", "new\n")
 	write(t, ignored, "only.local", "ignored\n")
 	write(t, busy, "new.txt", "new\n")

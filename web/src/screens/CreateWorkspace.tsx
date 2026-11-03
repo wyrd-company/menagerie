@@ -10,7 +10,7 @@ export function nameProblems(name: string): string[] {
   if (name === "") return ["is required"];
   if (name.includes("/") || name.includes("\\"))
     return ["must be one folder name, without slashes"];
-  if (name === "." || name === "..") return ["must not be . or .."];
+  if (name.startsWith(".")) return ["must not start with a dot"];
   return [];
 }
 

@@ -47,7 +47,8 @@ type Config struct {
 	// Listen is the HTTP listen address of the workspace service.
 	Listen string `yaml:"listen"`
 	// WorkspaceRoot is the folder whose direct child folders are the
-	// workspaces. It has the same path in the container and on the host.
+	// workspaces, unless their names start with a dot. It has the same path
+	// in the container and on the host.
 	WorkspaceRoot string `yaml:"workspace-root"`
 	// WorkspaceRepository is the Git remote that holds one backup branch
 	// per workspace.

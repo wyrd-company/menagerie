@@ -25,7 +25,7 @@ func fixtureRoot(t *testing.T) string {
 	return dir
 }
 
-func TestNamesListsEveryDirectChildFolder(t *testing.T) {
+func TestNamesListsDirectChildFoldersWithoutADot(t *testing.T) {
 	root, err := NewRoot(fixtureRoot(t))
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestNamesListsEveryDirectChildFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(names, ","); got != ".hidden-space,alpha,beta" {
+	if got := strings.Join(names, ","); got != "alpha,beta" {
 		t.Fatalf("names %s", got)
 	}
 }
@@ -60,15 +60,17 @@ func TestFolderRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]error{
-		"":          ErrInvalidName,
-		".":         ErrInvalidName,
-		"..":        ErrInvalidName,
-		"alpha/sub": ErrInvalidName,
-		"../alpha":  ErrInvalidName,
-		"a\x00b":    ErrInvalidName,
-		"missing":   ErrNotFound,
-		"notes.txt": ErrNotFound,
-		"linked":    ErrNotFound,
+		"":              ErrInvalidName,
+		".":             ErrInvalidName,
+		"..":            ErrInvalidName,
+		".hidden-space": ErrInvalidName,
+		".missing":      ErrInvalidName,
+		"alpha/sub":     ErrInvalidName,
+		"../alpha":      ErrInvalidName,
+		"a\x00b":        ErrInvalidName,
+		"missing":       ErrNotFound,
+		"notes.txt":     ErrNotFound,
+		"linked":        ErrNotFound,
 	}
 	for name, want := range cases {
 		if _, err := root.Folder(name); !errors.Is(err, want) {

@@ -160,6 +160,9 @@ type errorBody struct {
 
 func TestListWorkspacesJoinsFoldersOnly(t *testing.T) {
 	f := newFixture(t, nil)
+	if err := os.Mkdir(filepath.Join(f.root, ".shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	resp, data := f.do(t, "GET", "/api/workspaces", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("%d %s", resp.StatusCode, data)
@@ -374,6 +377,7 @@ func TestStartJobRejects(t *testing.T) {
 	}{
 		{`{"operation":"start","workspace":"missing"}`, 404, "workspace-not-found", ""},
 		{`{"operation":"start","workspace":".."}`, 400, "invalid-workspace-name", ""},
+		{`{"operation":"start","workspace":".shared"}`, 400, "invalid-workspace-name", ""},
 		{`{"operation":"start","workspace":"alpha/x"}`, 400, "invalid-workspace-name", ""},
 		{`{"operation":"create","workspace":"delta","templateId":"sample-template"}`, 400, "unknown-operation", `"create"`},
 		{`{"operation":"start","workspace":"alpha","extra":1}`, 400, "invalid-request", ""},

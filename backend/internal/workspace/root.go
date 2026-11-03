@@ -5,8 +5,8 @@
 // ---
 
 // Package workspace discovers workspaces: every folder directly under the
-// workspace root is a workspace. Local folders are authoritative; this
-// package never consults Docker.
+// workspace root is a workspace, unless its name starts with a dot. Local
+// folders are authoritative; this package never consults Docker.
 package workspace
 
 import (
@@ -21,7 +21,7 @@ import (
 // ErrNotFound means no workspace folder has the requested name.
 var ErrNotFound = errors.New("workspace not found")
 
-// ErrInvalidName means a name cannot be a direct child folder of the root.
+// ErrInvalidName means a name cannot be a workspace's folder under the root.
 var ErrInvalidName = errors.New("invalid workspace name")
 
 // Root is the workspace root.
@@ -50,8 +50,9 @@ func NewRoot(path string) (*Root, error) {
 // Path returns the workspace root path.
 func (r *Root) Path() string { return r.path }
 
-// Names returns the names of every folder directly under the root, sorted.
-// Symbolic links and files are not workspaces.
+// Names returns the name of every workspace, sorted: the folders directly
+// under the root whose names ValidName accepts. Symbolic links and files are
+// not workspaces.
 func (r *Root) Names() ([]string, error) {
 	entries, err := os.ReadDir(r.path)
 	if err != nil {
@@ -59,7 +60,7 @@ func (r *Root) Names() ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() && ValidName(e.Name()) == nil {
 			names = append(names, e.Name())
 		}
 	}
@@ -92,10 +93,12 @@ func (r *Root) Folder(name string) (string, error) {
 	return folder, nil
 }
 
-// ValidName reports whether name can be a folder directly under the root.
+// ValidName reports whether name can be a workspace's folder directly under
+// the root. A name that starts with a dot cannot: such a folder belongs to the
+// host, as `.shared` does.
 func ValidName(name string) error {
 	switch {
-	case name == "", name == ".", name == "..":
+	case name == "", strings.HasPrefix(name, "."):
 		return fmt.Errorf("%w: %q", ErrInvalidName, name)
 	case strings.ContainsAny(name, "/\x00"):
 		return fmt.Errorf("%w: %q", ErrInvalidName, name)

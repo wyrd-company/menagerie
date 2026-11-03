@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -24,8 +25,10 @@ import (
 // runtime a mount for the root's folders only.
 func TestWorkspaceSocketsReachTheRuntime(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "alpha"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"alpha", ".shared"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	root, err := workspace.NewRoot(dir)
 	if err != nil {
@@ -56,6 +59,12 @@ func TestWorkspaceSocketsReachTheRuntime(t *testing.T) {
 	defer sockets.Close()
 	if info, err := os.Lstat(filepath.Join(folder, "alpha", devcontainer.WorkspaceSocketName)); err != nil || info.Mode()&os.ModeSocket == 0 {
 		t.Fatalf("alpha has no socket at start-up: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(folder, ".shared")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a dot folder got a socket folder at start-up: %v", err)
+	}
+	if _, err := opts.WorkspaceSocket(filepath.Join(dir, ".shared")); err == nil {
+		t.Fatal("a dot folder got a socket")
 	}
 	if got, err := opts.WorkspaceSocket(filepath.Join(dir, "beta")); err != nil || got != filepath.Join(folder, "beta") {
 		t.Fatalf("mount for beta %q %v", got, err)
