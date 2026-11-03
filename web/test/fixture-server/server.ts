@@ -199,7 +199,9 @@ export function createFixture(options: { distDir: string }) {
       if (
         !operation ||
         !name ||
-        !["create", "upgrade", "start", "stop", "rebuild", "apply-branch"].includes(operation)
+        !["create", "upgrade", "start", "stop", "rebuild", "apply-branch", "delete"].includes(
+          operation,
+        )
       ) {
         return fail(res, 400, "invalid-request", "operation and workspace are required");
       }

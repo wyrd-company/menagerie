@@ -65,6 +65,9 @@ const OperationCommit = "commit"
 // workspace and rebuilds its devcontainer.
 const OperationApplyBranch = "apply-branch"
 
+// OperationDelete removes a workspace from the host.
+const OperationDelete = "delete"
+
 // ContainerRuntime runs container operations on a workspace folder.
 // *devcontainer.Runtime satisfies it.
 type ContainerRuntime interface {

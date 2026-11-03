@@ -749,3 +749,58 @@ func TestAFolderAboveOwnedByAnotherUserIsRefused(t *testing.T) {
 		t.Fatalf("%v, want %v", err, errAncestor)
 	}
 }
+
+func TestRemoveStopsTheListenerAndRemovesTheFolder(t *testing.T) {
+	f := newFixture(t)
+	f.workspace("alpha")
+	f.workspace("beta")
+	held, err := net.Dial("unix", f.socket("alpha"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := f.sockets.Remove("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	// The listener's server has stopped, so a connection it held ends.
+	_ = held.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := held.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Errorf("a held connection: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(f.folder, "alpha")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("folder stays: %v", err)
+	}
+	if _, err := net.Dial("unix", f.socket("alpha")); err == nil {
+		t.Error("the socket still answers")
+	}
+	if _, err := os.Lstat(f.socket("beta")); err != nil {
+		t.Errorf("another workspace's socket: %v", err)
+	}
+	// What is already gone is done, and a later start makes it again.
+	if err := f.sockets.Remove("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.sockets.Ensure("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(f.socket("alpha")); err != nil {
+		t.Errorf("socket after Ensure: %v", err)
+	}
+}
+
+func TestRemoveRefusesALinkAndAnInvalidName(t *testing.T) {
+	f := newFixture(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(f.folder, "alpha")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.sockets.Remove("alpha"); err == nil {
+		t.Error("a link was followed")
+	}
+	if _, err := os.Lstat(outside); err != nil {
+		t.Errorf("link's target: %v", err)
+	}
+	if err := f.sockets.Remove("../alpha"); !errors.Is(err, workspace.ErrInvalidName) {
+		t.Errorf("name: %v", err)
+	}
+}

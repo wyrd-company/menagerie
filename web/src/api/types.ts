@@ -24,7 +24,7 @@ export interface Template {
 }
 
 export type Operation =
-  "create" | "upgrade" | "start" | "stop" | "rebuild" | "commit" | "apply-branch";
+  "create" | "upgrade" | "start" | "stop" | "rebuild" | "commit" | "apply-branch" | "delete";
 
 export interface ErrorBody {
   kind: string;

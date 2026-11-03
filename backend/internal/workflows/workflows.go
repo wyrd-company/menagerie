@@ -12,7 +12,8 @@
 // workspace branch, backs it up and starts the devcontainer. Upgrade backs up local changes to tracked files, interviews,
 // applies the merge, commits, backs up and rebuilds. Apply-branch fetches a
 // branch of the workspace repository, backs up every local change, brings
-// the branch into the workspace, backs up and rebuilds.
+// the branch into the workspace, backs up and rebuilds. Delete backs up and
+// removes the workspace from the host.
 package workflows
 
 import (
@@ -59,6 +60,9 @@ type Runtime interface {
 	Create(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error
 	// Retire records what the definition declares, before a job changes it.
 	Retire(folder string, p devcontainer.Progress) error
+	// Delete removes a workspace from the host, and runs save, which commits
+	// and backs the workspace up, before it removes anything.
+	Delete(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error
 }
 
 // Options compose the workflows.
@@ -80,7 +84,7 @@ type Options struct {
 	RestartLimit time.Duration
 }
 
-// Workflows owns the create, upgrade and apply-branch operations, and the
+// Workflows owns the create, upgrade, apply-branch and delete operations, and the
 // interviews of the first two.
 type Workflows struct {
 	opts Options
@@ -94,13 +98,15 @@ func New(opts Options) *Workflows {
 	return &Workflows{opts: opts, interviews: map[string]*interview{}}
 }
 
-// Operations returns the start, create, upgrade and apply-branch operations.
+// Operations returns the start, create, upgrade, apply-branch and delete
+// operations.
 func (w *Workflows) Operations() api.Operations {
 	return api.Operations{
 		api.OperationStart:       w.start,
 		api.OperationCreate:      w.create,
 		api.OperationUpgrade:     w.upgrade,
 		api.OperationApplyBranch: w.applyBranch,
+		api.OperationDelete:      w.delete,
 	}
 }
 

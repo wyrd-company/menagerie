@@ -19,6 +19,7 @@ const operationVerb: Record<string, string> = {
   rebuild: "Rebuild",
   commit: "Commit",
   "apply-branch": "Apply branch to",
+  delete: "Delete",
 };
 
 /** Live phases, log lines and the outcome of one job. */

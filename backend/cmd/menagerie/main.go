@@ -206,6 +206,13 @@ func workspaceSockets(ctx context.Context, cfg *config.Config, root *workspace.R
 		}
 		return sockets.Ensure(name)
 	}
+	opts.RemoveWorkspaceSocket = func(folder string) error {
+		name := filepath.Base(folder)
+		if own, err := root.FolderPath(name); err != nil || own != folder {
+			return errors.New("workspace socket: the workspace's folder is not a folder of the workspace root")
+		}
+		return sockets.Remove(name)
+	}
 	names, err := root.Names()
 	if err != nil {
 		sockets.Close()

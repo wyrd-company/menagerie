@@ -284,6 +284,40 @@ Start runs `initializeCommand` before it starts the container, as rebuild
 does. When `initializeCommand` fails, the job fails with
 `initialize-command-failed` and the container stays stopped.
 
+## Delete a workspace
+
+**Delete** on a row asks you to type the workspace's name, and removes the
+workspace from the host. Ignored files, such as cloned repositories, are not in
+the backup and are lost. The console shows these phases:
+
+1. `read-definition`: the job fails as `delete-refused` while a running container
+   outside the workspace mounts its folder, and as `provisioning-unavailable`
+   when the workspace holds a binding or a key that
+   [`provisioning`](configuration.md#provisioning) cannot reach. Nothing changes.
+2. `stop`: the devcontainer, and for Compose every service of its project.
+3. `commit` and `backup`: tracked and new files, as a commit does. A folder with
+   no applied record, such as one whose generation failed, has no backup. A
+   failure here removes nothing and leaves the devcontainer stopped.
+4. `unbind`: the Wyrwood binding, when the workspace has one. The console shows
+   a warning, or a token that may stay valid until it expires.
+5. `remove-container`: the workspace's containers.
+6. `revoke-key`: the Xolotl key, when the workspace has one.
+7. `remove-folder`: the workspace socket's folder, then the workspace folder. A
+   throwaway container that runs as root removes the folder, in the
+   [runner image](configuration.md#runner-images), which needs `sh`, `mv` and
+   `find`.
+
+A failed delete keeps what it finished. **Delete** again continues from what is
+left.
+
+These stay: the workspace's branch in the workspace repository, images, Compose
+volumes and networks, and bind sources outside the folder. A later create of that
+name copies the branch to `archive/<name>-<UTC stamp>` first. The agent's empty
+consumer directory stays until the next host restart.
+
+A binding or a key that another workspace's definition declares stays, and the
+console says so.
+
 ## Time limits
 
 The job console shows how long a job has run. When the configuration sets

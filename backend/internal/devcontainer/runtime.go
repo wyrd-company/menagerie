@@ -110,6 +110,9 @@ type Options struct {
 	// mount; a start that reuses a container without it leaves the
 	// container as it is. Nil mounts nothing.
 	WorkspaceSocket func(folder string) (string, error)
+	// RemoveWorkspaceSocket removes the workspace's socket and its folder.
+	// What is already gone is done. Nil removes nothing.
+	RemoveWorkspaceSocket func(folder string) error
 }
 
 // Runtime operates workspace devcontainers on one Docker Engine.
@@ -617,6 +620,85 @@ func (r *Runtime) removeWorkspaceContainers(ctx context.Context, folder string, 
 	}
 }
 
+// RemoveContainers removes the workspace's containers, and for Compose every
+// container of its project. Named volumes and networks stay.
+func (r *Runtime) RemoveContainers(ctx context.Context, folder string, p Progress) error {
+	p.Phase("remove-container")
+	project, err := r.composeHost(p, anonymous).Inspect(ctx, folder)
+	switch {
+	case errors.Is(err, dockercompose.ErrProjectNotFound):
+	case err != nil:
+		return err
+	default:
+		for _, c := range project.Containers {
+			fmt.Fprintf(p.Log(""), "removing container %s\n", shortID(c.ID))
+			err := r.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
+			if err != nil && !dockerclient.IsErrNotFound(err) {
+				return fmt.Errorf("remove container %s: %w", shortID(c.ID), err)
+			}
+		}
+	}
+	return r.removeWorkspaceContainers(ctx, folder, p)
+}
+
+// RemovingMark is the name a delete gives a workspace's .git folder before it
+// removes the rest, so that from then on no job can commit what is left of the
+// folder, and a retried delete knows that its backup has run.
+const RemovingMark = ".menagerie-removing"
+
+// removalScript removes everything in the working directory, which is a
+// workspace folder mounted at its own path. Renaming is one step, so a removal
+// that stops leaves either the whole repository or none under its name.
+const removalScript = `set -e
+if [ -e .git ] || [ -L .git ]; then mv .git ` + RemovingMark + `; fi
+find . -mindepth 1 -delete
+`
+
+// RemoveFolder removes the workspace's socket folder and then its folder. A
+// throwaway container that runs as root, with only that folder mounted, removes
+// what the services' user cannot. The service's user owns the workspace root,
+// and removes the empty folder.
+func (r *Runtime) RemoveFolder(ctx context.Context, folder string, p Progress) error {
+	p.Phase("remove-folder")
+	if r.opts.RemoveWorkspaceSocket != nil {
+		if err := r.opts.RemoveWorkspaceSocket(folder); err != nil {
+			return err
+		}
+	}
+	if _, err := os.Lstat(folder); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if r.opts.Containers == nil || r.opts.RunnerImage == nil {
+		return errors.New("removing the workspace folder needs throwaway containers, and none is configured")
+	}
+	image, err := r.opts.RunnerImage(ctx)
+	if err != nil {
+		return err
+	}
+	out := p.Log("remove-folder: ")
+	code, err := r.opts.Containers.Run(ctx, throwaway.Command{
+		Kind:   throwaway.KindFolderRemoval,
+		Job:    jobID(p),
+		Image:  image,
+		Folder: folder,
+		Dir:    folder,
+		User:   "0:0",
+		Argv:   []string{"sh", "-c", removalScript},
+		Stdout: out,
+		Stderr: out,
+		Log:    p.Log(""),
+	})
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("the container that removes the workspace folder exited with code %d", code)
+	}
+	return os.Remove(folder)
+}
+
 // anonymous is the credential source of operations that pull and build
 // nothing. It is still a source, so no call falls back to the Docker
 // client configuration.
@@ -712,6 +794,32 @@ func (r *Runtime) Mounting(ctx context.Context, folder string) ([]string, error)
 		return nil, err
 	}
 	return mounting(list, folder, r.opts.Own), nil
+}
+
+// MountingOutside is Mounting without the workspace's own containers: those
+// labelled for its folder and those of its Compose project.
+func (r *Runtime) MountingOutside(ctx context.Context, folder string, p Progress) ([]string, error) {
+	list, err := r.client.ContainerList(ctx, container.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	var name string
+	project, err := r.composeHost(p, anonymous).Inspect(ctx, folder)
+	switch {
+	case errors.Is(err, dockercompose.ErrProjectNotFound):
+	case err != nil:
+		return nil, err
+	default:
+		name = project.Name
+	}
+	others := make([]container.Summary, 0, len(list))
+	for _, c := range list {
+		if c.Labels[labelLocalFolder] == folder || (name != "" && c.Labels[dockercompose.LabelProject] == name) {
+			continue
+		}
+		others = append(others, c)
+	}
+	return mounting(others, folder, r.opts.Own), nil
 }
 
 // mounting returns the short ids of the containers in list, other than

@@ -287,6 +287,33 @@ func (s *Sockets) Ensure(name string) (string, error) {
 	return dir, nil
 }
 
+// Remove stops the workspace's listener and removes its socket folder. A
+// folder that is already gone is done, and a folder that is not this user's
+// stays and fails the call.
+func (s *Sockets) Remove(name string) error {
+	if err := workspace.ValidName(name); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if l, ok := s.listeners[name]; ok {
+		_ = l.server.Close()
+		delete(s.listeners, name)
+	}
+	dir := filepath.Join(s.opts.Folder, name)
+	err := s.ownFolder(dir, 0o755, false)
+	if errors.Is(err, errMissing) {
+		return nil
+	}
+	if err == nil {
+		err = os.RemoveAll(dir)
+	}
+	if err != nil {
+		return fmt.Errorf("workspace socket of %s: its folder %w", name, err)
+	}
+	return nil
+}
+
 // copyClient writes the client into bin through a new file renamed over
 // the old one, so a link there is replaced, never written through.
 func (s *Sockets) copyClient(bin string) error {

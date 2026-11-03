@@ -158,6 +158,24 @@ async function runApplyBranch(world: World, job: FixtureJob) {
   finish(job, "succeeded");
 }
 
+/** Replays a delete; its folder goes last. */
+async function runDelete(world: World, job: FixtureJob) {
+  const ws = workspace(world, job.workspace);
+  if (!ws) return;
+  setState(job, "running", "read-definition");
+  setState(job, "running", "stop");
+  ws.state = "stopped";
+  setState(job, "running", "commit");
+  log(job, `nothing to commit; branch ${ws.name} is at 0decade`);
+  setState(job, "running", "backup");
+  log(job, `branch ${ws.name} in the workspace repository is already up to date`);
+  await tick();
+  setState(job, "running", "remove-container");
+  setState(job, "running", "remove-folder");
+  world.workspaces.splice(world.workspaces.indexOf(ws), 1);
+  finish(job, "succeeded");
+}
+
 /** Replays the create interview: batch 1 (or its rejection, or a flow stop), then batch 2. */
 export function answer(
   world: World,
@@ -196,5 +214,6 @@ export function run(world: World, job: FixtureJob) {
   if (job.operation === "create") void runCreate(job);
   else if (job.operation === "upgrade") void runUpgrade(world, job);
   else if (job.operation === "apply-branch") void runApplyBranch(world, job);
+  else if (job.operation === "delete") void runDelete(world, job);
   else void runContainerJob(world, job);
 }

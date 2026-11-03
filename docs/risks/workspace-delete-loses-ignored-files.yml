@@ -7,11 +7,11 @@ title: Deleting a workspace loses files the backup does not hold
 description: >-
   Delete removes the workspace folder. The backup branch holds what Git tracks
   and new files outside the ignore rules. Ignored files, such as cloned
-  repositories and agent state, exist only in the folder and are lost, and a
-  later create of that name replaces the backup branch. Mitigation: the manager
+  repositories and agent state, exist only in the folder and are lost. Mitigation: the manager
   types the workspace's name in a screen that says this; delete commits and
   backs up first, and a failed backup removes nothing; the backup branch stays
-  in the workspace repository until that later create.
+  in the workspace repository, and a later create of that name copies it to
+  `archive/<name>-<UTC stamp>` before it pushes.
 categories:
   - operational
 likelihood: 2

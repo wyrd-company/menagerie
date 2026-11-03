@@ -23,7 +23,7 @@
 .entry {
   display: grid;
   grid-template-columns: minmax(10rem, 1.3fr) minmax(8rem, 1fr) auto;
-  grid-template-areas: "name state actions" "token token token" "error error error";
+  grid-template-areas: "name state actions" "token token token" "delete delete delete" "error error error";
   align-items: center;
   gap: 0.3rem 1.25rem;
   padding: 0.85rem 1rem;
@@ -103,6 +103,30 @@
   width: 14rem;
   min-height: 2rem;
   padding: 0.3rem 0.6rem;
+}
+
+.entry-delete {
+  grid-area: delete;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.875rem;
+}
+
+.entry-delete p {
+  flex-basis: 100%;
+}
+
+.entry-delete input {
+  width: 14rem;
+  min-height: 2rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.entry-delete-actions {
+  display: inline-flex;
+  gap: 0.3rem;
 }
 
 .entry-error {
@@ -210,7 +234,7 @@
 @media (max-width: 720px) {
   .entry {
     grid-template-columns: 1fr auto;
-    grid-template-areas: "name state" "actions actions" "token token" "error error";
+    grid-template-areas: "name state" "actions actions" "token token" "delete delete" "error error";
     gap: 0.6rem 1rem;
   }
 

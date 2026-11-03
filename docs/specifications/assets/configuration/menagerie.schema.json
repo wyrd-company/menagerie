@@ -216,6 +216,9 @@
             },
             "apply-branch": {
               "$ref": "#/$defs/duration"
+            },
+            "delete": {
+              "$ref": "#/$defs/duration"
             }
           }
         },
@@ -229,7 +232,10 @@
               "bind",
               "initialize-command",
               "build",
+              "unbind",
               "remove-container",
+              "revoke-key",
+              "remove-folder",
               "create-container",
               "wait-for-sockets",
               "up",

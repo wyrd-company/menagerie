@@ -280,6 +280,24 @@ func (r *fakeRuntime) Create(ctx context.Context, folder string, p devcontainer.
 	return r.Start(ctx, folder, p)
 }
 
+// Delete runs as provisioning does with no declaration: the stop, the save,
+// then what removes the folder.
+func (r *fakeRuntime) Delete(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error {
+	if err := r.do("stop", folder, p); err != nil {
+		return err
+	}
+	if err := save(ctx); err != nil {
+		return err
+	}
+	if err := r.do("remove-container", folder, p); err != nil {
+		return err
+	}
+	if err := r.do("remove-folder", folder, p); err != nil {
+		return err
+	}
+	return os.RemoveAll(folder)
+}
+
 // Retire records the call, apart from what seen reports.
 func (r *fakeRuntime) Retire(folder string, _ devcontainer.Progress) error {
 	r.mu.Lock()

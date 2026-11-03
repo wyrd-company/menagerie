@@ -35,6 +35,9 @@ const (
 	KindInvalid     = "provisioning-invalid"
 	KindUnavailable = "provisioning-unavailable"
 	KindNotReady    = "provisioning-not-ready"
+	// KindDeleteRefused is a delete refused while a container can still write
+	// to the workspace folder.
+	KindDeleteRefused = "delete-refused"
 )
 
 // DefaultReadinessWait bounds each wait on a binding's status when
@@ -59,6 +62,9 @@ type Runtime interface {
 	ContainerHolder(ctx context.Context, name string) (folder string, found bool, err error)
 	BeginStart(folder string, p devcontainer.Progress) (BringUp, error)
 	BeginRebuild(folder string, p devcontainer.Progress) (BringUp, error)
+	MountingOutside(ctx context.Context, folder string, p devcontainer.Progress) ([]string, error)
+	RemoveContainers(ctx context.Context, folder string, p devcontainer.Progress) error
+	RemoveFolder(ctx context.Context, folder string, p devcontainer.Progress) error
 }
 
 // BringUp is one start or rebuild as separate steps. *devcontainer.BringUp

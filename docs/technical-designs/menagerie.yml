@@ -375,10 +375,16 @@ proposed-design:
     workspace's containers; for Compose, named volumes and networks stay.
     `revoke-key` revokes the Xolotl key. `remove-folder` removes the socket
     folder and then the workspace folder; a throwaway container that runs as
-    root, with only that folder mounted, removes what the services' user
-    cannot. `unbind` and `revoke-key` also take what a retirement record names, and
-    the record goes with the folder. Without a declaration and a record,
-    `unbind` and `revoke-key` do not run. Each
+    root, with only that folder mounted, first renames the repository's `.git`
+    to `.menagerie-removing`, so that from then on no job commits what is left
+    and a retried delete skips the backup, and then removes the rest. `unbind`
+    and `revoke-key` also take what a retirement record names, and the record
+    goes before the folder. Without a declaration and a record, `unbind` and
+    `revoke-key` do not run. A name or key another workspace's definition
+    declares stays, as does what a declaration names when a container outside
+    the workspace holds its name, and the console says so. A block that is not
+    valid still names what an earlier definition may have provisioned, and it
+    cannot hold up the delete when the section it needs is absent. Each
     step treats what is already gone as done, and the folder goes last, so a
     retried delete can still read its declaration. The backup branch stays in
     the workspace repository, images stay, bind sources outside the folder

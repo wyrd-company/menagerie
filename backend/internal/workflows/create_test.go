@@ -18,13 +18,13 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 )
 
-func TestOperationsAreStartCreateUpgradeAndApplyBranch(t *testing.T) {
+func TestOperationsAreStartCreateUpgradeApplyBranchAndDelete(t *testing.T) {
 	var names []string
 	for name := range New(Options{}).Operations() {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{api.OperationApplyBranch, api.OperationCreate, api.OperationStart, api.OperationUpgrade}) {
+	if !reflect.DeepEqual(names, []string{api.OperationApplyBranch, api.OperationCreate, api.OperationDelete, api.OperationStart, api.OperationUpgrade}) {
 		t.Fatalf("operations %v", names)
 	}
 }

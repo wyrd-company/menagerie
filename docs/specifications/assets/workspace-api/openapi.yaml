@@ -303,7 +303,7 @@ components:
       properties:
         operation:
           type: string
-          enum: [start, stop, rebuild, create, upgrade, commit, apply-branch]
+          enum: [start, stop, rebuild, create, upgrade, commit, apply-branch, delete]
         workspace:
           type: string
         templateId:
@@ -404,6 +404,7 @@ components:
             - fetch-failed
             - not-applicable
             - apply-failed
+            - delete-refused
         message:
           type: string
     StateEvent:

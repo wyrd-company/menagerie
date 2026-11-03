@@ -62,11 +62,12 @@ const (
 	KindHook              = "hook"
 	KindInitializeCommand = "initialize-command"
 	KindBindSourceCheck   = "bind-source-check"
+	KindFolderRemoval     = "folder-removal"
 )
 
 // Command is one command to run in a throwaway container.
 type Command struct {
-	// Kind is KindHook or KindInitializeCommand.
+	// Kind is one of the kinds above.
 	Kind string
 	// Job is the id of the job the command belongs to.
 	Job string
@@ -83,6 +84,9 @@ type Command struct {
 	Target string
 	// Dir is the working directory, inside Folder or Target.
 	Dir string
+	// User, when set, is the container's user, uid:gid; empty is the
+	// service's user.
+	User string
 	// Argv is run as given: Argv[0] is the program, found on the image's
 	// PATH when it has no slash.
 	Argv []string
@@ -293,6 +297,10 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	if c.Folder != "" {
 		mounts = []mount.Mount{{Type: mount.TypeBind, Source: c.Folder, Target: c.Folder}}
 	}
+	user := c.User
+	if user == "" {
+		user = d.opts.User
+	}
 	created, err := d.client.ContainerCreate(createCtx, &container.Config{
 		Image: c.Image,
 		// The program is the entrypoint, so the image's own entrypoint and
@@ -301,7 +309,7 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 		Cmd:          c.Argv[1:],
 		Env:          env,
 		WorkingDir:   c.Dir,
-		User:         d.opts.User,
+		User:         user,
 		Labels:       labels,
 		AttachStdout: true,
 		AttachStderr: true,

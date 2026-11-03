@@ -48,6 +48,8 @@ type host struct {
 	issued  map[string]bool
 	logged  strings.Builder
 	phases  []string
+	// mounting and mountingOutside are what the two mount checks report.
+	mounting, mountingOutside []string
 }
 
 func newHost(t *testing.T) *host {
@@ -107,7 +109,16 @@ func (h *host) Rebuild(context.Context, string, devcontainer.Progress) error {
 	h.Unlock()
 	return h.note("plain-rebuild")
 }
-func (h *host) Mounting(context.Context, string) ([]string, error) { return nil, nil }
+func (h *host) Mounting(context.Context, string) ([]string, error) { return h.mounting, nil }
+func (h *host) MountingOutside(context.Context, string, devcontainer.Progress) ([]string, error) {
+	return h.mountingOutside, nil
+}
+func (h *host) RemoveContainers(context.Context, string, devcontainer.Progress) error {
+	return h.note("remove-containers")
+}
+func (h *host) RemoveFolder(context.Context, string, devcontainer.Progress) error {
+	return h.note("remove-folder")
+}
 func (h *host) CheckHostPrerequisites(context.Context, string, devcontainer.Progress) error {
 	return h.note("check")
 }

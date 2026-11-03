@@ -73,13 +73,14 @@ description: >-
   `succeeded`, `failed` and `ended`. The slot is released when the job ends,
   and every client that sees the result event can start the next job.
   `phase` names the current step, for example `read-definition`, `issue-key`, `bind`,
-  `initialize-command`, `build`, `remove-container`, `create-container`,
+  `initialize-command`, `build`, `unbind`, `remove-container`, `revoke-key`,
+  `remove-folder`, `create-container`,
   `wait-for-sockets`, `up`, `verify`, `retire`, `stop`,
   `interview`, `initialize-repository`, `generate`, `host-prerequisites`,
   `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `runner-image-unavailable`, `provisioning-invalid`, `provisioning-unavailable`,
-  `provisioning-not-ready`, `host-prerequisites-missing`, `operation-failed` or
+  `provisioning-not-ready`, `host-prerequisites-missing`, `delete-refused`, `operation-failed` or
   `internal-error`, and for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
   `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
@@ -186,8 +187,8 @@ description: >-
   never removes its folder, and a second create of that workspace is
   refused while the folder exists. A folder with an applied record whose
   first backup has not landed, or with no commit, is finished by the
-  workspace's next `start`, which runs what remains of the create; any other failed create needs manual recovery, by
-  inspecting the folder and then removing it. On success the service commits
+  workspace's next `start`, which runs what remains of the create; any other failed create is ended by
+  deleting the workspace, which removes the folder. On success the service commits
   the output as the branch's first commit, which has no parent, force-pushes
   it to the workspace repository and starts the devcontainer. A branch of the
   workspace's name that the workspace repository already holds, from a
@@ -200,6 +201,22 @@ description: >-
   (commits on the workspace branch) or `refs/menagerie/template-head` (a
   detached HEAD); the workspace branch still starts from its own root.
 
+
+  Delete. Operation `delete` removes a workspace from the host, in the
+  design's `delete-flow`. In `read-definition` it fails as `delete-refused`
+  while a running container outside the workspace mounts the folder, a path
+  inside it or a folder that contains it, and as `provisioning-unavailable`
+  when the workspace holds a binding or a key and the configuration lacks the
+  section that reaches it, with nothing changed. `stop` follows, and the mount
+  check again. `commit` and `backup` save what a commit operation saves, and
+  skip a folder with no applied record, which has no backup. A failure there
+  fails as `backup-failed` and removes nothing. `unbind`,
+  `remove-container`, `revoke-key` and `remove-folder` follow, each treating what
+  is already gone as done, so a failed delete is retried by a new `delete`. The
+  folder goes last. `remove-folder` needs a runner image with `sh`, `mv` and
+  `find`, and fails as `runner-image-unavailable` when there is no image. The
+  backup branch, images, Compose volumes and networks, and bind sources outside
+  the folder stay. Ignored files are lost.
 
   Upgrade. The service first commits changes to tracked files, including
   deletions, and force-pushes the branch, so the state before the upgrade

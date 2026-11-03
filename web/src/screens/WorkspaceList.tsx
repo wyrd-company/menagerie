@@ -26,6 +26,7 @@ const operationLabel: Record<string, string> = {
   rebuild: "rebuilding",
   commit: "committing",
   "apply-branch": "applying a branch",
+  delete: "deleting",
 };
 
 function useFleet() {
@@ -75,6 +76,8 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
   const [branch, setBranch] = useState("");
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [typedName, setTypedName] = useState("");
   const [minting, setMinting] = useState<Record<string, true>>({});
   const [tokens, setTokens] = useState<Record<string, T3CodePairingToken>>({});
 
@@ -93,8 +96,16 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
     }
   };
 
+  const openDelete = (workspace: string) => {
+    setConfirming(null);
+    setApplying(null);
+    setTypedName("");
+    setDeleting(workspace);
+  };
+
   const openApply = (workspace: string) => {
     setConfirming(null);
+    setDeleting(null);
     setBranch("");
     setApplying(workspace);
   };
@@ -102,6 +113,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
   const run = async (workspace: string, operation: Operation, branchName?: string) => {
     setConfirming(null);
     setApplying(null);
+    setDeleting(null);
     setPending((p) => ({ ...p, [workspace]: operation }));
     setRowErrors(({ [workspace]: _, ...rest }) => rest);
     try {
@@ -216,6 +228,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                         disabled={busy}
                         onClick={() => {
                           setApplying(null);
+                          setDeleting(null);
                           setConfirming(ws.name);
                         }}
                       >
@@ -271,7 +284,55 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                     >
                       {isMinting ? "Minting…" : "T3 Code token"}
                     </button>
+                    <button
+                      type="button"
+                      disabled={busy || deleting === ws.name}
+                      onClick={() => openDelete(ws.name)}
+                    >
+                      Delete
+                    </button>
                   </div>
+                  {deleting === ws.name ? (
+                    <form
+                      className="entry-delete"
+                      aria-label={`Delete ${ws.name}`}
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (typedName === ws.name) void run(ws.name, "delete");
+                      }}
+                    >
+                      <p>
+                        Delete removes the container and the folder of{" "}
+                        <span className="mono">{ws.name}</span>. Tracked and new files are backed up
+                        first. Ignored files, such as cloned repositories, are not backed up and are
+                        lost.
+                      </p>
+                      <input
+                        type="text"
+                        className="mono"
+                        name="workspace-name"
+                        aria-label="Type the workspace's name"
+                        placeholder={ws.name}
+                        autoComplete="off"
+                        spellCheck={false}
+                        autoFocus
+                        value={typedName}
+                        onChange={(e) => setTypedName(e.target.value)}
+                      />
+                      <span className="entry-delete-actions">
+                        <button
+                          type="submit"
+                          className="danger"
+                          disabled={busy || typedName !== ws.name}
+                        >
+                          Delete workspace
+                        </button>
+                        <button type="button" className="ghost" onClick={() => setDeleting(null)}>
+                          Keep
+                        </button>
+                      </span>
+                    </form>
+                  ) : null}
                   {token ? (
                     <PairingToken
                       token={token}
