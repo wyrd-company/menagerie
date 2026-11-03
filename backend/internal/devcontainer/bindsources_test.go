@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -119,7 +120,7 @@ volumes:
 			t.Fatalf("sources %q", got)
 		}
 	}
-	if n := runNetwork(dc, SubstitutionContext(dc, folder, nil)); n != "" {
+	if n := runNetworks(dc, SubstitutionContext(dc, folder, nil)); len(n) != 0 {
 		t.Fatalf("network %q in Compose", n)
 	}
 }
@@ -148,48 +149,55 @@ func TestInsideFolder(t *testing.T) {
 
 func TestRunArgsReadAsDevcontainerBuilderReadsThem(t *testing.T) {
 	cases := []struct {
-		name          string
-		args          []string
-		cname, cnet   string
-		networkExpect string
+		name     string
+		args     []string
+		cname    string
+		networks []string
+		inspect  []string
 	}{
-		{"spaced", []string{"--name", "n", "--network", "homelab-sample"}, "n", "homelab-sample", "homelab-sample"},
-		{"equals", []string{"--name=n", "--net=homelab-sample"}, "n", "homelab-sample", "homelab-sample"},
-		{"the last counts", []string{"--network", "one", "--name", "a", "--network=two", "--name=b"}, "b", "two", "two"},
-		{"after a combined short flag", []string{"-it", "--network", "after"}, "", "after", "after"},
-		{"after a cluster that ends in a value", []string{"-itv/one:/two", "--network", "after"}, "", "after", "after"},
-		{"after an attached value", []string{"-hsample", "--network", "after"}, "", "after", "after"},
-		{"another flag's attached value", []string{"-e--network=not-a-network", "--name=n"}, "n", "", ""},
-		{"another flag's value", []string{"--label", "--network=not-a-network", "-e", "--name=not-a-name"}, "", "", ""},
-		{"host", []string{"--network=host"}, "", "host", ""},
-		{"none", []string{"--network=none"}, "", "none", ""},
-		{"bridge", []string{"--network=bridge"}, "", "bridge", ""},
-		{"default", []string{"--network=default"}, "", "default", ""},
-		{"another container", []string{"--network=container:other"}, "", "container:other", ""},
-		{"stops at a refused positional", []string{"positional=value", "--network=after"}, "", "", ""},
-		{"stops at a refused separator", []string{"--", "--network=after"}, "", "", ""},
-		{"an empty argument", []string{"", "--network=after"}, "", "after", "after"},
-		{"a flag without its value", []string{"--network"}, "", "", ""},
-		{"substituted", []string{"--network=${localEnv:SAMPLE}"}, "", "from-env", "from-env"},
+		{"spaced", []string{"--name", "n", "--network", "homelab-sample"}, "n", []string{"homelab-sample"}, []string{"homelab-sample"}},
+		{"equals", []string{"--name=n", "--net=homelab-sample"}, "n", []string{"homelab-sample"}, []string{"homelab-sample"}},
+		{"the last name counts, every network does", []string{"--network", "one", "--name", "a", "--network=two", "--name=b"}, "b", []string{"one", "two"}, []string{"one", "two"}},
+		{"a repeated network once", []string{"--network=one", "--network=name=one,alias=sample"}, "", []string{"one", "one"}, []string{"one"}},
+		{"long form", []string{"--network=name=long-net,alias=sample"}, "", []string{"long-net"}, []string{"long-net"}},
+		{"long form, spaced", []string{"--network", "alias=sample,name=long-net"}, "", []string{"long-net"}, []string{"long-net"}},
+		{"long form without a name stops", []string{"--network=alias=sample", "--name=n"}, "", nil, nil},
+		{"a built-in beside a user-defined network", []string{"--network=bridge", "--network=one"}, "", []string{"bridge", "one"}, []string{"one"}},
+		{"after a combined short flag", []string{"-it", "--network", "after"}, "", []string{"after"}, []string{"after"}},
+		{"after a cluster that ends in a value", []string{"-itv/one:/two", "--network", "after"}, "", []string{"after"}, []string{"after"}},
+		{"after an attached value", []string{"-hsample", "--network", "after"}, "", []string{"after"}, []string{"after"}},
+		{"another flag's attached value", []string{"-e--network=not-a-network", "--name=n"}, "n", nil, nil},
+		{"another flag's value", []string{"--label", "--network=not-a-network", "-e", "--name=not-a-name"}, "", nil, nil},
+		{"host", []string{"--network=host"}, "", []string{"host"}, nil},
+		{"none", []string{"--network=none"}, "", []string{"none"}, nil},
+		{"bridge", []string{"--network=bridge"}, "", []string{"bridge"}, nil},
+		{"default", []string{"--network=default"}, "", []string{"default"}, nil},
+		{"another container", []string{"--network=container:other"}, "", []string{"container:other"}, nil},
+		{"stops at a refused positional", []string{"positional=value", "--network=after"}, "", nil, nil},
+		{"stops at a refused separator", []string{"--", "--network=after"}, "", nil, nil},
+		{"an empty argument", []string{"", "--network=after"}, "", []string{"after"}, []string{"after"}},
+		{"a flag without its value", []string{"--network"}, "", nil, nil},
+		{"substituted", []string{"--network=${localEnv:SAMPLE}"}, "", []string{"from-env"}, []string{"from-env"}},
 	}
 	for _, flag := range []string{"--init", "--privileged", "--read-only", "-P", "--publish-all", "-d", "--detach", "-i", "--interactive", "-t", "--tty", "--rm", "--sig-proxy", "--oom-kill-disable", "--no-healthcheck"} {
 		cases = append(cases, struct {
-			name          string
-			args          []string
-			cname, cnet   string
-			networkExpect string
-		}{"after " + flag, []string{flag, "--network", "after"}, "", "after", "after"})
+			name     string
+			args     []string
+			cname    string
+			networks []string
+			inspect  []string
+		}{"after " + flag, []string{flag, "--network", "after"}, "", []string{"after"}, []string{"after"}})
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dc := &spec.DevContainer{Image: "sample", RunArgs: c.args}
 			sub := SubstitutionContext(dc, "/root/sample", map[string]string{"SAMPLE": "from-env"})
 			got := runArgValues(dc, sub)
-			if got.name != c.cname || got.network != c.cnet {
-				t.Fatalf("read %+v, want %q %q", got, c.cname, c.cnet)
+			if got.name != c.cname || !slices.Equal(got.networks, c.networks) {
+				t.Fatalf("read %+v, want %q %q", got, c.cname, c.networks)
 			}
-			if n := runNetwork(dc, sub); n != c.networkExpect {
-				t.Fatalf("network %q, want %q", n, c.networkExpect)
+			if n := runNetworks(dc, sub); !slices.Equal(n, c.inspect) {
+				t.Fatalf("networks %q, want %q", n, c.inspect)
 			}
 		})
 	}
@@ -387,6 +395,18 @@ func TestADeclarationExcludesItsConsumerDirectoryOnly(t *testing.T) {
 	}
 	if want := []string{"runner:sample /run/consumers/other-box"}; !reflect.DeepEqual(sources.asked, want) {
 		t.Errorf("asked %q", sources.asked)
+	}
+}
+
+func TestEveryAttachedNetworkIsChecked(t *testing.T) {
+	folder, _ := definitionFixture(t, `{
+		"image": "sample",
+		"runArgs": ["--network=name=present-net,alias=sample", "--network=name=absent-long,alias=sample", "--network", "absent-short"]
+	}`)
+	err := checkRuntime(t, networkEngine(t, map[string]bool{"present-net": true}, 0), &fakeBindSources{}).CheckHostPrerequisites(context.Background(), folder, &bufferProgress{})
+	var missing *HostPrerequisitesError
+	if !errors.As(err, &missing) || !reflect.DeepEqual(missing.Networks, []string{"absent-long", "absent-short"}) {
+		t.Fatalf("error %v", err)
 	}
 }
 

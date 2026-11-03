@@ -73,7 +73,7 @@ func (r *Runtime) CheckHostPrerequisites(ctx context.Context, folder string, p P
 			missing.BindSources = append(missing.BindSources, source)
 		}
 	}
-	if name := runNetwork(dc, sub); name != "" {
+	for _, name := range runNetworks(dc, sub) {
 		switch _, err := r.client.NetworkInspect(ctx, name, network.InspectOptions{}); {
 		case dockerclient.IsErrNotFound(err):
 			missing.Networks = append(missing.Networks, name)
@@ -265,22 +265,28 @@ func consumerFolder(dc *spec.DevContainer, sub substitute.Context) string {
 	return runArgValues(dc, sub).name
 }
 
-// runNetwork is the user-defined network that runArgs names, or "". Docker
-// creates or owns every other network mode.
-func runNetwork(dc *spec.DevContainer, sub substitute.Context) string {
-	name := runArgValues(dc, sub).network
-	if name == "" || !container.NetworkMode(name).IsUserDefined() {
-		return ""
+// runNetworks are the user-defined networks that runArgs names, once each.
+// Docker creates or owns every other network mode.
+func runNetworks(dc *spec.DevContainer, sub substitute.Context) []string {
+	var names []string
+	for _, name := range runArgValues(dc, sub).networks {
+		if container.NetworkMode(name).IsUserDefined() && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
 	}
-	return name
+	return names
 }
 
-type runArgs struct{ name, network string }
+type runArgs struct {
+	name     string
+	networks []string
+}
 
-// runArgValues reads the container name and network of runArgs as
-// devcontainer-builder does: the last of each counts, and runArgs do not
-// apply to Compose. It stops at what devcontainer-builder refuses, which
-// the start then reports.
+// runArgValues reads the container name and networks of runArgs as
+// devcontainer-builder does: the last name counts, each network flag is an
+// attachment in the Docker CLI's grammar, and runArgs do not apply to
+// Compose. It stops at what devcontainer-builder refuses, which the start
+// then reports.
 func runArgValues(dc *spec.DevContainer, sub substitute.Context) runArgs {
 	var out runArgs
 	if dc.Mode() != spec.ModeSingle {
@@ -320,7 +326,11 @@ func runArgValues(dc *spec.DevContainer, sub substitute.Context) runArgs {
 		case "--name":
 			out.name = value
 		case "--network", "--net":
-			out.network = value
+			var parsed dockeropts.NetworkOpt
+			if parsed.Set(value) != nil {
+				return out
+			}
+			out.networks = append(out.networks, parsed.Value()[0].Target)
 		}
 	}
 	return out

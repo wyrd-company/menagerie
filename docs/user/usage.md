@@ -52,7 +52,7 @@ The job console then shows each phase:
    a throwaway container that sees only the workspace folder. Output a hook
    does not capture appears in the console, each line prefixed `hook: `.
 3. `host-prerequisites`: Docker checks the bind sources outside the workspace
-   folder and the network of `runArgs`. The job fails as
+   folder and the networks of `runArgs`. The job fails as
    `host-prerequisites-missing` when the host lacks any, and the message names
    them all. Nothing is committed or started.
 4. `commit` and `backup`: the first commit, pushed to the workspace's own
