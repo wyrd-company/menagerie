@@ -60,11 +60,16 @@ func TestBindSourcesReadsEveryFormOfMount(t *testing.T) {
 			{"type": "bind", "source": "${localWorkspaceFolder}/object", "target": "/f"},
 			{"type": "volume", "source": "named", "target": "/g"},
 			"type=bind,source=/env/${localEnv:SAMPLE},target=/h",
-			"type=bind,source=/no/type,target=/again"
+			"type=bind,source=/no/type,target=/again",
+			"type=volume,type=,source=/type/ends/empty,target=/i",
+			"type=bind,source=/overridden/by/a/volume,target=/j",
+			"type=volume,source=named,target=/j",
+			"type=bind,source=/overridden/by/a/bind,target=/k",
+			{"type": "bind", "source": "/overrides/a/bind", "target": "/k"}
 		]
 	}`)
 	got := bindSources(context.Background(), dc, folder, map[string]string{"SAMPLE": "value"})
-	want := []string{folder, folder + "/string", "/no/type", "/spaced", folder + "/object", "/env/value"}
+	want := []string{folder, folder + "/string", "/no/type", "/spaced", folder + "/object", "/env/value", "/type/ends/empty", "/overrides/a/bind"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sources\n got %q\nwant %q", got, want)
 	}
@@ -197,6 +202,11 @@ func TestCreateBindSources(t *testing.T) {
 			"type=bind,source=${localWorkspaceFolder}/deep/er/folder,target=/c",
 			"type=bind,source=${localWorkspaceFolder}/present/file,target=/d",
 			"type=bind,source=${localWorkspaceFolder}/escape/created,target=/e",
+			"type=bind,source=${localWorkspaceFolder}/absolute-inside/from-absolute,target=/i",
+			"type=bind,source=${localWorkspaceFolder}/relative-inside/from-relative,target=/j",
+			"type=bind,source=${localWorkspaceFolder}/absolute-escape/created,target=/k",
+			"type=bind,source=${localWorkspaceFolder}/overridden,target=/l",
+			"type=volume,source=sample,target=/l",
 			"type=bind,source=%[1]s/not-created,target=/f",
 			"type=bind,source=${localWorkspaceFolder}/../not-created,target=/g",
 			"type=volume,source=${localWorkspaceFolder}/volume-name,target=/h"
@@ -211,6 +221,14 @@ func TestCreateBindSources(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(folder, "escape")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(folder, "actual"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for link, target := range map[string]string{"absolute-inside": filepath.Join(folder, "actual"), "relative-inside": "actual", "absolute-escape": outside} {
+		if err := os.Symlink(target, filepath.Join(folder, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	p := &bufferProgress{}
 	if err := createBindSources(context.Background(), dc, folder, map[string]string{}, p); err != nil {
 		t.Fatal(err)
@@ -219,7 +237,7 @@ func TestCreateBindSources(t *testing.T) {
 	if err := syscall.Stat(filepath.Dir(folder), &rootOwner); err != nil {
 		t.Fatal(err)
 	}
-	for _, rel := range []string{"repos", "deep", "deep/er", "deep/er/folder"} {
+	for _, rel := range []string{"repos", "deep", "deep/er", "deep/er/folder", "actual/from-absolute", "actual/from-relative"} {
 		var st syscall.Stat_t
 		if err := syscall.Stat(filepath.Join(folder, rel), &st); err != nil {
 			t.Fatalf("%s: %v", rel, err)
@@ -231,13 +249,13 @@ func TestCreateBindSources(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(folder, "present", "file")); err != nil || string(data) != "kept" {
 		t.Errorf("an existing file source changed: %q %v", data, err)
 	}
-	for _, absent := range []string{filepath.Join(outside, "created"), filepath.Join(outside, "not-created"), filepath.Join(filepath.Dir(folder), "not-created"), filepath.Join(folder, "volume-name")} {
+	for _, absent := range []string{filepath.Join(outside, "created"), filepath.Join(outside, "not-created"), filepath.Join(filepath.Dir(folder), "not-created"), filepath.Join(folder, "volume-name"), filepath.Join(folder, "overridden")} {
 		if _, err := os.Lstat(absent); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s was created: %v", absent, err)
 		}
 	}
 	console := p.String()
-	if !strings.Contains(console, "created bind source folder repos\n") || !strings.Contains(console, "bind source escape/created was not checked") {
+	if !strings.Contains(console, "created bind source folder repos\n") || !strings.Contains(console, "bind source escape/created was not checked") || !strings.Contains(console, "bind source absolute-escape/created was not checked") {
 		t.Errorf("console %q", console)
 	}
 	if strings.Contains(console, "bind source folder present") {

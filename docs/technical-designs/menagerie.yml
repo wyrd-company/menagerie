@@ -203,7 +203,7 @@ proposed-design:
     folder. A declaration's consumer directory is excluded, because the agent
     creates it: it is the bind source whose final folder is the container name.
     The bind sources are those the definition file names, in `workspaceMount`,
-    `mounts` and, for Compose, its services' volumes; what features and image
+    `mounts`, where the last mount of a target wins, and, for Compose, its services' volumes; what features and image
     metadata add is not known before the build. A source with a `..` component
     counts as outside the folder, because only Docker can tell where it leads,
     and a source inside the folder that a symbolic link takes out of it is left

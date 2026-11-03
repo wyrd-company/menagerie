@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/wyrd-company/devcontainer-builder/pkg/host/dockercompose"
+	"github.com/wyrd-company/devcontainer-builder/pkg/metadata"
 	"github.com/wyrd-company/devcontainer-builder/pkg/spec"
 	"github.com/wyrd-company/devcontainer-builder/pkg/substitute"
 )
@@ -100,9 +101,9 @@ func (r *Runtime) bindSourceExists(ctx context.Context, source string, p Progres
 // createBindSources creates each missing bind source folder inside the
 // workspace folder, so that a clone of a backup, which has no folder that
 // holds no tracked file, starts. The services run as the workspace root's
-// owner, so the new folders are theirs. A source that cannot be read, such
-// as one through a symbolic link that leaves the workspace folder, is not
-// touched: Docker resolves it on the host and decides.
+// owner, so the new folders are theirs. A source that a symbolic link takes
+// out of the workspace folder, and one that cannot be read, is not touched:
+// Docker resolves it on the host and decides.
 func createBindSources(ctx context.Context, dc *spec.DevContainer, folder string, env map[string]string, p Progress) error {
 	var rels []string
 	for _, source := range bindSources(ctx, dc, folder, env) {
@@ -119,6 +120,12 @@ func createBindSources(ctx context.Context, dc *spec.DevContainer, folder string
 	}
 	defer root.Close()
 	for _, rel := range rels {
+		resolved, stays := resolveInside(folder, rel)
+		if !stays {
+			fmt.Fprintf(p.Log(""), "bind source %s was not checked: it leaves the workspace folder or cannot be read\n", rel)
+			continue
+		}
+		rel = resolved
 		_, err := root.Stat(rel)
 		switch {
 		case err == nil:
@@ -134,11 +141,39 @@ func createBindSources(ctx context.Context, dc *spec.DevContainer, folder string
 	return nil
 }
 
+// resolveInside returns rel beneath folder with the symbolic links of its
+// existing part resolved, or false when they lead out of folder or a part
+// cannot be read. os.Root
+// refuses every absolute link, also one that stays inside, and it still
+// guards the writes this path leads to.
+func resolveInside(folder, rel string) (string, bool) {
+	real, err := filepath.EvalSymlinks(folder)
+	if err != nil {
+		return "", false
+	}
+	existing, rest := filepath.Join(folder, rel), ""
+	for {
+		resolved, err := filepath.EvalSymlinks(existing)
+		if err == nil {
+			if !within(resolved, real) {
+				return "", false
+			}
+			inside, err := filepath.Rel(real, resolved)
+			return filepath.Join(inside, rest), err == nil
+		}
+		if !errors.Is(err, os.ErrNotExist) || existing == folder {
+			return "", false
+		}
+		existing, rest = filepath.Dir(existing), filepath.Join(filepath.Base(existing), rest)
+	}
+}
+
 // bindSources lists, once each, the absolute bind sources the definition
-// file names: its workspaceMount and mounts and, for Compose, the volumes
-// of its services. Mounts that features or image metadata add are not
-// known before the build. A Compose project that does not load has no
-// volumes here, and the start reports it.
+// file names: its workspaceMount, its mounts after
+// devcontainer-builder's rule that the last mount of a target wins and,
+// for Compose, the volumes of its services. Mounts that features or image
+// metadata add are not known before the build. A Compose project that
+// does not load has no volumes here, and the start reports it.
 func bindSources(ctx context.Context, dc *spec.DevContainer, folder string, env map[string]string) []string {
 	sub := SubstitutionContext(dc, folder, env)
 	var sources []string
@@ -150,8 +185,12 @@ func bindSources(ctx context.Context, dc *spec.DevContainer, folder string, env 
 	if dc.Mode() == spec.ModeSingle && dc.WorkspaceMount != "" {
 		add(mountStringSource(substitute.Substitute(sub, dc.WorkspaceMount)))
 	}
-	for _, raw := range dc.Mounts {
-		add(mountSource(raw, sub))
+	entries, err := metadata.Substitute(metadata.Collect(nil, nil, dc), func(s string) string { return substitute.Substitute(sub, s) })
+	if err != nil {
+		return sources
+	}
+	for _, raw := range metadata.Merge(dc, entries).DevContainer.Mounts {
+		add(mountSource(raw))
 	}
 	if dc.Mode() == spec.ModeCompose {
 		project, err := dockercompose.LoadProject(ctx, dockercompose.LoadInputs{Spec: dc, Workspace: folder, LocalEnv: env})
@@ -171,39 +210,37 @@ func bindSources(ctx context.Context, dc *spec.DevContainer, folder string, env 
 
 // mountSource is the bind source of one mounts entry, or "". An object is
 // read as the string devcontainer-builder serializes it to.
-func mountSource(raw any, sub substitute.Context) string {
+func mountSource(raw any) string {
 	switch v := raw.(type) {
 	case string:
-		return mountStringSource(substitute.Substitute(sub, v))
+		return mountStringSource(v)
 	case map[string]any:
 		kind, _ := v["type"].(string)
 		source, _ := v["source"].(string)
 		target, _ := v["target"].(string)
-		return mountStringSource(substitute.Substitute(sub, "type="+kind+",src="+source+",dst="+target))
+		return mountStringSource("type=" + kind + ",src=" + source + ",dst=" + target)
 	}
 	return ""
 }
 
 // mountStringSource reads a mount string as devcontainer-builder does:
-// comma-separated fields, spaces trimmed, bind when no type is given, and
-// no mount without a target.
+// comma-separated fields, spaces trimmed, the last of a field counting,
+// bind when the type ends empty, and no mount without a target.
 func mountStringSource(s string) string {
-	kind, source, target := "bind", "", ""
+	var kind, source, target string
 	for _, field := range strings.Split(s, ",") {
 		key, value, _ := strings.Cut(strings.TrimSpace(field), "=")
 		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
 		switch key {
 		case "type":
-			if value != "" {
-				kind = value
-			}
+			kind = value
 		case "source", "src":
 			source = value
 		case "target", "dst", "destination":
 			target = value
 		}
 	}
-	if kind != "bind" || target == "" {
+	if (kind != "" && kind != "bind") || target == "" {
 		return ""
 	}
 	return source
