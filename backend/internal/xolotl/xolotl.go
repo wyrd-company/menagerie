@@ -306,6 +306,11 @@ func (o operation) request(ctx context.Context, method string, target *url.URL, 
 		return 0, nil, o.unreachable(ctx, err)
 	}
 	defer resp.Body.Close()
+	// The status of a refusal is the whole answer, so a body that breaks off
+	// cannot turn it into an unreachable Xolotl.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return resp.StatusCode, nil, nil
+	}
 	answer, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
 	if err != nil {
 		return 0, nil, o.unreachable(ctx, err)

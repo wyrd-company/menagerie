@@ -293,6 +293,40 @@ func TestRefusalsAreNotSentAgainAndAreNotUnreachable(t *testing.T) {
 	}
 }
 
+func TestARefusalWithABrokenBodyIsStillARefusal(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(strconv.Itoa(code)+" breaks off", func(t *testing.T) {
+			srv, _ := answering(t, func(w http.ResponseWriter) {
+				w.Header().Set("Content-Length", "100")
+				w.WriteHeader(code)
+				fmt.Fprint(w, `{"error":`)
+			})
+			_, err := newClient(t, srv.URL, scoped()).Issue(context.Background(), "host-sample", "sample")
+			var e *Error
+			if !errors.As(err, &e) || e.Unreachable || !strings.Contains(e.Reason, "scoped key") {
+				t.Fatalf("got %v", err)
+			}
+		})
+		t.Run(strconv.Itoa(code)+" stalls", func(t *testing.T) {
+			release := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(code)
+				w.(http.Flusher).Flush()
+				<-release
+			}))
+			defer srv.Close()
+			defer close(release)
+			c := newClient(t, srv.URL, scoped())
+			c.timeout = 200 * time.Millisecond
+			_, err := c.Revoke(context.Background(), "host-sample", "sample")
+			var e *Error
+			if !errors.As(err, &e) || e.Unreachable || !strings.Contains(e.Reason, "scoped key") {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
 func TestAnAnswerFromSomethingElseIsNotAKey(t *testing.T) {
 	for _, tc := range []struct {
 		name string
