@@ -48,6 +48,7 @@ func TestRemoveFolderRemovesWhatTheServicesUserCannot(t *testing.T) {
 	h.exec(status.ContainerID, "sh", "-c", "mkdir -p "+inside+"/kept/root && touch "+inside+"/kept/root/file && chown -R 0:0 "+inside+"/kept/root && chmod 700 "+inside+"/kept/root")
 
 	var removeSocket []string
+	emptied := 0
 	rt := devcontainer.New(h.client, h.options(devcontainer.Options{RemoveWorkspaceSocket: func(f string) error {
 		removeSocket = append(removeSocket, f)
 		return nil
@@ -58,7 +59,7 @@ func TestRemoveFolderRemovesWhatTheServicesUserCannot(t *testing.T) {
 	if _, err := h.client.ContainerInspect(h.ctx, status.ContainerID); !dockerclient.IsErrNotFound(err) {
 		t.Fatalf("container stays: %v", err)
 	}
-	if err := rt.RemoveFolder(h.ctx, folder, &logProgress{t: t}); err != nil {
+	if err := rt.RemoveFolder(h.ctx, folder, &logProgress{t: t}, func() error { emptied++; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(folder); !errors.Is(err, os.ErrNotExist) {
@@ -70,8 +71,11 @@ func TestRemoveFolderRemovesWhatTheServicesUserCannot(t *testing.T) {
 	if !slices.Equal(removeSocket, []string{folder}) {
 		t.Errorf("socket removals %v", removeSocket)
 	}
+	if emptied != 1 {
+		t.Errorf("emptied ran %d times", emptied)
+	}
 	// What is already gone is done.
-	if err := rt.RemoveFolder(h.ctx, folder, &logProgress{t: t}); err != nil {
+	if err := rt.RemoveFolder(h.ctx, folder, &logProgress{t: t}, func() error { emptied++; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := rt.RemoveContainers(h.ctx, folder, &logProgress{t: t}); err != nil {

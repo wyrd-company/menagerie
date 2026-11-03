@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
@@ -99,23 +100,36 @@ func (s *Steps) Delete(ctx context.Context, folder string, p devcontainer.Progre
 	// Every name and key of the record is done, and a retried delete acts on the
 	// declaration again while the folder has one. Once the removal takes the
 	// repository, a retry does not back up what is left of the folder, and no job
-	// starts its devcontainer.
-	if err := s.opts.Records.Write(filepath.Base(folder), Record{Removing: true}); err != nil {
+	// starts its devcontainer. The state ends while the empty folder still stands,
+	// so it never outlives the folder it is about.
+	name := filepath.Base(folder)
+	if err := s.opts.Records.Write(name, Record{Removing: folderID(folder)}); err != nil {
 		return err
 	}
-	if err := s.opts.Runtime.RemoveFolder(ctx, folder, p); err != nil {
-		return err
-	}
-	return s.opts.Records.Write(filepath.Base(folder), Record{})
+	return s.opts.Runtime.RemoveFolder(ctx, folder, p, func() error { return s.opts.Records.Write(name, Record{}) })
 }
 
-// removalBegan says that a delete backed the folder up and has taken its
-// repository. The record alone does not say so: a removal that stopped before
-// it took the repository leaves a folder that jobs can still change, and a folder
-// of this name can be new. Each job that writes to a folder needs its repository,
-// so with the repository gone nothing was written after the backup.
+// folderID names a folder as the host's file system knows it, or is "" when it
+// cannot be read, which no state matches.
+func folderID(folder string) string {
+	info, err := os.Lstat(folder)
+	if err != nil {
+		return ""
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", st.Dev, st.Ino)
+}
+
+// removalBegan says that a delete backed this folder up and has taken its
+// repository. The record alone does not say so: a removal that stopped before it
+// took the repository leaves a folder that jobs can still change, and another
+// folder can stand under this name. Each job that writes to a folder needs its
+// repository, so with the repository gone nothing was written after the backup.
 func removalBegan(record Record, folder string) bool {
-	if !record.Removing {
+	if record.Removing == "" || record.Removing != folderID(folder) {
 		return false
 	}
 	_, err := os.Lstat(filepath.Join(folder, ".git"))
@@ -123,18 +137,17 @@ func removalBegan(record Record, folder string) bool {
 }
 
 // refuseRemoving keeps a job from starting a devcontainer on what is left of a
-// folder. A folder that still has its repository was not touched, so the state
-// ends.
+// folder. Any other folder of this name was not touched, so the state ends.
 func (s *Steps) refuseRemoving(folder string) error {
 	name := filepath.Base(folder)
 	record, err := s.opts.Records.Read(name)
-	if err != nil || !record.Removing {
+	if err != nil || record.Removing == "" {
 		return err
 	}
 	if removalBegan(record, folder) {
 		return &jobs.Failure{Kind: KindDeleteUnfinished, Err: errors.New("a delete began to remove this workspace's folder; delete the workspace again to finish it")}
 	}
-	record.Removing = false
+	record.Removing = ""
 	return s.opts.Records.Write(name, record)
 }
 

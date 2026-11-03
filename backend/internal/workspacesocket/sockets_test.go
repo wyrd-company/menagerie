@@ -764,7 +764,9 @@ func TestRemoveStopsTheListenerAndRemovesTheFolder(t *testing.T) {
 	}
 	// The listener's server has stopped, so a connection it held ends.
 	_ = held.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := held.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+	// It ends as an end of file or a reset, and a time-out says it did not.
+	var timeout net.Error
+	if _, err := held.Read(make([]byte, 1)); err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
 		t.Errorf("a held connection: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(f.folder, "alpha")); !errors.Is(err, os.ErrNotExist) {

@@ -253,7 +253,7 @@ func TestADeleteBacksUpAFolderThatHasARepository(t *testing.T) {
 	h := newHost(t)
 	s := h.steps()
 	real := sampleAt(t, h, true)
-	if err := s.opts.Records.Write("sample", Record{Removing: true}); err != nil {
+	if err := s.opts.Records.Write("sample", Record{Removing: folderID(real)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.deleteAt(s, real); err != nil {
@@ -267,14 +267,14 @@ func TestAStartOfAFolderThatHasARepositoryEndsTheState(t *testing.T) {
 	s := h.steps()
 	real := sampleAt(t, h, true)
 	h.definitions[real] = devcontainer.Definition{}
-	if err := s.opts.Records.Write("sample", Record{Removing: true}); err != nil {
+	if err := s.opts.Records.Write("sample", Record{Removing: folderID(real)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Start(context.Background(), real, h); err != nil {
 		t.Fatal(err)
 	}
 	record, err := s.opts.Records.Read("sample")
-	if err != nil || record.Removing {
+	if err != nil || record.Removing != "" {
 		t.Errorf("record %+v %v", record, err)
 	}
 }
@@ -288,4 +288,34 @@ func TestAFolderWithNoRepositoryAndNoRemovalStillSaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.wantCalls(t, wholeDelete...)
+}
+
+// Another folder imported under the name has no repository either, and its files
+// have no backup.
+func TestAFolderOfTheNameThatARemovalWasNotAboutStillSaves(t *testing.T) {
+	h := newHost(t)
+	s := h.steps()
+	real := sampleAt(t, h, false)
+	if err := s.opts.Records.Write("sample", Record{Removing: "another-folder"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.deleteAt(s, real); err != nil {
+		t.Fatal(err)
+	}
+	h.wantCalls(t, wholeDelete...)
+}
+
+// A removal that fails after it emptied the folder leaves no state, so it cannot
+// reach a later folder of the name.
+func TestTheStateEndsWhileTheEmptyFolderStands(t *testing.T) {
+	h := newHost(t)
+	s := h.steps()
+	real := sampleAt(t, h, false)
+	h.failAfterEmptied = errors.New("the empty folder stayed")
+	if err := h.deleteAt(s, real); err == nil {
+		t.Fatal("no failure")
+	}
+	if _, err := os.Stat(s.opts.Records.path("sample")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("record stays: %v", err)
+	}
 }

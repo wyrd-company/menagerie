@@ -24,14 +24,15 @@ const DefaultRecords = "/var/lib/menagerie/provisioning"
 type Record struct {
 	Names []string `json:"names,omitempty"`
 	Keys  []Key    `json:"keys,omitempty"`
-	// Removing says that a delete finished its backup and went on to remove the
-	// folder. It is kept here because a devcontainer can write anything in the
-	// folder, and a removal can take any of it first. Only with the folder's
-	// repository gone does it say that the removal began: see removalBegan.
-	Removing bool `json:"removing,omitempty"`
+	// Removing names the folder, as folderID gives it, that a delete backed up
+	// and went on to remove. It is kept here because a devcontainer can write
+	// anything in the folder, and a removal can take any of it first. Only for
+	// that folder with its repository gone does it say that the removal began:
+	// see removalBegan.
+	Removing string `json:"removing,omitempty"`
 }
 
-func (r Record) empty() bool { return len(r.Names) == 0 && len(r.Keys) == 0 && !r.Removing }
+func (r Record) empty() bool { return len(r.Names) == 0 && len(r.Keys) == 0 && r.Removing == "" }
 
 // Records keeps one Record per workspace in a folder.
 type Records struct{ Folder string }

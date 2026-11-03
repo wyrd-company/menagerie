@@ -659,9 +659,10 @@ find . -mindepth 1 -delete
 
 // RemoveFolder removes the workspace's socket folder and then its folder. A
 // throwaway container that runs as root, with only that folder mounted, removes
-// what the services' user cannot. The service's user owns the workspace root,
-// and removes the empty folder.
-func (r *Runtime) RemoveFolder(ctx context.Context, folder string, p Progress) error {
+// what the services' user cannot. emptied runs once nothing of the folder's
+// content is left, also when the folder is already gone. The service's user owns
+// the workspace root, and then removes the empty folder.
+func (r *Runtime) RemoveFolder(ctx context.Context, folder string, p Progress, emptied func() error) error {
 	p.Phase("remove-folder")
 	if r.opts.RemoveWorkspaceSocket != nil {
 		if err := r.opts.RemoveWorkspaceSocket(folder); err != nil {
@@ -669,7 +670,7 @@ func (r *Runtime) RemoveFolder(ctx context.Context, folder string, p Progress) e
 		}
 	}
 	if _, err := os.Lstat(folder); errors.Is(err, os.ErrNotExist) {
-		return nil
+		return emptied()
 	} else if err != nil {
 		return err
 	}
@@ -698,6 +699,9 @@ func (r *Runtime) RemoveFolder(ctx context.Context, folder string, p Progress) e
 	}
 	if code != 0 {
 		return fmt.Errorf("the container that removes the workspace folder exited with code %d", code)
+	}
+	if err := emptied(); err != nil {
+		return err
 	}
 	return os.Remove(folder)
 }

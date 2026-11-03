@@ -67,7 +67,7 @@ type Runtime interface {
 	BeginRebuild(folder string, p devcontainer.Progress) (BringUp, error)
 	MountingOutside(ctx context.Context, folder string, p devcontainer.Progress) ([]string, error)
 	RemoveContainers(ctx context.Context, folder string, p devcontainer.Progress) error
-	RemoveFolder(ctx context.Context, folder string, p devcontainer.Progress) error
+	RemoveFolder(ctx context.Context, folder string, p devcontainer.Progress, emptied func() error) error
 }
 
 // BringUp is one start or rebuild as separate steps. *devcontainer.BringUp

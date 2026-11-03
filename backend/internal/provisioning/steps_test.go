@@ -50,6 +50,8 @@ type host struct {
 	phases  []string
 	// mounting and mountingOutside are what the two mount checks report.
 	mounting, mountingOutside []string
+	// failAfterEmptied fails a removal after it has emptied the folder.
+	failAfterEmptied error
 }
 
 func newHost(t *testing.T) *host {
@@ -116,8 +118,14 @@ func (h *host) MountingOutside(context.Context, string, devcontainer.Progress) (
 func (h *host) RemoveContainers(context.Context, string, devcontainer.Progress) error {
 	return h.note("remove-containers")
 }
-func (h *host) RemoveFolder(context.Context, string, devcontainer.Progress) error {
-	return h.note("remove-folder")
+func (h *host) RemoveFolder(_ context.Context, _ string, _ devcontainer.Progress, emptied func() error) error {
+	if err := h.note("remove-folder"); err != nil {
+		return err
+	}
+	if err := emptied(); err != nil {
+		return err
+	}
+	return h.failAfterEmptied
 }
 func (h *host) CheckHostPrerequisites(context.Context, string, devcontainer.Progress) error {
 	return h.note("check")
