@@ -41,6 +41,14 @@ describe("a lost session", () => {
     expect(assign).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["pointerdown", "keydown"])("starts a new redirect after a person's %s", async (type) => {
+    const { listJobs } = await loadPage();
+    await expect(listJobs()).rejects.toThrow();
+    window.dispatchEvent(new Event(type));
+    await expect(listJobs()).rejects.toThrow();
+    expect(assign).toHaveBeenCalledTimes(2);
+  });
+
   it("starts no new redirect on a page shown without a restore", async () => {
     const { listJobs } = await loadPage();
     await expect(listJobs()).rejects.toThrow();

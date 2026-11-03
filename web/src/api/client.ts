@@ -36,15 +36,28 @@ let redirecting = false;
 function redirectToLogin(): void {
   if (redirecting) return;
   redirecting = true;
-  // A page the back/forward cache restores keeps the flag, but its navigation is over.
-  const onShow = (event: PageTransitionEvent) => {
-    if (!event.persisted) return;
-    redirecting = false;
-    window.removeEventListener("pageshow", onShow);
-  };
-  window.addEventListener("pageshow", onShow);
+  allowNextRedirect();
   const back = window.location.pathname + window.location.search;
   window.location.assign(`/auth/login?return=${encodeURIComponent(back)}`);
+}
+
+/**
+ * Ends the guard when the page outlives its navigation: the person's next action
+ * after they cancelled it, or a restore from the back/forward cache.
+ */
+function allowNextRedirect(): void {
+  const allow = () => {
+    redirecting = false;
+    window.removeEventListener("pointerdown", allow, true);
+    window.removeEventListener("keydown", allow, true);
+    window.removeEventListener("pageshow", onShow);
+  };
+  const onShow = (event: PageTransitionEvent) => {
+    if (event.persisted) allow();
+  };
+  window.addEventListener("pointerdown", allow, true);
+  window.addEventListener("keydown", allow, true);
+  window.addEventListener("pageshow", onShow);
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {

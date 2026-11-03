@@ -272,6 +272,39 @@ test("starts one redirect for the 401s of one lost session on a job page", async
   expect(new URL(logins[0]!).searchParams.get("return")).toBe(`/?job=${jobId}`);
 });
 
+test("starts a new redirect when the person acts after cancelling one", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+  await expect(page.getByRole("list", { name: "Workspaces" }).getByRole("listitem")).toHaveCount(5);
+  await control(request, "auth", { signedIn: false });
+  const logins: string[] = [];
+  page.on("request", (loginRequest) => {
+    if (new URL(loginRequest.url()).pathname === "/auth/login") logins.push(loginRequest.url());
+  });
+  // The first navigation is cancelled with the error the Stop button gives it.
+  await page.route(/\/auth\/login/, (route) =>
+    logins.length > 1 ? route.continue() : route.abort("aborted"),
+  );
+  const cancelled = page.waitForEvent("requestfailed", (failed) =>
+    failed.url().includes("/auth/login"),
+  );
+
+  const refused = (path: string) =>
+    page.waitForResponse((r) => new URL(r.url()).pathname === path && r.status() === 401);
+  const reads = Promise.all([refused("/api/workspaces"), refused("/api/jobs")]);
+  const refresh = page.getByRole("button", { name: "Refresh" });
+  await refresh.click();
+  await reads;
+  await cancelled;
+  expect(logins).toHaveLength(1);
+
+  await refresh.click();
+  await expect(page.getByRole("heading", { name: "Fixture sign-in" })).toBeVisible();
+  expect(logins).toHaveLength(2);
+});
+
 test("signs out with a POST to the logout route", async ({ page }) => {
   await page.goto("/");
   const request = page.waitForRequest((r) => r.url().endsWith("/auth/logout"));

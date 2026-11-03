@@ -145,10 +145,18 @@ test.describe("as a manager", () => {
     await expect(link).toBeVisible();
     await page.context().clearCookies({ domain: "localhost", name: undefined });
     const events = page.waitForResponse((r) => r.url().includes(`/api/jobs/${jobId}/events`));
+    // The job's summary read meets the 401 too. Its sign-in waits until the stream
+    // answers, because that navigation cancels the stream's request when it commits.
+    const login = (u: URL) => u.pathname === "/auth/login";
+    await page.route(login, async (route) => {
+      await events;
+      await route.continue();
+    });
     // An in-app navigation: no page request, so the API and the stream meet the missing session.
     await link.click();
     expect((await events).status()).toBe(401);
     await page.waitForURL((u) => u.origin === new URL(info.pocket).origin);
+    await page.unroute(login);
     await signIn(page, "sample-manager");
   });
 
