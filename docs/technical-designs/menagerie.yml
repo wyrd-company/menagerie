@@ -670,7 +670,9 @@ proposed-design:
     matches included. The
     resolver's credential request races the template service request's
     caller: when the job is cancelled or reaches its limit, the request
-    loses its connection and the fetch fails with a fixed reason. Every
+    loses its connection and the fetch fails with a fixed reason. A
+    generate or apply checks the same signal just before its first write,
+    so a fetch that returns later writes nothing to the folder. Every
     failure is a fixed reason, with at most a
     status code: no error carries a token, a JWT, a signature, a URL, a
     response body or a transport error's text. A push or fetch to a remote

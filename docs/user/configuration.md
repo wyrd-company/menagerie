@@ -251,7 +251,9 @@ once the cancelled work has stopped.
   `backup-local-changes` or `backup`. Template hooks run inside `generate`
   and `apply`; a hook
   still running when its job is cancelled has its container killed and
-  removed before the job ends.
+  removed before the job ends. A template fetch cannot be interrupted, so it
+  runs until the remote or the network ends it; if the job has ended by
+  then, it writes nothing to the workspace folder.
 
 A duration is whole hours, minutes and seconds, such as `2h`, `45m` or
 `1h30m`. A key without a value, such as `rebuild:` or `default: ""`, is an

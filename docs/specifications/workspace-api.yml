@@ -108,9 +108,11 @@ description: >-
   cancellation keeps its workspace busy.
   A cancelled generate or apply revokes its hook token and kills and
   removes its running hook containers before the job ends, so no hook
-  writes to the folder afterwards. The template service itself does not
-  stop when its request is cancelled: a template fetch, or the files Toha
-  writes before its next hook, can still finish after the job ended.
+  writes to the folder afterwards. A generate or apply whose request ended
+  before its first write writes nothing to the folder, also when a template
+  fetch returns later. The template service cannot interrupt a template
+  fetch, which runs until the remote or the network ends it, and the files
+  Toha is writing when the request ends are finished up to its next hook.
   Stopping Menagerie also cancels jobs, which fail with their own error,
   not `timed-out`. A timed-out create keeps its folder, as every failed
   create does, for manual recovery. A timed-out build or up can leave a

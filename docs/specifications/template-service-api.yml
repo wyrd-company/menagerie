@@ -274,7 +274,10 @@ description: >-
   fails with `GitHub App credentials are unavailable: the operation ended
   before credentials arrived`; no later one is sent. Toha's own network
   reads and local work for that request are not interrupted and run until
-  they return.
+  they return. A generate or apply checks the request just before its first
+  write: when the request has ended, the operation stops with
+  `request-ended` and writes nothing. Files Toha is already writing are
+  finished up to its next hook.
 
 
   Apply replies. Generate and apply answer 200 with `{"outcome","files",
@@ -308,7 +311,8 @@ description: >-
   `workspace-exists` (409), `target-not-new` (409), `not-git` (409),
   `dirty-target` (409), `stale-application` (409), `target-conflict` (409),
   `target-drift` (409), `target-symlink` (409), `target-occupied` (409),
-  `target-changed` (409). Toha refusals: `template-not-found` (422),
+  `target-changed` (409), `request-ended` (409), which has no reader
+  because its caller went away. Toha refusals: `template-not-found` (422),
   `template-stale-revision` (422), `template-ambiguous` (422),
   `template-resolve-failed` (422), `template-refresh-failed` (422),
   `template-cache-conflict` (409),
@@ -358,7 +362,9 @@ validation-criteria: >-
   repository's token, replies with only the fixed sentence when a remote
   echoes the credential, also as overlapping copies, keeps Toha's message
   when no credential was handed out, and ends the credential request and its worker of
-  each caller that goes away, without leaving a thread; `go test -tags
+  each caller that goes away, without leaving a thread, and writes nothing
+  to the folder when a generate's or an apply's fetch returns after its
+  caller went away; `go test -tags
   templateservice ./backend/internal/workflows/` ends the credential
   request of a create whose job reaches its time limit;
   `tests/numbers.rs` covers number values through the session and the
