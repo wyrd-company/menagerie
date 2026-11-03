@@ -27,10 +27,24 @@ export class ApiError extends Error {
   }
 }
 
-/** Sends the browser to the OIDC login, returning to the current page afterwards. */
-export function redirectToLogin(location: Location = window.location): void {
-  const back = location.pathname + location.search;
-  location.assign(`/auth/login?return=${encodeURIComponent(back)}`);
+let redirecting = false;
+
+/**
+ * Sends the browser to the OIDC login, returning to the current page afterwards.
+ * One lost session starts one navigation: a later one would cancel the first.
+ */
+function redirectToLogin(): void {
+  if (redirecting) return;
+  redirecting = true;
+  // A page the back/forward cache restores keeps the flag, but its navigation is over.
+  const onShow = (event: PageTransitionEvent) => {
+    if (!event.persisted) return;
+    redirecting = false;
+    window.removeEventListener("pageshow", onShow);
+  };
+  window.addEventListener("pageshow", onShow);
+  const back = window.location.pathname + window.location.search;
+  window.location.assign(`/auth/login?return=${encodeURIComponent(back)}`);
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {

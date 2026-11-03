@@ -22,8 +22,8 @@ time limits.
 - Workspaces, templates, jobs and interview jobs: `docs/specifications/workspace-api.yml`
   in the repository root (owned by the workspace service).
 - How the browser answers interviews: [`docs/interview-form.yml`](docs/interview-form.yml).
-- Sign-in: any `401` sends the browser to `/auth/login?return=<path>`;
-  **Sign out** posts to `/auth/logout`.
+- Sign-in: any `401` sends the browser to `/auth/login?return=<path>`, with
+  one redirect for one lost session; **Sign out** posts to `/auth/logout`.
 
 ## Commands
 

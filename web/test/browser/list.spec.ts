@@ -233,6 +233,45 @@ test("sends a signed-out person to the login and back", async ({ page, request }
   await expect(page.getByRole("heading", { name: "Upgrade sample-alpha" })).toBeVisible();
 });
 
+test("starts one redirect for the 401s of one lost session on a job page", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+  await entry(page, "sample-beta").getByRole("button", { name: "Start" }).click();
+  await expect(page.getByRole("region", { name: "Job console" }).locator(".outcome")).toContainText(
+    "Completed.",
+  );
+  const jobId = jobIdFromUrl(page);
+  await control(request, "auth", { signedIn: false });
+
+  // The first redirect waits for the summary read and the stream's read, so each
+  // has its chance to start another navigation before the first one commits.
+  let resolve = () => {};
+  const bothRefused = new Promise<void>((settle) => (resolve = settle));
+  let refusedReads = 0;
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname !== `/api/jobs/${jobId}`) return;
+    if (response.status() === 401 && ++refusedReads === 2) resolve();
+  });
+  // Counted from the page's requests: a route handler does not see a navigation
+  // that a later one cancels.
+  const logins: string[] = [];
+  page.on("request", (loginRequest) => {
+    if (new URL(loginRequest.url()).pathname === "/auth/login") logins.push(loginRequest.url());
+  });
+  await page.route(/\/auth\/login/, async (route) => {
+    await bothRefused;
+    await route.continue().catch(() => {});
+  });
+
+  await page.goto(`/?job=${jobId}`);
+  await expect(page.getByRole("heading", { name: "Fixture sign-in" })).toBeVisible();
+  expect(refusedReads).toBe(2);
+  expect(logins).toHaveLength(1);
+  expect(new URL(logins[0]!).searchParams.get("return")).toBe(`/?job=${jobId}`);
+});
+
 test("signs out with a POST to the logout route", async ({ page }) => {
   await page.goto("/");
   const request = page.waitForRequest((r) => r.url().endsWith("/auth/logout"));

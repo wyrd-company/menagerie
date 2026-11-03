@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useState } from "react";
-import { ApiError, getJob, redirectToLogin } from "../api/client.ts";
+import { ApiError, getJob } from "../api/client.ts";
 import type { InterviewReply } from "../api/types.ts";
 import { decodeEvent, initialJobView, isTerminal, jobReducer, type JobView } from "./jobView.ts";
 
@@ -74,9 +74,8 @@ export function useJob(jobId: string | null): JobHandle {
         .catch((error: unknown) => {
           if (error instanceof ApiError && error.status === 404) {
             dispatch({ type: "connection", connection: "gone" });
-          } else if (error instanceof ApiError && error.status === 401) {
-            redirectToLogin();
-          } else {
+          } else if (!(error instanceof ApiError && error.status === 401)) {
+            // A 401 is not a lost stream: the read has already sent the browser to sign in.
             dispatch({ type: "connection", connection: "lost" });
           }
         });
