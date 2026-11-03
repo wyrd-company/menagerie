@@ -202,6 +202,17 @@ proposed-design:
     `host-prerequisites-missing`. It creates nothing outside the workspace
     folder. A declaration's consumer directory is excluded, because the agent
     creates it: it is the bind source whose final folder is the container name.
+    The bind sources are those the definition file names, in `workspaceMount`,
+    `mounts` and, for Compose, its services' volumes; what features and image
+    metadata add is not known before the build. A source with a `..` component
+    counts as outside the folder, because only Docker can tell where it leads,
+    and a source inside the folder that a symbolic link takes out of it is left
+    to Docker. The daemon answers for sources outside the folder, because
+    Menagerie's filesystem does not show host paths: for each source, a
+    throwaway container with that source mounted is created and removed,
+    never started, and the Engine refuses to create one whose source is
+    missing. The services run as the workspace root's owner, so a new folder is
+    theirs.
   provisioning-declaration: >-
     A provisioning declaration is the `customizations.menagerie` block of a
     rendered definition, as the provisioning-declaration specification
@@ -496,7 +507,9 @@ proposed-design:
     does not interrupt; a creation that fails is followed by a search for
     its id label, so a lost reply leaves no container. The workspace
     service removes its leftovers when it starts. A cancelled job kills and
-    removes its running containers before it ends.
+    removes its running containers before it ends. The containers of a bind
+    source check, as host-prerequisites describes, carry the same labels and
+    run no command.
   runner-images: >-
     A throwaway container runs the template entry's `runner-image`, else the
     global `runner-image`, else Menagerie's own image, which the workspace

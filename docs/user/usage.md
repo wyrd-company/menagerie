@@ -49,16 +49,24 @@ The job console then shows each phase:
 2. `generate`: Toha writes the files and runs the template's hooks, each in
    a throwaway container that sees only the workspace folder. Output a hook
    does not capture appears in the console, each line prefixed `hook: `.
-3. `commit` and `backup`: the first commit, pushed to the workspace's own
+3. `host-prerequisites`: Docker checks the bind sources outside the workspace
+   folder and the network of `runArgs`. The job fails as
+   `host-prerequisites-missing` when the host lacks any, and the message names
+   them all. Nothing is committed or started.
+4. `commit` and `backup`: the first commit, pushed to the workspace's own
    orphan branch in the workspace repository.
-4. `initialize-command`: the devcontainer's `initializeCommand`, in
+5. `initialize-command`: the devcontainer's `initializeCommand`, in
    throwaway containers that see only the workspace folder, with only the
    variables of [`local-env`](configuration.md#local-environment) beside
    the [runner image](configuration.md#runner-images)'s own.
-5. `build` when the definition builds an image, then `up`: the devcontainer
+6. `build` when the definition builds an image, then `up`: the devcontainer
    starts.
 
 The answers are kept in the workspace, in `.toha.json`.
+
+Before each create, start, rebuild and upgrade, Menagerie creates any missing
+bind source folder inside the workspace folder, so a clone of a backup starts:
+Git keeps no empty folder. The job console names each folder it creates.
 
 ![A template interview](assets/create-interview.png)
 

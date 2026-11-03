@@ -246,15 +246,18 @@ folder.
 
 ### Throwaway containers
 
-Template hooks and `initializeCommand` run in throwaway containers on the
-host daemon, which need no extra mount or setting. By default they run
+Template hooks, `initializeCommand` and the check of a new workspace's bind
+sources run in throwaway containers on the host daemon, which need no extra
+mount or setting. By default they run
 Menagerie's own image, which Menagerie finds by inspecting its own
 container: by the container id in its mounts or, when they name none, by
-its hostname, Docker's default. When it cannot, a job with a hook or an `initializeCommand`
-fails as `runner-image-unavailable`; set
+its hostname, Docker's default. When it cannot, a job with a hook, an
+`initializeCommand` or a bind source outside its folder fails as
+`runner-image-unavailable`; set
 [`runner-image`](configuration.md#runner-images). Each container carries
 the label `menagerie.throwaway` and is removed when its command ends; any
-left by a stopped Menagerie are removed when it starts.
+left by a stopped Menagerie are removed when it starts. A bind source check
+creates and removes its container and never starts it.
 
 ### Container registries
 

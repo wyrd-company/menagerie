@@ -246,8 +246,9 @@ once the cancelled work has stopped.
 - `phases` limits each stay in a phase, inside any operation:
   `read-definition`, `initialize-command`, `build`, `remove-container`,
   `up`, `stop`, `interview`, `initialize-repository`, `generate`,
-  `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or
-  `backup`. Template hooks run inside `generate` and `apply`; a hook
+  `host-prerequisites`, `fetch`, `plan`, `apply`, `commit`,
+  `backup-local-changes` or `backup`. Template hooks run inside `generate`
+  and `apply`; a hook
   still running when its job is cancelled has its container killed and
   removed before the job ends.
 
