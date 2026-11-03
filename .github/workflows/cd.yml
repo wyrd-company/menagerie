@@ -4,7 +4,8 @@ name: CD
 
 # Delivers the image for a release tag, then publishes its GitHub Release. A
 # dispatch re-delivers an existing release tag for recovery; it cannot create
-# a tag. A Release that is already published stays as it is.
+# a tag. A Release that is already published stays as it is. Publish docs
+# follows a tag push by itself; a dispatch starts it.
 on:
   push:
     tags:
@@ -75,9 +76,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # This workflow's own revision, so that a dispatch for a tag older than
+      # this job can run it; the script reads the tag's changelog from the tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
           persist-credentials: false
           fetch-tags: true
       - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
@@ -86,3 +88,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: task release:publish
+
+  docs:
+    name: Start Publish docs after a dispatch
+    needs: release
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+        run: gh workflow run publish-docs.yml --ref "$WORKFLOW_REF" -f ref="$RELEASE_TAG"

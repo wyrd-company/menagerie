@@ -68,9 +68,7 @@ GitHub Release. A docs tag on the commit of a code tag whose Release is not
 published yet does not publish; CD's success publishes that commit. A push to
 `main` does not publish.
 
-To recover a failed CD run, re-run its failed jobs: that keeps the tag push as
-the event, so Publish docs follows. Dispatching CD with an existing `tag` also
-delivers the image and publishes a missing Release, and leaves a published
-Release as it is, but Publish docs does not follow a dispatch, so dispatch
-Publish docs with its `ref` afterwards. Do the same to publish a tag or commit
-again.
+To recover a failed CD run, re-run its failed jobs, or dispatch CD with the
+existing `tag`. Either way CD delivers the image, publishes a missing Release,
+leaves a published Release as it is, and Publish docs follows. To publish a tag
+or commit again, dispatch Publish docs with its `ref`.

@@ -205,6 +205,7 @@ expect "the notes leave out the heading the title repeats" 1 '^0$' grep -c 'note
 gh_state
 expect "the highest release is published" 0 'published the GitHub Release of 0\.9\.0' gh_release 0.9.0 publish
 expect "the highest release takes Latest" 0 '^gh release create 0\.9\.0 --verify-tag --title 0\.9\.0 --latest=true --notes-file -$' gh_calls 'release create'
+expect "the fixture tag's tree has no release tooling, as a tag from before this job has none" 128 'does not exist' git -C "$g" cat-file -e 0.2.0:scripts/github-release.sh
 gh_state 0.2.0 published
 expect "a published Release stays as it is" 0 'already published' gh_release 0.2.0 publish
 expect "a published Release gets no write" 1 '^0$' grep -c -E 'release (create|edit)' "$stub/calls"
@@ -249,6 +250,16 @@ expect "the Release job needs the image job" 0 '^image$' cd_job '.jobs.release.n
 expect "the Release job keeps the default condition, so a failed or skipped image stops it" 0 '^null$' cd_job '.jobs.release.if'
 expect "only the Release job can write contents" 0 '^release$' cd_job '[.jobs | to_entries[] | select(.value.permissions.contents == "write") | .key] | join(",")'
 expect "the Release job names the tag the image job delivered" 0 '^true$' cd_job '(.jobs.release.steps[] | select(.run == "task release:publish") | .env.RELEASE_TAG) == (.jobs.image.steps[] | select(.run == "task release:image") | .env.RELEASE_TAG)'
+expect "the Release job runs this workflow's revision, not the tag's" 0 '^null$' cd_job '.jobs.release.steps[0].with.ref'
+expect "the Release job fetches the tag it reads" 0 '^true$' cd_job '.jobs.release.steps[0].with.fetch-tags'
+expect "only a successful Release job starts Publish docs" 0 '^release$' cd_job '.jobs.docs.needs'
+expect "only a dispatch starts Publish docs, since a tag push's completion does" 0 "^github.event_name == 'workflow_dispatch'$" cd_job '.jobs.docs.if'
+expect "Publish docs follows only a tag push's completion, so a dispatch publishes once" 0 "github.event.workflow_run.event == 'push'" docs_job '.jobs.tag.if'
+expect "starting Publish docs needs only that permission" 0 '^actions=write$' cd_job '.jobs.docs.permissions | to_entries | map(.key + "=" + .value) | join(",")'
+expect "CD names the dispatch input Publish docs reads" 0 '^true$' docs_job '.on.workflow_dispatch.inputs.ref.required'
+# shellcheck disable=SC2016
+expect "CD starts the Publish docs workflow with that tag" 0 '^gh workflow run publish-docs\.yml --ref "\$WORKFLOW_REF" -f ref="\$RELEASE_TAG"$' cd_job '.jobs.docs.steps[0].run'
+expect "the workflow CD starts exists" 0 '^Publish docs$' docs_job '.name'
 expect "only a docs tag push runs the docs tag check" 0 "^github.event_name == 'push'$" docs_job '.jobs.docs-tag.if'
 expect "the docs tag is the only tag push Publish docs takes" 0 '^menagerie-docs@\*$' docs_job '.on.push.tags[]'
 publish_if="\${{ !cancelled() && needs.tag.result != 'failure' && needs.docs-tag.result != 'failure' && (github.event_name == 'workflow_dispatch' || needs.tag.outputs.release == 'true' || needs.docs-tag.outputs.publish == 'true') }}"
