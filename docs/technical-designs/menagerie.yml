@@ -123,7 +123,9 @@ proposed-design:
     reports that the applied record was written. Without a provisioning
     declaration, the workspace service commits, backs the commit up to an
     orphan branch named after the workspace in the workspace repository, and
-    starts the devcontainer through devcontainer-builder. With one, it runs
+    starts the devcontainer through devcontainer-builder. A branch of that name
+    from a deleted workspace is the only copy left of it, so the backup first
+    copies it to `archive/<name>-<UTC stamp>` and the console names the copy. With one, it runs
     the provisioning steps, which include that commit and backup. A folder
     with an applied record and no commit is committed and backed up by the
     next start, so a start retries a create that failed after generation. A
@@ -303,7 +305,7 @@ proposed-design:
     and records the container's id. That mode refuses a bind with an SELinux
     `z` or `Z` option or `bind-create-src`, and the job fails naming the mount,
     so a declaration's definition uses neither. 7. `wait-for-sockets` reads the binding's
-    status until its reported container is that id, not running,
+    status until its reported container is that id, in any state,
     with the declared access group applied and both sockets ready, with no
     conformance failure. It waits on this readiness, never on the token,
     which reports valid while a wrong directory owner leaves no sockets.
@@ -312,7 +314,8 @@ proposed-design:
     times the host and never a person, and its failure,
     `provisioning-not-ready`, carries the status and the agent's last error.
     8. `up` starts the container and runs its lifecycle commands, so the
-    first start has sockets. 9. `verify` reads the status again: the same id,
+    first start has sockets. 9. `verify` reads the status again, within the
+    same bound, because the agent reports a start a moment later: the same id,
     running, with its sockets. What a container needs from its sockets is
     the template's to check, in a lifecycle command, whose failure fails the
     job. 10. The job ends, and the workspace row offers pairing.
@@ -338,7 +341,7 @@ proposed-design:
     and which no devcontainer can reach. The record only grows until it is
     consumed, so a later job never loses what an earlier one left. Any job
     that ends with the devcontainer started, with or without a declaration,
-    consumes it last: it unbinds each name and revokes each key that the
+    consumes it last, in a `retire` phase: it unbinds each name and revokes each key that the
     workspace's definition no longer declares, removes those entries as each
     is confirmed gone, and removes the record when it is empty. A job that
     fails, or a Menagerie that restarts, leaves the record for the next one.

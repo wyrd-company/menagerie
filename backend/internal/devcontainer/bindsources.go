@@ -8,6 +8,7 @@ package devcontainer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -346,4 +347,57 @@ func flagTakesNoValue(flag string) bool {
 		return true
 	}
 	return false
+}
+
+// Definition is what provisioning reads from a workspace's definition file.
+type Definition struct {
+	// Block is the customizations.menagerie block, or nil when the definition
+	// has none. It comes only from the definition file, never from the
+	// metadata of an image or a feature.
+	Block json.RawMessage
+	// Compose says that the definition uses Compose.
+	Compose bool
+	// ContainerName is the --name value of runArgs, read as
+	// devcontainer-builder reads it, or "" when there is none.
+	ContainerName string
+}
+
+// Definition reads the workspace's definition file. An error means that the
+// file cannot be read, which the start that follows reports.
+func (r *Runtime) Definition(folder string) (Definition, error) {
+	dc, err := spec.LoadFromWorkspace(folder)
+	if err != nil {
+		return Definition{}, err
+	}
+	out := Definition{Compose: dc.Mode() == spec.ModeCompose}
+	if block, declared := dc.Customizations["menagerie"]; declared {
+		if out.Block, err = json.Marshal(block); err != nil {
+			return Definition{}, fmt.Errorf("read customizations.menagerie: %w", err)
+		}
+	}
+	env := newLocalEnvironment(r.opts.Environ(), r.opts.LocalEnv).values
+	out.ContainerName = runArgValues(dc, SubstitutionContext(dc, folder, env)).name
+	return out, nil
+}
+
+// ContainerHolder returns the workspace folder label of the container called
+// name, and whether such a container exists. A container with no label gives
+// "" and true.
+func (r *Runtime) ContainerHolder(ctx context.Context, name string) (string, bool, error) {
+	info, err := r.client.ContainerInspect(ctx, name)
+	if dockerclient.IsErrNotFound(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("inspect container %s: %w", name, err)
+	}
+	// An inspect also matches an id, and a container's name can be another's id
+	// only by chance; only the name counts here.
+	if info.Name != "/"+name {
+		return "", false, nil
+	}
+	if info.Config == nil {
+		return "", true, nil
+	}
+	return info.Config.Labels[labelLocalFolder], true, nil
 }

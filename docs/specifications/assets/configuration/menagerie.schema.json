@@ -225,11 +225,16 @@
           "propertyNames": {
             "enum": [
               "read-definition",
+              "issue-key",
+              "bind",
               "initialize-command",
               "build",
               "remove-container",
               "create-container",
+              "wait-for-sockets",
               "up",
+              "verify",
+              "retire",
               "stop",
               "interview",
               "initialize-repository",
@@ -313,6 +318,10 @@
       "additionalProperties": false,
       "description": "What provisioning a workspace uses on this host. Absent, a definition with a provisioning declaration cannot be provisioned.",
       "properties": {
+        "readiness-wait": {
+          "$ref": "#/$defs/duration",
+          "description": "Bounds each wait on a binding's status. Absent, 2m."
+        },
         "wyrwood": {
           "type": "object",
           "additionalProperties": false,

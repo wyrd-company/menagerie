@@ -665,7 +665,7 @@ func TestFormatLimit(t *testing.T) {
 func TestPhasesAreThePublishedPhases(t *testing.T) {
 	published := map[string]bool{}
 	call := regexp.MustCompile(`\.Phase\("([a-z-]+)"\)`)
-	for _, dir := range []string{"../devcontainer", "../workflows"} {
+	for _, dir := range []string{"../devcontainer", "../workflows", "../provisioning"} {
 		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)

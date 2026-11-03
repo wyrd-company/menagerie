@@ -98,6 +98,9 @@ type Config struct {
 
 // Provisioning names what provisioning a workspace uses on this host.
 type Provisioning struct {
+	// ReadinessWait bounds each wait on a binding's status. Empty is 2m. It
+	// times the host, never a person.
+	ReadinessWait Duration `yaml:"readiness-wait"`
 	// Wyrwood locates the controller and the operator key. Absent, no
 	// declaration can be provisioned.
 	Wyrwood *Wyrwood `yaml:"wyrwood"`
@@ -553,6 +556,11 @@ func (c *Config) validate() error {
 	}
 	if c.GitHubApp != nil {
 		errs = append(errs, c.GitHubApp.validate()...)
+	}
+	if c.Provisioning != nil {
+		if err := c.Provisioning.ReadinessWait.validate("provisioning.readiness-wait"); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if c.Provisioning != nil && c.Provisioning.Wyrwood != nil {
 		errs = append(errs, c.Provisioning.Wyrwood.validate()...)

@@ -45,17 +45,20 @@ type Templates interface {
 	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
 }
 
-// Runtime starts, stops and rebuilds devcontainers, reads their state,
-// lists the running containers that mount a folder, and checks what a
-// definition needs from the host.
-// *devcontainer.Runtime satisfies it.
+// Runtime starts, stops and rebuilds devcontainers with their provisioning,
+// reads their state and lists the running containers that mount a folder.
+// *provisioning.Steps satisfies it.
 type Runtime interface {
 	Status(ctx context.Context, folder string) (devcontainer.Status, error)
 	Start(ctx context.Context, folder string, p devcontainer.Progress) error
 	Stop(ctx context.Context, folder string, p devcontainer.Progress) error
 	Rebuild(ctx context.Context, folder string, p devcontainer.Progress) error
 	Mounting(ctx context.Context, folder string) ([]string, error)
-	CheckHostPrerequisites(ctx context.Context, folder string, p devcontainer.Progress) error
+	// Create starts a workspace with no commit: it checks the host and runs
+	// save, which commits and backs the workspace up, before the start.
+	Create(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error
+	// Retire records what the definition declares, before a job changes it.
+	Retire(folder string, p devcontainer.Progress) error
 }
 
 // Options compose the workflows.
@@ -91,9 +94,10 @@ func New(opts Options) *Workflows {
 	return &Workflows{opts: opts, interviews: map[string]*interview{}}
 }
 
-// Operations returns the create, upgrade and apply-branch operations.
+// Operations returns the start, create, upgrade and apply-branch operations.
 func (w *Workflows) Operations() api.Operations {
 	return api.Operations{
+		api.OperationStart:       w.start,
 		api.OperationCreate:      w.create,
 		api.OperationUpgrade:     w.upgrade,
 		api.OperationApplyBranch: w.applyBranch,
@@ -153,6 +157,30 @@ func (w *Workflows) upgrade(req api.JobRequest) (jobsRunner, error) {
 		return nil, err
 	}
 	return (&upgrading{w: w, name: req.Workspace, folder: folder, template: req.TemplateID}).run, nil
+}
+
+// start starts a workspace. A workspace whose create failed after generation
+// has an applied record and no commit, and its start finishes that create.
+func (w *Workflows) start(req api.JobRequest) (jobsRunner, error) {
+	folder, err := api.ExistingFolder(w.opts.Root, req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, run *jobs.Run) error {
+		pending, err := backup.Uncommitted(folder, req.Workspace)
+		if err != nil {
+			return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("reading the workspace repository failed: %w; the devcontainer was not started", err)}
+		}
+		if !pending {
+			return api.ContainerFailure(w.opts.Runtime.Start(ctx, folder, run))
+		}
+		fmt.Fprintf(run.Log(""), "the workspace has an applied record and no commit; finishing its create\n")
+		saving := &saving{w: w, name: req.Workspace, folder: folder,
+			output:  backup.Output{Record: backup.RecordName},
+			message: fmt.Sprintf("Create workspace %s", req.Workspace),
+		}
+		return saving.finish(ctx, run, "nothing was committed or started; start the workspace again when this is fixed")
+	}, nil
 }
 
 func (w *Workflows) selector(name, folder, template string) templates.Selector {

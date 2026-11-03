@@ -219,6 +219,11 @@ shows the remote's own text with the URL and the token replaced by
 
 `provisioning` names what provisioning a workspace uses on this host.
 
+`readiness-wait` bounds each wait on a binding's status, such as the wait for a
+container's sockets. Absent, it is `2m`. It times the host, never a person. A
+wait that passes it fails the job as `provisioning-not-ready`, with the status
+and the agent's last error.
+
 ### Wyrwood operator key
 
 ```yaml
@@ -329,8 +334,9 @@ once the cancelled work has stopped.
 - `operations` gives `start`, `stop`, `rebuild`, `create`, `upgrade`,
   `commit` or `apply-branch` its own limit, which replaces `default`.
 - `phases` limits each stay in a phase, inside any operation:
-  `read-definition`, `initialize-command`, `build`, `remove-container`,
-  `create-container`, `up`, `stop`, `interview`, `initialize-repository`, `generate`,
+  `read-definition`, `issue-key`, `bind`, `initialize-command`, `build`,
+  `remove-container`, `create-container`, `wait-for-sockets`, `up`, `verify`,
+  `retire`, `stop`, `interview`, `initialize-repository`, `generate`,
   `host-prerequisites`, `fetch`, `plan`, `apply`, `commit`,
   `backup-local-changes` or `backup`. Template hooks run inside `generate`
   and `apply`; a hook

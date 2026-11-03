@@ -35,6 +35,8 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/openbaokv"
+	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/t3code"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
@@ -42,6 +44,8 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/workflows"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 	"github.com/wyrd-company/menagerie/backend/internal/workspacesocket"
+	"github.com/wyrd-company/menagerie/backend/internal/wyrwood"
+	"github.com/wyrd-company/menagerie/backend/internal/xolotl"
 	"github.com/wyrd-company/menagerie/web"
 )
 
@@ -141,7 +145,11 @@ func run(configPath string) error {
 		go commitJobs.Schedule(ctx, ticker.C, nil)
 		log.Printf("menagerie: committing workspaces with changes every %s", a.Every.Value())
 	}
-	handler, err := newHandler(cfg, root, remote, runtime, manager, parts.hooks, parts.images)
+	clients, err := provisioningClients(cfg)
+	if err != nil {
+		return err
+	}
+	handler, err := newHandler(cfg, root, remote, runtime, clients, manager, parts.hooks, parts.images)
 	if err != nil {
 		return err
 	}
@@ -288,8 +296,8 @@ func hookRoutes(hooks *throwaway.HookRunner, app *githubapp.Minter) http.Handler
 
 // newHandler is the workspace service's whole HTTP surface: the workspace
 // API behind manager sign-in.
-func newHandler(cfg *config.Config, root *workspace.Root, remote *backup.Remote, runtime *devcontainer.Runtime, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) (http.Handler, error) {
-	return signedIn(newServer(cfg, root, remote, runtime, manager, hooks, images), cfg.OIDC)
+func newHandler(cfg *config.Config, root *workspace.Root, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) (http.Handler, error) {
+	return signedIn(newServer(cfg, root, remote, runtime, clients, manager, hooks, images), cfg.OIDC)
 }
 
 // signedIn serves server behind manager sign-in: the sign-in routes are
@@ -306,8 +314,9 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 // newServer composes the workspace API: the container operations, create
 // and upgrade with their interviews, commit, and the web UI embedded at build time.
 // Backups go to remote. Template hooks run through hooks in the template's
-// runner image; nil hooks refuse every hook.
-func newServer(cfg *config.Config, root *workspace.Root, remote *backup.Remote, runtime *devcontainer.Runtime, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) *api.Server {
+// runner image; nil hooks refuse every hook. Every job that can create a
+// container runs through the provisioning steps.
+func newServer(cfg *config.Config, root *workspace.Root, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) *api.Server {
 	approved := make([]api.Template, 0, len(cfg.Templates))
 	ids := make(map[string]bool, len(cfg.Templates))
 	for _, t := range cfg.Templates {
@@ -322,17 +331,23 @@ func newServer(cfg *config.Config, root *workspace.Root, remote *backup.Remote, 
 	if cfg.JobLimits != nil {
 		restart = cfg.JobLimits.Operations.Start.Value()
 	}
+	steps := provisioning.New(provisioning.Options{
+		Clients:    clients,
+		Runtime:    provisioning.Adapt(runtime),
+		Workspaces: root,
+		Records:    provisioning.Records{Folder: provisioning.DefaultRecords},
+	})
 	flows := workflows.New(workflows.Options{
 		Root:         root,
 		Templates:    templates.New(cfg.TemplateService.Socket),
 		Approved:     ids,
 		Remote:       remote,
-		Runtime:      runtime,
+		Runtime:      steps,
 		Hooks:        hooks,
 		RunnerImage:  image,
 		RestartLimit: restart,
 	})
-	operations := api.ContainerOperations(root, runtime)
+	operations := api.ContainerOperations(root, steps)
 	for name, op := range flows.Operations() {
 		operations[name] = op
 	}
@@ -376,6 +391,43 @@ func gitHubApp(cfg *config.Config) (*githubapp.Minter, error) {
 		return nil, err
 	}
 	return githubapp.New(githubapp.Options{AppID: g.AppID, Signer: signer, Installations: g.Installations, Server: g.Server})
+}
+
+// provisioningClients are the host's provisioning services, as configuration
+// names them. A section it lacks gives no client, and a declaration that needs
+// it fails its job.
+func provisioningClients(cfg *config.Config) (provisioning.Clients, error) {
+	var clients provisioning.Clients
+	p := cfg.Provisioning
+	if p == nil {
+		return clients, nil
+	}
+	clients.Wait = p.ReadinessWait.Value()
+	if w := p.Wyrwood; w != nil {
+		client, err := wyrwood.New(wyrwood.Config{
+			Controller:  w.Controller,
+			HostKey:     w.HostKey,
+			Agent:       w.Agent,
+			OperatorKey: w.OperatorKey,
+			Socket:      filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName),
+		})
+		if err != nil {
+			return clients, err
+		}
+		clients.Bindings = client
+	}
+	if x := p.Xolotl; x != nil {
+		secrets, err := openbaokv.New(registrycreds.SocketAddress(cfg.WyrwoodDirectory), x.KeySecret.KVMount)
+		if err != nil {
+			return clients, err
+		}
+		client, err := xolotl.New(x.URL, secrets, x.KeySecret.Path)
+		if err != nil {
+			return clients, err
+		}
+		clients.Keys = client
+	}
+	return clients, nil
 }
 
 // jobOptions configures the jobs manager: the configured time limits, and

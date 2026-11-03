@@ -18,11 +18,16 @@ import (
 // phase time limit names one of them.
 var Phases = []string{
 	"read-definition",
+	"issue-key",
+	"bind",
 	"initialize-command",
 	"build",
 	"remove-container",
 	"create-container",
+	"wait-for-sockets",
 	"up",
+	"verify",
+	"retire",
 	"stop",
 	"interview",
 	"initialize-repository",

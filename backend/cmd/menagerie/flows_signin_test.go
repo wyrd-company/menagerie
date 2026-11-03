@@ -18,6 +18,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -73,7 +74,7 @@ func TestSignedInManagersAnswerInterviewsOfAnySize(t *testing.T) {
 		OIDC:            config.OIDC{Issuer: issuer.URL(), ClientID: clientID, RedirectURL: srv.URL + auth.CallbackPath},
 	}
 	// The composition run serves.
-	h, err = newHandler(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), manager, nil, nil)
+	h, err = newHandler(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, manager, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

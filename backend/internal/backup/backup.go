@@ -478,3 +478,38 @@ func (n nestedRepositories) contains(rel string) bool {
 	}
 	return false
 }
+
+// RecordName is the applied record's name in a workspace folder.
+const RecordName = ".toha.json"
+
+// Uncommitted reports whether folder holds a generated workspace with no
+// commit: an applied record, a workspace branch with no commit, and a HEAD
+// that names that branch or is detached, as a template's hook can leave it. A
+// repository on another branch is someone else's, and stays as it is.
+func Uncommitted(folder, workspace string) (bool, error) {
+	if _, err := os.Lstat(filepath.Join(folder, RecordName)); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	repo, branch, err := open(folder, workspace)
+	if errors.Is(err, git.ErrRepositoryNotExists) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	head, err := repo.Storer.Reference(plumbing.HEAD)
+	if err != nil {
+		return false, fmt.Errorf("read HEAD: %w", err)
+	}
+	if head.Type() == plumbing.SymbolicReference && head.Target() != branch {
+		return false, nil
+	}
+	if _, err := repo.Reference(branch, false); err == nil {
+		return false, nil
+	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return false, err
+	}
+	return true, nil
+}

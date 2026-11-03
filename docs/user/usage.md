@@ -66,6 +66,58 @@ The job console then shows each phase:
 
 The answers are kept in the workspace, in `.toha.json`.
 
+If a branch with the workspace's name is already in the workspace repository,
+from a workspace that was deleted, the `backup` phase first copies it to
+`archive/<name>-<UTC stamp>`, and the console names the copy.
+
+When a create fails after `generate`, **Start** finishes it: the commit and
+backup that did not run, then the devcontainer. A second create of that name is
+refused while the folder exists.
+
+### A workspace with a provisioning declaration
+
+A template that renders a `customizations.menagerie` block in its definition
+gets a Wyrwood binding and, when it asks for one, a Xolotl client key, with no
+step in a CLI or a web interface, once the [host is
+prepared](install.md#provisioning). The console shows these phases in a create:
+
+1. `read-definition`: the block is read and checked. The job fails as
+   `provisioning-invalid` when the block is not valid, when the definition has
+   no `--name` in `runArgs`, and when another workspace holds the container name
+   or the key. The job fails as `provisioning-unavailable` when
+   [`provisioning`](configuration.md#provisioning) lacks the section the block
+   needs.
+2. `host-prerequisites`, as above.
+3. `issue-key`: the Xolotl key. A key that exists stays as it is, and the
+   console says when it is disabled or expires.
+4. `bind`: the Wyrwood binding. A binding that differs from the definition is
+   removed and made again while the container is stopped, and the console names
+   the fields.
+5. `commit` and `backup`, `initialize-command` and `build`, as above.
+6. `create-container`: the container, not started. A bind with an SELinux `z` or
+   `Z` option or `bind-create-src` fails here, so such a definition uses neither.
+7. `wait-for-sockets`: the job reads the binding's status until the agent reports
+   this container with the declared access group and both sockets. The console
+   shows each change of the status and the agent's last error.
+8. `up`: the container starts, with its sockets, and its lifecycle commands run.
+9. `verify`: the status again, with the container running. What the container
+   needs from its sockets is the template's to check in a lifecycle command,
+   whose failure fails the job.
+
+Each step is safe to repeat. A job that fails leaves what it finished, and
+**Start** continues from what is missing: it does not rotate the key or write
+the binding again. A rebuild, an upgrade's rebuild and an apply-branch's rebuild
+run the same steps without the commit and backup. A start of a container that
+exists goes on when Xolotl cannot be reached, with a note in the console; any
+other failure of a step fails the job.
+
+Before an upgrade or an apply-branch changes the definition, Menagerie records the
+container name and key it declares. A job that ends with the devcontainer started
+then runs `retire`: it unbinds each recorded name and revokes each recorded key
+that no workspace declares any more. A definition edited by other means has no
+record, so what it stops declaring stays until an operator removes it in the
+Wyrwood and Xolotl web interfaces.
+
 Before each create, start, rebuild and upgrade, Menagerie creates any missing
 bind source folder inside the workspace folder, so a clone of a backup starts:
 Git keeps no empty folder. The job console names each folder it creates.

@@ -57,6 +57,9 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	run.Phase("apply")
+	if err := u.w.opts.Runtime.Retire(u.folder, run); err != nil {
+		return fmt.Errorf("%w; nothing was upgraded", err)
+	}
 	grant, err := u.w.grantHooks(ctx, run, u.folder, u.template, throwaway.TargetCandidate)
 	if err != nil {
 		return fmt.Errorf("%w; nothing was upgraded", err)
@@ -98,6 +101,9 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 		return &jobs.Failure{Kind: KindMergeConflicted, Err: fmt.Errorf("the upgrade is not complete: it wrote merge conflict markers into %s, which need manual resolution; the conflicted files are committed and backed up as %s, and the state before the upgrade as %s; the devcontainer was not rebuilt: resolve the conflicts, then rebuild", strings.Join(applied.Conflicts, ", "), commit.Hash, before.Hash)}
 	}
 	if err := u.w.opts.Runtime.Rebuild(ctx, u.folder, run); err != nil {
+		if started(err) {
+			return api.ContainerFailure(fmt.Errorf("the workspace was upgraded and backed up as %s: %w", commit.Hash, err))
+		}
 		return api.ContainerFailure(fmt.Errorf("the workspace was upgraded and backed up as %s, but its devcontainer did not rebuild: %w", commit.Hash, err))
 	}
 	return nil

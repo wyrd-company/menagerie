@@ -78,7 +78,7 @@ type ContainerRuntime interface {
 func ContainerOperations(root *workspace.Root, rt ContainerRuntime) Operations {
 	op := func(do func(context.Context, string, devcontainer.Progress) error) Operation {
 		return func(req JobRequest) (jobs.Runner, error) {
-			folder, err := existingFolder(root, req.Workspace)
+			folder, err := ExistingFolder(root, req.Workspace)
 			if err != nil {
 				return nil, err
 			}
@@ -94,9 +94,9 @@ func ContainerOperations(root *workspace.Root, rt ContainerRuntime) Operations {
 	}
 }
 
-// existingFolder resolves a workspace's folder, or a RequestError that names
+// ExistingFolder resolves a workspace's folder, or a RequestError that names
 // why the request cannot have it.
-func existingFolder(root *workspace.Root, name string) (string, error) {
+func ExistingFolder(root *workspace.Root, name string) (string, error) {
 	folder, err := root.Folder(name)
 	switch {
 	case errors.Is(err, workspace.ErrInvalidName):

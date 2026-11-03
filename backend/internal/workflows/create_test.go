@@ -18,13 +18,13 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 )
 
-func TestOperationsAreCreateUpgradeAndApplyBranch(t *testing.T) {
+func TestOperationsAreStartCreateUpgradeAndApplyBranch(t *testing.T) {
 	var names []string
 	for name := range New(Options{}).Operations() {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{api.OperationApplyBranch, api.OperationCreate, api.OperationUpgrade}) {
+	if !reflect.DeepEqual(names, []string{api.OperationApplyBranch, api.OperationCreate, api.OperationStart, api.OperationUpgrade}) {
 		t.Fatalf("operations %v", names)
 	}
 }
@@ -293,7 +293,7 @@ func TestMissingHostPrerequisitesStopACreateBeforeItsCommit(t *testing.T) {
 	if snap.State != jobs.Failed || snap.Error.Kind != api.KindHostPrerequisitesMissing {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
-	for _, want := range []string{"/absent/one, /absent/two", "absent-net", "nothing was committed or started", "remove it before creating workspace alpha again"} {
+	for _, want := range []string{"/absent/one, /absent/two", "absent-net", "nothing was committed or started", "start the workspace when this is fixed"} {
 		if !strings.Contains(snap.Error.Message, want) {
 			t.Errorf("message %q lacks %q", snap.Error.Message, want)
 		}

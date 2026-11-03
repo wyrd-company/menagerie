@@ -16,6 +16,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -47,7 +48,7 @@ func TestPairingTokenRouteIsWiredBehindManagerSignIn(t *testing.T) {
 		TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")},
 		OIDC:            config.OIDC{Issuer: issuer.URL(), ClientID: clientID, RedirectURL: srv.URL + auth.CallbackPath},
 	}
-	h, err = newHandler(cfg, root, backupRemote(cfg, nil), devcontainer.New(docker, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{}), nil, nil)
+	h, err = newHandler(cfg, root, backupRemote(cfg, nil), devcontainer.New(docker, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

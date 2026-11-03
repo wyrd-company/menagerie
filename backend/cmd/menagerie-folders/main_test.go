@@ -35,6 +35,7 @@ func newLayout(t *testing.T) *layout {
 		{parent: l.lib, name: "menagerie", mode: 0o755, data: true},
 		{parent: l.data, name: "toha", mode: 0o755, data: true, contents: true},
 		{parent: l.data, name: "home", mode: 0o700, data: true, contents: true},
+		{parent: l.data, name: "provisioning", mode: 0o700, data: true, contents: true},
 	}
 	t.Cleanup(func() { afterCheck = func() {}; afterCreate = func(string) {} })
 	return l

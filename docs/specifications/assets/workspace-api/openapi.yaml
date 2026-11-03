@@ -387,6 +387,9 @@ components:
             - registry-credentials-unavailable
             - runner-image-unavailable
             - host-prerequisites-missing
+            - provisioning-invalid
+            - provisioning-unavailable
+            - provisioning-not-ready
             - internal-error
             - workspace-exists
             - template-refused

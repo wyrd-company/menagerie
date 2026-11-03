@@ -88,8 +88,8 @@ description: >-
   replaces `default`; `phases`
   limits each stay in a phase, counted from each entry into the phase
   (an answered interview enters `interview` again), inside any operation.
-  The phase names are `read-definition`, `initialize-command`, `build`,
-  `remove-container`, `create-container`, `up`, `stop`, `interview`, `initialize-repository`,
+  The phase names are `read-definition`, `issue-key`, `bind`, `initialize-command`, `build`,
+  `remove-container`, `create-container`, `wait-for-sockets`, `up`, `verify`, `retire`, `stop`, `interview`, `initialize-repository`,
   `generate`, `host-prerequisites`, `fetch`, `plan`, `apply`, `commit`, `backup-local-changes`
   and `backup`.
   Template hooks run inside `generate` and `apply`. A duration is positive
@@ -159,7 +159,8 @@ description: >-
 
 
   Optional `provisioning` names what provisioning a workspace uses on this
-  host. Its optional `wyrwood` locates the controller that holds workspaces'
+  host. Its optional `readiness-wait`, a duration, absent `2m`, bounds each wait
+  on a binding's status; it times the host, never a person. Its optional `wyrwood` locates the controller that holds workspaces'
   bindings and selects the operator key: `controller` is `ssh://host[:port]`,
   with port 22 when absent and nothing else in the value; `host-key` is the
   controller's SHA256 fingerprint, as `wyrwood controller host-key` prints it,

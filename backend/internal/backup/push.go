@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -209,4 +210,48 @@ func basicForms(username, password string) []string {
 		base64.URLEncoding.EncodeToString(pair),
 		base64.RawURLEncoding.EncodeToString(pair),
 	}
+}
+
+// ArchivePrefix starts the branch that keeps an earlier workspace's backup.
+const ArchivePrefix = "archive/"
+
+// Archive keeps what the workspace repository holds on the workspace's branch
+// under archive/<workspace>-<UTC stamp> before a new workspace of that name
+// pushes over it, because the backup is the only copy left of the workspace
+// that a delete removed. It returns the new branch's short name, or "" when
+// the repository has no such branch or the branch already holds the local
+// commit. Only the next push replaces the branch, so a failure loses nothing.
+func (r *Remote) Archive(ctx context.Context, folder, workspace string, now time.Time, progress io.Writer) (string, error) {
+	repo, branch, err := open(folder, workspace)
+	if err != nil {
+		return "", err
+	}
+	fetched, err := r.Fetch(ctx, folder, workspace, branch.Short(), progress)
+	if errors.Is(err, ErrBranchNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = RemoveFetched(folder, workspace) }()
+	if local, err := repo.Reference(branch, false); err == nil && local.Hash() == fetched {
+		return "", nil
+	}
+	name := ArchivePrefix + workspace + "-" + now.UTC().Format("20060102T150405Z")
+	s, err := r.open(ctx, progress)
+	if err != nil {
+		return "", err
+	}
+	defer s.close()
+	remote := git.NewRemote(repo.Storer, &config.RemoteConfig{Name: remoteName, URLs: []string{r.URL}})
+	err = remote.PushContext(s.ctx, &git.PushOptions{
+		RemoteName: remoteName,
+		RefSpecs:   []config.RefSpec{config.RefSpec(FetchedRef.String() + ":refs/heads/" + name)},
+		Auth:       s.auth,
+		Progress:   s.progress,
+	})
+	if err != nil {
+		return "", fmt.Errorf("archive %s: %w", branch.Short(), transportFailure(s.ctx, r.URL, err))
+	}
+	return name, nil
 }

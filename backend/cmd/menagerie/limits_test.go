@@ -16,6 +16,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
@@ -118,7 +119,7 @@ func TestAJobPastItsLimitTimesOutThroughTheAPI(t *testing.T) {
 	t.Cleanup(cancel)
 	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
 	rt := devcontainer.New(nil, devcontainer.Options{Containers: hanging{}, RunnerImage: func(context.Context) (string, error) { return "runner:sample", nil }})
-	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), rt, manager, nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), rt, provisioning.Clients{}, manager, nil, nil))
 	t.Cleanup(server.Close)
 
 	for range 2 {

@@ -76,8 +76,10 @@ workspace-socket:
 # What provisioning a workspace uses on this host. wyrwood locates the controller
 # that holds workspaces' bindings and selects the operator key on ssh-agent.sock.
 # xolotl issues and revokes workspaces' client keys: api_key in the secret holds
-# Menagerie's scoped key, read through the Wyrwood vault socket.
+# Menagerie's scoped key, read through the Wyrwood vault socket. readiness-wait
+# bounds each wait on a binding's status.
 # provisioning:
+#   readiness-wait: 2m
 #   wyrwood:
 #     controller: ssh://wyrwood-controller:2222
 #     host-key: SHA256:<wyrwood controller host-key>

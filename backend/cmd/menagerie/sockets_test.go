@@ -16,6 +16,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 	"github.com/wyrd-company/menagerie/backend/internal/workspacesocket"
 )
@@ -84,7 +85,7 @@ func TestServerServesCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
-	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
 	defer server.Close()
 	resp, err := http.Post(server.URL+"/api/jobs", "application/json", strings.NewReader(`{"operation":"commit","workspace":"absent"}`))
 	if err != nil {

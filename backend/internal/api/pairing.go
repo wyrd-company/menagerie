@@ -25,7 +25,7 @@ type PairingTokens interface {
 // nothing here may keep the token. It takes no job slot, since it changes
 // neither the workspace nor its container.
 func (s *Server) mintPairingToken(w http.ResponseWriter, r *http.Request) {
-	folder, err := existingFolder(s.opts.Root, r.PathValue("name"))
+	folder, err := ExistingFolder(s.opts.Root, r.PathValue("name"))
 	if err != nil {
 		var re *RequestError
 		if errors.As(err, &re) {

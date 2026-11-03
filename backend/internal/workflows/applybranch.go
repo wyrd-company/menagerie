@@ -149,6 +149,9 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	if failure := a.unmounted(ctx, run); failure != nil {
 		return a.resume(ctx, run, failure)
 	}
+	if err := a.w.opts.Runtime.Retire(a.folder, run); err != nil {
+		return a.resume(ctx, run, &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; nothing was applied", a.branch, err)})
+	}
 	applied, err := plan.Write(a.folder, run.Log("apply: "))
 	var refused *backup.NotApplicableError
 	var failed *backup.ApplyError
@@ -167,6 +170,10 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("branch %s was applied as %s, but its backup failed; the devcontainer was not rebuilt", a.branch, applied.Hash)}
 	}
 	if err := a.w.opts.Runtime.Rebuild(ctx, a.folder, run); err != nil {
+		if started(err) {
+			a.stopped = false
+			return api.ContainerFailure(fmt.Errorf("branch %s was applied and backed up as %s: %w", a.branch, applied.Hash, err))
+		}
 		return api.ContainerFailure(fmt.Errorf("branch %s was applied and backed up as %s, but the devcontainer did not rebuild: %w", a.branch, applied.Hash, err))
 	}
 	a.stopped = false
@@ -269,7 +276,9 @@ func (a *applying) resume(ctx context.Context, run *jobs.Run, failure error) err
 	}
 	start, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
 	defer cancel()
-	if err := a.w.opts.Runtime.Start(start, a.folder, run); err != nil {
+	if err := a.w.opts.Runtime.Start(start, a.folder, run); started(err) {
+		fmt.Fprintln(run.Log(""), err)
+	} else if err != nil {
 		fmt.Fprintf(run.Log(""), "starting the devcontainer again failed: %v\n", err)
 		fmt.Fprintln(run.Log(""), failure)
 		return api.ContainerFailure(fmt.Errorf("nothing was applied, and the devcontainer did not start again: %w", err))

@@ -287,16 +287,16 @@ func reason(err error, operation, agent, fingerprint string) string {
 	}
 	var refusal *operator.Error
 	if errors.As(err, &refusal) {
-		if text := oneLine(refusal.Message); text != "" {
+		if text := OneLine(refusal.Message); text != "" {
 			return "the controller answered: " + text
 		}
 	}
 	return "the controller refused the request"
 }
 
-// oneLine keeps the controller's text to one bounded line, so that it cannot
+// OneLine keeps the controller's text to one bounded line, so that it cannot
 // pass as other lines of a job's console.
-func oneLine(text string) string {
+func OneLine(text string) string {
 	runes := []rune(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '

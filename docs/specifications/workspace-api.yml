@@ -72,16 +72,19 @@ description: >-
   interview operations, which keeps the slot), or one of the terminal states
   `succeeded`, `failed` and `ended`. The slot is released when the job ends,
   and every client that sees the result event can start the next job.
-  `phase` names the current step, for example `read-definition`,
-  `initialize-command`, `build`, `remove-container`, `create-container`, `up`, `stop`,
+  `phase` names the current step, for example `read-definition`, `issue-key`, `bind`,
+  `initialize-command`, `build`, `remove-container`, `create-container`,
+  `wait-for-sockets`, `up`, `verify`, `retire`, `stop`,
   `interview`, `initialize-repository`, `generate`, `host-prerequisites`,
   `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
-  `runner-image-unavailable`, `operation-failed` or `internal-error`, and
-  for interview operations
+  `runner-image-unavailable`, `provisioning-invalid`, `provisioning-unavailable`,
+  `provisioning-not-ready`, `host-prerequisites-missing`, `operation-failed` or
+  `internal-error`, and for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
-  `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`,
-  `host-prerequisites-missing` or `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
+  `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
+  or `backup-failed`, for `start` of a workspace whose create it finishes
+  `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
   for `apply-branch` `branch-not-found`, `fetch-failed`, `backup-failed`,
   `not-applicable` or `apply-failed`. Its message says what was written and
   what recovery is needed.
@@ -181,10 +184,18 @@ description: >-
   generation fails as `generation-failed`; the folder keeps the files
   written before the failure and has no applied record. A failed create
   never removes its folder, and a second create of that workspace is
-  refused while the folder exists: recovery is manual, by inspecting the
-  folder and then removing it. On success the service commits the output as
-  the branch's first commit, which has no parent, force-pushes it to the
-  workspace repository and starts the devcontainer. A template whose hooks
+  refused while the folder exists. A folder with an applied record and no
+  commit is finished by the workspace's next `start`, which runs what
+  remains of the create; any other failed create needs manual recovery, by
+  inspecting the folder and then removing it. On success the service commits
+  the output as the branch's first commit, which has no parent, force-pushes
+  it to the workspace repository and starts the devcontainer. A branch of the
+  workspace's name that the workspace repository already holds, from a
+  deleted workspace, is first copied to `archive/<workspace>-<UTC stamp>`, and
+  the console names it. With a provisioning declaration, the steps of the
+  design's `provisioning-steps` run around that commit and backup, each its
+  own phase, and a job that ends with the devcontainer started consumes the
+  workspace's retirement record in `retire`. A template whose hooks
   already made Git history keeps it under `refs/menagerie/template-history`
   (commits on the workspace branch) or `refs/menagerie/template-head` (a
   detached HEAD); the workspace branch still starts from its own root.

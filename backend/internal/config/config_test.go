@@ -113,6 +113,19 @@ provisioning:
     operator-key: sample-operator
 `
 
+func TestParseProvisioningReadinessWait(t *testing.T) {
+	cfg, err := Parse([]byte(valid + "provisioning:\n  readiness-wait: 5m\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Provisioning.ReadinessWait.Value(); got != 5*time.Minute {
+		t.Errorf("wait %s", got)
+	}
+	if _, err := Parse([]byte(valid + "provisioning:\n  readiness-wait: soon\n")); err == nil || !strings.Contains(err.Error(), "provisioning.readiness-wait") || strings.Contains(err.Error(), "soon") {
+		t.Errorf("error %v", err)
+	}
+}
+
 func TestParseProvisioningWyrwood(t *testing.T) {
 	cfg, err := Parse([]byte(valid + provisioningWyrwood))
 	if err != nil {

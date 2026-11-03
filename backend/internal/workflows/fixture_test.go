@@ -186,6 +186,8 @@ type fakeRuntime struct {
 	onStop func()
 	// onCheck observes each host prerequisites check.
 	onCheck func(folder string)
+	// retired lists the workspaces Retire was called for.
+	retired []string
 	// state is the devcontainer's state before a stop, running when
 	// empty; mounting are the containers Mounting reports.
 	state    string
@@ -212,18 +214,6 @@ func (r *fakeRuntime) Mounting(context.Context, string) ([]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.mounting, r.failOn["mounting"]
-}
-
-// CheckHostPrerequisites is not a call that seen reports: only a create
-// makes it, and onCheck and failOn are how a test observes it.
-func (r *fakeRuntime) CheckHostPrerequisites(_ context.Context, folder string, p devcontainer.Progress) error {
-	p.Phase("host-prerequisites")
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.onCheck != nil {
-		r.onCheck(folder)
-	}
-	return r.failOn["host-prerequisites"]
 }
 
 func (r *fakeRuntime) do(op, folder string, p devcontainer.Progress) error {
@@ -270,6 +260,34 @@ func (r *fakeRuntime) Rebuild(ctx context.Context, folder string, p devcontainer
 	}
 	return err
 }
+
+// Create runs as provisioning does without a declaration: the check, the
+// save, the start.
+func (r *fakeRuntime) Create(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error {
+	p.Phase("host-prerequisites")
+	r.mu.Lock()
+	if r.onCheck != nil {
+		r.onCheck(folder)
+	}
+	err := r.failOn["host-prerequisites"]
+	r.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := save(ctx); err != nil {
+		return err
+	}
+	return r.Start(ctx, folder, p)
+}
+
+// Retire records the call, apart from what seen reports.
+func (r *fakeRuntime) Retire(folder string, _ devcontainer.Progress) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.retired = append(r.retired, filepath.Base(folder))
+	return r.failOn["retire"]
+}
+
 func (r *fakeRuntime) seen() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

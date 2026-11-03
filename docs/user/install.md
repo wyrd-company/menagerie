@@ -148,7 +148,11 @@ Create the container first, bind it, then start it.
 
 ### Provisioning
 
-To let Menagerie provision workspaces, prepare the host once.
+To let Menagerie provision workspaces, prepare the host once. After this, a
+[create](usage.md#a-workspace-with-a-provisioning-declaration) needs no step in a
+CLI or a web interface. Keep Menagerie's data volume: the retirement records are
+in its `provisioning` folder, and what a lost record named stays until an operator
+removes it.
 
 1. Create an Ed25519 Transit key, here `menagerie-operator`, and offer it in
    Menagerie's policy beside any SSH key. Also grant `read` on the secret that
