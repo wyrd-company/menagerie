@@ -3,6 +3,7 @@
 use crate::Service;
 use crate::api::{AnswerRequest, ApplyReply, ApplyRequest, InterviewReply, Outcome, StartRequest};
 use crate::checks::{self, Operation};
+use crate::credentials::Ended;
 use crate::error::{ServiceError, ValueFree};
 use crate::hooks::CallbackRunner;
 use crate::host::{self, ProcessEnvironment};
@@ -104,8 +105,12 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
 
 /// Rebuild a completed session and apply it into the folder the workspace
 /// service created and initialized. Complete only when the applied record was
-/// written.
-pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, ServiceError> {
+/// written. Writes nothing when the caller went away before the first write.
+pub fn generate(
+    service: &Service,
+    request: ApplyRequest,
+    ended: &Ended,
+) -> Result<ApplyReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
     let binding = Binding::new(Operation::Create, &request.workspace, &request.template_id);
     let record = seal::open(&service.key, binding, request.session)?;
@@ -136,6 +141,7 @@ pub fn generate(service: &Service, request: ApplyRequest) -> Result<ApplyReply, 
             messages,
         ));
     }
+    ended.check()?;
     let applied = session
         .apply_plan(
             plan,

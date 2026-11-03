@@ -4,6 +4,7 @@
 use crate::Service;
 use crate::api::{AnswerRequest, ApplyReply, ApplyRequest, InterviewReply, StartRequest};
 use crate::checks::{self, Operation};
+use crate::credentials::Ended;
 use crate::error::{ServiceError, ValueFree};
 use crate::hooks::CallbackRunner;
 use crate::host::{self, ProcessEnvironment};
@@ -101,7 +102,12 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
 }
 
 /// Rebuild a completed upgrade session and merge it into the workspace.
-pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, ServiceError> {
+/// Writes nothing when the caller went away before the first write.
+pub fn apply(
+    service: &Service,
+    request: ApplyRequest,
+    ended: &Ended,
+) -> Result<ApplyReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
     let binding = Binding::new(Operation::Upgrade, &request.workspace, &request.template_id);
     let record = seal::open(&service.key, binding, request.session)?;
@@ -127,6 +133,7 @@ pub fn apply(service: &Service, request: ApplyRequest) -> Result<ApplyReply, Ser
         socket: &service.settings.hook_runner_socket,
         token: request.hook_token.as_deref(),
     };
+    ended.check()?;
     let (merged, report) = session
         .apply(&done, false, &runner, None)
         .map_err(ValueFree::value_free)?;

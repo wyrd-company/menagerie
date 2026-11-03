@@ -210,6 +210,19 @@ pub fn lifetime() -> (Alive, Ended) {
 }
 
 impl Ended {
+    /// Refuse when the caller went away. Toha cannot stop a fetch or a file
+    /// loop, so a fetch that returns after the caller left must not go on to
+    /// write to a folder another job may be working in.
+    pub fn check(&self) -> Result<(), ServiceError> {
+        if self.0.has_changed().is_err() {
+            return Err(ServiceError::conflict(
+                "request-ended",
+                "the caller went away before the operation started to write",
+            ));
+        }
+        Ok(())
+    }
+
     /// Wait until the caller went away. No value is ever sent, so the wait
     /// ends only when `Alive` is dropped.
     async fn wait(mut self) {

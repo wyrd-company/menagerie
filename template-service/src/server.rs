@@ -2,6 +2,7 @@
 //! blocking worker, inside its own credential resolver scope, and returns
 //! owned JSON.
 use crate::Service;
+use crate::credentials::Ended;
 use crate::error::ServiceError;
 use axum::Router;
 use axum::body::Bytes;
@@ -37,11 +38,15 @@ pub fn router(service: Arc<Service>) -> Router {
     Router::new()
         .route(
             INTERVIEWS,
-            post(|s: State<Arc<Service>>, b: Bytes| call(s, b, crate::create::start)),
+            post(|s: State<Arc<Service>>, b: Bytes| {
+                call(s, b, |s, r, _| crate::create::start(s, r))
+            }),
         )
         .route(
             INTERVIEW_ANSWERS,
-            post(|s: State<Arc<Service>>, b: Bytes| call(s, b, crate::create::answer)),
+            post(|s: State<Arc<Service>>, b: Bytes| {
+                call(s, b, |s, r, _| crate::create::answer(s, r))
+            }),
         )
         .route(
             GENERATE,
@@ -49,11 +54,15 @@ pub fn router(service: Arc<Service>) -> Router {
         )
         .route(
             UPGRADES,
-            post(|s: State<Arc<Service>>, b: Bytes| call(s, b, crate::upgrade::start)),
+            post(|s: State<Arc<Service>>, b: Bytes| {
+                call(s, b, |s, r, _| crate::upgrade::start(s, r))
+            }),
         )
         .route(
             UPGRADE_ANSWERS,
-            post(|s: State<Arc<Service>>, b: Bytes| call(s, b, crate::upgrade::answer)),
+            post(|s: State<Arc<Service>>, b: Bytes| {
+                call(s, b, |s, r, _| crate::upgrade::answer(s, r))
+            }),
         )
         .route(
             UPGRADE_APPLY,
@@ -71,10 +80,14 @@ pub fn router(service: Arc<Service>) -> Router {
         .with_state(service)
 }
 
+/// One route's work. It gets its caller's `Ended` signal, which the routes
+/// that write to a folder check before they start to write.
+type Operation<Req, Rep> = fn(&Service, Req, &Ended) -> Result<Rep, ServiceError>;
+
 async fn call<Req, Rep>(
     State(service): State<Arc<Service>>,
     body: Bytes,
-    operation: fn(&Service, Req) -> Result<Rep, ServiceError>,
+    operation: Operation<Req, Rep>,
 ) -> Response
 where
     Req: DeserializeOwned + Send + 'static,
@@ -91,7 +104,7 @@ where
 async fn run<Req, Rep>(
     service: Arc<Service>,
     body: Bytes,
-    operation: fn(&Service, Req) -> Result<Rep, ServiceError>,
+    operation: Operation<Req, Rep>,
     handed: crate::credentials::Handed,
 ) -> (StatusCode, Vec<u8>)
 where
@@ -126,13 +139,14 @@ where
     // Every Toha fetch the operation makes, on this worker, asks the
     // workspace service's credential route when an HTTPS remote challenges.
     // `_alive` lives as long as this future: when the caller goes away the
-    // future is dropped, which ends the resolver's credential requests.
+    // future is dropped, which ends the resolver's credential requests and
+    // tells the operation not to start writing.
     let (_alive, ended) = crate::credentials::lifetime();
     let kept = handed.clone();
     let result = tokio::task::spawn_blocking(move || {
         let resolver =
-            crate::credentials::resolver(&service.settings.hook_runner_socket, kept, ended);
-        toha::source::with_credential_resolver(resolver, || operation(&service, request))
+            crate::credentials::resolver(&service.settings.hook_runner_socket, kept, ended.clone());
+        toha::source::with_credential_resolver(resolver, || operation(&service, request, &ended))
     })
     .await;
     let reply = match result {

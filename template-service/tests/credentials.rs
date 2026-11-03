@@ -85,6 +85,11 @@ struct HostState {
     /// service name, built from the request's `Authorization` header and
     /// its token, as a misbehaving host does.
     echo: Option<fn(&str, &str) -> String>,
+    /// While set, the pack request after this many others waits here, as a
+    /// hung remote does.
+    stall_after: Option<usize>,
+    /// How many requests waited.
+    stalls: usize,
 }
 
 /// A smart HTTP Git host over TLS on loopback.
@@ -178,6 +183,21 @@ impl GitHost {
         *self.rendezvous.lock().unwrap() = repositories;
     }
 
+    /// Make the pack request after `others` others wait until `resume`.
+    fn stall(&self, others: usize) {
+        self.state.0.lock().unwrap().stall_after = Some(others);
+    }
+
+    fn resume(&self) {
+        let (lock, arrived) = &*self.state;
+        lock.lock().unwrap().stall_after = None;
+        arrived.notify_all();
+    }
+
+    fn stalls(&self) -> usize {
+        self.state.0.lock().unwrap().stalls
+    }
+
     fn echo(&self, service: fn(&str, &str) -> String) {
         self.state.0.lock().unwrap().echo = Some(service);
     }
@@ -191,12 +211,17 @@ impl GitHost {
     }
 }
 
-/// The repository a request path names: up to and including `.git`.
+/// The repository a request path names: up to and including `.git`, or up to
+/// the smart HTTP route for a name without that suffix.
 fn repository(path: &str) -> String {
-    match path.find(".git") {
-        Some(end) => path[..end + 4].to_owned(),
-        None => path.to_owned(),
+    if let Some(end) = path.find(".git") {
+        return path[..end + 4].to_owned();
     }
+    ["/info/refs", "/git-upload-pack"]
+        .iter()
+        .find_map(|route| path.strip_suffix(route))
+        .unwrap_or(path)
+        .to_owned()
 }
 
 fn serve(
@@ -278,6 +303,18 @@ fn serve(
         drop(host);
         respond(out, "403 Forbidden", &[], b"");
         return;
+    }
+    if path.ends_with("/git-upload-pack") {
+        match host.stall_after {
+            Some(0) => {
+                host.stalls += 1;
+                host = arrived
+                    .wait_while(host, |h| h.stall_after.is_some())
+                    .unwrap();
+            }
+            Some(others) => host.stall_after = Some(others - 1),
+            None => {}
+        }
     }
     if let Some(service) = host.echo.filter(|_| path.ends_with("/info/refs")) {
         drop(host);
@@ -445,13 +482,22 @@ fn token_free(reply: &Reply) {
 }
 
 /// A world with the sample template served by `host` as
-/// `example-org/kit-a.git` and `example-org/kit-b.git`.
+/// `example-org/kit-a.git` and `example-org/kit-b.git`, and as
+/// `example-org/kit-c`, a name Toha's formal name keeps, in two versions.
 fn world(host: &GitHost) -> World {
-    let (a, b) = (
+    let (a, b, c, next) = (
         format!("{}@v1", host.url("example-org/kit-a.git")),
         format!("{}@v1", host.url("example-org/kit-b.git")),
+        format!("{}@v1", host.url("example-org/kit-c")),
+        format!("{}@v2", host.url("example-org/kit-c")),
     );
-    let world = World::with_templates(&[("private-a", &a), ("private-b", &b)]);
+    let world = World::with_templates(&[
+        ("private-a", &a),
+        ("private-b", &b),
+        ("private-c", &c),
+        ("private-c-next", &next),
+    ]);
+    host.publish("example-org/kit-c", &world.sample);
     host.publish("example-org/kit-a.git", &world.sample);
     host.publish("example-org/kit-b.git", &world.sample);
     world
@@ -809,6 +855,134 @@ fn a_caller_going_away_ends_its_credential_request_and_worker() {
             .post("/v1/interviews", &world.select("after", "private-a"))
             .await;
         assert_eq!(start.kind(), "template-resolve-failed", "{}", start.json);
+        service.stop().await;
+    });
+}
+
+/// Call `path` with `body` while the host stalls its last pack request, after
+/// `others` others, go away, and let the fetch finish. Toha cannot stop the
+/// fetch, so it runs on when the host answers, and it asks for no credential
+/// after that, which would end it.
+async fn lose_the_caller_during_a_fetch(
+    host: &GitHost,
+    world: &World,
+    service: &Running,
+    path: &'static str,
+    body: &Value,
+    others: usize,
+) {
+    // With no admission cached, the operation asks the remote again.
+    std::fs::remove_dir_all(world.data.join("cache/sources")).unwrap();
+    host.stall(others);
+    let socket = service.socket.clone();
+    let bytes = body_of(path, body);
+    let caller = tokio::spawn(async move { post_bytes(&socket, path, bytes).await });
+    assert!(
+        eventually(|| host.stalls() > 0).await,
+        "the operation never reached its last pack request"
+    );
+    caller.abort();
+    // Test-only: the server sees the closed connection and drops the request
+    // before this ends. Released earlier, the guard would let the write
+    // through and this test would fail, not pass by chance.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    host.resume();
+    // Test-only: long enough for the writes an unguarded operation makes,
+    // which removing each guard shows.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+}
+
+/// Every file of a folder outside `.git`, with its text.
+fn tree(folder: &Path) -> Vec<(String, String)> {
+    let mut files = vec![];
+    for name in entries(folder) {
+        if name != ".git" && folder.join(&name).is_file() {
+            files.push((name.clone(), read(folder, &name)));
+        }
+    }
+    files
+}
+
+/// A caller that goes away while the host holds its generate's fetch, as a
+/// cancelled job or one at its limit does: nothing is written to the folder
+/// when the fetch returns.
+#[test]
+fn a_fetch_that_returns_after_its_generate_lost_its_caller_writes_nothing() {
+    run(async {
+        let host = GitHost::start();
+        let world = world(&host);
+        host.admit(TOKEN_A, "example-org/kit-a.git");
+        world
+            .hooks
+            .answer_credentials(grants(vec![(host.url("example-org/kit-a.git"), TOKEN_A)]));
+        let service = Running::start(&world).await;
+        let selector = world.select("alpha", "private-a");
+        let start = service.post("/v1/interviews", &selector).await;
+        let done = service
+            .post(
+                "/v1/interviews/answers",
+                &with(
+                    selector.clone(),
+                    json!({"session": start.json["session"],
+                    "submission": submission(&start, json!({"label": "one",
+                        "catalog": {"title": "Sample"}}))}),
+                ),
+            )
+            .await;
+        assert_eq!(done.json["state"], "completed", "{}", done.json);
+        let folder = world.initialize("alpha");
+        let before = entries(&folder);
+        let body = with(selector, json!({"session": done.json["session"]}));
+        lose_the_caller_during_a_fetch(
+            &host,
+            &world,
+            &service,
+            "/v1/workspaces/generate",
+            &body,
+            1,
+        )
+        .await;
+        assert_eq!(entries(&folder), before, "the generate wrote to the folder");
+        service.stop().await;
+    });
+}
+
+/// The same for an upgrade's apply.
+#[test]
+fn a_fetch_that_returns_after_its_apply_lost_its_caller_writes_nothing() {
+    run(async {
+        let host = GitHost::start();
+        let world = world(&host);
+        host.admit(TOKEN_A, "example-org/kit-c");
+        world
+            .hooks
+            .answer_credentials(grants(vec![(host.url("example-org/kit-c"), TOKEN_A)]));
+        let service = Running::start(&world).await;
+        let folder = create(&world, &service, "alpha", "private-c").await;
+        let selector = world.select("alpha", "private-c-next");
+        let start = service.post("/v1/upgrades", &selector).await;
+        assert_eq!(start.status, 200, "{}", start.json);
+        let done = service
+            .post(
+                "/v1/upgrades/answers",
+                &with(
+                    selector.clone(),
+                    json!({"session": start.json["session"],
+                    "submission": submission(&start, json!({"extra": "added"}))}),
+                ),
+            )
+            .await;
+        assert_eq!(done.json["state"], "completed", "{}", done.json);
+        let before = tree(&folder);
+        // The merge base is fetched by its commit, as GitHub allows.
+        git(
+            &host.root.join("example-org/kit-c"),
+            &["config", "uploadpack.allowAnySHA1InWant", "true"],
+        );
+        let body = with(selector, json!({"session": done.json["session"]}));
+        lose_the_caller_during_a_fetch(&host, &world, &service, "/v1/upgrades/apply", &body, 3)
+            .await;
+        assert_eq!(tree(&folder), before, "the apply wrote to the folder");
         service.stop().await;
     });
 }
