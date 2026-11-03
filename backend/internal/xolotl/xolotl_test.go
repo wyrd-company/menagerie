@@ -419,8 +419,10 @@ func TestCallerEndingTheOperation(t *testing.T) {
 	})
 	t.Run("before sending again", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		srv, count := answering(t, func(w http.ResponseWriter) {
-			cancel()
+			// Later than the answer, so that the wait is what ends.
+			time.AfterFunc(50*time.Millisecond, cancel)
 			w.WriteHeader(http.StatusConflict)
 		})
 		c := newClient(t, srv.URL, scoped())
@@ -428,6 +430,17 @@ func TestCallerEndingTheOperation(t *testing.T) {
 		_, err := c.Issue(ctx, "host-sample", "sample")
 		assert(t, err)
 		if *count != 1 {
+			t.Fatalf("%d requests", *count)
+		}
+	})
+	t.Run("during the scoped key read", func(t *testing.T) {
+		srv, count := answering(t, status(http.StatusCreated, `{"status":"created"}`))
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		time.AfterFunc(10*time.Millisecond, cancel)
+		_, err := newClient(t, srv.URL, hungSecret{}).Revoke(ctx, "host-sample", "sample")
+		assert(t, err)
+		if *count != 0 {
 			t.Fatalf("%d requests", *count)
 		}
 	})
@@ -471,6 +484,47 @@ func TestScopedKeyFailureSendsNothingAndIsNotUnreachable(t *testing.T) {
 				t.Fatalf("%d requests", *count)
 			}
 		})
+	}
+}
+
+// hungSecret holds a read until its context ends.
+type hungSecret struct{}
+
+func (hungSecret) Read(ctx context.Context, _ string) (map[string]any, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestAHungScopedKeyReadEndsAndIsNotUnreachable(t *testing.T) {
+	srv, count := answering(t, status(http.StatusCreated, `{"status":"created"}`))
+	c := newClient(t, srv.URL, hungSecret{})
+	c.timeout = 50 * time.Millisecond
+	_, err := c.Issue(context.Background(), "host-sample", "sample")
+	var e *Error
+	if !errors.As(err, &e) || e.Unreachable || !strings.Contains(e.Reason, "the scoped key could not be read") {
+		t.Fatalf("got %v", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the read's time limit reads as the job's own deadline: %v", err)
+	}
+	if *count != 0 {
+		t.Fatalf("%d requests", *count)
+	}
+}
+
+func TestALongAnswerIsNotRead(t *testing.T) {
+	long := `{"status":"exists"}` + strings.Repeat(" ", maxAnswer)
+	srv, _ := answering(t, status(http.StatusOK, long))
+	_, err := newClient(t, srv.URL, scoped()).Issue(context.Background(), "host-sample", "sample")
+	if err != nil {
+		t.Fatalf("the status fits the bound: %v", err)
+	}
+	long = strings.Repeat(" ", maxAnswer) + `{"status":"exists"}`
+	srv, _ = answering(t, status(http.StatusOK, long))
+	_, err = newClient(t, srv.URL, scoped()).Issue(context.Background(), "host-sample", "sample")
+	var e *Error
+	if !errors.As(err, &e) || e.Reason != unexpectedAnswer {
+		t.Fatalf("got %v", err)
 	}
 }
 
