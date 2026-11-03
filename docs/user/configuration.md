@@ -219,6 +219,33 @@ shows the remote's own text with the URL and the token replaced by
 
 `provisioning` names what provisioning a workspace uses on this host.
 
+### Wyrwood operator key
+
+```yaml
+provisioning:
+  wyrwood:
+    controller: ssh://wyrwood-controller:2222
+    host-key: SHA256:<wyrwood controller host-key>
+    agent: sample-host
+    operator-key: menagerie-operator
+```
+
+`provisioning.wyrwood` lets Menagerie manage the bindings of workspaces. Menagerie
+needs Wyrwood 0.6.1 or later. [Prepare the host](install.md#provisioning) first.
+
+- `controller` is the controller's `ssh://host[:port]`. The port defaults to 22.
+- `host-key` is the controller's SHA256 fingerprint, as
+  `wyrwood controller host-key` prints it. Menagerie offers no key to a controller
+  that presents another.
+- `agent` is the name of this host's Wyrwood agent.
+- `operator-key` selects the operator key on `ssh-agent.sock`: its Transit key
+  name, its public key or its SHA256 fingerprint. Menagerie offers the controller
+  only this key, so the Git key is not recorded as pending.
+
+Each connection and each request has 30 seconds. An operator key with no approval,
+or a call outside its grant, fails the job with the operation and the container
+name, and an operator key with no approval also with the key's fingerprint.
+
 ### Xolotl
 
 ```yaml

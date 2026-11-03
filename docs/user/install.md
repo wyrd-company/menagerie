@@ -54,7 +54,8 @@ container a directory of sockets:
   when `registry-credentials` is configured. Both use the binding's own
   token.
 - `ssh-agent.sock` signs Toha's SSH template fetches and Menagerie's SSH
-  backup pushes with Menagerie's SSH key, when the policy offers one.
+  backup pushes with Menagerie's SSH key, when the policy offers one. With
+  [provisioning](#provisioning) it also signs with the operator key.
 
 ### Git identity
 
@@ -95,7 +96,7 @@ and `github-app.transit-key` in the configuration.
 #### SSH identity
 
 Toha's template fetches and Menagerie's backup pushes use the same agent, so
-the agent must offer one key, and that key must reach every repository
+the agent must offer one Git key, and that key must reach every repository
 Menagerie uses over SSH. An SSH client offers its keys in turn, and the Git
 host signs it in with the first key it knows, whether or not that key can
 reach the repository. A second key in the agent does not select a second
@@ -144,6 +145,70 @@ workspace root's owner, not as root, and without an access group Wyrwood's
 sockets are open only to Wyrwood's own user. The agent creates the consumer
 directory `/run/wyrwood/containers/menagerie` when it binds the container.
 Create the container first, bind it, then start it.
+
+### Provisioning
+
+To let Menagerie provision workspaces, prepare the host once.
+
+1. Create an Ed25519 Transit key, here `menagerie-operator`, and offer it in
+   Menagerie's policy beside any SSH key. Also grant `read` on the secret that
+   holds Xolotl's scoped key:
+
+   ```yaml
+   openbao:
+     policy: |
+       path "transit/keys/menagerie-operator" { capabilities = ["read"] }
+       path "transit/sign/menagerie-operator" { capabilities = ["update"] }
+       path "kv/data/menagerie/xolotl" { capabilities = ["read"] }
+   ssh:
+     transit-keys:
+       - menagerie-operator
+   ```
+
+   Add these lines to the policy above. `ssh-agent.sock` then offers the key to
+   every SSH connection Menagerie makes. No Git host accepts it, because no Git
+   host has its public key.
+
+2. Write one Wyrwood policy that all this host's workspaces share. It reads a
+   workspace's Xolotl key by a per-binding value, and its path fixes
+   [the Xolotl key policy of this host](configuration.md#xolotl), so the value
+   names only the key:
+
+   ```yaml
+   name: host-sample-workspace
+   openbao:
+     agent-token-renewal: true
+     policy: |
+       path "secret/data/xolotl/keys/host-sample/{{binding.xolotl_key_name}}" { capabilities = ["read"] }
+   contract:
+     mount-target: /run/wyrwood
+   ```
+
+   Use the path your Xolotl writes client keys to, and only this host's key
+   policy in it. If it names a key policy other hosts use, one host can read the
+   keys of another.
+
+3. Configure [`provisioning.wyrwood`](configuration.md#wyrwood-operator-key) and
+   restart Menagerie. Start a job on a workspace with a declaration. It fails and
+   names the key's fingerprint, and the controller records the key as pending
+   with the proposed label `menagerie-<agent>`.
+
+4. In the Wyrwood web interface, open **Operator keys**, compare the fingerprint
+   and approve the key with this grant:
+
+   | Grant | Value |
+   | --- | --- |
+   | **Agents** | Only this host's agent |
+   | **Policies** | Only the policies your templates declare, such as `host-sample-workspace` |
+   | **Read** and **Bind** | On |
+   | **Policy write** | Off |
+
+Approve the key once. It has no expiry, so that provisioning does not stop in
+silence, and **Revoke** ends it. A grant cannot be edited: a wider allowlist needs
+a new Transit key and a new approval under a new label. A binding that holds a
+policy outside the allowlist is outside the grant, so Menagerie cannot change it.
+Keep Menagerie's own policy out of the allowlist, so that Menagerie cannot change
+its own binding.
 
 ## The host
 

@@ -28,6 +28,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
+	"github.com/wyrd-company/menagerie/backend/internal/wyrwood"
 	"github.com/wyrd-company/menagerie/backend/internal/xolotl"
 )
 
@@ -97,9 +98,26 @@ type Config struct {
 
 // Provisioning names what provisioning a workspace uses on this host.
 type Provisioning struct {
+	// Wyrwood locates the controller and the operator key. Absent, no
+	// declaration can be provisioned.
+	Wyrwood *Wyrwood `yaml:"wyrwood"`
 	// Xolotl locates the Xolotl that issues client keys. Absent, a
 	// declaration with a Xolotl key cannot be provisioned.
 	Xolotl *Xolotl `yaml:"xolotl"`
+}
+
+// Wyrwood locates the controller that holds bindings and selects the operator
+// key Menagerie manages them with.
+type Wyrwood struct {
+	// Controller is the controller's ssh://host[:port].
+	Controller string `yaml:"controller"`
+	// HostKey is the controller's pinned SHA256 host-key fingerprint.
+	HostKey string `yaml:"host-key"`
+	// Agent is the name of this host's Wyrwood agent.
+	Agent string `yaml:"agent"`
+	// OperatorKey selects the operator key on ssh-agent.sock in the Wyrwood
+	// directory, by name, public key or SHA256 fingerprint.
+	OperatorKey string `yaml:"operator-key"`
 }
 
 // Xolotl locates a Xolotl and the secret that holds Menagerie's scoped key.
@@ -536,6 +554,9 @@ func (c *Config) validate() error {
 	if c.GitHubApp != nil {
 		errs = append(errs, c.GitHubApp.validate()...)
 	}
+	if c.Provisioning != nil && c.Provisioning.Wyrwood != nil {
+		errs = append(errs, c.Provisioning.Wyrwood.validate()...)
+	}
 	if c.Provisioning != nil && c.Provisioning.Xolotl != nil {
 		errs = append(errs, c.Provisioning.Xolotl.validate()...)
 	}
@@ -638,6 +659,26 @@ func (g *GitHubApp) validate() []error {
 	}
 	if twice {
 		errs = append(errs, errors.New("github-app.installations names one account twice; account names are compared in lower case"))
+	}
+	return errs
+}
+
+func (w *Wyrwood) validate() []error {
+	var errs []error
+	for _, field := range []struct {
+		name, value string
+		valid       func(string) error
+	}{
+		{"controller", w.Controller, wyrwood.ValidController},
+		{"host-key", w.HostKey, wyrwood.ValidHostKey},
+		{"agent", w.Agent, wyrwood.ValidAgent},
+		{"operator-key", w.OperatorKey, wyrwood.ValidOperatorKey},
+	} {
+		if field.value == "" {
+			errs = append(errs, fmt.Errorf("provisioning.wyrwood.%s is required", field.name))
+		} else if err := field.valid(field.value); err != nil {
+			errs = append(errs, fmt.Errorf("provisioning.wyrwood.%s %w", field.name, err))
+		}
 	}
 	return errs
 }

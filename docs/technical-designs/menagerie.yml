@@ -293,10 +293,11 @@ proposed-design:
     `name` binding, with `report` enforcement and default token lifetimes,
     and waits until the binding reports its consumer directory, which the
     agent creates before the container exists. An equal binding is not
-    written, so a repeat revokes no token. A binding that differs in its
-    policies, values or access group is changed to what the definition
-    declares, with the revision it read, and the console names the fields;
-    the definition is the source of these three values. 4. `commit` and
+    written, so a repeat revokes no token. Wyrwood refuses a binding that
+    differs in its policies, values or access group and changes nothing, and
+    the definition is the source of these three values. So a job unbinds and
+    binds again while the container is stopped, and the console names the
+    fields. 4. `commit` and
     `backup` run as in a create. 5. `initialize-command` and `build` run as
     in any start. 6. `create-container` uses devcontainer-builder's create-only mode
     and records the container's id. That mode refuses a bind with an SELinux

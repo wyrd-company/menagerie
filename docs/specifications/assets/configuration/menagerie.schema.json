@@ -313,6 +313,39 @@
       "additionalProperties": false,
       "description": "What provisioning a workspace uses on this host. Absent, a definition with a provisioning declaration cannot be provisioned.",
       "properties": {
+        "wyrwood": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The Wyrwood controller that holds workspaces' bindings, and the operator key Menagerie manages them with. Absent, no declaration can be provisioned.",
+          "required": [
+            "controller",
+            "host-key",
+            "agent",
+            "operator-key"
+          ],
+          "properties": {
+            "controller": {
+              "type": "string",
+              "description": "The controller's ssh://host[:port]. The port defaults to 22."
+            },
+            "host-key": {
+              "type": "string",
+              "pattern": "^SHA256:[A-Za-z0-9+/]{43}$",
+              "description": "The controller's pinned SHA256 host-key fingerprint, as wyrwood controller host-key prints it."
+            },
+            "agent": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "description": "The name of this host's Wyrwood agent."
+            },
+            "operator-key": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Selects the operator key on ssh-agent.sock in wyrwood-directory: its Transit key name, public key or SHA256 fingerprint."
+            }
+          }
+        },
         "xolotl": {
           "type": "object",
           "additionalProperties": false,

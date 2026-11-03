@@ -159,7 +159,25 @@ description: >-
 
 
   Optional `provisioning` names what provisioning a workspace uses on this
-  host. Its optional `xolotl` locates the Xolotl that issues and revokes
+  host. Its optional `wyrwood` locates the controller that holds workspaces'
+  bindings and selects the operator key: `controller` is `ssh://host[:port]`,
+  with port 22 when absent and nothing else in the value; `host-key` is the
+  controller's SHA256 fingerprint, as `wyrwood controller host-key` prints it,
+  and a controller presenting another is refused before any key is offered;
+  `agent` is the name of this host's Wyrwood agent, a host name of letters,
+  digits, hyphens and dots; `operator-key` selects one key on `ssh-agent.sock`
+  in `wyrwood-directory` by its name, public key or SHA256 fingerprint, on one
+  line with no space at either end. Menagerie offers the controller only that
+  key, and proposes `menagerie-<agent>` as its label, or `menagerie` when that
+  is too long. Each operation opens its own connection, and the connection to
+  the agent, the connection to the controller and each request have 30 seconds.
+  A key with no approval, a call outside the grant, a host key that differs and
+  a key the selection does not find each fail with the operation and the
+  container name, and a key with no approval also with the key's fingerprint.
+  Text from a refusal is kept to one line of 200 characters.
+
+
+  Its optional `xolotl` locates the Xolotl that issues and revokes
   workspaces' client keys: `url` is an http or https URL with a host and no
   user information, query or fragment, and `key-secret` names, with `kv-mount`
   and `path`, the secret whose string field `api_key` holds Menagerie's scoped

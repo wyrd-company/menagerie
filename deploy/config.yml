@@ -73,9 +73,16 @@ workspace-socket:
 # auto-commit:
 #   every: 1h
 
-# The Xolotl that issues and revokes workspaces' client keys. api_key in the
-# secret holds Menagerie's scoped key, read through the Wyrwood vault socket.
+# What provisioning a workspace uses on this host. wyrwood locates the controller
+# that holds workspaces' bindings and selects the operator key on ssh-agent.sock.
+# xolotl issues and revokes workspaces' client keys: api_key in the secret holds
+# Menagerie's scoped key, read through the Wyrwood vault socket.
 # provisioning:
+#   wyrwood:
+#     controller: ssh://wyrwood-controller:2222
+#     host-key: SHA256:<wyrwood controller host-key>
+#     agent: sample-host
+#     operator-key: menagerie-operator
 #   xolotl:
 #     url: http://xolotl:8317
 #     key-secret:

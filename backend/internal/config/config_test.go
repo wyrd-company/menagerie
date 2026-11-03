@@ -102,6 +102,65 @@ provisioning:
       path: menagerie/xolotl
 `
 
+var sampleHostKey = "SHA256:" + strings.Repeat("a", 43)
+
+var provisioningWyrwood = `
+provisioning:
+  wyrwood:
+    controller: ssh://controller.example.test:2222
+    host-key: ` + sampleHostKey + `
+    agent: sample-host
+    operator-key: sample-operator
+`
+
+func TestParseProvisioningWyrwood(t *testing.T) {
+	cfg, err := Parse([]byte(valid + provisioningWyrwood))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := cfg.Provisioning.Wyrwood
+	if w.Controller != "ssh://controller.example.test:2222" || w.HostKey != sampleHostKey ||
+		w.Agent != "sample-host" || w.OperatorKey != "sample-operator" {
+		t.Fatalf("wyrwood = %+v", w)
+	}
+	if cfg.Provisioning.Xolotl != nil {
+		t.Fatalf("xolotl = %+v", cfg.Provisioning.Xolotl)
+	}
+	cfg, err = Parse([]byte(valid + provisioningXolotl))
+	if err != nil || cfg.Provisioning.Wyrwood != nil {
+		t.Fatalf("section without wyrwood: %+v %v", cfg.Provisioning, err)
+	}
+}
+
+func TestProvisioningWyrwoodErrors(t *testing.T) {
+	const field = "provisioning.wyrwood."
+	line := func(text string) string { return "    " + text + "\n" }
+	controller := line("controller: ssh://controller.example.test:2222")
+	hostKey := line("host-key: " + sampleHostKey)
+	agent := line("agent: sample-host")
+	operatorKey := line("operator-key: sample-operator")
+	cases := []struct{ name, section, want string }{
+		{"no controller", strings.Replace(provisioningWyrwood, controller, "", 1), field + "controller is required"},
+		{"no host key", strings.Replace(provisioningWyrwood, hostKey, "", 1), field + "host-key is required"},
+		{"no agent", strings.Replace(provisioningWyrwood, agent, "", 1), field + "agent is required"},
+		{"no operator key", strings.Replace(provisioningWyrwood, operatorKey, "", 1), field + "operator-key is required"},
+		{"controller form", strings.Replace(provisioningWyrwood, "ssh://controller.example.test:2222", "controller.example.test:2222", 1), field + "controller must be"},
+		{"controller user", strings.Replace(provisioningWyrwood, "ssh://controller", "ssh://user@controller", 1), field + "controller must be"},
+		{"host key form", strings.Replace(provisioningWyrwood, sampleHostKey, "ssh-ed25519", 1), field + "host-key must be"},
+		{"agent form", strings.Replace(provisioningWyrwood, "agent: sample-host", "agent: sample/host", 1), field + "agent must be"},
+		{"operator key form", strings.Replace(provisioningWyrwood, "operator-key: sample-operator", `operator-key: "sample\noperator"`, 1), field + "operator-key must be"},
+		{"private key in the file", strings.Replace(provisioningWyrwood, operatorKey, operatorKey+line("private-key: secret-value"), 1), "has no field private-key"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Parse([]byte(valid + test.section))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestParseProvisioningXolotl(t *testing.T) {
 	cfg, err := Parse([]byte(valid + provisioningXolotl))
 	if err != nil {
