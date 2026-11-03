@@ -178,26 +178,81 @@ func TestARetireThatFailsChangesNothing(t *testing.T) {
 	}
 }
 
-// A retire that fails leaves the devcontainer running, so no message says that
-// it did not start or that it is stopped.
-func TestAFailedRetireIsNotAFailedStart(t *testing.T) {
-	failed := &provisioning.RetireError{Err: errors.New("refused")}
+// A verify or retire that fails comes after the start, so no message says that
+// the devcontainer did not start or that it is stopped.
+func TestAFailureAfterTheStartIsNotAFailedStart(t *testing.T) {
+	failed := &provisioning.AfterStartError{Step: "a later step", Err: errors.New("refused")}
 	w := newWorld(t)
 	w.rt.failOn = map[string]error{"up": failed}
-	if _, snap := w.create(t, "alpha"); snap.State != jobs.Failed || strings.Contains(snap.Error.Message, "did not start") || !strings.Contains(snap.Error.Message, "the devcontainer is running") {
+	if _, snap := w.create(t, "alpha"); snap.State != jobs.Failed || strings.Contains(snap.Error.Message, "did not start") || !strings.Contains(snap.Error.Message, "the devcontainer started") {
 		t.Fatalf("create: %+v %+v", snap, snap.Error)
 	}
 	w.rt.failOn = map[string]error{"rebuild": failed}
-	if _, snap := w.upgraded(t); snap.State != jobs.Failed || strings.Contains(snap.Error.Message, "did not rebuild") || !strings.Contains(snap.Error.Message, "the devcontainer is running") {
+	if _, snap := w.upgraded(t); snap.State != jobs.Failed || strings.Contains(snap.Error.Message, "did not rebuild") || !strings.Contains(snap.Error.Message, "the devcontainer started") {
 		t.Fatalf("upgrade: %+v %+v", snap, snap.Error)
 	}
 	w.rt.failOn = map[string]error{"rebuild": failed}
 	w.contribute(t, "alpha", "feature", map[string]string{"file": "content\n"})
 	job, snap := w.applyBranch(t, "alpha", "feature")
-	if snap.State != jobs.Failed || strings.Contains(snap.Error.Message, "did not rebuild") || !strings.Contains(snap.Error.Message, "the devcontainer is running") {
+	if snap.State != jobs.Failed || strings.Contains(snap.Error.Message, "did not rebuild") || !strings.Contains(snap.Error.Message, "the devcontainer started") {
 		t.Fatalf("apply: %+v %+v", snap, snap.Error)
 	}
 	if strings.Contains(strings.Join(events(job, "log"), "\n"), StoppedNotice) {
 		t.Error("the console says the devcontainer is stopped")
+	}
+}
+
+// breakRemote makes every transfer to the workspace repository fail, and
+// returns the function that repairs it.
+func (w *world) breakRemote(t *testing.T) func() {
+	t.Helper()
+	aside := w.remote + ".aside"
+	if err := os.Rename(w.remote, aside); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.Rename(aside, w.remote); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A backup that fails after the root commit still owes the archive, and no
+// later job's push may replace the branch without it.
+func TestAFailedArchiveIsNotLostToALaterPush(t *testing.T) {
+	w := newWorld(t)
+	if _, snap := w.create(t, "alpha"); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v", snap)
+	}
+	first := w.contribute(t, "alpha", "alpha", map[string]string{"file": "content\n"})
+	if err := os.RemoveAll(filepath.Join(w.root, "alpha")); err != nil {
+		t.Fatal(err)
+	}
+	job := w.startJob(t, "create", "alpha", "sample-v1")
+	waitWaiting(t, job, 0)
+	repair := w.breakRemote(t)
+	w.answer(t, job, sessionAsking)
+	snap := waitEnded(t, job)
+	repair()
+	if snap.State != jobs.Failed || snap.Error.Kind != KindBackupFailed {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if got := w.remoteBranches(t)["alpha"]; got != first {
+		t.Fatalf("branch %s, want %s", got, first)
+	}
+	retry, snap := w.start(t, "alpha")
+	if snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if slices.Contains(phases(retry), "commit") {
+		t.Errorf("committed again: %v", phases(retry))
+	}
+	branches := w.remoteBranches(t)
+	found := false
+	for name, hash := range branches {
+		found = found || (strings.HasPrefix(name, backup.ArchivePrefix+"alpha-") && hash == first)
+	}
+	if !found || branches["alpha"] == first {
+		t.Fatalf("branches %v, first %s", branches, first)
 	}
 }

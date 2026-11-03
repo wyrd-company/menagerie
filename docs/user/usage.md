@@ -71,7 +71,8 @@ from a workspace that was deleted, the `backup` phase first copies it to
 `archive/<name>-<UTC stamp>`, and the console names the copy.
 
 When a create fails after `generate`, **Start** finishes it: the commit and
-backup that did not run, then the devcontainer. A second create of that name is
+backup that did not run, then the devcontainer. Until its first backup lands, any
+job's first push copies the earlier branch first. A second create of that name is
 refused while the folder exists.
 
 ### A workspace with a provisioning declaration
@@ -106,10 +107,11 @@ prepared](install.md#provisioning). The console shows these phases in a create:
 
 Each step is safe to repeat. A job that fails leaves what it finished, and
 **Start** continues from what is missing: it does not rotate the key or write
-the binding again. A rebuild, an upgrade's rebuild and an apply-branch's rebuild
-run the same steps without the commit and backup. A start of a container that
-exists goes on when Xolotl cannot be reached, with a note in the console; any
-other failure of a step fails the job.
+the binding again. It replaces a container that has a name the definition no
+longer declares, because a rebuild that failed left it. A rebuild, an upgrade's
+rebuild and an apply-branch's rebuild run the same steps without the commit and
+backup. A start of a container that exists goes on when Xolotl cannot be
+reached, with a note in the console; any other failure of a step fails the job.
 
 Before an upgrade or an apply-branch changes the definition, Menagerie records the
 container name and key it declares. A job that ends with the devcontainer started

@@ -14,7 +14,8 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
+
+	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
@@ -55,6 +56,9 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 	if err := backup.Init(c.folder, c.name); err != nil {
 		return fmt.Errorf("%w; %s", err, c.recovery("holds what the repository initialization left"))
 	}
+	if err := backup.MarkCreate(c.folder); err != nil {
+		return fmt.Errorf("%w; %s", err, c.recovery("holds only the initialized repository"))
+	}
 
 	run.Phase("generate")
 	grant, err := c.w.grantHooks(ctx, run, c.folder, c.template, throwaway.TargetFolder)
@@ -90,8 +94,8 @@ type saving struct {
 	folder  string
 	output  backup.Output
 	message string
-	// commit is the first commit, once it exists.
-	commit *backup.Commit
+	// commit is the first commit, once its backup landed.
+	commit *plumbing.Hash
 	// failure is why the save failed.
 	failure error
 }
@@ -110,39 +114,52 @@ func (s *saving) finish(ctx context.Context, run *jobs.Run, before string) error
 	case s.commit == nil:
 		return api.ContainerFailure(fmt.Errorf("%w; %s", err, before))
 	}
-	return api.ContainerFailure(fmt.Errorf("the workspace was generated and backed up as %s, but its devcontainer did not start: %w", s.commit.Hash, err))
+	return api.ContainerFailure(fmt.Errorf("the workspace was generated and backed up as %s, but its devcontainer did not start: %w", *s.commit, err))
 }
 
-// started says that the devcontainer did start and only retiring failed.
+// started says that the devcontainer did start and a step after it failed.
 func started(err error) bool {
-	var retire *provisioning.RetireError
-	return errors.As(err, &retire)
+	var after *provisioning.AfterStartError
+	return errors.As(err, &after)
 }
 
 // save commits the workspace as the root of its branch and backs it up.
 func (s *saving) save(ctx context.Context, run *jobs.Run) error {
-	run.Phase("commit")
-	commit, err := backup.CommitRoot(s.folder, s.name, s.output, s.message, run.Log("commit: "))
+	commit, err := s.rootCommit(run)
 	if err != nil {
 		s.failure = &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("the workspace was generated with its applied record, but committing it failed: %w; the workspace was not started; the workspace folder %s holds the generated files; start the workspace when this is fixed, or inspect the folder and remove it before creating workspace %s again", err, s.folder, s.name)}
 		return s.failure
 	}
-	fmt.Fprintf(run.Log(""), "committed %s as the root of branch %s\n", commit.Hash, s.name)
-
 	run.Phase("backup")
-	archived, err := s.w.opts.Remote.Archive(ctx, s.folder, s.name, time.Now(), run.Log("backup: "))
-	if err == nil && archived != "" {
-		fmt.Fprintf(run.Log(""), "kept the earlier backup of branch %s as %s\n", s.name, archived)
-	}
-	if err == nil {
-		err = push(ctx, s.w.opts.Remote, s.folder, s.name, run)
-	}
-	if err != nil {
-		s.failure = &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("the workspace was generated and committed as %s, but its backup failed: %w; the workspace was not started; start it with the start operation, and the next upgrade pushes its branch again", commit.Hash, err)}
+	if err := push(ctx, s.w.opts.Remote, s.folder, s.name, run); err != nil {
+		s.failure = &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("the workspace was generated and committed as %s, but its backup failed: %w; the workspace was not started; start it with the start operation, which backs it up first", commit, err)}
 		return s.failure
 	}
 	s.commit = &commit
 	return nil
+}
+
+// rootCommit makes the workspace's root commit, or finds the one an earlier
+// attempt made.
+func (s *saving) rootCommit(run *jobs.Run) (plumbing.Hash, error) {
+	if err := backup.MarkCreate(s.folder); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	made, err := backup.CreateCommit(s.folder)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if !made.IsZero() {
+		fmt.Fprintf(run.Log(""), "the root of branch %s is already committed as %s\n", s.name, made)
+		return made, nil
+	}
+	run.Phase("commit")
+	commit, err := backup.CommitRoot(s.folder, s.name, s.output, s.message, run.Log("commit: "))
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	fmt.Fprintf(run.Log(""), "committed %s as the root of branch %s\n", commit.Hash, s.name)
+	return commit.Hash, backup.RecordCreateCommit(s.folder, commit.Hash)
 }
 
 // recovery is the manual recovery guidance of a create that failed before its

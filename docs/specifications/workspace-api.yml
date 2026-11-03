@@ -184,9 +184,9 @@ description: >-
   generation fails as `generation-failed`; the folder keeps the files
   written before the failure and has no applied record. A failed create
   never removes its folder, and a second create of that workspace is
-  refused while the folder exists. A folder with an applied record and no
-  commit is finished by the workspace's next `start`, which runs what
-  remains of the create; any other failed create needs manual recovery, by
+  refused while the folder exists. A folder with an applied record whose
+  first backup has not landed, or with no commit, is finished by the
+  workspace's next `start`, which runs what remains of the create; any other failed create needs manual recovery, by
   inspecting the folder and then removing it. On success the service commits
   the output as the branch's first commit, which has no parent, force-pushes
   it to the workspace repository and starts the devcontainer. A branch of the

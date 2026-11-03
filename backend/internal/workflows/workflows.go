@@ -159,22 +159,22 @@ func (w *Workflows) upgrade(req api.JobRequest) (jobsRunner, error) {
 	return (&upgrading{w: w, name: req.Workspace, folder: folder, template: req.TemplateID}).run, nil
 }
 
-// start starts a workspace. A workspace whose create failed after generation
-// has an applied record and no commit, and its start finishes that create.
+// start starts a workspace, and finishes a create that failed after
+// generation.
 func (w *Workflows) start(req api.JobRequest) (jobsRunner, error) {
 	folder, err := api.ExistingFolder(w.opts.Root, req.Workspace)
 	if err != nil {
 		return nil, err
 	}
 	return func(ctx context.Context, run *jobs.Run) error {
-		pending, err := backup.Uncommitted(folder, req.Workspace)
+		pending, err := backup.CreatePending(folder, req.Workspace)
 		if err != nil {
 			return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("reading the workspace repository failed: %w; the devcontainer was not started", err)}
 		}
 		if !pending {
 			return api.ContainerFailure(w.opts.Runtime.Start(ctx, folder, run))
 		}
-		fmt.Fprintf(run.Log(""), "the workspace has an applied record and no commit; finishing its create\n")
+		fmt.Fprintf(run.Log(""), "the workspace's create did not finish; finishing it\n")
 		saving := &saving{w: w, name: req.Workspace, folder: folder,
 			output:  backup.Output{Record: backup.RecordName},
 			message: fmt.Sprintf("Create workspace %s", req.Workspace),

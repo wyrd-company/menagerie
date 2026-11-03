@@ -199,3 +199,31 @@ func TestAContainerNameAnotherContainerHoldsIsRefused(t *testing.T) {
 		t.Error("bound a taken name")
 	}
 }
+
+// A rebuild that failed left the container under its old name, so a start
+// replaces it and does not wait for a report that never comes.
+func TestAStartReplacesAContainerWithAnOldName(t *testing.T) {
+	h := newHarness(t)
+	suffix := h.runID[len(h.runID)-12:]
+	old, name := "menagerie-test-old-"+suffix, "menagerie-test-new-"+suffix
+	folder := h.workspace("renamed", map[string]string{".devcontainer/devcontainer.json": provisioned(old)})
+	if err := h.rt.Start(h.ctx, folder, &logProgress{t: t}); err != nil {
+		t.Fatal(err)
+	}
+	first := h.status(folder)
+	h.write(folder, map[string]string{".devcontainer/devcontainer.json": provisioned(name)})
+	steps := provisioning.New(provisioning.Options{
+		Clients: provisioning.Clients{Bindings: &reportingAgent{h: h, name: name}, Wait: 30 * time.Second},
+		Runtime: provisioning.Adapt(h.rt), Records: provisioning.Records{Folder: t.TempDir()}, Poll: 100 * time.Millisecond,
+	})
+	if err := steps.Start(h.ctx, folder, &logProgress{t: t}); err != nil {
+		t.Fatal(err)
+	}
+	replaced := h.status(folder)
+	if replaced.ContainerID == first.ContainerID || replaced.State != devcontainer.StateRunning {
+		t.Fatalf("%+v after %+v", replaced, first)
+	}
+	if h.inspect(replaced.ContainerID).Name != "/"+name {
+		t.Fatalf("name %s", h.inspect(replaced.ContainerID).Name)
+	}
+}

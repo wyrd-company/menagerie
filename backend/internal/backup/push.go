@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
@@ -47,7 +48,9 @@ type Remote struct {
 // Push force-pushes the workspace branch to the branch of the same name in
 // the workspace repository, replacing whatever it held. It reads the
 // remote's advertised refs, as every push does, and fetches nothing.
-// Pushed is false when the remote branch already held the local commit.
+// Pushed is false when the remote branch already held the local commit. The
+// first push of a create, from any job, first copies a deleted workspace's
+// branch of that name, and ends the create's mark only when it has landed.
 func (r *Remote) Push(ctx context.Context, folder, workspace string, progress io.Writer) (pushed bool, err error) {
 	repo, branch, err := open(folder, workspace)
 	if err != nil {
@@ -56,6 +59,21 @@ func (r *Remote) Push(ctx context.Context, folder, workspace string, progress io
 	if _, err := repo.Reference(branch, false); err != nil {
 		return false, fmt.Errorf("workspace branch %s has no commit: %w", branch.Short(), err)
 	}
+	unfinished := createUnfinished(folder)
+	if unfinished {
+		archived, err := r.Archive(ctx, folder, workspace, time.Now(), progress)
+		if err != nil {
+			return false, err
+		}
+		if archived != "" && progress != nil {
+			fmt.Fprintf(progress, "kept the earlier backup of branch %s as %s\n", branch.Short(), archived)
+		}
+	}
+	defer func() {
+		if err == nil && unfinished {
+			err = os.Remove(markerPath(folder))
+		}
+	}()
 	s, err := r.open(ctx, progress)
 	if err != nil {
 		return false, err

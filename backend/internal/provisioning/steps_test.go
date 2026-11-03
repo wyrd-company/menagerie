@@ -34,8 +34,10 @@ type host struct {
 	state, container string
 	// created is the id Create gives; rebuilds replace container with it.
 	created string
-	holders map[string]string
-	failOn  map[string]error
+	// containerName is the name of the workspace's container.
+	containerName string
+	holders       map[string]string
+	failOn        map[string]error
 	// bound is the binding of each name.
 	bound map[string]wyrwood.Selection
 	// status gives a binding's status for each read; nil is a ready binding of
@@ -50,7 +52,7 @@ type host struct {
 
 func newHost(t *testing.T) *host {
 	return &host{
-		t: t, state: devcontainer.StateNoContainer, created: "created-id",
+		t: t, state: devcontainer.StateNoContainer, created: "created-id", containerName: "container-sample",
 		definitions: map[string]devcontainer.Definition{"/root/sample": definition(sampleBlock)},
 		holders:     map[string]string{}, failOn: map[string]error{},
 		bound: map[string]wyrwood.Selection{}, issued: map[string]bool{},
@@ -100,6 +102,9 @@ func (h *host) Stop(context.Context, string, devcontainer.Progress) error {
 	return nil
 }
 func (h *host) Rebuild(context.Context, string, devcontainer.Progress) error {
+	h.Lock()
+	h.containerName = ""
+	h.Unlock()
 	return h.note("plain-rebuild")
 }
 func (h *host) Mounting(context.Context, string) ([]string, error) { return nil, nil }
@@ -112,8 +117,17 @@ func (h *host) Definition(folder string) (devcontainer.Definition, error) {
 	return h.definitions[folder], h.definedErr
 }
 func (h *host) ContainerHolder(_ context.Context, name string) (string, bool, error) {
-	folder, found := h.holders[name]
-	return folder, found, h.failOn["holder"]
+	h.Lock()
+	defer h.Unlock()
+	if folder, found := h.holders[name]; found {
+		return folder, true, h.failOn["holder"]
+	}
+	// The workspace's container has the name it declares, unless a test says
+	// that it has another.
+	if h.container != "" && name == h.containerName {
+		return folder, true, h.failOn["holder"]
+	}
+	return "", false, h.failOn["holder"]
 }
 func (h *host) BeginStart(string, devcontainer.Progress) (BringUp, error) {
 	return &fakeBringUp{h: h}, h.note("begin-start")
@@ -137,7 +151,7 @@ func (b *fakeBringUp) Create(context.Context) (string, error) {
 	b.h.Lock()
 	defer b.h.Unlock()
 	if b.rebuild || b.h.container == "" {
-		b.h.container, b.h.state = b.h.created, devcontainer.StateStopped
+		b.h.container, b.h.state, b.h.containerName = b.h.created, devcontainer.StateStopped, "container-sample"
 	}
 	return b.h.container, nil
 }
@@ -349,7 +363,7 @@ func TestAMissingSectionFailsBeforeAnyWrite(t *testing.T) {
 			if !strings.Contains(err.Error(), "provisioning."+name) {
 				t.Errorf("message %v", err)
 			}
-			h.wantCalls(t, "begin-start")
+			h.wantCalls(t)
 		})
 	}
 }
@@ -399,7 +413,7 @@ func TestANameOrKeyAnotherWorkspaceHoldsIsRefused(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("message %v, want %q", err, tc.want)
 			}
-			h.wantCalls(t, "begin-start")
+			h.wantCalls(t)
 		})
 	}
 }
@@ -687,8 +701,12 @@ func TestVerifyFailsAContainerThatDoesNotRun(t *testing.T) {
 	}
 	err := h.steps().Start(context.Background(), folder, h)
 	wantKind(t, err, KindNotReady)
-	if !strings.Contains(err.Error(), "its running container and sockets") {
+	if !strings.Contains(err.Error(), "its running container and sockets") || !strings.Contains(err.Error(), "the devcontainer started") {
 		t.Errorf("message %v", err)
+	}
+	var after *AfterStartError
+	if !errors.As(err, &after) {
+		t.Errorf("%T", err)
 	}
 	if h.phases[len(h.phases)-1] != "verify" {
 		t.Errorf("phases %v", h.phases)
@@ -882,7 +900,7 @@ func TestAFailureWhileConsumingFailsTheJobAndKeepsTheRest(t *testing.T) {
 	}
 	h.failOn["unbind container-b"] = errors.New("refused")
 	err := s.Start(context.Background(), folder, h)
-	if err == nil || !strings.Contains(err.Error(), "the devcontainer is running") {
+	if err == nil || !strings.Contains(err.Error(), "the devcontainer started") {
 		t.Fatalf("%v", err)
 	}
 	kept, _ := s.opts.Records.Read("sample")
@@ -952,4 +970,54 @@ func TestAnUnreadableRecordFailsTheJob(t *testing.T) {
 	if err := s.Start(context.Background(), folder, h); err == nil || !strings.Contains(err.Error(), "retirement record") {
 		t.Fatalf("%v", err)
 	}
+}
+
+func TestAStartReplacesAContainerAFailedRebuildLeft(t *testing.T) {
+	h := newHost(t)
+	h.state, h.container, h.containerName = devcontainer.StateRunning, "old-id", "container-old"
+	h.failOn["issue host-sample/sample"] = &xolotl.Error{Operation: "issue", Unreachable: true}
+	s := h.steps()
+	// Xolotl out of reach fails it, because the old container is not kept.
+	if err := s.Start(context.Background(), folder, h); err == nil {
+		t.Fatal("went on without Xolotl")
+	}
+	delete(h.failOn, "issue host-sample/sample")
+	h.calls = nil
+	if err := s.Start(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	h.wantCalls(t, "begin-rebuild", "check", "issue host-sample/sample", "bind container-sample", "build", "create", "up")
+	if h.container != "created-id" {
+		t.Errorf("container %s", h.container)
+	}
+	if !strings.Contains(h.logged.String(), "replacing it") {
+		t.Errorf("console %s", h.logged.String())
+	}
+}
+
+// The block's removal failed in its rebuild, so a start must not unbind what
+// the kept container still uses.
+func TestAStartWithoutABlockReplacesTheContainerBeforeItRetires(t *testing.T) {
+	h := newHost(t)
+	h.definitions[folder] = devcontainer.Definition{}
+	h.state, h.container = devcontainer.StateStopped, "old-id"
+	s := h.steps()
+	if err := s.opts.Records.Write("sample", Record{Names: []string{"container-sample"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	h.wantCalls(t, "plain-rebuild", "unbind container-sample")
+	assertNoRecord(t, s, "sample")
+}
+
+func TestAStartWithoutABlockOrARecordKeepsItsContainer(t *testing.T) {
+	h := newHost(t)
+	h.definitions[folder] = devcontainer.Definition{}
+	h.state, h.container = devcontainer.StateStopped, "old-id"
+	if err := h.steps().Start(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	h.wantCalls(t, "plain-start")
 }

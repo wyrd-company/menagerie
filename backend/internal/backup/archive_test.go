@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,31 +24,130 @@ func generated(t *testing.T, name string) string {
 	if err := Init(folder, name); err != nil {
 		t.Fatal(err)
 	}
+	if err := MarkCreate(folder); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(folder, RecordName), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return folder
 }
 
-func TestUncommittedIsAGeneratedWorkspaceWithNoCommit(t *testing.T) {
+func TestCreatePendingIsAGeneratedWorkspaceWithNoCommit(t *testing.T) {
 	folder := generated(t, "sample")
-	if pending, err := Uncommitted(folder, "sample"); err != nil || !pending {
+	if pending, err := CreatePending(folder, "sample"); err != nil || !pending {
 		t.Fatalf("after generation: %t %v", pending, err)
 	}
 	if _, err := CommitRoot(folder, "sample", Output{Record: RecordName}, "first", &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if pending, err := Uncommitted(folder, "sample"); err != nil || pending {
+	// Its create stays unfinished until its first backup lands.
+	if pending, err := CreatePending(folder, "sample"); err != nil || !pending {
 		t.Fatalf("after its commit: %t %v", pending, err)
+	}
+	remote := bareRemote(t)
+	if _, err := remote.Push(context.Background(), folder, "sample", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := CreatePending(folder, "sample"); err != nil || pending {
+		t.Fatalf("after its backup: %t %v", pending, err)
 	}
 }
 
-func TestUncommittedLeavesOtherFoldersAlone(t *testing.T) {
+// A push from any job keeps the earlier branch, and a later one fetches nothing.
+func TestTheFirstPushOfACreateArchivesAndLaterOnesDoNot(t *testing.T) {
+	remote := bareRemote(t)
+	ctx := context.Background()
+	first, firstHash := pushable(t, remote, "sample", "first")
+	if _, err := remote.Push(ctx, first, "sample", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := pushable(t, remote, "sample", "second")
+	var console bytes.Buffer
+	if _, err := remote.Push(ctx, second, "sample", &console); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(console.String(), "kept the earlier backup of branch sample as archive/sample-") {
+		t.Errorf("console %s", console.String())
+	}
+	bare, err := git.PlainOpen(remote.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := func() (n int) {
+		refs, err := bare.Branches()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = refs.ForEach(func(r *plumbing.Reference) error {
+			if strings.HasPrefix(r.Name().Short(), ArchivePrefix) && r.Hash() == firstHash {
+				n++
+			}
+			return nil
+		})
+		return n
+	}
+	if found() != 1 {
+		t.Fatal("no archive")
+	}
+	// The branch can move on the remote; only a create's first push copies it.
+	if err := os.WriteFile(filepath.Join(second, "file"), []byte("third"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CommitAll(second, "sample", "third", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.Push(ctx, second, "sample", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := bare.Branches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	_ = refs.ForEach(func(*plumbing.Reference) error { count++; return nil })
+	if count != 2 {
+		t.Errorf("%d branches", count)
+	}
+}
+
+func TestAPushThatFailsKeepsTheCreateUnfinished(t *testing.T) {
+	folder := generated(t, "sample")
+	if _, err := CommitRoot(folder, "sample", Output{Record: RecordName}, "first", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	remote := &Remote{URL: filepath.Join(t.TempDir(), "absent.git")}
+	if _, err := remote.Push(context.Background(), folder, "sample", &bytes.Buffer{}); err == nil {
+		t.Fatal("the push passed")
+	}
+	if pending, err := CreatePending(folder, "sample"); err != nil || !pending {
+		t.Fatalf("%t %v", pending, err)
+	}
+}
+
+func TestACreateKeepsItsRootCommit(t *testing.T) {
+	folder := generated(t, "sample")
+	if made, err := CreateCommit(folder); err != nil || !made.IsZero() {
+		t.Fatalf("%s %v", made, err)
+	}
+	hash := plumbing.NewHash("0123456789012345678901234567890123456789")
+	if err := RecordCreateCommit(folder, hash); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkCreate(folder); err != nil {
+		t.Fatal(err)
+	}
+	if made, err := CreateCommit(folder); err != nil || made != hash {
+		t.Fatalf("%s %v", made, err)
+	}
+}
+
+func TestCreatePendingLeavesOtherFoldersAlone(t *testing.T) {
 	plain := t.TempDir()
 	if err := os.WriteFile(filepath.Join(plain, RecordName), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if pending, err := Uncommitted(plain, "sample"); err != nil || pending {
+	if pending, err := CreatePending(plain, "sample"); err != nil || pending {
 		t.Errorf("no repository: %t %v", pending, err)
 	}
 	folder := filepath.Join(t.TempDir(), "sample")
@@ -57,7 +157,7 @@ func TestUncommittedLeavesOtherFoldersAlone(t *testing.T) {
 	if err := Init(folder, "sample"); err != nil {
 		t.Fatal(err)
 	}
-	if pending, err := Uncommitted(folder, "sample"); err != nil || pending {
+	if pending, err := CreatePending(folder, "sample"); err != nil || pending {
 		t.Errorf("no applied record: %t %v", pending, err)
 	}
 	other := generated(t, "sample")
@@ -68,12 +168,15 @@ func TestUncommittedLeavesOtherFoldersAlone(t *testing.T) {
 	if err := repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/another")); err != nil {
 		t.Fatal(err)
 	}
-	if pending, err := Uncommitted(other, "sample"); err != nil || pending {
+	if err := os.Remove(markerPath(other)); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := CreatePending(other, "sample"); err != nil || pending {
 		t.Errorf("HEAD on another branch: %t %v", pending, err)
 	}
 }
 
-func TestUncommittedFinishesADetachedHead(t *testing.T) {
+func TestCreatePendingFinishesADetachedHead(t *testing.T) {
 	folder := generated(t, "sample")
 	repo, err := git.PlainOpen(folder)
 	if err != nil {
@@ -82,7 +185,7 @@ func TestUncommittedFinishesADetachedHead(t *testing.T) {
 	if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.HEAD, plumbing.NewHash("0123456789012345678901234567890123456789"))); err != nil {
 		t.Fatal(err)
 	}
-	if pending, err := Uncommitted(folder, "sample"); err != nil || !pending {
+	if pending, err := CreatePending(folder, "sample"); err != nil || !pending {
 		t.Errorf("%t %v", pending, err)
 	}
 }

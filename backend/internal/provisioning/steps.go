@@ -198,20 +198,25 @@ func (s *Steps) run(ctx context.Context, folder string, p devcontainer.Progress,
 		return err
 	}
 	if err := s.consume(ctx, folder, declaration, p); err != nil {
-		return &RetireError{Err: err}
+		return &AfterStartError{Step: "retiring what the definition no longer declares", Err: err}
 	}
 	return nil
 }
 
-// RetireError says that a job started the devcontainer and then could not
-// consume the retirement record. It fails the job, with the devcontainer
-// running, and the record keeps the rest for the next job.
-type RetireError struct{ Err error }
-
-func (e *RetireError) Error() string {
-	return "the devcontainer is running, but retiring what the definition no longer declares failed: " + e.Err.Error()
+// AfterStartError says that a job started the devcontainer and a later step
+// failed: verify, or consuming the retirement record, which keeps the rest for
+// the next job. A job's message must not say that the devcontainer did not
+// start.
+type AfterStartError struct {
+	// Step says what failed after the start.
+	Step string
+	Err  error
 }
-func (e *RetireError) Unwrap() error { return e.Err }
+
+func (e *AfterStartError) Error() string {
+	return "the devcontainer started, but " + e.Step + " failed: " + e.Err.Error()
+}
+func (e *AfterStartError) Unwrap() error { return e.Err }
 
 // declaration reads a workspace's declaration. A definition that cannot be
 // read has none here, and the runtime's start reports it.
@@ -237,6 +242,16 @@ func (s *Steps) plain(ctx context.Context, folder string, p devcontainer.Progres
 			return err
 		}
 	}
+	if !kind.rebuild {
+		retired, err := s.retiredContainer(ctx, folder)
+		if err != nil {
+			return err
+		}
+		if retired {
+			fmt.Fprintln(p.Log(""), "the workspace's container has a name its definition no longer declares, so a rebuild that failed left it; replacing it")
+			kind.rebuild = true
+		}
+	}
 	if kind.rebuild {
 		return s.opts.Runtime.Rebuild(ctx, folder, p)
 	}
@@ -244,6 +259,26 @@ func (s *Steps) plain(ctx context.Context, folder string, p devcontainer.Progres
 }
 
 func (s *Steps) provision(ctx context.Context, folder string, d *Declaration, p devcontainer.Progress, kind bringKind) error {
+	if err := s.available(d); err != nil {
+		return err
+	}
+	if err := s.notTaken(ctx, folder, d); err != nil {
+		return err
+	}
+	before, err := s.opts.Runtime.Status(ctx, folder)
+	if err != nil {
+		return err
+	}
+	if !kind.rebuild {
+		behind, err := s.leftBehind(ctx, folder, d.ContainerName, before)
+		if err != nil {
+			return err
+		}
+		if behind {
+			fmt.Fprintf(p.Log(""), "the workspace's container does not have the declared name %s, so a rebuild that failed left it; replacing it\n", d.ContainerName)
+			kind.rebuild = true
+		}
+	}
 	begin := s.opts.Runtime.BeginStart
 	if kind.rebuild {
 		begin = s.opts.Runtime.BeginRebuild
@@ -252,17 +287,7 @@ func (s *Steps) provision(ctx context.Context, folder string, d *Declaration, p 
 	if err != nil {
 		return err
 	}
-	if err := s.available(d); err != nil {
-		return err
-	}
-	if err := s.notTaken(ctx, folder, d); err != nil {
-		return err
-	}
 	if err := s.opts.Runtime.CheckHostPrerequisites(ctx, folder, p); err != nil {
-		return err
-	}
-	before, err := s.opts.Runtime.Status(ctx, folder)
-	if err != nil {
 		return err
 	}
 	// Only a start of a container that exists goes on without Xolotl.
@@ -299,10 +324,49 @@ func (s *Steps) provision(ctx context.Context, folder string, d *Declaration, p 
 		return err
 	}
 	p.Phase("verify")
-	return s.await(ctx, d, p, "its running container and sockets", func(b operator.Binding) (bool, string) {
+	err = s.await(ctx, d, p, "its running container and sockets", func(b operator.Binding) (bool, string) {
 		ready, failure := containerReady(d, id)(b)
 		return ready && containerState(b, id) == "running", failure
 	})
+	if err != nil {
+		return &AfterStartError{Step: "verifying its sockets", Err: err}
+	}
+	return nil
+}
+
+// leftBehind says that a start finds a container that a failed rebuild had to
+// replace: the workspace has a container, and it does not have the name the
+// definition declares. A start would keep it, and its binding would never
+// report it.
+func (s *Steps) leftBehind(ctx context.Context, folder, name string, before devcontainer.Status) (bool, error) {
+	if before.State == devcontainer.StateNoContainer {
+		return false, nil
+	}
+	owner, found, err := s.opts.Runtime.ContainerHolder(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	return !found || owner != folder, nil
+}
+
+// retiredContainer says that the workspace's container still has a name its
+// record retires: a rebuild that would have removed the block failed, and
+// consuming the record would take what that container uses.
+func (s *Steps) retiredContainer(ctx context.Context, folder string) (bool, error) {
+	record, err := s.opts.Records.Read(filepath.Base(folder))
+	if err != nil {
+		return false, err
+	}
+	for _, name := range record.Names {
+		owner, found, err := s.opts.Runtime.ContainerHolder(ctx, name)
+		if err != nil {
+			return false, err
+		}
+		if found && owner == folder {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // available fails a declaration that needs a section configuration lacks.

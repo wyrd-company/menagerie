@@ -126,9 +126,12 @@ proposed-design:
     starts the devcontainer through devcontainer-builder. A branch of that name
     from a deleted workspace is the only copy left of it, so the backup first
     copies it to `archive/<name>-<UTC stamp>` and the console names the copy. With one, it runs
-    the provisioning steps, which include that commit and backup. A folder
-    with an applied record and no commit is committed and backed up by the
-    next start, so a start retries a create that failed after generation. A
+    the provisioning steps, which include that commit and backup. A create
+    is marked unfinished in its repository's Git folder until its first backup
+    lands. A folder with an applied record and that mark, or with no commit, is
+    committed and backed up by the next start, so a start retries a create that
+    failed after generation, and any job's first push copies the earlier
+    branch. A
     create stays refused while the folder exists; delete removes a folder
     whose generation failed.
   upgrade-flow: >-
@@ -332,7 +335,10 @@ proposed-design:
   provisioning-retries: >-
     Every step is safe to repeat. A job that fails leaves what it finished,
     and start is the retry: it finds the key, the binding and the container
-    and continues from what is missing. A `name` binding survives a rebuild,
+    and continues from what is missing. A start replaces a container that
+    has a name the definition no longer declares or does not declare, because
+    a rebuild that failed left it, and a binding of the new name would never
+    report it. A `name` binding survives a rebuild,
     because the container keeps its name: the agent keeps the directory
     through the gap and restores fresh sockets and a token. Before an upgrade
     or an apply-branch changes the definition, it adds the container name and

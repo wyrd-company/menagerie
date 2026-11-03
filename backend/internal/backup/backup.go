@@ -79,6 +79,54 @@ func Init(folder, workspace string) error {
 	return nil
 }
 
+// createMarker is a file in the repository's Git folder that exists from a
+// create's first step until its first backup lands. It keeps what a failed
+// create still owes across jobs and restarts: its root commit, and the copy
+// of a deleted workspace's branch. It is empty until the root commit exists,
+// and then holds the commit's hash. Git ignores it and no backup carries it.
+const createMarker = "menagerie-create"
+
+func markerPath(folder string) string { return filepath.Join(folder, git.GitDirName, createMarker) }
+
+// MarkCreate records that a create is unfinished. A marker that exists keeps
+// its commit.
+func MarkCreate(folder string) error {
+	file, err := os.OpenFile(markerPath(folder), os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("record the unfinished create: %w", err)
+	}
+	return file.Close()
+}
+
+// CreateCommit returns the root commit an unfinished create has made, or the
+// zero hash when it has made none.
+func CreateCommit(folder string) (plumbing.Hash, error) {
+	data, err := os.ReadFile(markerPath(folder))
+	if errors.Is(err, os.ErrNotExist) {
+		return plumbing.ZeroHash, nil
+	}
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("read the unfinished create: %w", err)
+	}
+	return plumbing.NewHash(strings.TrimSpace(string(data))), nil
+}
+
+// RecordCreateCommit keeps the create's root commit, so that a retry backs it
+// up and does not commit again.
+func RecordCreateCommit(folder string, commit plumbing.Hash) error {
+	if err := os.WriteFile(markerPath(folder), []byte(commit.String()+"\n"), 0o644); err != nil {
+		return fmt.Errorf("record the create's commit: %w", err)
+	}
+	return nil
+}
+
+// createUnfinished reports whether folder's create has not had its first
+// backup.
+func createUnfinished(folder string) bool {
+	_, err := os.Lstat(markerPath(folder))
+	return err == nil
+}
+
 // Commit is the result of a backup commit.
 type Commit struct {
 	// Hash is the workspace branch's commit after the call.
@@ -482,15 +530,19 @@ func (n nestedRepositories) contains(rel string) bool {
 // RecordName is the applied record's name in a workspace folder.
 const RecordName = ".toha.json"
 
-// Uncommitted reports whether folder holds a generated workspace with no
-// commit: an applied record, a workspace branch with no commit, and a HEAD
-// that names that branch or is detached, as a template's hook can leave it. A
-// repository on another branch is someone else's, and stays as it is.
-func Uncommitted(folder, workspace string) (bool, error) {
+// CreatePending reports whether folder holds a generated workspace whose
+// create a start can finish: an applied record, and a create that is marked
+// unfinished or a workspace branch with no commit. With no mark, HEAD must name
+// that branch or be detached, as a template's hook can leave it. A repository
+// on another branch is someone else's, and stays as it is.
+func CreatePending(folder, workspace string) (bool, error) {
 	if _, err := os.Lstat(filepath.Join(folder, RecordName)); errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	} else if err != nil {
 		return false, err
+	}
+	if createUnfinished(folder) {
+		return true, nil
 	}
 	repo, branch, err := open(folder, workspace)
 	if errors.Is(err, git.ErrRepositoryNotExists) {
