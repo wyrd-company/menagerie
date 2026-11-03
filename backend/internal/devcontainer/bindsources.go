@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 
+	dockeropts "github.com/docker/cli/opts"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
@@ -223,27 +224,19 @@ func mountSource(raw any) string {
 	return ""
 }
 
-// mountStringSource reads a mount string as devcontainer-builder does:
-// comma-separated fields, spaces trimmed, the last of a field counting,
-// bind when the type ends empty, and no mount without a target.
+// mountStringSource reads a mount string with the Docker CLI's parser, as
+// devcontainer-builder does: a mount without a type is a volume, and a
+// string that parser refuses is no mount here, and the start reports it.
 func mountStringSource(s string) string {
-	var kind, source, target string
-	for _, field := range strings.Split(s, ",") {
-		key, value, _ := strings.Cut(strings.TrimSpace(field), "=")
-		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
-		switch key {
-		case "type":
-			kind = value
-		case "source", "src":
-			source = value
-		case "target", "dst", "destination":
-			target = value
-		}
-	}
-	if (kind != "" && kind != "bind") || target == "" {
+	var parsed dockeropts.MountOpt
+	if err := parsed.Set(s); err != nil {
 		return ""
 	}
-	return source
+	m := parsed.Value()[0]
+	if m.Type != "bind" || m.Target == "" {
+		return ""
+	}
+	return m.Source
 }
 
 // insideFolder returns source relative to folder, when source is folder or
@@ -302,6 +295,17 @@ func runArgValues(dc *spec.DevContainer, sub substitute.Context) runArgs {
 		if !strings.HasPrefix(arg, "-") || arg == "--" {
 			return out
 		}
+		// A cluster of short flags gives up its first letter, and a short
+		// flag that takes a value takes what is attached to it.
+		if len(arg) > 2 && arg[1] != '-' && arg[2] != '=' {
+			switch {
+			case strings.ContainsRune("ditP", rune(arg[1])):
+				args = slices.Insert(args, i+1, "-"+arg[2:])
+				arg = arg[:2]
+			case strings.ContainsRune("ahuwelpvmc", rune(arg[1])):
+				arg = arg[:2] + "=" + arg[2:]
+			}
+		}
 		flag, value, hasValue := strings.Cut(arg, "=")
 		if !hasValue {
 			if flagTakesNoValue(flag) {
@@ -323,13 +327,13 @@ func runArgValues(dc *spec.DevContainer, sub substitute.Context) runArgs {
 }
 
 // flagTakesNoValue is true for the runArgs flags that devcontainer-builder
-// reads without a value, combined short flags such as -it included.
+// reads without a value.
 func flagTakesNoValue(flag string) bool {
 	switch flag {
 	case "--init", "--privileged", "--read-only", "-P", "--publish-all",
 		"-d", "--detach", "-i", "--interactive", "-t", "--tty", "--rm", "--sig-proxy",
-		"--oom-kill-disable":
+		"--oom-kill-disable", "--no-healthcheck":
 		return true
 	}
-	return len(flag) > 2 && flag[1] != '-' && strings.Trim(flag[1:], "itd") == ""
+	return false
 }

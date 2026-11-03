@@ -89,7 +89,7 @@ description: >-
   limits each stay in a phase, counted from each entry into the phase
   (an answered interview enters `interview` again), inside any operation.
   The phase names are `read-definition`, `initialize-command`, `build`,
-  `remove-container`, `up`, `stop`, `interview`, `initialize-repository`,
+  `remove-container`, `create-container`, `up`, `stop`, `interview`, `initialize-repository`,
   `generate`, `host-prerequisites`, `fetch`, `plan`, `apply`, `commit`, `backup-local-changes`
   and `backup`.
   Template hooks run inside `generate` and `apply`. A duration is positive

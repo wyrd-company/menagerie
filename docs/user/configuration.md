@@ -246,7 +246,7 @@ once the cancelled work has stopped.
   `commit` or `apply-branch` its own limit, which replaces `default`.
 - `phases` limits each stay in a phase, inside any operation:
   `read-definition`, `initialize-command`, `build`, `remove-container`,
-  `up`, `stop`, `interview`, `initialize-repository`, `generate`,
+  `create-container`, `up`, `stop`, `interview`, `initialize-repository`, `generate`,
   `host-prerequisites`, `fetch`, `plan`, `apply`, `commit`,
   `backup-local-changes` or `backup`. Template hooks run inside `generate`
   and `apply`; a hook

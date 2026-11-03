@@ -73,7 +73,7 @@ description: >-
   `succeeded`, `failed` and `ended`. The slot is released when the job ends,
   and every client that sees the result event can start the next job.
   `phase` names the current step, for example `read-definition`,
-  `initialize-command`, `build`, `remove-container`, `up`, `stop`,
+  `initialize-command`, `build`, `remove-container`, `create-container`, `up`, `stop`,
   `interview`, `initialize-repository`, `generate`, `host-prerequisites`,
   `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,

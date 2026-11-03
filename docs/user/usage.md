@@ -70,6 +70,9 @@ Before each create, start, rebuild and upgrade, Menagerie creates any missing
 bind source folder inside the workspace folder, so a clone of a backup starts:
 Git keeps no empty folder. The job console names each folder it creates.
 
+A string in `mounts` is read as Docker's `--mount` value: without `type=` it
+is a volume, not a bind, and a space around a field or a value is refused.
+
 ![A template interview](assets/create-interview.png)
 
 ## Upgrade a workspace

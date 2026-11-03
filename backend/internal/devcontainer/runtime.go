@@ -167,74 +167,176 @@ func (r *Runtime) Rebuild(ctx context.Context, folder string, p Progress) error 
 }
 
 func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replace bool) error {
-	p.Phase("read-definition")
-	dc, err := spec.LoadFromWorkspace(folder)
+	b, err := r.begin(folder, p, replace)
 	if err != nil {
 		return err
 	}
-	local := newLocalEnvironment(r.opts.Environ(), r.opts.LocalEnv)
-	for _, name := range refusedLocalEnv(dc.Raw, r.opts.LocalEnv) {
-		fmt.Fprintf(p.Log(""), "localEnv %s is not in local-env; it resolves to its default value\n", name)
-	}
-	env := local.values
-	if err := createBindSources(ctx, dc, folder, env, p); err != nil {
+	if err := b.Build(ctx); err != nil {
 		return err
 	}
-	socket, err := r.workspaceSocket(dc, folder, p)
-	if err != nil {
-		return err
-	}
-	if err := r.initialize(ctx, dc, folder, local.process, env, p); err != nil {
-		return err
-	}
-	// The lockfile snapshot lives for the whole operation; the builder only
-	// prepares the next generation, which is published after Up succeeds.
-	lock, err := featureLockfile(dc)
-	if err != nil {
-		return err
-	}
-	held := false
-	if socket != "" && !replace {
-		if socket, err = r.keepContainer(ctx, folder, socket, p); err != nil {
-			return err
-		}
-		held = socket == ""
-	}
-	if socket != "" {
-		nameSocket(dc)
-	}
-	op := &operation{dc: dc, folder: folder, env: env, p: p, lock: lock, auth: r.credentials(ctx), socket: socket, socketHeld: held}
-	switch dc.Mode() {
-	case spec.ModeSingle:
-		err = r.upSingle(ctx, op, replace)
-	case spec.ModeCompose:
-		err = r.upCompose(ctx, op, replace)
-	default:
-		err = fmt.Errorf("unsupported devcontainer mode %s", dc.Mode())
-	}
-	if err != nil {
-		return err
-	}
-	if err := lock.Publish(ctx); err != nil {
-		return fmt.Errorf("publish feature lockfile: %w", err)
-	}
-	return nil
+	return b.Up(ctx)
 }
 
-// operation carries one start or rebuild's inputs.
-type operation struct {
-	dc     *spec.DevContainer
-	folder string
-	env    map[string]string
-	p      Progress
-	lock   *features.LockfileState
-	auth   RegistryAuth
+// BringUp is one start or rebuild as separate steps, so that a job can act
+// between them: before Build, and on the created container before Up. A job
+// calls Build once and then Up, with any number of Create calls between
+// them. Start and Rebuild run the same steps with nothing between them and
+// no Create.
+type BringUp struct {
+	r       *Runtime
+	dc      *spec.DevContainer
+	folder  string
+	env     map[string]string
+	process []string
+	p       Progress
+	lock    *features.LockfileState
+	auth    RegistryAuth
 	// socket is the host folder mounted at WorkspaceSocketTarget; empty
 	// mounts none.
 	socket string
 	// socketHeld is set when a start leaves the socket out to keep a
 	// container created without it.
 	socketHeld bool
+	// replace removes the workspace's containers once, before the first
+	// Create or Up.
+	replace bool
+	built   bool
+	// image is a single-container definition's image, and a Compose
+	// definition's primary image.
+	image string
+	// imageBuilt says Build built image; features are what it installed.
+	imageBuilt bool
+	features   []features.Resolved
+}
+
+// BeginStart reads the definition for a start.
+func (r *Runtime) BeginStart(folder string, p Progress) (*BringUp, error) {
+	return r.begin(folder, p, false)
+}
+
+// BeginRebuild reads the definition for a rebuild.
+func (r *Runtime) BeginRebuild(folder string, p Progress) (*BringUp, error) {
+	return r.begin(folder, p, true)
+}
+
+func (r *Runtime) begin(folder string, p Progress, replace bool) (*BringUp, error) {
+	p.Phase("read-definition")
+	dc, err := spec.LoadFromWorkspace(folder)
+	if err != nil {
+		return nil, err
+	}
+	local := newLocalEnvironment(r.opts.Environ(), r.opts.LocalEnv)
+	for _, name := range refusedLocalEnv(dc.Raw, r.opts.LocalEnv) {
+		fmt.Fprintf(p.Log(""), "localEnv %s is not in local-env; it resolves to its default value\n", name)
+	}
+	return &BringUp{r: r, dc: dc, folder: folder, env: local.values, process: local.process, p: p, replace: replace}, nil
+}
+
+// Build creates the missing bind source folders inside the workspace
+// folder, runs initializeCommand and builds the current definition when it
+// needs a build.
+func (b *BringUp) Build(ctx context.Context) error {
+	r := b.r
+	if err := createBindSources(ctx, b.dc, b.folder, b.env, b.p); err != nil {
+		return err
+	}
+	socket, err := r.workspaceSocket(b.dc, b.folder, b.p)
+	if err != nil {
+		return err
+	}
+	if err := r.initialize(ctx, b.dc, b.folder, b.process, b.env, b.p); err != nil {
+		return err
+	}
+	// The lockfile snapshot lives for the whole operation; the builder only
+	// prepares the next generation, which is published after Up succeeds.
+	if b.lock, err = featureLockfile(b.dc); err != nil {
+		return err
+	}
+	if socket != "" && !b.replace {
+		if socket, err = r.keepContainer(ctx, b.folder, socket, b.p); err != nil {
+			return err
+		}
+		b.socketHeld = socket == ""
+	}
+	if socket != "" {
+		nameSocket(b.dc)
+	}
+	b.socket = socket
+	b.auth = r.credentials(ctx)
+	switch b.dc.Mode() {
+	case spec.ModeSingle:
+		err = b.buildSingle(ctx)
+	case spec.ModeCompose:
+		err = b.buildCompose(ctx)
+	default:
+		err = fmt.Errorf("unsupported devcontainer mode %s", b.dc.Mode())
+	}
+	if err != nil {
+		return err
+	}
+	b.built = true
+	return nil
+}
+
+// Create creates the workspace's container without starting it and returns
+// the container's id, the primary service's for Compose. It runs no
+// lifecycle command. A rebuild removes the old container first. A later
+// Create or a start keeps the container or replaces it under the rule Up
+// applies, and Create never starts or stops a container that it keeps. A
+// bind that devcontainer-builder cannot create without a start, one with an
+// SELinux `z` or `Z` option or with `bind-create-src`, fails here and not in
+// Up.
+func (b *BringUp) Create(ctx context.Context) (string, error) {
+	if err := b.removeForRebuild(ctx); err != nil {
+		return "", err
+	}
+	b.p.Phase("create-container")
+	id, err := b.host(ctx, true)
+	if err != nil {
+		return "", fmt.Errorf("create container: %w", err)
+	}
+	return id, nil
+}
+
+// Up starts the workspace's container, creating it when none exists, runs
+// its lifecycle commands according to their markers and publishes the
+// feature lockfile.
+func (b *BringUp) Up(ctx context.Context) error {
+	if err := b.removeForRebuild(ctx); err != nil {
+		return err
+	}
+	b.p.Phase("up")
+	if _, err := b.host(ctx, false); err != nil {
+		return fmt.Errorf("up: %w", err)
+	}
+	if err := b.lock.Publish(ctx); err != nil {
+		return fmt.Errorf("publish feature lockfile: %w", err)
+	}
+	return nil
+}
+
+// removeForRebuild removes the old containers of a rebuild, once.
+func (b *BringUp) removeForRebuild(ctx context.Context) error {
+	if !b.built {
+		return errors.New("the definition was not built")
+	}
+	if !b.replace {
+		return nil
+	}
+	if err := b.r.removeWorkspaceContainers(ctx, b.folder, b.p); err != nil {
+		return err
+	}
+	b.replace = false
+	return nil
+}
+
+// host calls devcontainer-builder's Up for the definition's mode and
+// returns the container's id.
+func (b *BringUp) host(ctx context.Context, noStart bool) (string, error) {
+	if b.dc.Mode() == spec.ModeCompose {
+		return b.upCompose(ctx, noStart)
+	}
+	return b.upSingle(ctx, noStart)
 }
 
 // workspaceSocket ensures the workspace's socket and returns the folder to
@@ -362,97 +464,102 @@ func jobID(p Progress) string {
 	return ""
 }
 
-func (r *Runtime) upSingle(ctx context.Context, op *operation, replace bool) error {
-	dc, folder, p := op.dc, op.folder, op.p
-	image := dc.Image
-	var built *builder.Result
-	if needsBuild(dc) {
-		p.Phase("build")
-		image = ImageName(folder)
-		var err error
-		if built, err = builder.New().Build(ctx, r.builderOptions(op, []string{image})); err != nil {
-			return fmt.Errorf("build: %w", err)
-		}
+func (b *BringUp) buildSingle(ctx context.Context) error {
+	b.image = b.dc.Image
+	if !needsBuild(b.dc) {
+		return nil
 	}
-	if replace {
-		if err := r.removeWorkspaceContainers(ctx, folder, p); err != nil {
-			return err
-		}
-	}
-	p.Phase("up")
-	req := hostdocker.UpRequest{
-		Spec:                dc,
-		SpecPath:            dc.Path,
-		LocalWorkspace:      folder,
-		Image:               image,
-		ImageBuilt:          built != nil,
-		LocalEnv:            op.env,
-		RemoteUserUIDUpdate: folderOwner(folder),
-	}
-	if built != nil {
-		req.Features = built.Features
-	}
-	if op.socket != "" {
-		req.Mounts = append(req.Mounts, mount.Mount{Type: mount.TypeBind, Source: op.socket, Target: WorkspaceSocketTarget, ReadOnly: true})
-	}
-	res, err := r.dockerHost(p, op.auth).Up(ctx, req)
-	// Up can create the container and then fail, in a lifecycle command
-	// for example; its result still says so.
-	if res != nil {
-		op.noteCreated(res.CreatedThisCall)
-	}
-	if err != nil {
-		return fmt.Errorf("up: %w", err)
-	}
-	fmt.Fprintf(p.Log(""), "container %s up (created=%t started=%t)\n", shortID(res.ContainerID), res.CreatedThisCall, res.StartedThisCall)
-	return nil
-}
-
-func (r *Runtime) upCompose(ctx context.Context, op *operation, replace bool) error {
-	dc, folder, p := op.dc, op.folder, op.p
-	p.Phase("build")
-	primary, err := dockercompose.BuildPrimaryImage(ctx, dockercompose.BuildPrimaryInputs{Spec: dc, Workspace: folder, LocalEnv: op.env, BuilderOptions: r.builderOptions(op, nil)})
+	b.p.Phase("build")
+	b.image = ImageName(b.folder)
+	built, err := builder.New().Build(ctx, b.builderOptions([]string{b.image}))
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
-	if replace {
-		if err := r.removeWorkspaceContainers(ctx, folder, p); err != nil {
-			return err
-		}
+	b.imageBuilt, b.features = true, built.Features
+	return nil
+}
+
+func (b *BringUp) buildCompose(ctx context.Context) error {
+	b.p.Phase("build")
+	primary, err := dockercompose.BuildPrimaryImage(ctx, dockercompose.BuildPrimaryInputs{Spec: b.dc, Workspace: b.folder, LocalEnv: b.env, BuilderOptions: b.builderOptions(nil)})
+	if err != nil {
+		return fmt.Errorf("build: %w", err)
 	}
-	p.Phase("up")
-	req := dockercompose.UpRequest{
-		Spec:           dc,
-		SpecPath:       dc.Path,
-		LocalWorkspace: folder,
-		PrimaryImage:   primary.Image,
-		ImageBuilt:     primary.BuildResult != nil,
-		LocalEnv:       op.env,
-	}
+	b.image = primary.Image
 	if primary.BuildResult != nil {
-		req.Features = primary.BuildResult.Features
+		b.imageBuilt, b.features = true, primary.BuildResult.Features
 	}
-	if op.socket != "" {
-		req.Mounts = append(req.Mounts, "type=bind,source="+op.socket+",target="+WorkspaceSocketTarget+",readonly")
+	return nil
+}
+
+func (b *BringUp) upSingle(ctx context.Context, noStart bool) (string, error) {
+	req := hostdocker.UpRequest{
+		Spec:                b.dc,
+		SpecPath:            b.dc.Path,
+		LocalWorkspace:      b.folder,
+		Image:               b.image,
+		ImageBuilt:          b.imageBuilt,
+		Features:            b.features,
+		LocalEnv:            b.env,
+		RemoteUserUIDUpdate: folderOwner(b.folder),
+		NoStart:             noStart,
 	}
-	res, err := r.composeHost(p, op.auth).Up(ctx, req)
+	if b.socket != "" {
+		req.Mounts = append(req.Mounts, mount.Mount{Type: mount.TypeBind, Source: b.socket, Target: WorkspaceSocketTarget, ReadOnly: true})
+	}
+	res, err := b.r.dockerHost(b.p, b.auth).Up(ctx, req)
+	// Up can create the container and then fail, in a lifecycle command
+	// for example; its result still says so.
+	if res != nil {
+		b.noteCreated(res.CreatedThisCall)
+	}
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(b.p.Log(""), "container %s %s (created=%t started=%t)\n", shortID(res.ContainerID), doneWord(noStart), res.CreatedThisCall, res.StartedThisCall)
+	return res.ContainerID, nil
+}
+
+func (b *BringUp) upCompose(ctx context.Context, noStart bool) (string, error) {
+	req := dockercompose.UpRequest{
+		Spec:           b.dc,
+		SpecPath:       b.dc.Path,
+		LocalWorkspace: b.folder,
+		PrimaryImage:   b.image,
+		ImageBuilt:     b.imageBuilt,
+		Features:       b.features,
+		LocalEnv:       b.env,
+		NoStart:        noStart,
+	}
+	if b.socket != "" {
+		req.Mounts = append(req.Mounts, "type=bind,source="+b.socket+",target="+WorkspaceSocketTarget+",readonly")
+	}
+	res, err := b.r.composeHost(b.p, b.auth).Up(ctx, req)
 	// Up can recreate the primary and then fail, in a lifecycle command
 	// for example; its result still says so.
 	if res != nil {
-		op.noteCreated(slices.Contains(res.CreatedThisCall, dc.Service) || slices.Contains(res.RecreatedThisCall, dc.Service))
+		b.noteCreated(slices.Contains(res.CreatedThisCall, b.dc.Service) || slices.Contains(res.RecreatedThisCall, b.dc.Service))
 	}
 	if err != nil {
-		return fmt.Errorf("up: %w", err)
+		return "", err
 	}
-	fmt.Fprintf(p.Log(""), "compose project %s up (primary %s, created %v, recreated %v)\n", res.ProjectName, shortID(res.PrimaryContainerID), res.CreatedThisCall, res.RecreatedThisCall)
-	return nil
+	fmt.Fprintf(b.p.Log(""), "compose project %s %s (primary %s, created %v, recreated %v)\n", res.ProjectName, doneWord(noStart), shortID(res.PrimaryContainerID), res.CreatedThisCall, res.RecreatedThisCall)
+	return res.PrimaryContainerID, nil
+}
+
+// doneWord is the console's word for what a call to Up did.
+func doneWord(noStart bool) string {
+	if noStart {
+		return "created, not started"
+	}
+	return "up"
 }
 
 // noteCreated tells the console when Up created or recreated the
 // container on a start that left the socket out.
-func (op *operation) noteCreated(created bool) {
-	if created && op.socketHeld {
-		fmt.Fprintln(op.p.Log(""), noteCreatedWithoutSocket)
+func (b *BringUp) noteCreated(created bool) {
+	if created && b.socketHeld {
+		fmt.Fprintln(b.p.Log(""), noteCreatedWithoutSocket)
 	}
 }
 
@@ -526,19 +633,19 @@ func (r *Runtime) credentials(ctx context.Context) RegistryAuth {
 	return anonymous
 }
 
-func (r *Runtime) builderOptions(op *operation, tags []string) builder.Options {
+func (b *BringUp) builderOptions(tags []string) builder.Options {
 	return builder.Options{
-		Spec:            op.dc,
-		SpecPath:        op.dc.Path,
-		Workspace:       op.folder,
-		Docker:          r.client,
+		Spec:            b.dc,
+		SpecPath:        b.dc.Path,
+		Workspace:       b.folder,
+		Docker:          b.r.client,
 		Tags:            tags,
 		Load:            true,
-		FeatureLockfile: op.lock,
-		RegistryAuth:    op.auth,
-		Logger:          logger(op.p),
-		Stdout:          op.p.Log(""),
-		Stderr:          op.p.Log(""),
+		FeatureLockfile: b.lock,
+		RegistryAuth:    b.auth,
+		Logger:          logger(b.p),
+		Stdout:          b.p.Log(""),
+		Stderr:          b.p.Log(""),
 	}
 }
 

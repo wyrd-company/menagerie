@@ -69,7 +69,7 @@ func TestBindSourcesReadsEveryFormOfMount(t *testing.T) {
 		]
 	}`)
 	got := bindSources(context.Background(), dc, folder, map[string]string{"SAMPLE": "value"})
-	want := []string{folder, folder + "/string", "/no/type", "/spaced", folder + "/object", "/env/value", "/type/ends/empty", "/overrides/a/bind"}
+	want := []string{folder, folder + "/string", folder + "/object", "/env/value", "/no/type", "/overrides/a/bind"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sources\n got %q\nwant %q", got, want)
 	}
@@ -157,6 +157,9 @@ func TestRunArgsReadAsDevcontainerBuilderReadsThem(t *testing.T) {
 		{"equals", []string{"--name=n", "--net=homelab-sample"}, "n", "homelab-sample", "homelab-sample"},
 		{"the last counts", []string{"--network", "one", "--name", "a", "--network=two", "--name=b"}, "b", "two", "two"},
 		{"after a combined short flag", []string{"-it", "--network", "after"}, "", "after", "after"},
+		{"after a cluster that ends in a value", []string{"-itv/one:/two", "--network", "after"}, "", "after", "after"},
+		{"after an attached value", []string{"-hsample", "--network", "after"}, "", "after", "after"},
+		{"another flag's attached value", []string{"-e--network=not-a-network", "--name=n"}, "n", "", ""},
 		{"another flag's value", []string{"--label", "--network=not-a-network", "-e", "--name=not-a-name"}, "", "", ""},
 		{"host", []string{"--network=host"}, "", "host", ""},
 		{"none", []string{"--network=none"}, "", "none", ""},
@@ -169,7 +172,7 @@ func TestRunArgsReadAsDevcontainerBuilderReadsThem(t *testing.T) {
 		{"a flag without its value", []string{"--network"}, "", "", ""},
 		{"substituted", []string{"--network=${localEnv:SAMPLE}"}, "", "from-env", "from-env"},
 	}
-	for _, flag := range []string{"--init", "--privileged", "--read-only", "-P", "--publish-all", "-d", "--detach", "-i", "--interactive", "-t", "--tty", "--rm", "--sig-proxy", "--oom-kill-disable"} {
+	for _, flag := range []string{"--init", "--privileged", "--read-only", "-P", "--publish-all", "-d", "--detach", "-i", "--interactive", "-t", "--tty", "--rm", "--sig-proxy", "--oom-kill-disable", "--no-healthcheck"} {
 		cases = append(cases, struct {
 			name          string
 			args          []string

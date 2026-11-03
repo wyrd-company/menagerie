@@ -21,6 +21,7 @@ var Phases = []string{
 	"initialize-command",
 	"build",
 	"remove-container",
+	"create-container",
 	"up",
 	"stop",
 	"interview",

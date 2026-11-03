@@ -66,7 +66,7 @@ func TestInitializeCommandForms(t *testing.T) {
 }
 
 func TestInitializeCommandRejectsUnsupportedValue(t *testing.T) {
-	dc, _ := writeDefinition(t, `{"image": "alpine:3.22", "initializeCommand": 3}`)
+	dc := &spec.DevContainer{Raw: []byte(`{"image": "alpine:3.22", "initializeCommand": 3}`)}
 	if _, err := InitializeCommand(dc); err == nil || !strings.Contains(err.Error(), "initializeCommand") {
 		t.Fatalf("got %v", err)
 	}

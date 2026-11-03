@@ -292,7 +292,9 @@ proposed-design:
     the definition is the source of these three values. 4. `commit` and
     `backup` run as in a create. 5. `initialize-command` and `build` run as
     in any start. 6. `create-container` uses devcontainer-builder's create-only mode
-    and records the container's id. 7. `wait-for-sockets` reads the binding's
+    and records the container's id. That mode refuses a bind with an SELinux
+    `z` or `Z` option or `bind-create-src`, and the job fails naming the mount,
+    so a declaration's definition uses neither. 7. `wait-for-sockets` reads the binding's
     status until its reported container is that id, not running,
     with the declared access group applied and both sockets ready, with no
     conformance failure. It waits on this readiness, never on the token,
