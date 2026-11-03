@@ -192,6 +192,10 @@ impl From<toha::ApplyError> for ServiceError {
                 "a hook or message that reads an earlier hook's result could not be rendered",
             ),
             E::Region(_) => Self::refused("apply-failed", "a region edit could not be resolved"),
+            E::UserSections { .. } => Self::refused(
+                "apply-failed",
+                "a user section in a generated file could not be kept",
+            ),
             E::Json(_) => Self::refused("apply-failed", "a JSON edit could not be resolved"),
             E::Git(_) => Self::refused(
                 "apply-failed",
@@ -521,6 +525,11 @@ mod tests {
                     stderr: Some(SECRET.into()),
                 },
             },
+            // A marker's key and the file's path are both rendered.
+            A::UserSections {
+                path: TargetPath::parse(SECRET).unwrap(),
+                message: format!("unpaired user section `{SECRET}`"),
+            },
             A::Record(format!("cannot read {SECRET}")),
             A::Git(toha::git_target::GitTargetError::Discover {
                 path: SECRET.into(),
@@ -642,6 +651,23 @@ mod tests {
                 "hook 0 `step` could not run: its command is empty"
             )
         );
+    }
+
+    #[test]
+    fn a_user_section_fault_has_the_services_own_message() {
+        let refused = ServiceError::from(A::UserSections {
+            path: TargetPath::parse("out.txt").unwrap(),
+            message: "unpaired user section `key`".into(),
+        });
+        assert_eq!(
+            (refused.status, refused.kind, refused.message.as_str()),
+            (
+                422,
+                "apply-failed",
+                "a user section in a generated file could not be kept"
+            )
+        );
+        assert!(refused.paths.is_empty());
     }
 
     #[test]

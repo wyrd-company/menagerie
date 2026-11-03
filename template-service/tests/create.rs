@@ -272,3 +272,88 @@ async fn generation_refuses_a_folder_that_is_not_a_fresh_repository() {
     assert_eq!((exists.status, exists.kind()), (409, "workspace-exists"));
     service.stop().await;
 }
+
+/// A world whose approved list names one template repository with this settings file.
+fn shaped_world(settings: &str) -> World {
+    let holder = tempfile::tempdir().unwrap().keep();
+    let source = holder.join("shaped");
+    write(
+        &source,
+        "template.yml",
+        "name: shaped\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\ndirectories:\n  - path: 'cache/{{ label }}'\n",
+    );
+    write(&source, "template/settings.txt", settings);
+    git(&source, &["init", "-q", "-b", "main"]);
+    commit_all(&source, "shaped");
+    git(&source, &["tag", "v1"]);
+    let address = format!("file://{}@v1", source.display());
+    World::with_templates(&[("shaped", &address)])
+}
+
+async fn answered(service: &Running, selector: &Value) -> Value {
+    let start = service.post("/v1/interviews", selector).await;
+    assert_eq!(start.status, 200, "{}", start.json);
+    let done = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                selector.clone(),
+                json!({"session": start.json["session"],
+                "submission": submission(&start, json!({"label": "first"}))}),
+            ),
+        )
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    done.json["session"].clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_template_can_declare_empty_directories_and_user_sections() {
+    let world = shaped_world(
+        "label: {{ label }}\n# >>> toha:user settings >>>\n# <<< toha:user settings <<<\n",
+    );
+    let service = Running::start(&world).await;
+    let selector = world.select("alpha", "shaped");
+    let session = answered(&service, &selector).await;
+    let folder = world.initialize("alpha");
+
+    let generated = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(selector, json!({"session": session})),
+        )
+        .await;
+
+    assert_eq!(generated.json["outcome"], "written", "{}", generated.json);
+    assert!(folder.join("cache/first").is_dir(), "{}", generated.json);
+    assert!(read(&folder, "settings.txt").contains("label: first\n"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unpaired_user_section_refuses_generation_without_its_rendered_key() {
+    let world = shaped_world("label: {{ label }}\n# >>> toha:user {{ label }} >>>\n");
+    let service = Running::start(&world).await;
+    let selector = world.select("alpha", "shaped");
+    let session = answered(&service, &selector).await;
+    let folder = world.initialize("alpha");
+
+    let refused = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(selector, json!({"session": session})),
+        )
+        .await;
+
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (422, "plan-failed"),
+        "{}",
+        refused.json
+    );
+    assert!(
+        !refused.json.to_string().contains("first"),
+        "{}",
+        refused.json
+    );
+    assert!(!folder.join("settings.txt").exists());
+}

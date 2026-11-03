@@ -4129,8 +4129,8 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "toha"
-version = "0.3.0"
-source = "git+https://github.com/wyrd-company/toha?rev=5da83c99a5bdb50a293d82969affa2cb67a4a2e5#5da83c99a5bdb50a293d82969affa2cb67a4a2e5"
+version = "0.4.1"
+source = "git+https://github.com/wyrd-company/toha?rev=b40611a09a02385a9ed9af004d27baf8542f07da#b40611a09a02385a9ed9af004d27baf8542f07da"
 dependencies = [
  "base64 0.22.1",
  "curl",
