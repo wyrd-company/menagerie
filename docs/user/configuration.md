@@ -369,4 +369,9 @@ folder, `/var/lib/menagerie/candidates` by default, where Toha builds an
 upgrade's candidate. Menagerie runs an upgrade's hooks only against a
 folder inside it. It must be an absolute folder other than `/`, neither
 inside `workspace-root` nor containing it, and only the services' user may
-enter it; the template service creates it when it is missing.
+enter it; the template service creates it when it is missing. Its temporary
+entries are in the subfolder `.menagerie-work`. At each start, unless another
+template service uses that subfolder, the service removes what a killed
+upgrade left directly inside it: entries of its own user named `.tmp` and six
+letters or digits, and folders named `.menagerie-copy-` and a number. It names
+each one in its log and leaves everything else.

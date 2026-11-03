@@ -21,7 +21,7 @@ hyper-util = { version = "0.1.21", features = ["tokio"] }
 indexmap = "2.14.2"
 jiff = "0.2.38"
 ring = "0.17"
-rustix = { version = "1.1.5", features = ["system", "process"] }
+rustix = { version = "1.1.5", features = ["system", "process", "fs"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 serde_norway = "0.9.42"

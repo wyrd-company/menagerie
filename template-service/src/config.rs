@@ -198,10 +198,11 @@ fn candidate_folder_path(value: Option<String>, root: &Path) -> Result<PathBuf, 
     Ok(folder)
 }
 
-/// Create the candidate folder when it is missing, private to this user,
-/// and make it the temporary folder of every `tempfile` call in this
-/// process, Toha's included. Call it once, before any temporary file.
-pub fn prepare_candidate_folder(folder: &Path) -> std::io::Result<()> {
+/// Create the candidate folder when it is missing, private to this user, and
+/// its work folder, and make the work folder the temporary folder of every
+/// `tempfile` call in this process, Toha's included. Return the work folder.
+/// Call it once, before any temporary file.
+pub fn prepare_candidate_folder(folder: &Path) -> std::io::Result<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -214,8 +215,10 @@ pub fn prepare_candidate_folder(folder: &Path) -> std::io::Result<()> {
         ));
     }
     std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))?;
-    tempfile::env::override_temp_dir(folder)
-        .map_err(|_| std::io::Error::other("the temporary folder was already chosen"))
+    let work = crate::candidates::prepare_work_folder(folder)?;
+    tempfile::env::override_temp_dir(&work)
+        .map_err(|_| std::io::Error::other("the temporary folder was already chosen"))?;
+    Ok(work)
 }
 
 /// `^[a-z0-9]+(-[a-z0-9]+)*$`, the workspace service's template id rule.

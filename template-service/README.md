@@ -22,7 +22,11 @@ menagerie-template-service -config /etc/menagerie/config.yml -data /var/lib/mena
   `workspace-root`, `templates`, `template-service.socket`,
   `template-service.hook-runner-socket` and
   `template-service.candidate-folder` from it. The candidate folder is the
-  service's temporary folder, where Toha builds an upgrade's candidate.
+  service's temporary folder, where Toha builds an upgrade's candidate, in
+  its subfolder `.menagerie-work`. At start-up, once its socket is bound and
+  before its first request, the service removes what an ended service left
+  in that subfolder, unless another service holds its lock. A service that
+  cannot take the lock does not start (`src/candidates.rs`).
 - `-data` holds Toha's configuration, registry, template cache and state.
 
 The service runs no hook itself. Its Toha hook runner (`src/hooks.rs`) sends

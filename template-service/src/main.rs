@@ -1,5 +1,5 @@
-use menagerie_template_service::{Service, config, seal, server};
-use std::path::PathBuf;
+use menagerie_template_service::{Service, candidates, config, seal, server};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -41,13 +41,16 @@ async fn main() -> ExitCode {
     };
     // Toha builds an upgrade's candidate in its temporary folder, the one
     // folder the workspace service accepts an upgrade's hook target in.
-    if let Err(e) = config::prepare_candidate_folder(&settings.candidate_folder) {
-        eprintln!(
-            "template service: {}: {e}",
-            settings.candidate_folder.display()
-        );
-        return ExitCode::FAILURE;
-    }
+    let work = match config::prepare_candidate_folder(&settings.candidate_folder) {
+        Ok(work) => work,
+        Err(e) => {
+            eprintln!(
+                "template service: {}: {e}",
+                settings.candidate_folder.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
     let key = match seal::SessionKey::load_or_create(&settings.data) {
         Ok(key) => key,
         Err(e) => {
@@ -68,7 +71,20 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // After the bind, so that a refused second start takes nothing, and before
+    // the first request. `_claim` keeps this service's candidates from another
+    // service's sweep, so a service without it does not start. Leftovers do not
+    // stop the start.
+    let (_claim, removal) = match candidates::claim_and_sweep(&work) {
+        Ok(claimed) => claimed,
+        Err(e) => {
+            eprintln!("template service: cannot lock {}: {e}", work.display());
+            let _ = std::fs::remove_file(&socket);
+            return ExitCode::FAILURE;
+        }
+    };
     eprintln!("template service listening on {}", socket.display());
+    report(&work, removal);
     let served = server::serve(listener, Arc::new(service), shutdown()).await;
     let _ = std::fs::remove_file(&socket);
     match served {
@@ -76,6 +92,26 @@ async fn main() -> ExitCode {
         Err(e) => {
             eprintln!("template service: {e}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+fn report(work: &Path, removal: candidates::Removal) {
+    let work = work.display();
+    match removal {
+        candidates::Removal::Swept(sweep) => {
+            for name in sweep.removed {
+                eprintln!("template service: removed leftover {work}/{name:?}");
+            }
+            for (name, e) in sweep.failed {
+                eprintln!("template service: cannot remove leftover {work}/{name:?}: {e}");
+            }
+        }
+        candidates::Removal::OtherServiceLive => {
+            eprintln!("template service: another service uses {work}; removed no leftovers");
+        }
+        candidates::Removal::Failed(e) => {
+            eprintln!("template service: removed no leftovers from {work}: {e}");
         }
     }
 }

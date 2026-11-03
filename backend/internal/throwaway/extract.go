@@ -32,7 +32,9 @@ var ErrUnsafeEntry = errors.New("unsafe archive entry")
 // archive leaves folder as it was. Entries belong to this process's user.
 // The old tree is removed after the swap; a tree that cannot be removed
 // completely adds a note to log and does not fail the replacement. No
-// error or note names an entry.
+// error or note names an entry. The template service removes a fresh folder
+// that a killed process left, by this name: keep is_leftover in
+// template-service/src/candidates.rs the same.
 func ReplaceFolder(folder string, archive io.Reader, log io.Writer) (err error) {
 	fresh, err := os.MkdirTemp(filepath.Dir(folder), ".menagerie-copy-")
 	if err != nil {

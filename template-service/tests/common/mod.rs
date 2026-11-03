@@ -396,6 +396,7 @@ pub struct HookHost {
     credential_urls: Arc<std::sync::Mutex<Vec<String>>>,
     credential_answer: Arc<std::sync::Mutex<CredentialAnswer>>,
     hold: Arc<Hold>,
+    hold_hooks: Arc<std::sync::atomic::AtomicBool>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -415,6 +416,8 @@ impl HookHost {
         let (urls, answer) = (credential_urls.clone(), credential_answer.clone());
         let hold = Arc::new(Hold::default());
         let holding = hold.clone();
+        let hold_hooks = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let holding_hooks = hold_hooks.clone();
         let thread = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -429,10 +432,13 @@ impl HookHost {
                         menagerie_template_service::hooks::HOOK_PATH,
                         axum::routing::post(move |body: axum::body::Bytes| {
                             let recorded = recorded.clone();
+                            let holding_hooks = holding_hooks.clone();
                             async move {
-                                tokio::task::spawn_blocking(move || run_hook(&recorded, &body))
-                                    .await
-                                    .unwrap()
+                                tokio::task::spawn_blocking(move || {
+                                    run_hook(&recorded, &holding_hooks, &body)
+                                })
+                                .await
+                                .unwrap()
                             }
                         }),
                     )
@@ -472,6 +478,7 @@ impl HookHost {
             credential_urls,
             credential_answer,
             hold,
+            hold_hooks,
             stop: Some(stop),
             thread: Some(thread),
         }
@@ -491,6 +498,13 @@ impl HookHost {
 
     /// Whether every credential request from now on is held until its
     /// caller closes the connection.
+    /// While on, a hook that ran does not answer, so its request stays open
+    /// with its target in place.
+    pub fn hold_hooks(&self, on: bool) {
+        self.hold_hooks
+            .store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub fn hold_credentials(&self, on: bool) {
         self.hold.on.store(on, std::sync::atomic::Ordering::SeqCst);
     }
@@ -544,6 +558,7 @@ impl Hold {
 
 impl Drop for HookHost {
     fn drop(&mut self) {
+        self.hold_hooks(false);
         self.hold.stopping.notify_waiters();
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
@@ -556,6 +571,7 @@ impl Drop for HookHost {
 
 fn run_hook(
     recorded: &std::sync::Mutex<Vec<Value>>,
+    holding: &std::sync::atomic::AtomicBool,
     body: &[u8],
 ) -> (
     axum::http::StatusCode,
@@ -606,6 +622,9 @@ fn run_hook(
         .env("PATH", std::env::var_os("PATH").unwrap())
         .output()
         .unwrap();
+    while holding.load(std::sync::atomic::Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     let stream = |captured: &Value, bytes: &[u8]| {
         if captured.as_bool().unwrap() {
             json!(base64::engine::general_purpose::STANDARD.encode(bytes))

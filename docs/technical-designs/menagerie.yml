@@ -546,7 +546,16 @@ proposed-design:
     temporary folder, applies the new version and runs its hooks there,
     then merges the result into the workspace. The template service's
     temporary folder is the candidate folder, which both services read from
-    configuration and which is private to the services' user; an upgrade's
+    configuration and which is private to the services' user; the service's
+    temporary entries are in its subfolder `.menagerie-work`. A template
+    service killed in an upgrade leaves its candidate there, so the next
+    start removes the entries with the exact names Toha's temporary folders
+    and the copy back below use. Each service holds a shared `flock` on the
+    subfolder for its lifetime, or does not start, and a start removes entries only after its
+    socket is bound and while it alone holds the subfolder, before its first
+    request. A hook the workspace service still runs for the ended request
+    is cancelled with that request, and a copy back at that moment fails
+    its own lost job. An upgrade's
     token admits only a folder inside it, named by its own path without a
     symbolic link and never the workspace folder, and a generate's token
     admits no candidate. The candidate is not a host path, so the workspace

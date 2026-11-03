@@ -17,8 +17,18 @@ description: >-
   the workspace service runs every template hook. The candidate folder,
   default `/var/lib/menagerie/candidates`, is the service's temporary
   folder: the service creates it when it is missing, private to its user,
-  and every temporary folder Toha makes is inside it, an upgrade's
-  candidate included. Toha's
+  and every temporary folder Toha makes is inside its subfolder
+  `.menagerie-work`, private to the same user, an upgrade's candidate
+  included. A service holds a shared `flock` on that subfolder for its
+  lifetime, and one that cannot take it does not start. At start-up, once the socket is bound and before the first
+  request, a service that alone holds the subfolder removes leftovers
+  directly inside it, each named on standard error: a folder or file named
+  `.tmp` and six letters or digits, and a folder named `.menagerie-copy-`
+  and a decimal number, belonging to the service's user. It follows no
+  symbolic link and removes read-only folders; it leaves every other entry
+  and everything outside the subfolder. An entry it cannot
+  remove, or a pass that fails, is named on standard error and does not
+  stop the start. Toha's
   configuration, registry, cache and state live under the folder named by
   `-data`, default `/var/lib/menagerie/toha`, with the session key
   `session-key`: 32 random bytes, readable only by the service, written on
