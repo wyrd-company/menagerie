@@ -158,6 +158,22 @@ description: >-
   fixed text.
 
 
+  Optional `provisioning` names what provisioning a workspace uses on this
+  host. Its optional `xolotl` locates the Xolotl that issues and revokes
+  workspaces' client keys: `url` is an http or https URL with a host and no
+  user information, query or fragment, and `key-secret` names, with `kv-mount`
+  and `path`, the secret whose string field `api_key` holds Menagerie's scoped
+  key. Mount and path follow the rule of `registry-credentials`. Menagerie
+  reads the secret through the Wyrwood vault socket for each operation on a
+  key and keeps the scoped key in memory for that operation only. The scoped
+  key goes only to `url`: a redirect ends the operation and is not followed.
+  The scoped key, and text from an answer, appear in no log, event or error.
+  Each read of the secret and each request has 30 seconds. Menagerie sends a
+  request up to three times, one second apart, while Xolotl answers 409 or
+  500. No connection, no answer in time, and a 502, 503 or 504 count as
+  Xolotl being out of reach. The template service ignores this section.
+
+
   Optional `github-app` names a GitHub App whose installation tokens
   authenticate backups and template fetches to `https` repository URLs on
   its server: a URL whose path is exactly `/{owner}/{repo}` or

@@ -72,3 +72,12 @@ workspace-socket:
 # Without this section nothing is committed on a schedule.
 # auto-commit:
 #   every: 1h
+
+# The Xolotl that issues and revokes workspaces' client keys. api_key in the
+# secret holds Menagerie's scoped key, read through the Wyrwood vault socket.
+# provisioning:
+#   xolotl:
+#     url: http://xolotl:8317
+#     key-secret:
+#       kv-mount: kv
+#       path: menagerie/xolotl

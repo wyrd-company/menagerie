@@ -215,6 +215,63 @@ a fixed reason, never a token, a URL or GitHub's answer, and the job console
 shows the remote's own text with the URL and the token replaced by
 `[redacted]`.
 
+## Provisioning
+
+`provisioning` names what provisioning a workspace uses on this host.
+
+### Xolotl
+
+```yaml
+provisioning:
+  xolotl:
+    url: http://xolotl:8317
+    key-secret:
+      kv-mount: kv
+      path: menagerie/xolotl
+```
+
+`provisioning.xolotl` lets Menagerie issue and revoke the client key a
+workspace's definition declares. Menagerie needs Xolotl 0.6.0 or later.
+
+- `url` is an http or https URL with a host and no user information, query or
+  fragment.
+- `key-secret` names the OpenBao secret whose string field `api_key` holds
+  Menagerie's scoped key. `kv-mount` is a KV version 2 mount and `path` is the
+  secret's path in the mount.
+- The Wyrwood policy grants `read` on `<kv-mount>/data/<path>`.
+
+Menagerie reads the scoped key through Wyrwood's `vault.sock` for each operation
+and stores it nowhere. The key goes only to `url`, and a redirect fails the job.
+
+Prepare two Xolotl policies, with one key policy for each host:
+
+```toml
+# The policy of the workspaces' client keys on this host.
+name = "host-sample"
+description = "Client keys of this host's workspaces"
+scopes = ["proxy", "mcp"]
+providers = ["*"]
+```
+
+```toml
+# The policy of Menagerie's scoped key.
+name = "host-sample-provisioner"
+description = "Issues keys for this host's workspaces"
+scopes = ["keys"]
+key_policies = ["host-sample"]
+```
+
+Give the first policy the providers, accounts and MCP servers the workspaces
+use. Xolotl answers 403 when a listed policy grants any scope other than `proxy`
+or `mcp`, and across instances a policy change can take up to 60 seconds to apply.
+Issue the scoped key from the second policy with
+`xolotl keys issue --policy host-sample-provisioner --name menagerie`, and put
+it in the secret that `key-secret` names.
+
+Menagerie issues a client key with no expiry, and a repeat leaves a key that
+exists as it is. It sends a request up to three times, one second apart, while
+Xolotl answers 409 or 500. Each request has 30 seconds.
+
 ## Local environment
 
 A devcontainer definition reads Menagerie's own environment through

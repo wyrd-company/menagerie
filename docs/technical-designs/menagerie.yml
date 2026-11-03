@@ -252,8 +252,9 @@ proposed-design:
     Menagerie writes no policy. Authority over keys stays on this host through
     a Xolotl key policy that only this host's workspaces use: the shared
     Wyrwood policy fixes that key policy in its path, so the value names only
-    the key, and the scoped Xolotl key lists only that key policy. Preparing a
-    host creates both. Bindings Menagerie creates use `report`
+    the key, and the scoped Xolotl key lists only that key policy. That key
+    policy grants only `proxy` and `mcp`, because Xolotl refuses a `keys` key
+    any other. Preparing a host creates both. Bindings Menagerie creates use `report`
     enforcement, so Wyrwood never recreates a container during a job. The
     grant has no default expiry, so that provisioning does not stop in
     silence. An operator revokes it in the Wyrwood web interface. The audit
@@ -265,7 +266,13 @@ proposed-design:
     HTTP. Menagerie spawns no CLI. `POST /admin/keys` writes the client key
     to OpenBao and returns no key, so Menagerie never holds a workspace's
     client key. The key has no expiry, so that a workspace does not lose its
-    gateway in silence. The Xolotl key that a template's `xolotl_key` answer
+    gateway in silence. An answer that a key exists also says whether that key
+    is disabled or expires, and the console shows it, since a repeat changes
+    neither. A request is sent again while Xolotl answers that it should be,
+    a few times, and a job that still fails is retried as any other. Xolotl
+    counts as out of reach when a request gets no connection or no answer in
+    time, or a gateway answers that it is not available; any other refusal
+    fails the job. The Xolotl key that a template's `xolotl_key` answer
     names is the one its definition declares.
   provisioning-steps: >-
     With a declaration, the jobs that can create a container run these steps,

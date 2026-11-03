@@ -28,6 +28,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
+	"github.com/wyrd-company/menagerie/backend/internal/xolotl"
 )
 
 // DefaultPath is where the workspace service looks for its configuration
@@ -89,6 +90,31 @@ type Config struct {
 	// repositories on its server with installation tokens. Absent, no
 	// token is minted.
 	GitHubApp *GitHubApp `yaml:"github-app"`
+	// Provisioning names the host's provisioning services. Absent, a
+	// definition with a provisioning declaration cannot be provisioned.
+	Provisioning *Provisioning `yaml:"provisioning"`
+}
+
+// Provisioning names what provisioning a workspace uses on this host.
+type Provisioning struct {
+	// Xolotl locates the Xolotl that issues client keys. Absent, a
+	// declaration with a Xolotl key cannot be provisioned.
+	Xolotl *Xolotl `yaml:"xolotl"`
+}
+
+// Xolotl locates a Xolotl and the secret that holds Menagerie's scoped key.
+type Xolotl struct {
+	// URL is Xolotl's http or https address.
+	URL string `yaml:"url"`
+	// KeySecret names the OpenBao secret whose api_key field holds the
+	// scoped key, read through the vault socket in the Wyrwood directory.
+	KeySecret KeySecret `yaml:"key-secret"`
+}
+
+// KeySecret names a secret in a KV version 2 mount.
+type KeySecret struct {
+	KVMount string `yaml:"kv-mount"`
+	Path    string `yaml:"path"`
 }
 
 // GitHubApp names the GitHub App whose installation tokens Menagerie uses
@@ -510,6 +536,9 @@ func (c *Config) validate() error {
 	if c.GitHubApp != nil {
 		errs = append(errs, c.GitHubApp.validate()...)
 	}
+	if c.Provisioning != nil && c.Provisioning.Xolotl != nil {
+		errs = append(errs, c.Provisioning.Xolotl.validate()...)
+	}
 	names := map[string]int{}
 	for i, name := range c.LocalEnv {
 		if !envNamePattern.MatchString(name) {
@@ -609,6 +638,22 @@ func (g *GitHubApp) validate() []error {
 	}
 	if twice {
 		errs = append(errs, errors.New("github-app.installations names one account twice; account names are compared in lower case"))
+	}
+	return errs
+}
+
+func (x *Xolotl) validate() []error {
+	var errs []error
+	if x.URL == "" {
+		errs = append(errs, errors.New("provisioning.xolotl.url is required"))
+	} else if err := xolotl.ValidURL(x.URL); err != nil {
+		errs = append(errs, fmt.Errorf("provisioning.xolotl.url %w", err))
+	}
+	if err := validSecretPath(x.KeySecret.KVMount); err != nil {
+		errs = append(errs, fmt.Errorf("provisioning.xolotl.key-secret.kv-mount %w", err))
+	}
+	if err := validSecretPath(x.KeySecret.Path); err != nil {
+		errs = append(errs, fmt.Errorf("provisioning.xolotl.key-secret.path %w", err))
 	}
 	return errs
 }

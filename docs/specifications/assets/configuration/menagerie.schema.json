@@ -308,6 +308,49 @@
         }
       }
     },
+    "provisioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What provisioning a workspace uses on this host. Absent, a definition with a provisioning declaration cannot be provisioned.",
+      "properties": {
+        "xolotl": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The Xolotl that issues and revokes workspaces' client keys. Absent, a declaration with a Xolotl key cannot be provisioned.",
+          "required": [
+            "url",
+            "key-secret"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Xolotl's http or https URL, with a host and no user information, query or fragment."
+            },
+            "key-secret": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "The OpenBao secret whose string field api_key holds Menagerie's scoped key, read through the vault socket in wyrwood-directory.",
+              "required": [
+                "kv-mount",
+                "path"
+              ],
+              "properties": {
+                "kv-mount": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "KV version 2 mount path."
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The secret's path in the mount."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "github-app": {
       "type": "object",
       "additionalProperties": false,

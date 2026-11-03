@@ -93,6 +93,64 @@ func TestParseRegistryCredentials(t *testing.T) {
 	}
 }
 
+const provisioningXolotl = `
+provisioning:
+  xolotl:
+    url: http://xolotl.example.test:8317
+    key-secret:
+      kv-mount: kv
+      path: menagerie/xolotl
+`
+
+func TestParseProvisioningXolotl(t *testing.T) {
+	cfg, err := Parse([]byte(valid + provisioningXolotl))
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := cfg.Provisioning.Xolotl
+	if x.URL != "http://xolotl.example.test:8317" || x.KeySecret.KVMount != "kv" || x.KeySecret.Path != "menagerie/xolotl" {
+		t.Fatalf("xolotl %+v", x)
+	}
+	cfg, err = Parse([]byte(valid))
+	if err != nil || cfg.Provisioning != nil {
+		t.Fatalf("absent section: %+v %v", cfg.Provisioning, err)
+	}
+	cfg, err = Parse([]byte(valid + "provisioning: {}\n"))
+	if err != nil || cfg.Provisioning.Xolotl != nil {
+		t.Fatalf("section without xolotl: %+v %v", cfg.Provisioning, err)
+	}
+}
+
+func TestProvisioningXolotlErrors(t *testing.T) {
+	const field = "provisioning.xolotl."
+	url := "http://xolotl.example.test:8317"
+	for _, tc := range []struct{ name, doc, want string }{
+		{"no url", strings.Replace(provisioningXolotl, "    url: "+url+"\n", "", 1), field + "url is required"},
+		{"scheme", strings.Replace(provisioningXolotl, url, "ftp://xolotl.example.test", 1), field + "url must be"},
+		{"no scheme", strings.Replace(provisioningXolotl, url, "xolotl.example.test:8317", 1), field + "url must be"},
+		{"user information", strings.Replace(provisioningXolotl, url, "http://user:secret-value@xolotl.example.test", 1), field + "url must be"},
+		{"query", strings.Replace(provisioningXolotl, url, url+"?token=secret-value", 1), field + "url must be"},
+		{"fragment", strings.Replace(provisioningXolotl, url, url+"#secret-value", 1), field + "url must be"},
+		{"no secret", strings.Replace(provisioningXolotl, "    key-secret:\n      kv-mount: kv\n      path: menagerie/xolotl\n", "", 1), field + "key-secret.kv-mount is required"},
+		{"no mount", strings.Replace(provisioningXolotl, "      kv-mount: kv\n", "", 1), field + "key-secret.kv-mount is required"},
+		{"no path", strings.Replace(provisioningXolotl, "      path: menagerie/xolotl\n", "", 1), field + "key-secret.path is required"},
+		{"mount slashes", strings.Replace(provisioningXolotl, "kv-mount: kv", "kv-mount: /kv/", 1), field + "key-secret.kv-mount \"/kv/\" must be"},
+		{"path dots", strings.Replace(provisioningXolotl, "menagerie/xolotl", "menagerie/../xolotl", 1), field + "key-secret.path \"menagerie/../xolotl\" must be"},
+		{"key in the file", strings.Replace(provisioningXolotl, "      path: menagerie/xolotl\n", "      path: menagerie/xolotl\n      api_key: secret-value\n", 1), "has a field it does not know"},
+		{"unknown section", strings.Replace(provisioningXolotl, "  xolotl:", "  gateway:", 1), "has no field gateway"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(valid + tc.doc))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "secret-value") {
+				t.Fatalf("the error names the value: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseLocalEnv(t *testing.T) {
 	cfg, err := Parse([]byte(valid))
 	if err != nil || cfg.LocalEnv != nil {
