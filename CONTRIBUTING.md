@@ -54,14 +54,23 @@ git push --atomic --follow-tags origin main
 record. The first release also tags its parent as the `0.0.0` baseline. The
 tag push starts the CD workflow, which delivers only Intentional release
 records: it pushes `ghcr.io/wyrd-company/menagerie:<version>` for linux/amd64
-and linux/arm64. `task release:rehearse` runs the same steps in a scratch
-clone and changes nothing. A release whose pending intents are all for the
-`menagerie-docs` unit tags only that unit (`menagerie-docs@<version>`); CD
-delivers no image for it.
+and linux/arm64, then publishes the tag's GitHub Release with the tag's
+`CHANGELOG.md` section as its notes. Nobody creates that Release by hand.
+`task release:rehearse` runs the same steps in a scratch clone and changes
+nothing. A release whose pending intents are all for the `menagerie-docs` unit
+tags only that unit (`menagerie-docs@<version>`); CD delivers no image and no
+Release for it.
 
 The Publish docs workflow then publishes `docs/user/` to wyrd.foo through
 wyrd.foo's reusable workflow: when CD succeeds for a release tag, and when a
 `menagerie-docs@*` tag is pushed. The publisher reads the release tag's
-GitHub Release, so create that Release first; to publish a tag or commit
-again, dispatch Publish docs with its `ref`. A push to `main` does not
-publish.
+GitHub Release. A docs tag on the commit of a code tag whose Release is not
+published yet does not publish; CD's success publishes that commit. A push to
+`main` does not publish.
+
+To recover a failed CD run, re-run its failed jobs: that keeps the tag push as
+the event, so Publish docs follows. Dispatching CD with an existing `tag` also
+delivers the image and publishes a missing Release, and leaves a published
+Release as it is, but Publish docs does not follow a dispatch, so dispatch
+Publish docs with its `ref` afterwards. Do the same to publish a tag or commit
+again.

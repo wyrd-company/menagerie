@@ -142,6 +142,118 @@ expect "a record of another version is refused" 1 'records another version' tag_
 expect "a v-prefixed tag is refused" 1 'not a bare X\.Y\.Z' tag_check v0.5.0
 expect "a lightweight tag is refused" 1 'not an annotated tag' tag_check 0.6.0
 
+# github-release.sh: the real script on real tags, with a gh that records its
+# calls and answers as the real gh does for a Release's state.
+g=$scratch/github-release
+git init -q "$g"
+printf '# Changelog\n\n## 0.2.0\n\n### Features\n\n- A second fixture change.\n\n## 0.1.0\n\n### Fixes\n\n- A first fixture change.\n' >"$g/CHANGELOG.md"
+git -C "$g" add CHANGELOG.md
+git_test -C "$g" commit -q -m "test: changelog"
+git_test -C "$g" tag -a 0.1.0 -m "$(record 0.1.0 'baseline: false')"
+git_test -C "$g" tag -a 0.2.0 -m "$(record 0.2.0 'baseline: false')"
+git_test -C "$g" tag -a 0.3.0 -m "$(record 0.3.0 'baseline: false')"
+git_test -C "$g" tag -a menagerie-docs@0.0.1 -m "a docs record"
+git_test -C "$g" commit -q --allow-empty -m "test: docs alone"
+git_test -C "$g" tag -a menagerie-docs@0.0.2 -m "a docs record"
+git_test -C "$g" commit -q --allow-empty -m "test: a hand-made tag"
+git_test -C "$g" tag -a 0.8.0 -m "a hand-made tag"
+git_test -C "$g" tag -a menagerie-docs@0.0.3 -m "a docs record"
+git_test -C "$g" commit -q --allow-empty -m "test: a baseline"
+git_test -C "$g" tag -a 0.0.0 -m "$(record 0.0.0 'baseline: true')"
+git_test -C "$g" tag -a menagerie-docs@0.0.4 -m "a docs record"
+printf '# Changelog\n\n## 0.9.0\n\n### Fixes\n\n- A later fixture change.\n' >"$g/CHANGELOG.md"
+git -C "$g" add CHANGELOG.md
+git_test -C "$g" commit -q -m "test: the highest release"
+git_test -C "$g" tag -a 0.9.0 -m "$(record 0.9.0 'baseline: false')"
+stub=$scratch/gh-stub
+mkdir -p "$stub/state"
+cat >"$stub/gh" <<'STUB'
+#!/bin/sh
+stub_dir=$(dirname "$0")
+echo "gh $*" >>"$stub_dir/calls"
+case "$1 $2" in
+  "release view")
+    case $(cat "$stub_dir/state/$3" 2>/dev/null || echo absent) in
+      absent) echo "release not found" >&2; exit 1 ;;
+      draft) echo true ;;
+      published) echo false ;;
+      denied) echo "HTTP 403: Resource not accessible by integration" >&2; exit 1 ;;
+    esac
+    ;;
+  "release create") sed 's/^/notes: /' >>"$stub_dir/calls" ;;
+esac
+STUB
+chmod +x "$stub/gh"
+gh_state() {
+  rm -f "$stub/state/"* "$stub/calls"
+  touch "$stub/calls"
+  while [ $# -gt 0 ]; do
+    echo "$2" >"$stub/state/$1"
+    shift 2
+  done
+}
+gh_release() { (cd "$g" && PATH="$stub:$PATH" GITHUB_OUTPUT='' RELEASE_TAG=$1 "$repo/scripts/github-release.sh" "$2"); }
+gh_calls() { grep -- "$1" "$stub/calls"; }
+
+gh_state
+expect "a missing Release is published" 0 'published the GitHub Release of 0\.2\.0' gh_release 0.2.0 publish
+expect "an older tag's Release is created for that existing tag and does not take Latest" 0 '^gh release create 0\.2\.0 --verify-tag --title 0\.2\.0 --latest=false --notes-file -$' gh_calls 'release create'
+expect "the notes are that version's changelog section" 0 '^notes: ### Features$' gh_calls '^notes: ### Features'
+expect "the notes hold that version's change" 0 'A second fixture change' cat "$stub/calls"
+expect "the notes leave out the older version" 1 '^0$' grep -c 'A first fixture change' "$stub/calls"
+expect "the notes leave out the heading the title repeats" 1 '^0$' grep -c 'notes: ## ' "$stub/calls"
+gh_state
+expect "the highest release is published" 0 'published the GitHub Release of 0\.9\.0' gh_release 0.9.0 publish
+expect "the highest release takes Latest" 0 '^gh release create 0\.9\.0 --verify-tag --title 0\.9\.0 --latest=true --notes-file -$' gh_calls 'release create'
+gh_state 0.2.0 published
+expect "a published Release stays as it is" 0 'already published' gh_release 0.2.0 publish
+expect "a published Release gets no write" 1 '^0$' grep -c -E 'release (create|edit)' "$stub/calls"
+gh_state 0.2.0 draft
+expect "a draft Release is published" 0 'published the GitHub Release of 0\.2\.0' gh_release 0.2.0 publish
+expect "a draft keeps its notes" 0 '^gh release edit 0\.2\.0 --draft=false --latest=false$' gh_calls 'release edit'
+expect "a draft takes no new Release" 1 '^0$' grep -c 'release create' "$stub/calls"
+gh_state 0.2.0 denied
+expect "a failed read fails, and is not a missing Release" 1 'cannot read the GitHub Release of 0\.2\.0: HTTP 403' gh_release 0.2.0 publish
+expect "a failed read creates nothing" 1 '^0$' grep -c 'release create' "$stub/calls"
+gh_state
+expect "a release tag with no changelog section is refused" 1 'has no notes for 0\.3\.0' gh_release 0.3.0 publish
+expect "a release tag with no changelog section creates nothing" 1 '^0$' grep -c 'release create' "$stub/calls"
+
+gh_state
+expect "a docs tag waits for the code Release on its commit" 0 '^publish=false$' gh_release menagerie-docs@0.0.1 docs-tag
+gh_state 0.1.0 draft 0.2.0 draft 0.3.0 draft
+expect "a docs tag waits for a draft code Release" 0 '^publish=false$' gh_release menagerie-docs@0.0.1 docs-tag
+gh_state 0.1.0 absent 0.2.0 published 0.3.0 published
+expect "a docs tag waits while any code Release on its commit is missing" 0 '^publish=false$' gh_release menagerie-docs@0.0.1 docs-tag
+gh_state 0.1.0 published 0.2.0 published 0.3.0 published
+expect "a docs tag publishes once the code Release is published" 0 '^publish=true$' gh_release menagerie-docs@0.0.1 docs-tag
+gh_state
+expect "a docs tag alone on its commit publishes, with no code Release" 0 '^publish=true$' gh_release menagerie-docs@0.0.2 docs-tag
+expect "a docs tag alone on its commit reads no Release" 1 '^0$' grep -c 'release view' "$stub/calls"
+expect "a hand-made bare tag does not hold a docs tag back" 0 '^publish=true$' gh_release menagerie-docs@0.0.3 docs-tag
+expect "the baseline does not hold a docs tag back" 0 '^publish=true$' gh_release menagerie-docs@0.0.4 docs-tag
+gh_state 0.1.0 denied
+expect "a failed read fails the docs tag check" 1 'cannot read the GitHub Release of 0\.1\.0' gh_release menagerie-docs@0.0.1 docs-tag
+gh_output() {
+  : >"$scratch/docs-output"
+  (cd "$g" && PATH="$stub:$PATH" GITHUB_OUTPUT="$scratch/docs-output" RELEASE_TAG=$1 "$repo/scripts/github-release.sh" docs-tag >/dev/null)
+  cat "$scratch/docs-output"
+}
+gh_state
+expect "the docs tag check writes its decision for the workflow" 0 '^publish=false$' gh_output menagerie-docs@0.0.1
+
+# The workflows wire those scripts as the contract says.
+cd_job() { yq -r "$1" "$repo/.github/workflows/cd.yml"; }
+docs_job() { yq -r "$1" "$repo/.github/workflows/publish-docs.yml"; }
+expect "the Release job needs the image job" 0 '^image$' cd_job '.jobs.release.needs[]'
+expect "the Release job keeps the default condition, so a failed or skipped image stops it" 0 '^null$' cd_job '.jobs.release.if'
+expect "only the Release job can write contents" 0 '^release$' cd_job '[.jobs | to_entries[] | select(.value.permissions.contents == "write") | .key] | join(",")'
+expect "the Release job names the tag the image job delivered" 0 '^true$' cd_job '(.jobs.release.steps[] | select(.run == "task release:publish") | .env.RELEASE_TAG) == (.jobs.image.steps[] | select(.run == "task release:image") | .env.RELEASE_TAG)'
+expect "only a docs tag push runs the docs tag check" 0 "^github.event_name == 'push'$" docs_job '.jobs.docs-tag.if'
+expect "the docs tag is the only tag push Publish docs takes" 0 '^menagerie-docs@\*$' docs_job '.on.push.tags[]'
+publish_if="\${{ !cancelled() && needs.tag.result != 'failure' && needs.docs-tag.result != 'failure' && (github.event_name == 'workflow_dispatch' || needs.tag.outputs.release == 'true' || needs.docs-tag.outputs.publish == 'true') }}"
+expect "publication follows only a dispatch, a CD release or the docs tag check, and no failed check" 0 '^true$' docs_job ".jobs.publish.if == \"$publish_if\""
+
 # require-env.sh and check-commit-subject.sh.
 expect "set variables pass" 0 '^$' env SAMPLE_ONE=1 SAMPLE_TWO=2 sh "$repo/scripts/require-env.sh" SAMPLE_ONE SAMPLE_TWO
 expect "an empty variable is named, not shown" 1 'Not configured for this workflow: SAMPLE_TWO$' \

@@ -313,6 +313,16 @@ tasks:
         --tag '{{.IMAGE_REPOSITORY}}:{{.RELEASE_TAG}}'
         --push .
 
+  release:publish:
+    desc: Publish the GitHub Release of RELEASE_TAG with its changelog section as the notes; safe to repeat (CD only)
+    cmds:
+      - scripts/github-release.sh publish
+
+  release:docs-tag:
+    desc: Decide whether a pushed docs tag RELEASE_TAG publishes now, or CD publishes its commit (Publish docs only)
+    cmds:
+      - scripts/github-release.sh docs-tag
+
   setup:
     desc: Install every tool the checks use and the Git hooks (the devcontainer runs this)
     cmds:

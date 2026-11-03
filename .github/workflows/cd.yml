@@ -2,8 +2,9 @@
 #   references: [taskfile]
 name: CD
 
-# Delivers the image for a release tag. A dispatch re-delivers an existing
-# release tag for recovery; it cannot create a release.
+# Delivers the image for a release tag, then publishes its GitHub Release. A
+# dispatch re-delivers an existing release tag for recovery; it cannot create
+# a tag. A Release that is already published stays as it is.
 on:
   push:
     tags:
@@ -66,3 +67,22 @@ jobs:
       - env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: task release:image
+
+  release:
+    name: Publish the GitHub Release
+    needs: [tag, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+          fetch-tags: true
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      - env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: task release:publish

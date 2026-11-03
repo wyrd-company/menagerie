@@ -7,7 +7,9 @@ name: Publish docs
 # dispatch for an existing tag or commit. The docs come from the ref, and
 # only an Intentional release record publishes from a release tag. A plain
 # push to main does not publish. The publisher reads the release tag's
-# GitHub Release, so a dispatch for a release waits until that Release exists.
+# GitHub Release, which CD publishes as its last job: a docs tag on the commit
+# of a code tag whose Release is not published leaves the publication to CD's
+# success, and a dispatch for a release waits until that Release exists.
 on:
   workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CD]
@@ -66,12 +68,35 @@ jobs:
           RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
         run: task release:tag
 
+  docs-tag:
+    name: Check the docs tag
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: false
+          fetch-tags: true
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+      - id: check
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: task release:docs-tag
+
   publish:
     name: Publish to wyrd.foo
-    needs: tag
+    needs: [tag, docs-tag]
     if: >-
-      ${{ !cancelled() && needs.tag.result != 'failure' &&
-      (github.event_name != 'workflow_run' || needs.tag.outputs.release == 'true') }}
+      ${{ !cancelled() && needs.tag.result != 'failure' && needs.docs-tag.result != 'failure' &&
+      (github.event_name == 'workflow_dispatch' || needs.tag.outputs.release == 'true' ||
+      needs.docs-tag.outputs.publish == 'true') }}
     permissions:
       contents: read
     # ryl disable-line rule:line-length

@@ -30,6 +30,8 @@ const needs = {
   build: [go, rust, pnpm, node],
   "release:rehearse": [task("tools:install:intentional")],
   "release:tag": [],
+  "release:publish": [],
+  "release:docs-tag": [],
   "release:image": ["docker/setup-qemu-action", "docker/setup-buildx-action", "docker/login-action"],
   "settings:credentials": [],
   "settings:apply": [],
