@@ -48,7 +48,7 @@ vars:
   OPENBAO_VERSION: 2.7.1
   # The Wyrwood release the acceptance run's controller and agent come from.
   # renovate: datasource=github-releases depName=wyrd-company/wyrwood
-  WYRWOOD_VERSION: 0.4.0
+  WYRWOOD_VERSION: 0.6.1
   # The YAML this repository's tooling owns; package documents have their
   # own owners and checks.
   REPOSITORY_YAML: >-

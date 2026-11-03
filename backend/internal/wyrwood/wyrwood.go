@@ -273,7 +273,7 @@ func (c *Client) do(ctx context.Context, operation, name string, request func(*o
 func reason(err error, operation, agent, fingerprint string) string {
 	switch {
 	case errors.Is(err, operator.ErrKeySelection):
-		return "ssh-agent.sock offers no single key that provisioning.wyrwood.operator-key selects"
+		return "ssh-agent.sock offers no single key that provisioning.wyrwood.operator-key selects; check that the Wyrwood agent runs on this host and that Menagerie's policy offers that key"
 	case errors.Is(err, operator.ErrNotApproved):
 		return fmt.Sprintf("the operator key %s is pending, rejected or revoked; approve a pending key in the Wyrwood web interface", fingerprint)
 	case errors.Is(err, operator.ErrOutsideGrant):

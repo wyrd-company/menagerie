@@ -108,7 +108,9 @@ prepared](install.md#provisioning). The console shows these phases in a create:
 Each step is safe to repeat. A job that fails leaves what it finished, and
 **Start** continues from what is missing: it does not rotate the key or write
 the binding again. It replaces a container that has a name the definition no
-longer declares, because a rebuild that failed left it. A rebuild, an upgrade's
+longer declares, because a rebuild that failed left it. **Start** is off while a
+container runs, so after an upgrade that failed with the old container still
+running, **Stop** it, then **Start**. A rebuild, an upgrade's
 rebuild and an apply-branch's rebuild run the same steps without the commit and
 backup. A start of a container that exists goes on when Xolotl cannot be
 reached, with a note in the console; any other failure of a step fails the job.

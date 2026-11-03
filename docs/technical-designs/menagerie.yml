@@ -754,8 +754,9 @@ proposed-design:
     after a host restart as container-operations says. Its deployment names
     the consumer directory so that Docker never creates a missing source:
     Docker would create it as root, the start would succeed, and the agent
-    rejects a directory owned by another user. So its binding comes first,
-    then its container. Its UI is
+    rejects a directory owned by another user. So its first install makes the
+    directory by hand for the first create, and the agent keeps it from the
+    binding on. Its UI is
     not exposed to the public internet. Menagerie is bound to a Wyrwood policy
     that grants only what it uses: the SSH Transit key, signing with the
     GitHub App's Transit key, or both, read access to the registry
@@ -794,10 +795,10 @@ proposed-design:
     create stopped at each step and retried with start issues no second key
     and no second binding. A wrong access group fails with a clear job error.
     After a host restart the workspace and Menagerie return with no
-    host-specific unit. A rebuild and an upgrade keep the binding and use
-    fresh sockets. Delete leaves no binding and no live client key, and a
+    host-specific unit. A rebuild keeps the binding and its sockets, and an
+    upgrade that changes a declaration replaces the binding. Delete leaves no binding and no live client key, and a
     delete stopped at each step can be retried. A workspace with no
     declaration and no retirement record calls neither Wyrwood's operator
     interface nor Xolotl. An upgrade that fails after changing a declaration,
-    then a second such upgrade, then a start retires both old names and keys,
+    then a second such upgrade, then a stop and a start retires both old names and keys,
     and an upgrade that removes the declaration retires them at its end.

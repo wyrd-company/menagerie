@@ -9,8 +9,7 @@ services:
     # directory after it.
     container_name: menagerie
     # Docker restarts Menagerie after either of its services stops, which
-    # stops the container. After a host restart, see "After a host restart" in
-    # the install guide.
+    # stops the container. After a host restart the Wyrwood agent starts it.
     restart: unless-stopped
     ports:
       # The UI is not for the public internet: publish it on a private
@@ -40,9 +39,15 @@ services:
       # hooks and initializeCommand with only the workspace folder mounted.
       - /var/run/docker.sock:/var/run/docker.sock
       # The Wyrwood consumer directory: vault.sock and ssh-agent.sock. The
-      # agent creates it when it binds the container, under its consumer
-      # root, /run/wyrwood/containers unless the agent configures another.
-      - ${WYRWOOD_CONSUMER_DIRECTORY:-/run/wyrwood/containers/menagerie}:/run/wyrwood
+      # agent keeps it for the binding, under its consumer root,
+      # /run/wyrwood/containers unless the agent configures another. Create it
+      # once for the first create: Docker must not create a missing source, or
+      # Menagerie starts with no sockets after a host restart.
+      - type: bind
+        source: ${WYRWOOD_CONSUMER_DIRECTORY:-/run/wyrwood/containers/menagerie}
+        target: /run/wyrwood
+        bind:
+          create_host_path: false
       - ./config.yml:/etc/menagerie/config.yml:ro
       # - ./ca-bundle.pem:/etc/menagerie/ca-bundle.pem:ro
       # Toha's template cache and state; it survives recreating the container.
