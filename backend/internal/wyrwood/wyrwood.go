@@ -91,9 +91,11 @@ func ValidAgent(name string) error {
 }
 
 // ValidOperatorKey accepts what can select a key: text on one line with no
-// space at either end. Its error names no value.
+// space at either end. A tab stays, because a public key's fields can be
+// separated by one. Its error names no value.
 func ValidOperatorKey(selection string) error {
-	if selection == "" || strings.TrimSpace(selection) != selection || strings.ContainsFunc(selection, unicode.IsControl) {
+	control := func(r rune) bool { return r != '\t' && unicode.IsControl(r) }
+	if selection == "" || strings.TrimSpace(selection) != selection || strings.ContainsFunc(selection, control) {
 		return errors.New("must be a key's name, public key or SHA256 fingerprint on one line")
 	}
 	return nil

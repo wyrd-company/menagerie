@@ -482,6 +482,36 @@ func TestSelectionByFingerprint(t *testing.T) {
 	}
 }
 
+func TestSelectionByTabSeparatedPublicKey(t *testing.T) {
+	controller := startController(t)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring := sshagent.NewKeyring()
+	if err := keyring.Add(sshagent.AddedKey{PrivateKey: private, Comment: operatorName}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := ssh.NewPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.approve(ssh.FingerprintSHA256(key))
+	socket := filepath.Join(t.TempDir(), "ssh-agent.sock")
+	serveAgent(t, keyring, socket)
+	authorized := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
+	client, err := New(Config{
+		Controller: controller.url(), HostKey: controller.fingerprint(), Agent: sampleAgent,
+		OperatorKey: strings.Replace(authorized, " ", "\t", 1) + "\tsample-comment", Socket: socket,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := client.Read(testContext(t), sampleName); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestARecreatedSocketWorks(t *testing.T) {
 	controller := startController(t)
 	keyring := sshagent.NewKeyring()
@@ -953,8 +983,8 @@ func TestValidators(t *testing.T) {
 			[]string{"host", "sample-host", "host.example.test", strings.Repeat("a", 63)},
 			[]string{"", "-host", "host-with space", "host/x", "host:", strings.Repeat("a", 64), strings.Repeat(strings.Repeat("a", 63)+".", 4) + "a"}},
 		{"operator key", ValidOperatorKey,
-			[]string{operatorName, "ssh-ed25519 AAAA sample-comment", hostKey},
-			[]string{"", " sample", "sample ", "sample\nother", "sample\tother"}},
+			[]string{operatorName, "ssh-ed25519 AAAA sample-comment", "ssh-ed25519\tAAAA\tsample-comment", hostKey},
+			[]string{"", " sample", "sample ", "\tsample", "sample\t", "sample\nother", "sample\rother", "sample\x00other"}},
 	}
 	for _, test := range cases {
 		for _, value := range test.good {

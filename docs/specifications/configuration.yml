@@ -167,7 +167,7 @@ description: >-
   `agent` is the name of this host's Wyrwood agent, a host name of letters,
   digits, hyphens and dots; `operator-key` selects one key on `ssh-agent.sock`
   in `wyrwood-directory` by its name, public key or SHA256 fingerprint, on one
-  line with no space at either end. Menagerie offers the controller only that
+  line with no white space at either end. Menagerie offers the controller only that
   key, and proposes `menagerie-<agent>` as its label, or `menagerie` when that
   is too long. Each operation opens its own connection, and the connection to
   the agent, the connection to the controller and each request have 30 seconds.
