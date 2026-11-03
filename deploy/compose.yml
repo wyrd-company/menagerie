@@ -8,8 +8,9 @@ services:
     # Wyrwood binds the container by this name and names its consumer
     # directory after it.
     container_name: menagerie
-    # Docker restarts Menagerie after a host restart, and after either of its
-    # services stops, which stops the container.
+    # Docker restarts Menagerie after either of its services stops, which
+    # stops the container. After a host restart, see "After a host restart" in
+    # the install guide.
     restart: unless-stopped
     ports:
       # The UI is not for the public internet: publish it on a private

@@ -1,0 +1,20 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: workspace-delete-loses-ignored-files
+title: Deleting a workspace loses files the backup does not hold
+description: >-
+  Delete removes the workspace folder. The backup branch holds what Git tracks
+  and new files outside the ignore rules. Ignored files, such as cloned
+  repositories and agent state, exist only in the folder and are lost, and a
+  later create of that name replaces the backup branch. Mitigation: the manager
+  types the workspace's name in a screen that says this; delete commits and
+  backs up first, and a failed backup removes nothing; the backup branch stays
+  in the workspace repository until that later create.
+categories:
+  - operational
+likelihood: 2
+impact: 3
+response-strategy: mitigate
+status: mitigated

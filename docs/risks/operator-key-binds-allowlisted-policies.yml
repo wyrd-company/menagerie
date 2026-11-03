@@ -1,0 +1,28 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: operator-key-binds-allowlisted-policies
+title: Menagerie's operator key can bind allowlisted policies to any container
+description: >-
+  Whoever controls Menagerie can sign with its operator key, and through it
+  can bind an allowlisted policy, with any per-binding value, to any container
+  name on the agent the grant names. This includes reading another workspace's
+  Xolotl key by binding the shared policy with that workspace's value. The
+  scoped Xolotl key can issue and revoke keys in its key policies, so it can
+  also stop any workspace's gateway access. A declaration in a definition that
+  a devcontainer can edit asks for the same things at the next rebuild.
+  Mitigation: the grant allows only the agent of Menagerie's own host, an
+  allowlist of policies, and bind, unbind and read, with no policy write, so
+  the key reaches nothing beyond what root on that host already reaches through
+  its consumer directories; a binding that holds a policy outside the allowlist
+  is outside the grant; the private key stays in OpenBao; an operator revokes
+  the grant in the Wyrwood web interface; each action is audited under the key's
+  label. The grant has no default expiry, so that provisioning does not stop in
+  silence, and a stolen signature path works until someone revokes it.
+categories:
+  - security
+likelihood: 2
+impact: 4
+response-strategy: accept
+status: accepted

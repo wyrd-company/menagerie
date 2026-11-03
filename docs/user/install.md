@@ -160,7 +160,7 @@ edit both files.
 | `config.yml` at `/etc/menagerie/config.yml` | Both services read it. |
 | `SSL_CERT_FILE` and the bundle it names | Optional: a Git server whose certificate a private authority signed. See [Git hosts](#git-hosts). |
 | A volume at `/var/lib/menagerie` | Toha's template cache, the template service's session key, the services' home and the folder Toha builds an upgrade's candidate in. Without it they are lost when the container is recreated. |
-| `restart: unless-stopped` | Docker starts Menagerie after a host restart, and restarts it after either service stops. |
+| `restart: unless-stopped` | Docker restarts Menagerie after either service stops. A host restart needs more: see [After a host restart](#after-a-host-restart). |
 | Port `8080` | The web UI and workspace API. Publish it on a private address only. |
 
 Create the socket folder before the first start, owned by the workspace
@@ -265,6 +265,34 @@ Docker Hub base image on a host that reaches Docker Hub's anonymous pull
 limit, needs an entry for that registry; for Docker Hub use `docker.io` and
 a Docker Hub access token as the password. See
 [Configuration](configuration.md#registry-credentials).
+
+## After a host restart
+
+A host restart empties `/run`, and Docker starts containers before the
+Wyrwood agent runs. A bound container therefore does not come back with its
+sockets by itself.
+
+The `volumes` entry in `deploy/compose.yml` lets Docker create the missing
+consumer directory, as root, so Menagerie starts. The agent rejects a directory
+owned by another user, so Menagerie has no Wyrwood sockets and its backups,
+SSH templates and registry credentials fail. When the agent runs, repair it:
+
+```sh
+docker stop menagerie
+sudo rmdir /run/wyrwood/containers/menagerie
+sudo install -d -o wyrwood -g wyrwood -m 0700 /run/wyrwood/containers/menagerie
+docker start menagerie
+```
+
+Stop if `rmdir` fails, and do not delete the directory recursively. The agent
+applies the binding's access group when it opens the repaired directory. See
+[Wyrwood](https://wyrd.foo/docs/wyrwood) for the agent's rules.
+
+A devcontainer that mounts its consumer directory with `--mount` or a
+definition's `mounts` stays exited instead, with the missing directory in
+`docker inspect -f '{{.State.Error}}' <name>`. Run `docker start <name>` when
+the agent has recreated the directory's `vault.sock`. A one-shot host unit
+ordered after `wyrwood-agent.service` can do this at each boot.
 
 ## Upgrades
 

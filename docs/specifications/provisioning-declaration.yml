@@ -1,0 +1,62 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  references:
+    - menagerie
+    - configuration
+format: json-schema
+description: >-
+  A template opts in to provisioning by rendering a block at
+  `customizations.menagerie` in its `.devcontainer/devcontainer.json`, defined
+  by `assets/provisioning-declaration/menagerie-customization.schema.json`. An
+  absent block means no provisioning. Unknown keys are errors, so a block that
+  this Menagerie cannot read fails the job before any step instead of losing a
+  need in silence. Keys are camelCase, as the rest of a devcontainer definition
+  is.
+
+
+  An example, rendered for a workspace called `sample`:
+
+
+  ```jsonc
+
+  "runArgs": ["--name", "devcontainer-sample"],
+
+  "customizations": {
+    "menagerie": {
+      "wyrwood": {
+        "accessGroup": 1000,
+        "policies": ["workspace", "xolotl-client-key"],
+        "values": {"xolotl_key_policy": "devcontainer", "xolotl_key_name": "sample"}
+      },
+      "xolotl": {"keyPolicy": "devcontainer", "keyName": "sample"}
+    }
+  }
+
+  ```
+
+
+  `wyrwood` is required. `accessGroup` is the numeric group of the consumer
+  directory and its sockets; the container's user must have it. `policies` lists
+  shared Wyrwood policies, each on the operator key's allowlist. `values`, which
+  is optional, gives the values these policies read for this binding. A value
+  holds letters, digits, `_` and `-` only, so it cannot widen a policy's path.
+  Wyrwood refuses a binding that leaves a value a policy reads unset.
+
+
+  `xolotl` is optional. `keyPolicy` and `keyName` address the client key
+  `<keyPolicy>/<keyName>`, which Menagerie issues. A policy path that reads this
+  key takes these two names from `values`, so both appear twice; the key and the
+  path are separate systems and share no field.
+
+
+  The container name is not in the block. It is the `--name` value of `runArgs`,
+  in either the `--name value` or the `--name=value` form, and a definition with
+  a block and no name is refused. The block has no variable substitution: the
+  template renders its values. A block in a Compose definition is refused. Two
+  workspaces cannot declare one container name or one Xolotl key.
+validation-criteria: >-
+  `go test` of the package that reads the block parses a valid block with and
+  without `xolotl` and `values`, treats an absent block as no provisioning, and
+  rejects each invalid field, an unknown key, a block in a Compose definition, a
+  definition with no `--name`, and a name or key another workspace declares. It
+  checks that the keys of the schema equal the keys the parser accepts.

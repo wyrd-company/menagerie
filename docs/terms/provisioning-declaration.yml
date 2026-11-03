@@ -1,0 +1,8 @@
+$schema: https://refinery.systems/ontology/term
+title: Provisioning declaration
+description: >-
+  The `customizations.menagerie` block of a workspace's rendered devcontainer
+  definition, which declares what the workspace needs from Wyrwood and Xolotl.
+  A workspace without one is not provisioned.
+terms:
+  - workspace

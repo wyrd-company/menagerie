@@ -1,0 +1,6 @@
+$schema: https://refinery.systems/ontology/term
+title: Operator key
+description: >-
+  The OpenBao Transit key Menagerie uses, through its own SSH-agent socket, to
+  manage bindings on the Wyrwood controller. An operator approves it once and
+  sets its grant: the agents, policy names and actions it may use.

@@ -2,6 +2,8 @@ $schema: https://refinery.systems/ontology/risk
 relationships:
   mitigated-by:
     - menagerie
+  related-to:
+    - operator-key-binds-allowlisted-policies
 slug: menagerie-has-host-root
 title: Menagerie has root on the host
 description: >-
@@ -24,7 +26,10 @@ description: >-
   redirect the swap by replacing a folder above the candidate in between;
   that user already holds the Docker socket, as it holds the hook runner
   socket, whose credential route hands out read tokens. A body-inspecting
-  Docker proxy reduces this exposure further.
+  Docker proxy reduces this exposure further. Provisioning adds authority
+  beyond the host: an operator key on the Wyrwood controller and a scoped key
+  on Xolotl. Their grants keep what they reach within what root on this host
+  already reaches, as the risk of the operator key records.
 categories:
   - security
 likelihood: 2
