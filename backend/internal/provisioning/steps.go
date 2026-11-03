@@ -194,7 +194,7 @@ type bringKind struct {
 }
 
 func (s *Steps) run(ctx context.Context, folder string, p devcontainer.Progress, kind bringKind) error {
-	if err := s.refuseRemoving(folder, kind); err != nil {
+	if err := s.refuseRemoving(folder); err != nil {
 		return err
 	}
 	declaration, err := s.declaration(folder, p)

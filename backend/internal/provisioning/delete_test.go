@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +16,27 @@ import (
 var wholeDelete = []string{"stop", "save", "unbind container-sample", "remove-containers", "revoke host-sample/sample", "remove-folder"}
 
 func (h *host) deleteSample(s *Steps) error {
-	return s.Delete(context.Background(), folder, h, func(context.Context) error { return h.note("save") })
+	return h.deleteAt(s, folder)
+}
+
+func (h *host) deleteAt(s *Steps, at string) error {
+	return s.Delete(context.Background(), at, h, func(context.Context) error { return h.note("save") })
+}
+
+// sampleAt is a real folder of the sample's name that declares what the sample
+// declares, with or without a repository.
+func sampleAt(t *testing.T, h *host, repository bool) string {
+	t.Helper()
+	real := filepath.Join(t.TempDir(), "sample")
+	path := real
+	if repository {
+		path = filepath.Join(real, ".git")
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.definitions = map[string]devcontainer.Definition{real: h.definitions[folder]}
+	return real
 }
 
 func TestDeleteRunsEachStepInOrder(t *testing.T) {
@@ -40,22 +61,19 @@ func TestADeleteStoppedAtEachStepCanBeRetried(t *testing.T) {
 		t.Run(step, func(t *testing.T) {
 			h := newHost(t)
 			s := h.steps()
+			// The fake removal touches nothing, so the repository stays, and each
+			// retry backs up again.
+			real := sampleAt(t, h, true)
 			h.failOn[step] = errors.New("step failed")
-			if err := h.deleteSample(s); err == nil {
+			if err := h.deleteAt(s, real); err == nil {
 				t.Fatal("no failure")
 			}
 			h.failOn = map[string]error{}
 			h.calls = nil
-			if err := h.deleteSample(s); err != nil {
+			if err := h.deleteAt(s, real); err != nil {
 				t.Fatal(err)
 			}
-			want := slices.Clone(wholeDelete)
-			if step == "remove-folder" {
-				// The removal began, and TestARetryAfterTheRemovalBeganSkipsTheSave
-				// says why.
-				want = slices.DeleteFunc(want, func(call string) bool { return call == "save" })
-			}
-			h.wantCalls(t, want...)
+			h.wantCalls(t, wholeDelete...)
 		})
 	}
 }
@@ -187,18 +205,20 @@ func TestDeleteOfAnInvalidBlockActsOnWhatItNames(t *testing.T) {
 	h.wantCalls(t, "stop", "save", "remove-containers", "remove-folder")
 }
 
-// A removal can stop with any part of the folder left. The state that says so
-// is outside the folder, so what is left cannot change a retry.
-func TestARetryAfterTheRemovalBeganSkipsTheSave(t *testing.T) {
+// A removal can stop with any part of the folder left, once it has taken the
+// repository. The state that says so is outside the folder, so what is left
+// cannot change a retry.
+func TestARetryAfterTheRemovalTookTheRepositorySkipsTheSave(t *testing.T) {
 	h := newHost(t)
 	s := h.steps()
+	real := sampleAt(t, h, false)
 	h.failOn["remove-folder"] = errors.New("stopped part way")
-	if err := h.deleteSample(s); err == nil {
+	if err := h.deleteAt(s, real); err == nil {
 		t.Fatal("no failure")
 	}
 	h.failOn = map[string]error{}
 	h.calls = nil
-	if err := h.deleteSample(s); err != nil {
+	if err := h.deleteAt(s, real); err != nil {
 		t.Fatal(err)
 	}
 	if slices.Contains(h.seen(), "save") {
@@ -212,32 +232,60 @@ func TestARetryAfterTheRemovalBeganSkipsTheSave(t *testing.T) {
 	}
 }
 
-func TestNoJobStartsAFolderADeleteBeganToRemove(t *testing.T) {
+func TestNoJobStartsWhatARemovalLeft(t *testing.T) {
 	h := newHost(t)
 	s := h.steps()
+	real := sampleAt(t, h, false)
 	h.failOn["remove-folder"] = errors.New("stopped part way")
-	if err := h.deleteSample(s); err == nil {
+	if err := h.deleteAt(s, real); err == nil {
 		t.Fatal("no failure")
 	}
 	h.calls = nil
-	wantKind(t, s.Start(context.Background(), folder, h), KindDeleteUnfinished)
-	wantKind(t, s.Rebuild(context.Background(), folder, h), KindDeleteUnfinished)
+	wantKind(t, s.Start(context.Background(), real, h), KindDeleteUnfinished)
+	wantKind(t, s.Rebuild(context.Background(), real, h), KindDeleteUnfinished)
 	h.wantCalls(t)
 }
 
-// A process that stopped just after the removal leaves the state with no folder,
-// so a later create of that name ends it.
-func TestACreateEndsAnEarlierRemoval(t *testing.T) {
+// A removal that stopped before it took the repository left a folder that an
+// upgrade can still change, and whose changes may have no backup. A later create
+// of the name makes the same kind of folder, whose generated files may have none.
+func TestADeleteBacksUpAFolderThatHasARepository(t *testing.T) {
 	h := newHost(t)
 	s := h.steps()
+	real := sampleAt(t, h, true)
 	if err := s.opts.Records.Write("sample", Record{Removing: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Create(context.Background(), folder, h, func(context.Context) error { return nil }); err != nil {
+	if err := h.deleteAt(s, real); err != nil {
+		t.Fatal(err)
+	}
+	h.wantCalls(t, wholeDelete...)
+}
+
+func TestAStartOfAFolderThatHasARepositoryEndsTheState(t *testing.T) {
+	h := newHost(t)
+	s := h.steps()
+	real := sampleAt(t, h, true)
+	h.definitions[real] = devcontainer.Definition{}
+	if err := s.opts.Records.Write("sample", Record{Removing: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(context.Background(), real, h); err != nil {
 		t.Fatal(err)
 	}
 	record, err := s.opts.Records.Read("sample")
 	if err != nil || record.Removing {
 		t.Errorf("record %+v %v", record, err)
 	}
+}
+
+// A folder that lost its repository with no delete under way has files with no
+// backup, so the save runs, and it fails the job there.
+func TestAFolderWithNoRepositoryAndNoRemovalStillSaves(t *testing.T) {
+	h := newHost(t)
+	real := sampleAt(t, h, false)
+	if err := h.deleteAt(h.steps(), real); err != nil {
+		t.Fatal(err)
+	}
+	h.wantCalls(t, wholeDelete...)
 }

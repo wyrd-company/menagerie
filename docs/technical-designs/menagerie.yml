@@ -377,10 +377,14 @@ proposed-design:
     folder and then the workspace folder; a throwaway container that runs as
     root, with only that folder mounted, first renames the repository's `.git`,
     so that from then on no job commits what is left, and then removes the rest.
-    Before that container runs, the workspace's retirement record says the
-    removal began, in Menagerie's data volume, which no devcontainer can reach
-    and no removal can take part of: a retried delete skips the backup, a start
-    or rebuild fails as `delete-unfinished`, and a create ends the state. `unbind`
+    Before that container runs, the workspace's retirement record says so, in
+    Menagerie's data volume, which no devcontainer can reach and no removal can
+    take part of. Only that record with `.git` gone means the removal began: a
+    retried delete then skips the backup, and a start or rebuild fails as
+    `delete-unfinished`. Every job that writes to a folder needs its repository,
+    so nothing was written after the backup. A folder that has `.git`, which a
+    stopped removal did not reach or a later create made, is backed up as usual,
+    and a start or rebuild ends the state. `unbind`
     and `revoke-key` also take what a retirement record names, and the record
     goes with the folder. Without a declaration and a record, `unbind` and
     `revoke-key` do not run. A name or key another workspace's definition

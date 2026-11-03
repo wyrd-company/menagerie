@@ -24,9 +24,10 @@ const DefaultRecords = "/var/lib/menagerie/provisioning"
 type Record struct {
 	Names []string `json:"names,omitempty"`
 	Keys  []Key    `json:"keys,omitempty"`
-	// Removing says that a delete finished its backup and began to remove the
+	// Removing says that a delete finished its backup and went on to remove the
 	// folder. It is kept here because a devcontainer can write anything in the
-	// folder, and a removal can take any of it first.
+	// folder, and a removal can take any of it first. Only with the folder's
+	// repository gone does it say that the removal began: see removalBegan.
 	Removing bool `json:"removing,omitempty"`
 }
 

@@ -213,8 +213,8 @@ description: >-
   fails as `backup-failed` and removes nothing. `unbind`,
   `remove-container`, `revoke-key` and `remove-folder` follow, each treating what
   is already gone as done, so a failed delete is retried by a new `delete`. The
-  folder goes last. Once `remove-folder` begins, a retry skips the backup, and a
-  `start` or `rebuild` fails as `delete-unfinished`. `remove-folder` needs a runner image with `sh`, `mv` and
+  folder goes last. Once `remove-folder` has taken the repository, a retry skips
+  the backup, and a `start` or `rebuild` fails as `delete-unfinished`. `remove-folder` needs a runner image with `sh`, `mv` and
   `find`, and fails as `runner-image-unavailable` when there is no image. The
   backup branch, images, Compose volumes and networks, and bind sources outside
   the folder stay. Ignored files are lost.

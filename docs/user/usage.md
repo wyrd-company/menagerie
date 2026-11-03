@@ -308,8 +308,9 @@ the backup and are lost. The console shows these phases:
    `find`.
 
 A failed delete keeps what it finished. **Delete** again continues from what is
-left. Once `remove-folder` has begun, **Start** and **Rebuild** fail as
-`delete-unfinished`, and **Delete** finishes the removal with no second backup.
+left. Once `remove-folder` has taken the repository, **Start** and **Rebuild**
+fail as `delete-unfinished`, and **Delete** finishes the removal with no second
+backup.
 
 These stay: the workspace's branch in the workspace repository, images, Compose
 volumes and networks, and bind sources outside the folder. A later create of that

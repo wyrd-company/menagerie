@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
@@ -61,7 +62,7 @@ func (s *Steps) Delete(ctx context.Context, folder string, p devcontainer.Progre
 	if err != nil {
 		return err
 	}
-	if began.Removing {
+	if removalBegan(began, folder) {
 		fmt.Fprintln(p.Log(""), "an earlier delete backed this workspace up and began to remove its folder, so there is no backup to make")
 	} else if err := save(ctx); err != nil {
 		fmt.Fprintln(p.Log(""), stoppedNotice)
@@ -96,8 +97,9 @@ func (s *Steps) Delete(ctx context.Context, folder string, p devcontainer.Progre
 		}
 	}
 	// Every name and key of the record is done, and a retried delete acts on the
-	// declaration again while the folder has one. From here a retry does not
-	// back up what is left of the folder, and no job starts its devcontainer.
+	// declaration again while the folder has one. Once the removal takes the
+	// repository, a retry does not back up what is left of the folder, and no job
+	// starts its devcontainer.
 	if err := s.opts.Records.Write(filepath.Base(folder), Record{Removing: true}); err != nil {
 		return err
 	}
@@ -107,17 +109,29 @@ func (s *Steps) Delete(ctx context.Context, folder string, p devcontainer.Progre
 	return s.opts.Records.Write(filepath.Base(folder), Record{})
 }
 
-// refuseRemoving keeps a job from starting a devcontainer on a folder a delete
-// began to remove, whose files would have no backup at the next delete. A create
-// starts a new folder, or backs up the one it finishes, so it ends the state, as
-// a process that stopped just after the removal can leave it.
-func (s *Steps) refuseRemoving(folder string, kind bringKind) error {
+// removalBegan says that a delete backed the folder up and has taken its
+// repository. The record alone does not say so: a removal that stopped before
+// it took the repository leaves a folder that jobs can still change, and a folder
+// of this name can be new. Each job that writes to a folder needs its repository,
+// so with the repository gone nothing was written after the backup.
+func removalBegan(record Record, folder string) bool {
+	if !record.Removing {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(folder, ".git"))
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// refuseRemoving keeps a job from starting a devcontainer on what is left of a
+// folder. A folder that still has its repository was not touched, so the state
+// ends.
+func (s *Steps) refuseRemoving(folder string) error {
 	name := filepath.Base(folder)
 	record, err := s.opts.Records.Read(name)
 	if err != nil || !record.Removing {
 		return err
 	}
-	if kind.save == nil {
+	if removalBegan(record, folder) {
 		return &jobs.Failure{Kind: KindDeleteUnfinished, Err: errors.New("a delete began to remove this workspace's folder; delete the workspace again to finish it")}
 	}
 	record.Removing = false
