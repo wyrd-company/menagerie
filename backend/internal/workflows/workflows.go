@@ -7,9 +7,9 @@
 // Package workflows runs the create and upgrade operations. Each is a job
 // that holds its workspace's job slot from the request to its end,
 // including while its template interview waits for answers. Create
-// interviews, initializes the workspace repository, generates, commits the
-// independent root of the workspace branch, backs it up and starts the
-// devcontainer. Upgrade backs up local changes to tracked files, interviews,
+// interviews, initializes the workspace repository, generates, checks what
+// the definition needs from the host, commits the independent root of the
+// workspace branch, backs it up and starts the devcontainer. Upgrade backs up local changes to tracked files, interviews,
 // applies the merge, commits, backs up and rebuilds. Apply-branch fetches a
 // branch of the workspace repository, backs up every local change, brings
 // the branch into the workspace, backs up and rebuilds.
@@ -45,8 +45,9 @@ type Templates interface {
 	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
 }
 
-// Runtime starts, stops and rebuilds devcontainers, reads their state, and
-// lists the running containers that mount a folder.
+// Runtime starts, stops and rebuilds devcontainers, reads their state,
+// lists the running containers that mount a folder, and checks what a
+// definition needs from the host.
 // *devcontainer.Runtime satisfies it.
 type Runtime interface {
 	Status(ctx context.Context, folder string) (devcontainer.Status, error)
@@ -54,6 +55,7 @@ type Runtime interface {
 	Stop(ctx context.Context, folder string, p devcontainer.Progress) error
 	Rebuild(ctx context.Context, folder string, p devcontainer.Progress) error
 	Mounting(ctx context.Context, folder string) ([]string, error)
+	CheckHostPrerequisites(ctx context.Context, folder string, p devcontainer.Progress) error
 }
 
 // Options compose the workflows.

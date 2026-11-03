@@ -72,6 +72,10 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 		return &jobs.Failure{Kind: KindNotApplied, Err: fmt.Errorf("generation reported %s and wrote nothing; %s", applied.Outcome, c.recovery("holds only the initialized repository"))}
 	}
 
+	if err := c.w.opts.Runtime.CheckHostPrerequisites(ctx, c.folder, run); err != nil {
+		return api.ContainerFailure(fmt.Errorf("%w; nothing was committed or started; %s", err, c.recovery("holds the generated files")))
+	}
+
 	run.Phase("commit")
 	commit, err := backup.CommitRoot(c.folder, c.name, output(applied), fmt.Sprintf("Create workspace %s from %s", c.name, c.template), run.Log("commit: "))
 	if err != nil {

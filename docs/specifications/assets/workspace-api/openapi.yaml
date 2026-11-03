@@ -348,6 +348,7 @@ components:
             - initialize-command-failed
             - registry-credentials-unavailable
             - runner-image-unavailable
+            - host-prerequisites-missing
             - internal-error
             - workspace-exists
             - template-refused

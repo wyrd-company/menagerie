@@ -104,11 +104,13 @@ const (
 	KindInitializeCommandFailed        = "initialize-command-failed"
 	KindRegistryCredentialsUnavailable = "registry-credentials-unavailable"
 	KindRunnerImageUnavailable         = "runner-image-unavailable"
+	KindHostPrerequisitesMissing       = "host-prerequisites-missing"
 )
 
 // ContainerFailure names the job error kind of a container operation
 // failure: registry-credentials-unavailable, runner-image-unavailable,
-// initialize-command-failed, or the default operation-failed.
+// initialize-command-failed, host-prerequisites-missing, or the default
+// operation-failed.
 func ContainerFailure(err error) error {
 	var credErr *registrycreds.Error
 	if errors.As(err, &credErr) {
@@ -121,6 +123,10 @@ func ContainerFailure(err error) error {
 	var initErr *devcontainer.InitializeError
 	if errors.As(err, &initErr) {
 		return &jobs.Failure{Kind: KindInitializeCommandFailed, Err: err}
+	}
+	var missing *devcontainer.HostPrerequisitesError
+	if errors.As(err, &missing) {
+		return &jobs.Failure{Kind: KindHostPrerequisitesMissing, Err: err}
 	}
 	return err
 }

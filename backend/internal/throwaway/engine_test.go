@@ -20,6 +20,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/mount"
 	dockerclient "github.com/docker/docker/client"
 )
 
@@ -382,4 +383,74 @@ func TestAFoldersCommandMountsOnlyItsFolder(t *testing.T) {
 	if len(mounts) != 1 || mounts[0].Type != "bind" || mounts[0].Source != c.Folder || mounts[0].Target != c.Folder || len(e.creates[0].HostConfig.Binds) != 0 {
 		t.Fatalf("mounts %+v binds %v", mounts, e.creates[0].HostConfig.Binds)
 	}
+}
+
+// TestABindSourceCheckOnlyCreatesAndRemoves mounts the source read-only in
+// a labelled container that is removed and never started.
+func TestABindSourceCheckOnlyCreatesAndRemoves(t *testing.T) {
+	e, client := newEngine(t)
+	e.pulled = true
+	// The fake Engine fails the test's start, which no check may reach.
+	e.fail = map[string]string{"start": "started", "attach": "attached"}
+	found, err := NewDocker(client, DockerOptions{Root: "/srv"}).BindSourceExists(context.Background(), "job-1", "runner:sample", "/present", nil)
+	if err != nil || !found {
+		t.Fatalf("found %t, %v", found, err)
+	}
+	if len(e.creates) != 1 {
+		t.Fatalf("creates %+v", e.creates)
+	}
+	req := e.creates[0]
+	if got := req.HostConfig.Mounts; len(got) != 1 || got[0].Type != mount.TypeBind || got[0].Source != "/present" || !got[0].ReadOnly {
+		t.Fatalf("mounts %+v", got)
+	}
+	if req.Labels[LabelKind] != KindBindSourceCheck || req.Labels[LabelRoot] != "/srv" || req.Labels[LabelJob] != "job-1" {
+		t.Fatalf("labels %v", req.Labels)
+	}
+	if left := e.left(); len(left) != 0 {
+		t.Fatalf("left %v", left)
+	}
+	if len(e.removed) != 1 {
+		t.Fatalf("removed %v", e.removed)
+	}
+}
+
+func TestABindSourceCheckTellsAMissingSourceFromAnotherRefusal(t *testing.T) {
+	refusal := func(body string) func(http.ResponseWriter, *http.Request, func() string) {
+		return func(w http.ResponseWriter, _ *http.Request, _ func() string) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(body))
+		}
+	}
+	t.Run("missing", func(t *testing.T) {
+		e, client := newEngine(t)
+		e.pulled = true
+		e.onCreate = refusal(`{"message":"invalid mount config for type \"bind\": bind source path does not exist: /absent"}`)
+		found, err := NewDocker(client, DockerOptions{Root: "/srv"}).BindSourceExists(context.Background(), "job-1", "runner:sample", "/absent", nil)
+		if err != nil || found {
+			t.Fatalf("found %t, %v", found, err)
+		}
+	})
+	t.Run("another refusal hides the Engine's text", func(t *testing.T) {
+		e, client := newEngine(t)
+		e.pulled = true
+		e.onCreate = refusal(`{"message":"engine-text-sample"}`)
+		_, err := NewDocker(client, DockerOptions{Root: "/srv"}).BindSourceExists(context.Background(), "job-1", "runner:sample", "/absent", nil)
+		var run *RunError
+		if !errors.As(err, &run) || run.Stage != StageCreate || run.Class != "invalid-argument" {
+			t.Fatalf("error %v", err)
+		}
+		if strings.Contains(err.Error(), "engine-text-sample") {
+			t.Fatalf("error carries the Engine's text: %v", err)
+		}
+	})
+	t.Run("a lost image fails as an image failure", func(t *testing.T) {
+		e, client := newEngine(t)
+		e.fail = map[string]string{"pull": "refused"}
+		_, err := NewDocker(client, DockerOptions{Root: "/srv"}).BindSourceExists(context.Background(), "job-1", "runner:sample", "/absent", nil)
+		var imageErr *ImageError
+		if !errors.As(err, &imageErr) {
+			t.Fatalf("error %v", err)
+		}
+	})
 }

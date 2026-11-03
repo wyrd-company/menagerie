@@ -260,3 +260,59 @@ func TestCreateAndUpgradeRequestsAreCheckedBeforeAnyJob(t *testing.T) {
 		t.Fatal("a refused request started a job")
 	}
 }
+
+// TestMissingHostPrerequisitesStopACreateBeforeItsCommit checks that the
+// generated definition is what the check reads, and that a failed check
+// leaves no commit, backup or start.
+func TestMissingHostPrerequisitesStopACreateBeforeItsCommit(t *testing.T) {
+	w := newWorld(t)
+	missing := &devcontainer.HostPrerequisitesError{BindSources: []string{"/absent/one", "/absent/two"}, Networks: []string{"absent-net"}}
+	w.rt.failOn = map[string]error{"host-prerequisites": missing}
+	var generated bool
+	var head error
+	w.rt.onCheck = func(folder string) {
+		_, err := os.Stat(filepath.Join(folder, ".toha.json"))
+		generated = err == nil
+		repo, err := git.PlainOpen(folder)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_, head = repo.Head()
+	}
+	job := w.startJob(t, "create", "alpha", "sample-v1")
+	waitWaiting(t, job, 0)
+	w.answer(t, job, sessionAsking)
+	snap := waitEnded(t, job)
+	if !generated {
+		t.Error("the check ran before the definition was rendered")
+	}
+	if head == nil {
+		t.Error("the check ran after the commit")
+	}
+	if snap.State != jobs.Failed || snap.Error.Kind != api.KindHostPrerequisitesMissing {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	for _, want := range []string{"/absent/one, /absent/two", "absent-net", "nothing was committed or started", "remove it before creating workspace alpha again"} {
+		if !strings.Contains(snap.Error.Message, want) {
+			t.Errorf("message %q lacks %q", snap.Error.Message, want)
+		}
+	}
+	if got := w.rt.seen(); len(got) != 0 {
+		t.Errorf("runtime %v", got)
+	}
+	remote, err := git.PlainOpen(w.remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.Reference("refs/heads/alpha", false); err == nil {
+		t.Error("backed up after a failed check")
+	}
+	repo, err := git.PlainOpen(filepath.Join(w.root, "alpha"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Head(); err == nil {
+		t.Error("committed after a failed check")
+	}
+}

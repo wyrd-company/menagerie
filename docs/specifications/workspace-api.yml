@@ -53,14 +53,14 @@ description: >-
   and every client that sees the result event can start the next job.
   `phase` names the current step, for example `read-definition`,
   `initialize-command`, `build`, `remove-container`, `up`, `stop`,
-  `interview`, `initialize-repository`, `generate`, `fetch`, `plan`,
-  `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
+  `interview`, `initialize-repository`, `generate`, `host-prerequisites`,
+  `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `runner-image-unavailable`, `operation-failed` or `internal-error`, and
   for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
-  `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
-  or `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
+  `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`,
+  `host-prerequisites-missing` or `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
   for `apply-branch` `branch-not-found`, `fetch-failed`, `backup-failed`,
   `not-applicable` or `apply-failed`. Its message says what was written and
   what recovery is needed.

@@ -5,7 +5,8 @@
 // ---
 
 // Package throwaway runs template hooks and initializeCommand in throwaway
-// containers through the Docker Engine API. Each command gets its own
+// containers through the Docker Engine API, and asks the Engine whether a
+// bind source exists with a throwaway container it never starts. Each command gets its own
 // container: the workspace folder bind-mounted read-write at its own path,
 // or a candidate folder copied in and back, and nothing else, no
 // environment beyond what the caller gives and the image's own, the
@@ -43,8 +44,8 @@ import (
 
 // Labels every throwaway container carries.
 const (
-	// LabelKind names what the container runs: KindHook or
-	// KindInitializeCommand.
+	// LabelKind names what the container is for: KindHook,
+	// KindInitializeCommand or KindBindSourceCheck.
 	LabelKind = "menagerie.throwaway"
 	// LabelRoot is the workspace root of the Menagerie that created it, so
 	// two Menageries on one Docker Engine never remove each other's.
@@ -60,6 +61,7 @@ const (
 const (
 	KindHook              = "hook"
 	KindInitializeCommand = "initialize-command"
+	KindBindSourceCheck   = "bind-source-check"
 )
 
 // Command is one command to run in a throwaway container.
@@ -102,6 +104,14 @@ type Containers interface {
 	// Run runs c and returns its exit code. A cancelled ctx removes the
 	// container, and Run returns only after that removal was attempted.
 	Run(ctx context.Context, c Command) (int, error)
+}
+
+// BindSources asks the Docker Engine whether a bind source exists on its
+// host. *Docker satisfies it.
+type BindSources interface {
+	// BindSourceExists reports whether the Engine has source. job labels
+	// what it creates and log receives its notes, such as an image pull.
+	BindSourceExists(ctx context.Context, job, image, source string, log io.Writer) (bool, error)
 }
 
 // RegistryAuth returns the Engine API X-Registry-Auth value for an image
@@ -362,6 +372,54 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 		return -1, fmt.Errorf("cancelled: %w", context.Cause(ctx))
 	}
 }
+
+// BindSourceExists creates a container that mounts source and removes it
+// without starting it: the Engine refuses to create a bind mount whose
+// source its host does not have. Nothing runs and nothing on the host
+// changes. Every error it returns is a *RunError, an *ImageError, or a
+// fixed sentence.
+func (d *Docker) BindSourceExists(ctx context.Context, job, ref, source string, log io.Writer) (bool, error) {
+	if err := d.ensureImage(ctx, ref, orDiscard(log)); err != nil {
+		return false, &ImageError{Image: ref, Err: err}
+	}
+	id, err := randomID()
+	if err != nil {
+		return false, errors.New("no random container id could be drawn")
+	}
+	labels := map[string]string{}
+	for k, v := range d.opts.Labels {
+		labels[k] = v
+	}
+	labels[LabelKind], labels[LabelRoot], labels[LabelJob], labels[LabelID] = KindBindSourceCheck, d.opts.Root, job, id
+	// As in Run, the creation runs to its reply so its id is never lost.
+	createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	created, err := d.client.ContainerCreate(createCtx, &container.Config{
+		Image:      ref,
+		Entrypoint: []string{"true"},
+		User:       d.opts.User,
+		Labels:     labels,
+	}, &container.HostConfig{
+		Mounts:      []mount.Mount{{Type: mount.TypeBind, Source: source, Target: bindSourceCheckTarget, ReadOnly: true}},
+		NetworkMode: "none",
+		SecurityOpt: []string{"no-new-privileges"},
+	}, nil, nil, "")
+	cancel()
+	if err != nil {
+		if cerrdefs.IsInvalidArgument(err) && strings.Contains(err.Error(), noBindSource) {
+			return false, nil
+		}
+		return false, errors.Join(failed(StageCreate, err, ""), d.removeLabelled(ctx, id))
+	}
+	return true, d.remove(ctx, created.ID)
+}
+
+const (
+	// bindSourceCheckTarget is where a bind source check would mount its
+	// source. It is never started, so no process sees it.
+	bindSourceCheckTarget = "/menagerie-bind-source-check"
+	// noBindSource is the Engine's refusal of a missing bind source.
+	noBindSource = "bind source path does not exist"
+)
 
 // remove force-removes a container and its anonymous volumes, killing a
 // command that still runs. It outlives a cancelled ctx by at most

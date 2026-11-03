@@ -94,7 +94,11 @@ type Options struct {
 	// Containers runs initializeCommand in throwaway containers. Nil fails
 	// a definition that has one.
 	Containers throwaway.Containers
-	// RunnerImage returns the image initializeCommand runs in.
+	// BindSources asks the Docker Engine whether a bind source exists. Nil
+	// fails the check of a definition that names one outside its folder.
+	BindSources throwaway.BindSources
+	// RunnerImage returns the image initializeCommand runs in, and the
+	// image of a bind source check.
 	RunnerImage func(ctx context.Context) (string, error)
 	// Own lists Menagerie's own container ids, which Mounting leaves out:
 	// Menagerie mounts the workspace root.
@@ -139,7 +143,8 @@ func (r *Runtime) Status(ctx context.Context, folder string) (Status, error) {
 	return Status{State: StateStopped, ContainerID: info.ID}, nil
 }
 
-// Start runs initializeCommand and brings the devcontainer up, creating
+// Start creates the missing bind source folders inside the workspace
+// folder, runs initializeCommand and brings the devcontainer up, creating
 // it when none exists. It follows devcontainer-builder's up sequencing:
 // build the current definition when it needs a build, then Up, which
 // reuses and starts an existing container and runs lifecycle phases
@@ -148,7 +153,8 @@ func (r *Runtime) Start(ctx context.Context, folder string, p Progress) error {
 	return r.bringUp(ctx, folder, p, false)
 }
 
-// Rebuild runs initializeCommand, builds the current definition, removes
+// Rebuild creates the missing bind source folders inside the workspace
+// folder, runs initializeCommand, builds the current definition, removes
 // the workspace's container and brings a new one up. Only the container
 // labelled for the workspace is removed (in Compose, the primary
 // service): named volumes, networks and other services are kept, and
@@ -168,6 +174,9 @@ func (r *Runtime) bringUp(ctx context.Context, folder string, p Progress, replac
 		fmt.Fprintf(p.Log(""), "localEnv %s is not in local-env; it resolves to its default value\n", name)
 	}
 	env := local.values
+	if err := createBindSources(ctx, dc, folder, env, p); err != nil {
+		return err
+	}
 	socket, err := r.workspaceSocket(dc, folder, p)
 	if err != nil {
 		return err

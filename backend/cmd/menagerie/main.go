@@ -245,7 +245,7 @@ func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspac
 	} else if n > 0 {
 		log.Printf("menagerie: removed %d leftover throwaway containers", n)
 	}
-	opts.Containers, opts.RunnerImage = runner, images.ForWorkspace
+	opts.Containers, opts.BindSources, opts.RunnerImage = runner, runner, images.ForWorkspace
 	return containers{docker: runner, images: images, hooks: throwaway.NewHookRunner(runner, cfg.TemplateService.CandidateFolder)}
 }
 

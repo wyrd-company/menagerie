@@ -184,6 +184,8 @@ type fakeRuntime struct {
 	fail   error
 	failOn map[string]error
 	onStop func()
+	// onCheck observes each host prerequisites check.
+	onCheck func(folder string)
 	// state is the devcontainer's state before a stop, running when
 	// empty; mounting are the containers Mounting reports.
 	state    string
@@ -210,6 +212,18 @@ func (r *fakeRuntime) Mounting(context.Context, string) ([]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.mounting, r.failOn["mounting"]
+}
+
+// CheckHostPrerequisites is not a call that seen reports: only a create
+// makes it, and onCheck and failOn are how a test observes it.
+func (r *fakeRuntime) CheckHostPrerequisites(_ context.Context, folder string, p devcontainer.Progress) error {
+	p.Phase("host-prerequisites")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.onCheck != nil {
+		r.onCheck(folder)
+	}
+	return r.failOn["host-prerequisites"]
 }
 
 func (r *fakeRuntime) do(op, folder string, p devcontainer.Progress) error {

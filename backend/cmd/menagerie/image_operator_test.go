@@ -67,6 +67,7 @@ func operatorTemplate(t *testing.T, dir string, version int) {
   "name": "sample",
   "build": { "dockerfile": "Dockerfile" },
   "remoteUser": "sample",
+  "mounts": ["type=bind,source=${localWorkspaceFolder}/created-source,target=/mnt/created-source"],
   "initializeCommand": "mkdir -p markers && echo initialized > markers/initialize.txt"
 }
 `)
@@ -401,7 +402,7 @@ workspace-socket:
 		if snap.State != jobs.Succeeded {
 			t.Fatalf("create ended %s: %+v\n%s", snap.State, snap.Error, c.logs(time.Time{}))
 		}
-		for _, rel := range []string{"result.txt", "hook-marker.txt", ".toha.json", "markers/initialize.txt", ".git/HEAD"} {
+		for _, rel := range []string{"result.txt", "hook-marker.txt", ".toha.json", "markers/initialize.txt", ".git/HEAD", "created-source"} {
 			if _, err := os.Stat(filepath.Join(folder, rel)); err != nil {
 				t.Errorf("%s: %v", rel, err)
 			}
