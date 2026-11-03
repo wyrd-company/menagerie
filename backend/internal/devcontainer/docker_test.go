@@ -255,6 +255,59 @@ const singleDefinition = `{
 
 func single(value string) string { return strings.Replace(singleDefinition, "%s", value, 1) }
 
+// A name from runArgs is the container's name through stop, start and rebuild,
+// and a ",ro" suffix on an object mount's target mounts read-only at the path
+// before the suffix.
+func TestRunArgsNameAndReadOnlyMountTarget(t *testing.T) {
+	h := newHarness(t)
+	name := "sample-" + strings.ToLower(strings.NewReplacer("/", "-", "_", "-").Replace(h.runID))
+	folder := h.workspace("named-space", map[string]string{
+		".devcontainer/devcontainer.json": `{
+  "image": "` + baseImage + `",
+  "runArgs": ["--name", "` + name + `"],
+  "mounts": [{"source": "${localWorkspaceFolder}/shared", "target": "/shared,ro", "type": "bind"}]
+}`,
+		"shared/sample.txt": "sample\n",
+	})
+
+	check := func(stage string) string {
+		t.Helper()
+		s := h.status(folder)
+		if s.State != devcontainer.StateRunning {
+			t.Fatalf("%s: %+v", stage, s)
+		}
+		info := h.inspect(s.ContainerID)
+		if info.Name != "/"+name {
+			t.Fatalf("%s: container name %q, want %q", stage, info.Name, "/"+name)
+		}
+		var found bool
+		for _, m := range info.Mounts {
+			if m.Destination == "/shared" {
+				found = true
+				if m.RW {
+					t.Fatalf("%s: /shared is writable: %+v", stage, m)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("%s: no mount at /shared: %+v", stage, info.Mounts)
+		}
+		return s.ContainerID
+	}
+
+	h.mustRun(h.rt.Start, folder)
+	first := check("start")
+	h.mustRun(h.rt.Stop, folder)
+	h.mustRun(h.rt.Start, folder)
+	if again := check("restart"); again != first {
+		t.Fatalf("restart replaced container %s with %s", first, again)
+	}
+	h.mustRun(h.rt.Rebuild, folder)
+	if rebuilt := check("rebuild"); rebuilt == first {
+		t.Fatalf("rebuild kept container %s", first)
+	}
+}
+
 func TestSingleContainerStartStopRebuild(t *testing.T) {
 	h := newHarness(t)
 	folder := h.workspace("single-space", map[string]string{
