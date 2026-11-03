@@ -641,16 +641,19 @@ func (r *Runtime) RemoveContainers(ctx context.Context, folder string, p Progres
 	return r.removeWorkspaceContainers(ctx, folder, p)
 }
 
-// RemovingMark is the name a delete gives a workspace's .git folder before it
+// removedRepository is the name a removal gives a workspace's .git before it
 // removes the rest, so that from then on no job can commit what is left of the
-// folder, and a retried delete knows that its backup has run.
-const RemovingMark = ".menagerie-removing"
+// folder. Nothing reads it: the workspace can hold a file of that name.
+const removedRepository = ".menagerie-removing"
 
 // removalScript removes everything in the working directory, which is a
 // workspace folder mounted at its own path. Renaming is one step, so a removal
 // that stops leaves either the whole repository or none under its name.
 const removalScript = `set -e
-if [ -e .git ] || [ -L .git ]; then mv .git ` + RemovingMark + `; fi
+if [ -e .git ] || [ -L .git ]; then
+  rm -rf -- ` + removedRepository + `
+  mv .git ` + removedRepository + `
+fi
 find . -mindepth 1 -delete
 `
 

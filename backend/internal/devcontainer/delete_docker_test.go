@@ -24,6 +24,8 @@ func TestRemoveFolderRemovesWhatTheServicesUserCannot(t *testing.T) {
 		".devcontainer/devcontainer.json": `{"image": "` + baseImage + `"}`,
 		".git/HEAD":                       "ref: refs/heads/removed-space\n",
 		"kept/file":                       "content\n",
+		// The name a removal gives the repository, held by the workspace.
+		".menagerie-removing": "the workspace's own\n",
 	})
 	outside := filepath.Join(h.root, "outside-file")
 	if err := os.WriteFile(outside, []byte("stays\n"), 0o644); err != nil {

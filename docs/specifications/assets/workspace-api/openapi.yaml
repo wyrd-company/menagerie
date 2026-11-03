@@ -405,6 +405,7 @@ components:
             - not-applicable
             - apply-failed
             - delete-refused
+            - delete-unfinished
         message:
           type: string
     StateEvent:

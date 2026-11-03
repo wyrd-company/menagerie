@@ -80,7 +80,7 @@ description: >-
   `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `runner-image-unavailable`, `provisioning-invalid`, `provisioning-unavailable`,
-  `provisioning-not-ready`, `host-prerequisites-missing`, `delete-refused`, `operation-failed` or
+  `provisioning-not-ready`, `host-prerequisites-missing`, `delete-refused`, `delete-unfinished`, `operation-failed` or
   `internal-error`, and for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,
   `generation-failed`, `upgrade-failed`, `not-applied`, `merge-conflicted`
@@ -213,7 +213,8 @@ description: >-
   fails as `backup-failed` and removes nothing. `unbind`,
   `remove-container`, `revoke-key` and `remove-folder` follow, each treating what
   is already gone as done, so a failed delete is retried by a new `delete`. The
-  folder goes last. `remove-folder` needs a runner image with `sh`, `mv` and
+  folder goes last. Once `remove-folder` begins, a retry skips the backup, and a
+  `start` or `rebuild` fails as `delete-unfinished`. `remove-folder` needs a runner image with `sh`, `mv` and
   `find`, and fails as `runner-image-unavailable` when there is no image. The
   backup branch, images, Compose volumes and networks, and bind sources outside
   the folder stay. Ignored files are lost.

@@ -57,7 +57,13 @@ func (s *Steps) Delete(ctx context.Context, folder string, p devcontainer.Progre
 		fmt.Fprintln(p.Log(""), stoppedNotice)
 		return err
 	}
-	if err := save(ctx); err != nil {
+	began, err := s.opts.Records.Read(filepath.Base(folder))
+	if err != nil {
+		return err
+	}
+	if began.Removing {
+		fmt.Fprintln(p.Log(""), "an earlier delete backed this workspace up and began to remove its folder, so there is no backup to make")
+	} else if err := save(ctx); err != nil {
 		fmt.Fprintln(p.Log(""), stoppedNotice)
 		return err
 	}
@@ -90,11 +96,32 @@ func (s *Steps) Delete(ctx context.Context, folder string, p devcontainer.Progre
 		}
 	}
 	// Every name and key of the record is done, and a retried delete acts on the
-	// declaration again while the folder has one.
-	if err := s.opts.Records.Write(filepath.Base(folder), Record{}); err != nil {
+	// declaration again while the folder has one. From here a retry does not
+	// back up what is left of the folder, and no job starts its devcontainer.
+	if err := s.opts.Records.Write(filepath.Base(folder), Record{Removing: true}); err != nil {
 		return err
 	}
-	return s.opts.Runtime.RemoveFolder(ctx, folder, p)
+	if err := s.opts.Runtime.RemoveFolder(ctx, folder, p); err != nil {
+		return err
+	}
+	return s.opts.Records.Write(filepath.Base(folder), Record{})
+}
+
+// refuseRemoving keeps a job from starting a devcontainer on a folder a delete
+// began to remove, whose files would have no backup at the next delete. A create
+// starts a new folder, or backs up the one it finishes, so it ends the state, as
+// a process that stopped just after the removal can leave it.
+func (s *Steps) refuseRemoving(folder string, kind bringKind) error {
+	name := filepath.Base(folder)
+	record, err := s.opts.Records.Read(name)
+	if err != nil || !record.Removing {
+		return err
+	}
+	if kind.save == nil {
+		return &jobs.Failure{Kind: KindDeleteUnfinished, Err: errors.New("a delete began to remove this workspace's folder; delete the workspace again to finish it")}
+	}
+	record.Removing = false
+	return s.opts.Records.Write(name, record)
 }
 
 // stoppedNotice is the console line of a delete that stopped the devcontainer

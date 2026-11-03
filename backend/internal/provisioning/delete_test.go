@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -48,7 +49,13 @@ func TestADeleteStoppedAtEachStepCanBeRetried(t *testing.T) {
 			if err := h.deleteSample(s); err != nil {
 				t.Fatal(err)
 			}
-			h.wantCalls(t, wholeDelete...)
+			want := slices.Clone(wholeDelete)
+			if step == "remove-folder" {
+				// The removal began, and TestARetryAfterTheRemovalBeganSkipsTheSave
+				// says why.
+				want = slices.DeleteFunc(want, func(call string) bool { return call == "save" })
+			}
+			h.wantCalls(t, want...)
 		})
 	}
 }
@@ -178,4 +185,59 @@ func TestDeleteOfAnInvalidBlockActsOnWhatItNames(t *testing.T) {
 		t.Fatalf("an invalid block held up the delete: %v", err)
 	}
 	h.wantCalls(t, "stop", "save", "remove-containers", "remove-folder")
+}
+
+// A removal can stop with any part of the folder left. The state that says so
+// is outside the folder, so what is left cannot change a retry.
+func TestARetryAfterTheRemovalBeganSkipsTheSave(t *testing.T) {
+	h := newHost(t)
+	s := h.steps()
+	h.failOn["remove-folder"] = errors.New("stopped part way")
+	if err := h.deleteSample(s); err == nil {
+		t.Fatal("no failure")
+	}
+	h.failOn = map[string]error{}
+	h.calls = nil
+	if err := h.deleteSample(s); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(h.seen(), "save") {
+		t.Errorf("calls %v", h.seen())
+	}
+	if !slices.Contains(h.seen(), "remove-folder") {
+		t.Errorf("calls %v", h.seen())
+	}
+	if _, err := os.Stat(s.opts.Records.path("sample")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("record stays: %v", err)
+	}
+}
+
+func TestNoJobStartsAFolderADeleteBeganToRemove(t *testing.T) {
+	h := newHost(t)
+	s := h.steps()
+	h.failOn["remove-folder"] = errors.New("stopped part way")
+	if err := h.deleteSample(s); err == nil {
+		t.Fatal("no failure")
+	}
+	h.calls = nil
+	wantKind(t, s.Start(context.Background(), folder, h), KindDeleteUnfinished)
+	wantKind(t, s.Rebuild(context.Background(), folder, h), KindDeleteUnfinished)
+	h.wantCalls(t)
+}
+
+// A process that stopped just after the removal leaves the state with no folder,
+// so a later create of that name ends it.
+func TestACreateEndsAnEarlierRemoval(t *testing.T) {
+	h := newHost(t)
+	s := h.steps()
+	if err := s.opts.Records.Write("sample", Record{Removing: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create(context.Background(), folder, h, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	record, err := s.opts.Records.Read("sample")
+	if err != nil || record.Removing {
+		t.Errorf("record %+v %v", record, err)
+	}
 }

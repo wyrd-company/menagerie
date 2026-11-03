@@ -38,6 +38,9 @@ const (
 	// KindDeleteRefused is a delete refused while a container can still write
 	// to the workspace folder.
 	KindDeleteRefused = "delete-refused"
+	// KindDeleteUnfinished is a job refused on a folder that a delete began to
+	// remove.
+	KindDeleteUnfinished = "delete-unfinished"
 )
 
 // DefaultReadinessWait bounds each wait on a binding's status when
@@ -191,6 +194,9 @@ type bringKind struct {
 }
 
 func (s *Steps) run(ctx context.Context, folder string, p devcontainer.Progress, kind bringKind) error {
+	if err := s.refuseRemoving(folder, kind); err != nil {
+		return err
+	}
 	declaration, err := s.declaration(folder, p)
 	if err != nil {
 		return err

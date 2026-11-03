@@ -15,7 +15,6 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
-	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 )
@@ -48,13 +47,8 @@ func nothingRemoved(err error) bool {
 }
 
 // saveBeforeDelete commits and backs up what the backup can hold. A folder with
-// no applied record has no backup, and neither has a folder whose earlier delete
-// began to remove it.
+// no applied record has no backup.
 func (w *Workflows) saveBeforeDelete(ctx context.Context, run *jobs.Run, folder, name string) error {
-	if _, err := os.Lstat(filepath.Join(folder, devcontainer.RemovingMark)); err == nil {
-		fmt.Fprintln(run.Log(""), "an earlier delete began to remove this folder after its backup, so there is no backup to make")
-		return nil
-	}
 	if _, err := os.Lstat(filepath.Join(folder, backup.RecordName)); errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintln(run.Log(""), "the folder has no applied record, so it has no backup")
 		return nil

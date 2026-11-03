@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 )
 
@@ -75,27 +74,29 @@ func TestDeleteOfAFolderWithNoAppliedRecordHasNoBackup(t *testing.T) {
 	}
 }
 
-// A retry after the removal began finds a repository under another name, and
-// must not fail on it or push what is left.
-func TestARetryAfterTheRemovalBeganSkipsTheBackup(t *testing.T) {
+// A workspace can hold a folder of the name a removal gives its repository, and
+// that name says nothing about a backup.
+func TestAFolderNamedAsARemovedRepositoryDoesNotSkipTheBackup(t *testing.T) {
 	w := newWorld(t)
 	if _, snap := w.create(t, "alpha"); snap.State != jobs.Succeeded {
 		t.Fatalf("%+v", snap)
 	}
-	before := w.remoteBranches(t)["alpha"]
 	folder := filepath.Join(w.root, "alpha")
-	if err := os.Rename(filepath.Join(folder, ".git"), filepath.Join(folder, devcontainer.RemovingMark)); err != nil {
+	if err := os.Mkdir(filepath.Join(folder, ".menagerie-removing"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	job, snap := w.deleteWorkspace(t, "alpha")
-	if snap.State != jobs.Succeeded {
+	if err := os.WriteFile(filepath.Join(folder, "new-file"), []byte("kept\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(w.remote); err != nil {
+		t.Fatal(err)
+	}
+	_, snap := w.deleteWorkspace(t, "alpha")
+	if snap.State != jobs.Failed || snap.Error.Kind != KindBackupFailed {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
-	if want := []string{"stop", "remove-container", "remove-folder"}; !slices.Equal(phases(job), want) {
-		t.Fatalf("phases %v", phases(job))
-	}
-	if got := w.remoteBranches(t)["alpha"]; got != before {
-		t.Errorf("branch moved to %s", got)
+	if _, err := os.Lstat(filepath.Join(folder, "new-file")); err != nil {
+		t.Errorf("file: %v", err)
 	}
 }
 
