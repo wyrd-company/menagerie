@@ -339,8 +339,8 @@ proposed-design:
     has a name the definition no longer declares or does not declare, because
     a rebuild that failed left it, and a binding of the new name would never
     report it. A `name` binding survives a rebuild,
-    because the container keeps its name: the agent keeps the directory
-    through the gap and restores fresh sockets and a token. Before an upgrade
+    because the container keeps its name: the agent keeps the directory and
+    its sockets through the gap and gets a new token. Before an upgrade
     or an apply-branch changes the definition, it adds the container name and
     Xolotl key the definition declares to a retirement record,
     `/var/lib/menagerie/provisioning/<workspace>.json`, which holds no secret

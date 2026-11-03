@@ -431,17 +431,38 @@ type wyrwoodRow struct {
 	Revision                                                    int
 }
 
-// row returns the controller's row for a container name, once reported.
+// row returns what the controller holds for a container name, once reported:
+// the binding that names it, or the container its add-binding page lists.
 func (w *wyrwoodSite) row(name string) wyrwoodRow {
 	w.t.Helper()
 	var found wyrwoodRow
 	waitFor(w.t, "the agent to report "+name, func() bool {
-		var page struct {
+		var bindings struct {
+			wyrwoodLayout
+			Rows []struct {
+				ID, Agent, KeyValue, Screen string
+				Containers                  []struct{ ID string }
+			}
+		}
+		pageData(w.t, fetch(w.t, w.operator, http.MethodGet, w.site+"/bindings", nil, nil), &bindings)
+		for _, r := range bindings.Rows {
+			if r.KeyValue != name || len(r.Containers) == 0 {
+				continue
+			}
+			var screen struct {
+				wyrwoodLayout
+				Row wyrwoodRow
+			}
+			pageData(w.t, fetch(w.t, w.operator, http.MethodGet, w.site+r.Screen, nil, nil), &screen)
+			found = wyrwoodRow{Agent: r.Agent, ID: r.Containers[0].ID, Name: name, BindingID: r.ID, Bound: true, Revision: screen.Row.Revision}
+			return true
+		}
+		var add struct {
 			wyrwoodLayout
 			Rows []wyrwoodRow
 		}
-		pageData(w.t, fetch(w.t, w.operator, http.MethodGet, w.site+"/containers?agent="+url.QueryEscape(w.agentName), nil, nil), &page)
-		for _, r := range page.Rows {
+		pageData(w.t, fetch(w.t, w.operator, http.MethodGet, w.site+"/bindings/add?agent="+url.QueryEscape(w.agentName), nil, nil), &add)
+		for _, r := range add.Rows {
 			if r.Name == name {
 				found = r
 				return true

@@ -44,12 +44,14 @@ the Wyrwood binding.
 ## Quickstart
 
 Copy [`deploy/`](deploy) and set the paths and names in `config.yml`. Create
-the container, bind the container `menagerie` to a Wyrwood policy so that
-the agent makes its consumer directory, then start it:
+the consumer directory and the container, bind the container `menagerie` to a
+Wyrwood policy, then start it:
 
 ```sh
+sudo install -d -o wyrwood -g wyrwood -m 0700 /run/wyrwood/containers/menagerie
 cp -r deploy ~/menagerie && cd ~/menagerie
 docker compose create
+# Bind the container "menagerie" in Wyrwood now.
 docker compose up -d
 ```
 
