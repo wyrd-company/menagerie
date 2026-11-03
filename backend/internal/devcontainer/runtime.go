@@ -126,6 +126,9 @@ func New(client *dockerclient.Client, opts Options) *Runtime {
 	return &Runtime{client: client, opts: opts}
 }
 
+// Docker returns the client the Runtime uses.
+func (r *Runtime) Docker() *dockerclient.Client { return r.client }
+
 // Status reports the state of the newest container whose
 // devcontainer.local_folder label equals folder. For Compose this is the
 // primary service, the only service carrying that label.

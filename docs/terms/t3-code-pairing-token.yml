@@ -1,0 +1,9 @@
+$schema: https://refinery.systems/ontology/term
+title: T3 Code pairing token
+description: >-
+  A short-lived, one-time credential that a T3 Code server issues so that a
+  client can pair with it. Menagerie mints one in a workspace's running
+  container at a manager's request and keeps no copy. It is not a Xolotl key
+  or an operator key.
+terms:
+  - workspace

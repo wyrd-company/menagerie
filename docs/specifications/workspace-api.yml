@@ -2,6 +2,7 @@ $schema: https://refinery.systems/ontology/specification
 relationships:
   references:
     - menagerie
+    - t3-code-pairing-token
     - configuration
     - job-without-timeout-blocks-workspace
     - authentication
@@ -30,6 +31,26 @@ description: >-
   root folders, so a container labelled for any other path, or without the
   label, never appears. `activeJob` names the folder's unfinished job. When
   Docker cannot answer, the request fails with `docker-unavailable` (503).
+
+
+  `POST /api/workspaces/{name}/t3-code-pairing-tokens` mints a
+  [T3 Code pairing token](../terms/t3-code-pairing-token.yml) in the
+  workspace's running container and answers 201 with `{"token","expiresAt"}`
+  and `Cache-Control: no-store`. The service reads the service user and home
+  from `/usr/local/lib/t3code-server/config.env`, which the t3code-server
+  Feature writes, through the Docker library. It then runs
+  `/usr/local/bin/t3 auth pairing create --base-dir <home>/.t3 --label
+  menagerie --json` as that user through Docker exec. The token has T3 Code's
+  default scopes and lifetime. It is not a job and takes no job slot, so it
+  also works while the workspace has a job. The service logs and keeps no
+  token, and no error holds what the command printed. An invalid or absent
+  workspace answers 400 `invalid-workspace-name` or 404
+  `workspace-not-found`. A stopped or absent container answers 409
+  `workspace-not-running`; a container without the Feature or the command
+  409 `t3-code-not-installed`; a command that gives no token 502
+  `pairing-token-failed`; and Docker's failure 503 `docker-unavailable`. The
+  request has no time limit of its own: when its client leaves, the service
+  stops waiting, and a command that hangs stays in the container.
 
 
   `GET /api/templates` returns the approved templates' `id` and `name`.

@@ -478,6 +478,17 @@ proposed-design:
     library for throwaway containers. Only the workspace service uses
     Docker: the template service reaches a container only by asking the
     workspace service to run a hook.
+  t3-code-pairing-tokens: >-
+    A manager gets a T3 Code pairing token for a running workspace from its
+    row in the list. The workspace service reads the t3code-server Feature's
+    service user and home from the container, and runs `t3 auth pairing
+    create` there through Docker exec in the Docker library, as that user and
+    with the server's data directory. T3 Code owns the token's scopes and
+    lifetime. The route answers the token directly and is not a job: job logs
+    and events are kept for later readers, and a token must have one reader.
+    A long job must not block it, so it takes no job slot. Docker cannot stop
+    an exec, so a command that hangs stays in the container. The Feature's
+    `config.env` is a file this design reads across a repository boundary.
   registry-credentials: >-
     Container registry credentials for pulls, builds, feature downloads and
     Compose services come from OpenBao. Configuration names, per registry, a

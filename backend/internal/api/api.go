@@ -40,7 +40,9 @@ type Options struct {
 	Operations Operations
 	// Interviews takes answers for interview jobs. Nil takes none.
 	Interviews Interviews
-	Templates  []Template
+	// PairingTokens mints T3 Code pairing tokens. Nil mints none.
+	PairingTokens PairingTokens
+	Templates     []Template
 	// UI holds the built web UI (index.html and assets/). Nil serves no UI.
 	UI fs.FS
 }
@@ -67,6 +69,7 @@ func (s *Server) routes() []struct {
 	}{
 		{Route{http.MethodGet, "/healthz"}, health},
 		{Route{http.MethodGet, "/api/workspaces"}, s.listWorkspaces},
+		{Route{http.MethodPost, "/api/workspaces/{name}/t3-code-pairing-tokens"}, s.mintPairingToken},
 		{Route{http.MethodGet, "/api/templates"}, s.listTemplates},
 		{Route{http.MethodGet, "/api/jobs"}, s.listJobs},
 		{Route{http.MethodPost, "/api/jobs"}, s.startJob},

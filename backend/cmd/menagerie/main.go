@@ -36,6 +36,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
+	"github.com/wyrd-company/menagerie/backend/internal/t3code"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workflows"
@@ -342,8 +343,11 @@ func newServer(cfg *config.Config, root *workspace.Root, remote *backup.Remote, 
 		Jobs:       manager,
 		Operations: operations,
 		Interviews: flows,
-		Templates:  approved,
-		UI:         web.FS,
+		// Runs in the workspace's own container, as the t3code-server
+		// Feature's service user.
+		PairingTokens: t3code.NewMinter(runtime.Docker()),
+		Templates:     approved,
+		UI:            web.FS,
 	})
 }
 

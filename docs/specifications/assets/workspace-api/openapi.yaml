@@ -49,6 +49,33 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/workspaces/{name}/t3-code-pairing-tokens:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: mintT3CodePairingToken
+      summary: Mint a T3 Code pairing token in a workspace's running container.
+      responses:
+        "201":
+          description: The token. The service keeps no copy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/T3CodePairingToken"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/templates:
     get:
       operationId: listTemplates
@@ -249,6 +276,17 @@ components:
                   type: string
                 state:
                   $ref: "#/components/schemas/JobState"
+    T3CodePairingToken:
+      type: object
+      required: [token, expiresAt]
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+          minLength: 1
+        expiresAt:
+          type: string
+          format: date-time
     Template:
       type: object
       required: [id, name]

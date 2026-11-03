@@ -157,7 +157,7 @@ tasks:
       - task: test:acceptance
 
   test:docker:
-    desc: Run the devcontainer runtime's, the workspace socket's and the throwaway containers' Docker suites on a disposable Docker daemon
+    desc: Run the devcontainer runtime's, the workspace socket's, the throwaway containers' and the T3 Code pairing Docker suites on a disposable Docker daemon
     vars:
       STATE: '{{.SCRATCH}}/docker'
       OWNER:
@@ -167,6 +167,7 @@ tasks:
       - scripts/isolated-docker.sh up '{{.STATE}}' '{{.OWNER}}'
       - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/devcontainer.test' ./backend/internal/devcontainer/
       - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/throwaway.test' ./backend/internal/throwaway/
+      - CGO_ENABLED=0 go test -c -tags docker -o '{{.STATE}}/t3code.test' ./backend/internal/t3code/
       # The workspace socket tests run the client inside their devcontainers.
       - CGO_ENABLED=0 go build -trimpath -o '{{.STATE}}/workspace-commit' ./backend/cmd/workspace-commit
       - >-
@@ -174,6 +175,7 @@ tasks:
         -e MENAGERIE_TEST_WORKSPACE_COMMIT=/menagerie-work/bin/workspace-commit
         '{{.STATE}}/devcontainer.test' -test.v -test.count=1 -test.timeout 10m
       - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/throwaway.test' -test.v -test.count=1 -test.timeout 10m
+      - scripts/isolated-docker.sh run '{{.STATE}}' '{{.STATE}}/t3code.test' -test.v -test.count=1 -test.timeout 10m
 
   test:openbao:
     desc: Read registry credentials and sign GitHub App JWTs with a disposable OpenBao dev server (needs bao on PATH)

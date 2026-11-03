@@ -16,7 +16,8 @@ Use `task` verbs: `task --list`. `task check` is CI. The live suites
 - Application code never spawns Git, Docker, Toha or devcontainer-builder
   CLIs; it uses their libraries. Template hooks and `initializeCommand` run
   as throwaway containers through the Docker library, not as Menagerie
-  processes.
+  processes. A T3 Code pairing token is minted in the workspace's own
+  container through Docker exec in that library.
 - Builds and devcontainers in tests run on the disposable daemon from
   `scripts/isolated-docker.sh`, never on a shared daemon's BuildKit. Cleanup
   removes only objects carrying the run's own label.

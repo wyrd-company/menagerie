@@ -81,6 +81,7 @@ type fixture struct {
 	manager *jobs.Manager
 	server  *Server
 	http    *httptest.Server
+	tokens  *fakeMinter
 }
 
 func newFixture(t *testing.T, ui fsFS) *fixture {
@@ -102,12 +103,14 @@ func newFixture(t *testing.T, ui fsFS) *fixture {
 		"/elsewhere/outsider": {State: devcontainer.StateRunning, ContainerID: "c-outsider"},
 	}}
 	manager := jobs.NewManager(context.Background(), jobs.Options{})
+	tokens := &fakeMinter{}
 	opts := Options{
-		Root:       root,
-		Status:     rt,
-		Jobs:       manager,
-		Operations: ContainerOperations(root, rt),
-		Templates:  []Template{{ID: "sample-template", Name: "Sample template"}},
+		Root:          root,
+		Status:        rt,
+		Jobs:          manager,
+		Operations:    ContainerOperations(root, rt),
+		PairingTokens: tokens,
+		Templates:     []Template{{ID: "sample-template", Name: "Sample template"}},
 	}
 	if ui != nil {
 		opts.UI = ui
@@ -115,7 +118,7 @@ func newFixture(t *testing.T, ui fsFS) *fixture {
 	server := New(opts)
 	hs := httptest.NewServer(server)
 	t.Cleanup(hs.Close)
-	return &fixture{root: dir, rt: rt, manager: manager, server: server, http: hs}
+	return &fixture{root: dir, rt: rt, manager: manager, server: server, http: hs, tokens: tokens}
 }
 
 type fsFS = fstest.MapFS
