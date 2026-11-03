@@ -26,9 +26,9 @@ description: >-
       "wyrwood": {
         "accessGroup": 1000,
         "policies": ["workspace", "xolotl-client-key"],
-        "values": {"xolotl_key_policy": "devcontainer", "xolotl_key_name": "sample"}
+        "values": {"xolotl_key_name": "sample"}
       },
-      "xolotl": {"keyPolicy": "devcontainer", "keyName": "sample"}
+      "xolotl": {"keyPolicy": "host-sample", "keyName": "sample"}
     }
   }
 
@@ -44,9 +44,10 @@ description: >-
 
 
   `xolotl` is optional. `keyPolicy` and `keyName` address the client key
-  `<keyPolicy>/<keyName>`, which Menagerie issues. A policy path that reads this
-  key takes these two names from `values`, so both appear twice; the key and the
-  path are separate systems and share no field.
+  `<keyPolicy>/<keyName>`, which Menagerie issues. `keyPolicy` is a key policy
+  only this host's workspaces use, and the Wyrwood policy that reads the key
+  fixes it in its path. That path takes the name from `values`, so the name
+  appears twice: the key and the path are separate systems and share no field.
 
 
   The container name is not in the block. It is the `--name` value of `runArgs`,

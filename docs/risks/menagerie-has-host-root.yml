@@ -28,8 +28,9 @@ description: >-
   socket, whose credential route hands out read tokens. A body-inspecting
   Docker proxy reduces this exposure further. Provisioning adds authority
   beyond the host: an operator key on the Wyrwood controller and a scoped key
-  on Xolotl. Their grants keep what they reach within what root on this host
-  already reaches, as the risk of the operator key records.
+  on Xolotl. Their grants, and a Xolotl key policy used only on this host, keep
+  what they reach within what root on this host already reaches, as the risk of
+  the operator key records.
 categories:
   - security
 likelihood: 2

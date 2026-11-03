@@ -191,6 +191,17 @@ proposed-design:
     that container when its sockets are ready, when its last start failed on
     that directory and its restart policy says it runs. An unbound container
     needs no agent: the daemon restarts it.
+  host-prerequisites: >-
+    Before each create, start, rebuild and upgrade, with or without a
+    declaration, the workspace service creates any missing bind source folder
+    inside the workspace folder, owned by the workspace root's owner, because
+    a clone of a backup has no folder that holds no tracked file. Before any
+    other step of a create, after the definition is rendered, it checks bind
+    sources outside the workspace folder and the networks `runArgs` names, and
+    reports all that are missing in one job console message, as
+    `host-prerequisites-missing`. It creates nothing outside the workspace
+    folder. A declaration's consumer directory is excluded, because the agent
+    creates it: it is the bind source whose final folder is the container name.
   provisioning-declaration: >-
     A provisioning declaration is the `customizations.menagerie` block of a
     rendered definition, as the provisioning-declaration specification
@@ -225,13 +236,17 @@ proposed-design:
     own binding or any binding an operator made for something else. Each
     workspace reads only its own Xolotl key through one shared policy with a
     per-binding value, so no workspace needs a policy of its own and
-    Menagerie writes no policy. Bindings Menagerie creates use `report`
+    Menagerie writes no policy. Authority over keys stays on this host through
+    a Xolotl key policy that only this host's workspaces use: the shared
+    Wyrwood policy fixes that key policy in its path, so the value names only
+    the key, and the scoped Xolotl key lists only that key policy. Preparing a
+    host creates both. Bindings Menagerie creates use `report`
     enforcement, so Wyrwood never recreates a container during a job. The
     grant has no default expiry, so that provisioning does not stop in
     silence. An operator revokes it in the Wyrwood web interface. The audit
     subject of each action is the key's label. A call outside the grant fails
     the job and names the action. Xolotl's scoped key has the `keys` scope
-    for a list of key policies and can do nothing else.
+    for that key policy and can do nothing else.
   provisioning-clients: >-
     Wyrwood is reached through its public Go package, Xolotl through plain
     HTTP. Menagerie spawns no CLI. `POST /admin/keys` writes the client key
@@ -252,9 +267,8 @@ proposed-design:
     another workspace's definition declares or a container of another
     workspace holds. The last check keeps the delete of one workspace from
     revoking another's key. A provisioning section that configuration lacks
-    fails as `provisioning-unavailable`. Missing host prerequisites are
-    reported together here, so nothing is issued for a workspace that cannot
-    start. 2. `issue-key` issues the Xolotl key, and treats the answer that
+    fails as `provisioning-unavailable`. Host prerequisites are
+    checked here, so nothing is issued for a workspace that cannot start. 2. `issue-key` issues the Xolotl key, and treats the answer that
     the key exists as done, so a repeat never rotates it. 3. `bind` makes the
     `name` binding, with `report` enforcement and default token lifetimes,
     and waits until the binding reports its consumer directory, which the
@@ -266,7 +280,7 @@ proposed-design:
     `backup` run as in a create. 5. `initialize-command` and `build` run as
     in any start. 6. `create-container` uses devcontainer-builder's create-only mode
     and records the container's id. 7. `wait-for-sockets` reads the binding's
-    status until its reported container is that id, in the created state,
+    status until its reported container is that id, not running,
     with the declared access group applied and both sockets ready, with no
     conformance failure. It waits on this readiness, never on the token,
     which reports valid while a wrong directory owner leaves no sockets.
@@ -279,23 +293,33 @@ proposed-design:
     running, with its sockets. What a container needs from its sockets is
     the template's to check, in a lifecycle command, whose failure fails the
     job. 10. The job ends, and the workspace row offers pairing.
-    A start of an existing container runs no `issue-key` or `bind`, so a
-    Xolotl outage leaves it able to start. It uses create-only mode as well,
-    which keeps the container or replaces it under the rule `up` applies, so
-    a changed definition never starts without sockets. It then runs
-    `wait-for-sockets` unless the container runs, `up` and `verify`. Without
-    a declaration, every job uses `up` as it would without provisioning.
+    A start of an existing container runs `issue-key` and `bind` as well, so
+    it finishes a job that stopped before them, whatever container that job
+    left. Only when Xolotl cannot be reached does it continue, with a console
+    note, so a Xolotl outage leaves an existing container able to start; a
+    key that was never issued then fails the template's lifecycle check. It
+    uses create-only mode, which keeps the container or replaces it under the
+    rule `up` applies, so a changed definition never starts without sockets.
+    It then runs `wait-for-sockets` unless the container runs, `up` and
+    `verify`. Without a declaration, every job uses `up` as it would without
+    provisioning.
   provisioning-retries: >-
     Every step is safe to repeat. A job that fails leaves what it finished,
     and start is the retry: it finds the key, the binding and the container
     and continues from what is missing. A `name` binding survives a rebuild,
     because the container keeps its name: the agent keeps the directory
-    through the gap and restores fresh sockets and a token. An upgrade or an
-    apply-branch compares the declarations before and after it changes the
-    definition. After the job's `verify`, it unbinds a container name and
-    revokes a Xolotl key that the definition no longer declares. A definition
-    edited by other means is not compared; what it stops declaring stays
-    until an operator removes it. A definition a devcontainer can edit
+    through the gap and restores fresh sockets and a token. Before an upgrade
+    or an apply-branch changes the definition, it writes the container name
+    and Xolotl key the definition declares to a retirement record,
+    `/var/lib/menagerie/provisioning/<workspace>.json`, which holds no secret
+    and which no devcontainer can reach. After `verify`, any job that finds
+    this record unbinds a name and revokes a key that the definition no longer
+    declares, and then removes the record, so a job that fails or a Menagerie
+    that restarts leaves the record for the next start or rebuild. Delete
+    consumes it too. A definition edited by other means has no record; what
+    it stops declaring, or what a lost data volume's record named, stays until
+    an operator removes it, visible in the Wyrwood and Xolotl web interfaces.
+    A definition a devcontainer can edit
     already gets privileged mode at its next rebuild, so the declaration is
     no boundary against that devcontainer; the allowlist still bounds what
     the operator key can bind.
@@ -312,7 +336,9 @@ proposed-design:
     `revoke-key` revokes the Xolotl key. `remove-folder` removes the socket
     folder and then the workspace folder; a throwaway container that runs as
     root, with only that folder mounted, removes what the services' user
-    cannot. Without a declaration, `unbind` and `revoke-key` do not run. Each
+    cannot. `unbind` and `revoke-key` also take what a retirement record names, and
+    the record goes with the folder. Without a declaration and a record,
+    `unbind` and `revoke-key` do not run. Each
     step treats what is already gone as done, and the folder goes last, so a
     retried delete can still read its declaration. The backup branch stays in
     the workspace repository, images stay, bind sources outside the folder
