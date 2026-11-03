@@ -21,7 +21,10 @@ import {
 } from "./state.ts";
 
 export function createFixture(options: { distDir: string }) {
-  const world: World = { workspaces: initialWorkspaces(), options: { upgradeDocument: "raw" } };
+  const world: World = {
+    workspaces: initialWorkspaces(),
+    options: { upgradeDocument: "raw", t3CodeInstalled: true },
+  };
   let jobs = new Map<string, FixtureJob>();
   let signedIn = true;
   let dockerAvailable = true;
@@ -30,7 +33,7 @@ export function createFixture(options: { distDir: string }) {
   const reset = () => {
     for (const job of jobs.values()) for (const res of job.listeners) res.end();
     world.workspaces = initialWorkspaces();
-    world.options = { upgradeDocument: "raw" };
+    world.options = { upgradeDocument: "raw", t3CodeInstalled: true };
     jobs = new Map();
     signedIn = true;
     dockerAvailable = true;
@@ -160,6 +163,25 @@ export function createFixture(options: { distDir: string }) {
               : null,
           };
         }),
+      });
+    }
+    const pairing = /^\/api\/workspaces\/([^/]+)\/t3-code-pairing-tokens$/.exec(pathname);
+    if (pairing && method === "POST") {
+      const name = decodeURIComponent(pairing[1]!);
+      const ws = world.workspaces.find((w) => w.name === name);
+      if (!ws) return fail(res, 404, "workspace-not-found", `no workspace ${name}`);
+      if (ws.state !== "running")
+        return fail(res, 409, "workspace-not-running", "this workspace's container is not running");
+      if (!world.options.t3CodeInstalled)
+        return fail(
+          res,
+          409,
+          "t3-code-not-installed",
+          "T3 Code is not installed in this workspace's container",
+        );
+      return json(res, 201, {
+        token: "SAMPLETOKEN123",
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
       });
     }
     if (pathname === "/api/templates" && method === "GET") return json(res, 200, { templates });

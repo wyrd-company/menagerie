@@ -5,6 +5,7 @@ import type {
   Job,
   Operation,
   Submission,
+  T3CodePairingToken,
   Template,
   Workspace,
 } from "./types.ts";
@@ -65,6 +66,13 @@ export async function listWorkspaces(): Promise<Workspace[]> {
 
 export async function listTemplates(): Promise<Template[]> {
   return (await json<{ templates: Template[] }>("/api/templates")).templates;
+}
+
+export async function mintT3CodePairingToken(workspace: string): Promise<T3CodePairingToken> {
+  return json<T3CodePairingToken>(
+    `/api/workspaces/${encodeURIComponent(workspace)}/t3-code-pairing-tokens`,
+    { method: "POST" },
+  );
 }
 
 export async function listJobs(): Promise<Job[]> {

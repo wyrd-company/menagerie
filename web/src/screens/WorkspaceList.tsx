@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, listJobs, listWorkspaces, startJob } from "../api/client.ts";
-import type { Job, Operation, Workspace } from "../api/types.ts";
+import {
+  ApiError,
+  listJobs,
+  listWorkspaces,
+  mintT3CodePairingToken,
+  startJob,
+} from "../api/client.ts";
+import type { Job, Operation, T3CodePairingToken, Workspace } from "../api/types.ts";
 import { JobPanel } from "../jobs/JobPanel.tsx";
 import { own } from "../own.ts";
 import { navigate, paths } from "../router.ts";
@@ -69,6 +75,23 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
   const [branch, setBranch] = useState("");
+  const [minting, setMinting] = useState<Record<string, true>>({});
+  const [tokens, setTokens] = useState<Record<string, T3CodePairingToken>>({});
+
+  const mint = async (workspace: string) => {
+    setMinting((m) => ({ ...m, [workspace]: true }));
+    setRowErrors(({ [workspace]: _, ...rest }) => rest);
+    setTokens(({ [workspace]: _, ...rest }) => rest);
+    try {
+      const token = await mintT3CodePairingToken(workspace);
+      setTokens((t) => ({ ...t, [workspace]: token }));
+    } catch (e) {
+      const err = e instanceof ApiError ? e : new ApiError(0, null, String(e));
+      setRowErrors((r) => ({ ...r, [workspace]: { message: err.message } }));
+    } finally {
+      setMinting(({ [workspace]: _, ...rest }) => rest);
+    }
+  };
 
   const openApply = (workspace: string) => {
     setConfirming(null);
@@ -140,6 +163,8 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
               const active = ws.activeJob;
               const busy = active !== null || own(pending, ws.name) !== undefined;
               const rowError = own(rowErrors, ws.name);
+              const token = own(tokens, ws.name);
+              const isMinting = own(minting, ws.name) !== undefined;
               return (
                 <li key={ws.name} className={`entry${busy ? " is-busy" : ""}`}>
                   <div className="entry-name">
@@ -239,7 +264,20 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                         Upgrade
                       </Link>
                     )}
+                    <button
+                      type="button"
+                      disabled={isMinting || ws.state !== "running"}
+                      onClick={() => void mint(ws.name)}
+                    >
+                      {isMinting ? "Minting…" : "T3 Code token"}
+                    </button>
                   </div>
+                  {token ? (
+                    <PairingToken
+                      token={token}
+                      onDismiss={() => setTokens(({ [ws.name]: _, ...rest }) => rest)}
+                    />
+                  ) : null}
                   {rowError ? (
                     <p className="entry-error" role="alert">
                       {rowError.message}
@@ -270,6 +308,35 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
           <JobPanel key={jobId} jobId={jobId} onFinished={() => void refresh()} />
         </aside>
       ) : null}
+    </div>
+  );
+}
+
+function PairingToken({ token, onDismiss }: { token: T3CodePairingToken; onDismiss: () => void }) {
+  const [copied, setCopied] = useState(false);
+  // The clipboard needs a secure context. Without one the token stays selectable.
+  const copy = () => {
+    void navigator.clipboard?.writeText(token.token).then(
+      () => setCopied(true),
+      () => undefined,
+    );
+  };
+  return (
+    <div className="entry-token" role="group" aria-label="T3 Code pairing token">
+      <p>
+        Pair a T3 Code client with this token before{" "}
+        <time dateTime={token.expiresAt}>{new Date(token.expiresAt).toLocaleTimeString()}</time>. It
+        is shown once.
+      </p>
+      <code className="mono">{token.token}</code>
+      <span className="entry-token-actions">
+        <button type="button" onClick={copy}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+        <button type="button" className="ghost" onClick={onDismiss}>
+          Dismiss
+        </button>
+      </span>
     </div>
   );
 }

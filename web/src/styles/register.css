@@ -23,7 +23,7 @@
 .entry {
   display: grid;
   grid-template-columns: minmax(10rem, 1.3fr) minmax(8rem, 1fr) auto;
-  grid-template-areas: "name state actions" "error error error";
+  grid-template-areas: "name state actions" "token token token" "error error error";
   align-items: center;
   gap: 0.3rem 1.25rem;
   padding: 0.85rem 1rem;
@@ -111,6 +111,25 @@
   font-size: 0.875rem;
 }
 
+.entry-token {
+  grid-area: token;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+.entry-token code {
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.entry-token-actions {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+
 .empty {
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius);
@@ -191,7 +210,7 @@
 @media (max-width: 720px) {
   .entry {
     grid-template-columns: 1fr auto;
-    grid-template-areas: "name state" "actions actions" "error error";
+    grid-template-areas: "name state" "actions actions" "token token" "error error";
     gap: 0.6rem 1rem;
   }
 

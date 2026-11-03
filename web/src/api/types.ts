@@ -154,3 +154,9 @@ export type JobEvent =
   | { id: number; type: "interview"; data: InterviewReply }
   | { id: number; type: "result"; data: JobResult }
   | { id: number; type: "unknown"; event: string; data: unknown };
+
+/** A one-time T3 Code pairing token. The service keeps no copy. */
+export interface T3CodePairingToken {
+  token: string;
+  expiresAt: string;
+}

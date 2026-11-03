@@ -39,6 +39,8 @@ export interface FixtureJob {
 export interface FixtureOptions {
   /** "raw": the producer's whole upgrade batch; "uncovered": the narrowed synthetic one. */
   upgradeDocument: "raw" | "uncovered";
+  /** Whether running workspaces have the t3code-server Feature. */
+  t3CodeInstalled: boolean;
 }
 
 /** What the job scripts read and change. */

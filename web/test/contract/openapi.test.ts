@@ -122,6 +122,21 @@ function expectEvents(events: { type: string; data: string }[]) {
 }
 
 describe("the fixture server keeps the workspace API contract", () => {
+  it("mints a T3 Code pairing token and refuses a stopped workspace", async () => {
+    await post("/__fixture/reset", {});
+    const path = "/api/workspaces/{name}/t3-code-pairing-tokens";
+    const minted = await call("/api/workspaces/sample-alpha/t3-code-pairing-tokens", {
+      method: "POST",
+    });
+    expect(minted.status).toBe(201);
+    await expectResponse(path, "post", minted);
+    const refused = await call("/api/workspaces/sample-beta/t3-code-pairing-tokens", {
+      method: "POST",
+    });
+    expect(refused.status).toBe(409);
+    await expectResponse(path, "post", refused);
+  });
+
   it("lists workspaces, templates and jobs", async () => {
     await post("/__fixture/reset", {});
     await expectResponse("/api/workspaces", "get", await call("/api/workspaces"));

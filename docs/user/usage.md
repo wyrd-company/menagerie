@@ -7,6 +7,7 @@ relationships:
     - workspace
     - workspace-root
     - workspace-api
+    - t3-code-pairing-token
 ---
 
 Sign in at Menagerie's address with your identity provider. Members of
@@ -21,8 +22,8 @@ dot, with its container's state:
 devcontainer was never created. Containers that belong to no folder in the
 root do not appear. **Refresh** reads the folders and containers again.
 
-Each row has **Stop**, **Start**, **Rebuild**, **Apply branch** and
-**Upgrade**. A commit,
+Each row has **Stop**, **Start**, **Rebuild**, **Apply branch**, **Upgrade**
+and [**T3 Code token**](#connect-t3-code-to-a-workspace). A commit,
 from the [schedule or the workspace itself](#commit-from-inside-a-workspace),
 shows on its row as **committing**. Rebuild asks
 for confirmation, then removes the container and creates it again from the
@@ -205,6 +206,20 @@ Menagerie does not: the socket comes back in the same mounted folder.
 With [automatic commits](configuration.md#automatic-commits), Menagerie
 also commits a workspace with changes on a schedule, with the message
 `chore(menagerie): automatic commit`.
+
+## Connect T3 Code to a workspace
+
+**T3 Code token** mints a pairing token on a running workspace whose
+devcontainer has the
+[t3code-server Feature](https://github.com/wyrd-company/devcontainers/tree/main/src/features/t3code-server). Pair a T3 Code
+client with the token that appears on the row. T3 Code sets the token's
+lifetime, shows it as `menagerie` in the server's connections list, and gives
+it its default scopes. These are full control of the workspace's T3 Code.
+
+Menagerie shows the token once and keeps no copy. **Dismiss** clears it from
+the page. The button also works while a job runs on the workspace. A refusal
+appears on the row: `workspace-not-running` when the container has stopped,
+`t3-code-not-installed` when the container does not have the Feature.
 
 ## Stop, start and rebuild
 

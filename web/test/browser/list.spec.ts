@@ -36,6 +36,37 @@ test("lists every workspace folder with its container state", async ({ page }) =
   await shot(page, "list-desktop");
 });
 
+test("shows a T3 Code pairing token on its row until it is dismissed", async ({ page }) => {
+  await page.goto("/");
+  const alpha = entry(page, "sample-alpha");
+  await expect(
+    entry(page, "sample-beta").getByRole("button", { name: "T3 Code token" }),
+  ).toBeDisabled();
+  await alpha.getByRole("button", { name: "T3 Code token" }).click();
+  const token = alpha.getByRole("group", { name: "T3 Code pairing token" });
+  await expect(token.locator("code")).toHaveText("SAMPLETOKEN123");
+  await expect(token.locator("time")).toHaveAttribute("datetime", /Z$/);
+  await expectNoHorizontalScroll(page);
+  await shot(page, "list-t3-code-token");
+  await token.getByRole("button", { name: "Dismiss" }).click();
+  await expect(token).toHaveCount(0);
+  await expect(page.getByText("SAMPLETOKEN123")).toHaveCount(0);
+  // The page holds no token across a reload.
+  await page.reload();
+  await expect(page.getByText("SAMPLETOKEN123")).toHaveCount(0);
+});
+
+test("says on the row when a workspace has no T3 Code", async ({ page, request }) => {
+  await control(request, "options", { t3CodeInstalled: false });
+  await page.goto("/");
+  const alpha = entry(page, "sample-alpha");
+  await alpha.getByRole("button", { name: "T3 Code token" }).click();
+  await expect(alpha.getByRole("alert")).toHaveText(
+    "T3 Code is not installed in this workspace's container",
+  );
+  await expect(alpha.getByRole("group", { name: "T3 Code pairing token" })).toHaveCount(0);
+});
+
 test("starts a stopped workspace and streams its job to completion", async ({ page }) => {
   await page.goto("/");
   await entry(page, "sample-beta").getByRole("button", { name: "Start" }).click();
