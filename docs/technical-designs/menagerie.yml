@@ -309,14 +309,20 @@ proposed-design:
     and continues from what is missing. A `name` binding survives a rebuild,
     because the container keeps its name: the agent keeps the directory
     through the gap and restores fresh sockets and a token. Before an upgrade
-    or an apply-branch changes the definition, it writes the container name
-    and Xolotl key the definition declares to a retirement record,
+    or an apply-branch changes the definition, it adds the container name and
+    Xolotl key the definition declares to a retirement record,
     `/var/lib/menagerie/provisioning/<workspace>.json`, which holds no secret
-    and which no devcontainer can reach. After `verify`, any job that finds
-    this record unbinds a name and revokes a key that the definition no longer
-    declares, and then removes the record, so a job that fails or a Menagerie
-    that restarts leaves the record for the next start or rebuild. Delete
-    consumes it too. A definition edited by other means has no record; what
+    and which no devcontainer can reach. The record only grows until it is
+    consumed, so a later job never loses what an earlier one left. Any job
+    that ends with the devcontainer started, with or without a declaration,
+    consumes it last: it unbinds each name and revokes each key that the
+    workspace's definition no longer declares, removes those entries as each
+    is confirmed gone, and removes the record when it is empty. A job that
+    fails, or a Menagerie that restarts, leaves the record for the next one.
+    `read-definition` treats a name or key in another workspace's record as
+    taken, as it treats one that workspace declares, and consumption keeps an
+    entry another workspace declares and removes it without acting, so one
+    workspace's retirement never takes what another uses. A definition edited by other means has no record; what
     it stops declaring, or what a lost data volume's record named, stays until
     an operator removes it, visible in the Wyrwood and Xolotl web interfaces.
     A definition a devcontainer can edit
