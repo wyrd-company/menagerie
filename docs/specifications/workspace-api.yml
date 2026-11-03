@@ -23,8 +23,8 @@ description: >-
   `cross-origin-request`. Neither runs an operation or reads a job.
 
 
-  `GET /api/workspaces` lists every folder directly under the workspace root,
-  sorted by name. Each folder is joined to the newest container whose
+  `GET /api/workspaces` lists every folder directly under the workspace root
+  whose name does not start with a dot, sorted by name. Each folder is joined to the newest container whose
   `devcontainer.local_folder` label equals the folder path; its state is
   `running`, `stopped` or `no-container`. The service asks Docker only about
   root folders, so a container labelled for any other path, or without the

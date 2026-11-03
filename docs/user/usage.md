@@ -15,7 +15,8 @@ says they are not a manager, and can change nothing.
 
 ## The workspace list
 
-Every folder in the workspace root is a row, with its container's state:
+Every folder in the workspace root is a row, unless its name starts with a
+dot, with its container's state:
 **Running**, **Stopped**, or **No container** for a folder whose
 devcontainer was never created. Containers that belong to no folder in the
 root do not appear. **Refresh** reads the folders and containers again.

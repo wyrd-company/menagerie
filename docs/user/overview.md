@@ -18,9 +18,9 @@ it defines.
   answers the template's interview. Toha writes the folder, the template's
   hooks run in throwaway containers that see only that folder, and
   [devcontainer-builder](https://wyrd.foo/docs/dcb) starts the devcontainer.
-- **See the fleet.** The list shows every folder in the workspace root and
-  the state of its container. Containers that belong to no workspace do not
-  appear.
+- **See the fleet.** The list shows every workspace folder in the workspace
+  root and the state of its container. Containers that belong to no workspace
+  do not appear.
 - **Operate.** Stop, start and rebuild a workspace's devcontainer. Each
   operation is a job whose console shows its phases and log.
 - **Upgrade.** Move a workspace to a newer template version. Menagerie asks

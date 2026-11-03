@@ -18,7 +18,7 @@
     "workspace-root": {
       "type": "string",
       "pattern": "^/.",
-      "description": "Absolute folder whose direct child folders are the workspaces. Same path in the container and on the host; not the filesystem root."
+      "description": "Absolute folder whose direct child folders are the workspaces, unless their names start with a dot. Same path in the container and on the host; not the filesystem root."
     },
     "workspace-repository": {
       "type": "string",

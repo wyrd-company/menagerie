@@ -70,8 +70,9 @@ github-app:
 
 `workspace-root` is the absolute path of the folder that holds the
 workspaces, the same path on the host and in the container. Every folder
-directly in it is a workspace, whether Menagerie created it or not, and it
-is never `/`. Menagerie finds a workspace's container by the
+directly in it is a workspace, whether Menagerie created it or not, unless
+its name starts with a dot: a folder such as `.shared` belongs to the host.
+The path is never `/`. Menagerie finds a workspace's container by the
 `devcontainer.local_folder` label and shows no other container.
 
 `workspace-repository` is the Git remote for backups. Each workspace is

@@ -30,7 +30,7 @@ paths:
   /api/workspaces:
     get:
       operationId: listWorkspaces
-      summary: Every folder directly under the workspace root, with its container state.
+      summary: Every folder directly under the workspace root whose name does not start with a dot, with its container state.
       responses:
         "200":
           description: Workspaces sorted by name.

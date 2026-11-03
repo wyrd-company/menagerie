@@ -79,7 +79,8 @@ proposed-design:
   terms: >-
     A workspace is a folder under the workspace root, generated from a Toha
     template, together with the devcontainer it defines. Every folder directly
-    under the workspace root is a workspace. Its git repository tracks only
+    under the workspace root is a workspace, unless its name starts with a dot:
+    such a folder belongs to the host. Its git repository tracks only
     the files the template generated; repositories cloned inside the workspace
     are ignored by the template's `.gitignore`.
   screens: >-
@@ -93,8 +94,8 @@ proposed-design:
     screen runs the interview for a newer template version, asking only what
     the recorded answers do not cover.
   workspace-discovery: >-
-    The list is built from the folders under the workspace root. Each folder
-    is joined to the container whose `devcontainer.local_folder` label equals
+    The list is built from the workspace folders under the workspace root.
+    Each folder is joined to the container whose `devcontainer.local_folder` label equals
     the folder path. Containers without such a label, or whose label points
     outside the workspace root, are never shown. Menagerie keeps no database.
   internal-api: >-
