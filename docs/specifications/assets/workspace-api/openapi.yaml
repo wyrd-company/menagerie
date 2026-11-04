@@ -317,6 +317,13 @@ components:
             Required by apply-branch: the short name of a branch of the
             workspace repository, slashes allowed, not a full ref name such
             as refs/heads/<name>. The workspace's own branch is allowed.
+        reanswer:
+          type: boolean
+          default: false
+          description: >-
+            Upgrade only: ask every question again, with the workspace's
+            recorded answers as the defaults, instead of only what they do
+            not settle.
     JobState:
       type: string
       enum: [running, waiting-for-answers, succeeded, failed, ended]

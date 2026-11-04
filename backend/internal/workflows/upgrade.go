@@ -26,6 +26,9 @@ type upgrading struct {
 	name     string
 	folder   string
 	template string
+	// reanswer asks every question again, with the recorded answers as
+	// the defaults.
+	reanswer bool
 }
 
 func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
@@ -46,8 +49,11 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 
 	t := u.w.opts.Templates
 	sel := u.w.selector(u.name, u.folder, u.template)
+	if u.reanswer {
+		fmt.Fprintln(run.Log(""), "asking every question again, with the recorded answers as the defaults")
+	}
 	reply, err := u.w.interview(ctx, run, interviewSteps{
-		start: func(ctx context.Context) (*templates.Reply, error) { return t.StartUpgrade(ctx, sel) },
+		start: func(ctx context.Context) (*templates.Reply, error) { return t.StartUpgrade(ctx, sel, u.reanswer) },
 		answer: func(ctx context.Context, session, submission json.RawMessage) (*templates.Reply, error) {
 			return t.AnswerUpgrade(ctx, sel, session, submission)
 		},

@@ -105,8 +105,8 @@ An entry's optional `runner-image` is the image its hooks run in; see
 
 Pin each entry to a tag. To move workspaces to a new template version, add
 an entry for that version; **Upgrade** then asks only the questions the new
-version adds and keeps the answers and local edits the workspace has. The
-list can be empty.
+version adds and keeps the answers and local edits the workspace has, or
+every question with **Ask every question again**. The list can be empty.
 
 ## Runner images
 

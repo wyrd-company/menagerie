@@ -166,8 +166,15 @@ func (c *Client) Generate(ctx context.Context, s Selector, session json.RawMessa
 }
 
 // StartUpgrade starts an upgrade of an existing workspace to s.TemplateID.
-func (c *Client) StartUpgrade(ctx context.Context, s Selector) (*Reply, error) {
-	return c.interview(ctx, pathUpgrades, s)
+// With reanswer it asks every question again, with the workspace's recorded
+// answers as the defaults; without it, only what they do not settle.
+func (c *Client) StartUpgrade(ctx context.Context, s Selector, reanswer bool) (*Reply, error) {
+	return c.interview(ctx, pathUpgrades, upgradeRequest{s, reanswer})
+}
+
+type upgradeRequest struct {
+	Selector
+	Reanswer bool `json:"reanswer,omitempty"`
 }
 
 // AnswerUpgrade submits one batch of an upgrade interview.

@@ -108,9 +108,10 @@ func TestStartRoutesCarryOnlyTheSelector(t *testing.T) {
 	f := newFake(t)
 	f.answer(200, `{"session":{},"state":"completed","document":null,"warnings":["w"]}`)
 	c := New(f.socket)
+	upgrade := func(ctx context.Context, s Selector) (*Reply, error) { return c.StartUpgrade(ctx, s, false) }
 	for path, start := range map[string]func(context.Context, Selector) (*Reply, error){
 		"/v1/interviews": c.StartInterview,
-		"/v1/upgrades":   c.StartUpgrade,
+		"/v1/upgrades":   upgrade,
 	} {
 		reply, err := start(context.Background(), sel)
 		if err != nil {
@@ -123,6 +124,18 @@ func TestStartRoutesCarryOnlyTheSelector(t *testing.T) {
 		if reply.State != Completed || string(reply.Document) != "null" || reply.Warnings[0] != "w" {
 			t.Fatalf("%+v", reply)
 		}
+	}
+}
+
+func TestAReansweredUpgradeStartSaysSo(t *testing.T) {
+	f := newFake(t)
+	f.answer(200, `{"session":{},"state":"questions","document":{},"warnings":[]}`)
+	if _, err := New(f.socket).StartUpgrade(context.Background(), sel, true); err != nil {
+		t.Fatal(err)
+	}
+	got, body := f.last()
+	if got != "/v1/upgrades" || body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","templateId":"sample","reanswer":true}`+"\n" {
+		t.Fatalf("%s %s", got, body)
 	}
 }
 

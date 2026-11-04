@@ -145,6 +145,13 @@ container that sees only that checkout; then it merges the result into
 the files, keeping your edits, and Menagerie commits, backs up and
 rebuilds the devcontainer.
 
+An earlier answer that still fits the new version is not asked again, even
+when the new version adds options to its question. To change it, check
+**Ask every question again** before **Begin upgrade**: every question is
+asked, filled in with the workspace's recorded answers, and a question you
+leave as it is keeps its answer. Documents are still read from their files
+in the workspace.
+
 When the new version and a local edit change the same lines, the upgrade
 writes conflict markers, commits and backs them up, and stops before the
 rebuild with `merge-conflicted`. Resolve the conflicts in the workspace,

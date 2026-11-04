@@ -116,6 +116,8 @@ export interface StartJob {
   templateId?: string;
   /** The branch of the workspace repository an apply-branch job applies. */
   branch?: string;
+  /** An upgrade asks every question again, with the recorded answers as defaults. */
+  reanswer?: boolean;
 }
 
 export async function startJob(start: StartJob): Promise<Job> {

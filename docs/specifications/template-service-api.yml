@@ -44,7 +44,8 @@ description: >-
   `/v1/interviews/answers` and `/v1/upgrades/answers` add `"session"` and
   `"submission"`. `/v1/workspaces/generate` and `/v1/upgrades/apply` add
   `"session"` and an optional `"hookToken"`, the workspace service's grant
-  for that request's hooks. Other members are refused. `workspace` is the folder name,
+  for that request's hooks. `/v1/upgrades` also takes an optional boolean
+  `"reanswer"`, false when absent. Other members are refused. `workspace` is the folder name,
   `target` is that folder under the workspace root, and `templateId` is an
   approved template's `id`; for an upgrade it names the template version to
   upgrade to. Another path answers 404 `not-found`, another method 405
@@ -136,6 +137,14 @@ description: >-
   input files when the upgrade starts, and keep those values for the whole
   session. The workspace must be clean and its applied record unchanged for
   the whole session. `/v1/upgrades/apply` merges a completed session.
+  A start with `reanswer` asks every question, as Toha's re-answer does,
+  and the session's signed record keeps it for every later request. Unlike
+  Toha's own re-answer, each question's default is its first recorded
+  answer when that answer has the JSON type the question takes in the newer
+  version: a string, a boolean, a list of strings, or `null`. So the form
+  starts from the recorded answers, and a question a submission leaves out
+  keeps its recorded answer. A recorded answer takes the place of a
+  configured default, and a document question still takes its input file.
 
 
   Hooks. Generate and apply hand each of the template's hooks to the
@@ -372,7 +381,8 @@ validation-criteria: >-
   fixed and moving addresses, installed branches and tags;
   `tests/offline.rs` resumes every route offline after a restart; `tests/upgrade.rs` covers an
   upgrade between two template versions that asks only the new question and
-  keeps local edits, rejected recorded answers, fresh and kept documents,
+  keeps local edits, a re-answered upgrade that asks every question with
+  the recorded answers as defaults, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;
   `tests/requests.rs` covers every request check, and refuses a session
   with any record member altered, without its signature, signed with

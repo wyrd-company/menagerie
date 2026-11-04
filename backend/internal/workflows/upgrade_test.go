@@ -160,6 +160,41 @@ func TestAnAlreadyCurrentUpgradeChangesNothing(t *testing.T) {
 	}
 }
 
+func TestAReansweredUpgradeAsksTheTemplateServiceToReanswer(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	w.tmpl.startUpgrade = func(templates.Selector) (*templates.Reply, error) {
+		return reply(templates.Completed, sessionDone, "null"), nil
+	}
+	w.tmpl.applyUpgrade = func(templates.Selector) (*templates.Applied, error) {
+		return appliedReply(templates.AlreadyCurrent, nil, nil), nil
+	}
+	for _, body := range []string{
+		`{"operation":"upgrade","workspace":"alpha","templateId":"sample-v1","reanswer":true}`,
+		`{"operation":"upgrade","workspace":"alpha","templateId":"sample-v1"}`,
+	} {
+		status, reply := w.do(t, http.MethodPost, "/api/jobs", body)
+		if status != http.StatusAccepted {
+			t.Fatalf("start: %d %s", status, reply)
+		}
+		var snap jobs.Snapshot
+		_ = json.Unmarshal([]byte(reply), &snap)
+		job, _ := w.manager.Get(snap.JobID)
+		if ended := waitEnded(t, job); ended.State != jobs.Succeeded {
+			t.Fatalf("%+v %+v", ended, ended.Error)
+		}
+		asked := strings.Contains(logText(job), "asking every question again")
+		if asked != strings.Contains(body, "reanswer") {
+			t.Fatalf("%s logged:\n%s", body, logText(job))
+		}
+	}
+	w.tmpl.mu.Lock()
+	defer w.tmpl.mu.Unlock()
+	if !reflect.DeepEqual(w.tmpl.reanswered, []bool{true, false}) {
+		t.Fatalf("reanswer of the upgrade starts %v", w.tmpl.reanswered)
+	}
+}
+
 func TestUpgradeFailuresAreVisibleAndReleaseTheSlot(t *testing.T) {
 	cases := []struct {
 		name    string

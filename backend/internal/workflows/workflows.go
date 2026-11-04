@@ -41,7 +41,7 @@ type Templates interface {
 	StartInterview(ctx context.Context, s templates.Selector) (*templates.Reply, error)
 	AnswerInterview(ctx context.Context, s templates.Selector, session, submission json.RawMessage) (*templates.Reply, error)
 	Generate(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
-	StartUpgrade(ctx context.Context, s templates.Selector) (*templates.Reply, error)
+	StartUpgrade(ctx context.Context, s templates.Selector, reanswer bool) (*templates.Reply, error)
 	AnswerUpgrade(ctx context.Context, s templates.Selector, session, submission json.RawMessage) (*templates.Reply, error)
 	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
 }
@@ -162,7 +162,7 @@ func (w *Workflows) upgrade(req api.JobRequest) (jobsRunner, error) {
 	if err != nil {
 		return nil, err
 	}
-	return (&upgrading{w: w, name: req.Workspace, folder: folder, template: req.TemplateID}).run, nil
+	return (&upgrading{w: w, name: req.Workspace, folder: folder, template: req.TemplateID, reanswer: req.Reanswer}).run, nil
 }
 
 // start starts a workspace, and finishes a create that failed after
