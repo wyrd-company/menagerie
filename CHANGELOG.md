@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0
+
+### Breaking
+
+- A workspace whose rendered definition has a `customizations.menagerie` block is provisioned by its jobs, with no step in a CLI or a web interface: Menagerie issues its Xolotl client key, makes its Wyrwood binding, creates its container, waits for its sockets and only then starts it. A create, start, rebuild, upgrade and apply-branch run the steps, each its own phase in the job console, and **Start** retries a job that failed without rotating the key or writing the binding again. A new create no longer overwrites a deleted workspace's backup branch: it copies the branch to `archive/<name>-<UTC stamp>` first. New configuration `provisioning.readiness-wait`, new phases `issue-key`, `bind`, `wait-for-sockets`, `verify` and `retire`, and new job errors `provisioning-invalid`, `provisioning-unavailable` and `provisioning-not-ready`.
+
+### Features
+
+- Run templates that declare empty directories and user sections, through Toha 0.4.1. Honor a container name from `runArgs` and read-only mount object targets, through devcontainer-builder 0.2.1.
+- Add `provisioning.wyrwood`, which locates the Wyrwood controller and selects the operator key that will manage workspaces' bindings. Menagerie offers the controller only that key, pins its host key, and names the key's fingerprint when it has no approval. Provisioning needs Wyrwood 0.6.1 or later.
+- Add a delete operation. **Delete** on a workspace's row asks for its name, stops the devcontainer, commits and backs up, removes its Wyrwood binding, containers and Xolotl key, then removes its socket folder and folder. A failed delete can be retried. Ignored files are not backed up and are lost.
+- Create the missing bind source folders inside a workspace before each start and rebuild. Check a new workspace's bind sources outside its folder and its network before its first commit, and report all that are missing at once as `host-prerequisites-missing`.
+- Mint a T3 Code pairing token for a running workspace from its row in the workspace list, or with `POST /api/workspaces/{name}/t3-code-pairing-tokens`. The token is minted in the workspace's container through Docker exec, and Menagerie keeps no copy.
+- Run workspaces through devcontainer-builder 0.3.0, which honors more of a definition's `runArgs`, `mounts` and build options. A `mounts` string now follows Docker's `--mount`: without `type=` it is a volume, and a space around a field or a value is refused. A lifecycle command of an unsupported type now fails when the definition is read. A new `create-container` phase can take a time limit.
+- Accept `provisioning.xolotl`, the Xolotl URL and the OpenBao secret of the scoped key that issues and revokes workspace client keys. Requires Xolotl 0.6.0 or later.
+
+### Fixes
+
+- A generate or upgrade whose job was cancelled or reached its time limit while a template fetch ran no longer writes to the workspace folder when that fetch returns.
+- The deployment example mounts the Wyrwood consumer directory in long form with `create_host_path: false`, so Docker never creates a missing directory as root and Menagerie returns after a host restart with no step by hand. A first install creates the directory once before `docker compose create`.
+- The template service removes what a killed upgrade left in its candidate folder when it starts: Toha's temporary entries and the workspace service's copy-back folders, each named in its log. It leaves every other entry.
+- A folder in the workspace root whose name starts with a dot, such as `.shared`, is not a workspace: it is not listed, and an operation that names it is refused as `invalid-workspace-name`.
+
 ## 0.3.0
 
 ### Features
