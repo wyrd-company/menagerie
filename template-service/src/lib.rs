@@ -6,6 +6,7 @@
 // its size does not matter on this path.
 #![allow(clippy::result_large_err)]
 pub mod api;
+pub mod blanks;
 pub mod candidates;
 pub mod checks;
 pub mod config;

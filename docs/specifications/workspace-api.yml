@@ -137,7 +137,11 @@ description: >-
   `{"session","state","document","warnings"}`. While questions remain the
   job is `waiting-for-answers`, with no expiry. `POST
   /api/jobs/{id}/answers` takes `{"session","submission"}`, both JSON
-  objects forwarded as received. The body carries the whole session, so
+  objects forwarded as received. The web UI's submission holds every
+  question the batch shows, an untouched one with the default it showed;
+  only an untouched document question is left out, so the template service
+  reads its input file. Another client may leave a question out to take
+  its default. The body carries the whole session, so
   it has no size bound, as the template service has none; the reply is
   read whole for the same reason. It answers 200 with the next reply's
   exact text and appends it as an event. Only a waiting job takes an

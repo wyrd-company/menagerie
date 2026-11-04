@@ -97,8 +97,9 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     )?;
     let answers = checks::submission(&record, &request.submission)?;
     let mut session = resume(service, record, &selected.target, config, &registry)?;
-    reply::asking(&session.state()?)?;
-    let state = session.answer(answers)?;
+    let shown = session.state()?;
+    reply::asking(&shown)?;
+    let state = session.answer(crate::blanks::filled(&shown, answers))?;
     let sealed = seal::seal(&service.key, binding, &session.record)?;
     reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }

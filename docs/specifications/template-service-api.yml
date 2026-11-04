@@ -65,7 +65,14 @@ description: >-
   and that it belongs to this flow: a create session has no update base, and
   an upgrade session's base is a recorded application. A submission is
   Toha's answers envelope `{"template","answers"}`, which Toha verifies
-  against the session's template before any answer exists.
+  against the session's template before any answer exists. A question the
+  latest reply showed and the submission leaves out is answered as Toha's
+  terminal answers a blank: with its default, else with `null`, the empty
+  answer, when it is optional. A required question without a default and
+  a document question stay out, so Toha refuses the one and reads the
+  other's input file. Toha's update resume skips a recorded batch with no
+  answers at all (wyrd-company/toha#67), so without this a batch accepted
+  as shown, `{}`, would be asked again.
 
 
   Interview replies. Start and answer routes answer 200 with
@@ -137,14 +144,10 @@ description: >-
   input files when the upgrade starts, and keep those values for the whole
   session. The workspace must be clean and its applied record unchanged for
   the whole session. `/v1/upgrades/apply` merges a completed session.
-  A start with `reanswer` asks every question, as Toha's re-answer does,
-  and the session's signed record keeps it for every later request. Unlike
-  Toha's own re-answer, each question's default is its first recorded
-  answer when that answer has the JSON type the question takes in the newer
-  version: a string, a boolean, a list of strings, or `null`. So the form
-  starts from the recorded answers, and a question a submission leaves out
-  keeps its recorded answer. A recorded answer takes the place of a
-  configured default, and a document question still takes its input file.
+  A start with `reanswer` asks every question through Toha's re-answer,
+  which gives each question its recorded answer as the default, and the
+  session's signed record keeps it for every later request. A document
+  question still takes its input file.
 
 
   Hooks. Generate and apply hand each of the template's hooks to the
@@ -382,7 +385,8 @@ validation-criteria: >-
   `tests/offline.rs` resumes every route offline after a restart; `tests/upgrade.rs` covers an
   upgrade between two template versions that asks only the new question and
   keeps local edits, a re-answered upgrade that asks every question with
-  the recorded answers as defaults, rejected recorded answers, fresh and kept documents,
+  the recorded answers as defaults, a create and a re-answered upgrade of
+  two batches whose second is accepted as shown, `{}`, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;
   `tests/requests.rs` covers every request check, and refuses a session
   with any record member altered, without its signature, signed with

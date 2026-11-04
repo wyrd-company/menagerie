@@ -17,8 +17,8 @@ use toha::updates::{self, Environment, PrepareMode, UpdateBase, UpdateSession};
 /// Start an upgrade of an existing workspace to the approved template version:
 /// replay the workspace's recorded answers and ask only what they do not cover.
 /// Current document inputs and defaults are admitted now and kept for the
-/// session. With `reanswer` every question is asked again, with the recorded
-/// answers as its defaults.
+/// session. With `reanswer` every question is asked again; Toha gives each the
+/// recorded answer as its default.
 pub fn start(service: &Service, request: UpgradeRequest) -> Result<InterviewReply, ServiceError> {
     let selected = checks::select(&service.settings, request.selector())?;
     if !selected.folder.is_dir() {
@@ -37,7 +37,7 @@ pub fn start(service: &Service, request: UpgradeRequest) -> Result<InterviewRepl
     }
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);
-    let mut prepared = updates::prepare(
+    let prepared = updates::prepare(
         &UpdateBase::Update,
         &selected.template.address,
         &selected.target,
@@ -56,9 +56,6 @@ pub fn start(service: &Service, request: UpgradeRequest) -> Result<InterviewRepl
         &registry,
     )?;
     warnings.extend(prepared.warnings.iter().cloned());
-    if request.reanswer {
-        recorded_defaults(&mut prepared);
-    }
     let session = UpdateSession::start(
         prepared,
         selected.target.clone(),
@@ -99,8 +96,9 @@ pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewRepl
     let mut environment = environment(service, &config, &registry, &mut source);
     let mut session = resume(service, record, &selected.target, &mut environment)?;
     let warnings = session.prepared.warnings.clone();
-    reply::asking(&session.state()?)?;
-    let state = session.answer(answers)?;
+    let shown = session.state()?;
+    reply::asking(&shown)?;
+    let state = session.answer(crate::blanks::filled(&shown, answers))?;
     let sealed = seal::seal(&service.key, binding, &session.record)?;
     reply::interview(&session.record, sealed, &selected.target, state, warnings)
 }
@@ -167,107 +165,11 @@ fn resume(
     target: &CanonicalTarget,
     environment: &mut Environment<'_, ProcessEnvironment>,
 ) -> Result<UpdateSession, toha::updates::SessionError> {
-    let mut session = UpdateSession::resume(
+    UpdateSession::resume(
         record,
         target.clone(),
         &service.host.paths,
         true,
         environment,
-    )?;
-    // Toha rebuilds the prepared operation on every resume, so a re-answered
-    // session gets its recorded defaults again.
-    if session.record.reanswer {
-        recorded_defaults(&mut session.prepared);
-    }
-    Ok(session)
-}
-
-/// Make the workspace's recorded answers the defaults of a re-answered
-/// upgrade, so its form starts from them and a question left out of a
-/// submission keeps its recorded answer rather than the template's default.
-/// Toha's own re-answer offers only the template's defaults. A recorded
-/// answer takes the place of a configured default. Only an answer whose JSON
-/// type fits its question in the new version is used, since Toha fails the
-/// interview on a default of the wrong type; documents are read again from
-/// the workspace instead. The first recorded value of a question is used,
-/// for every pass of a loop.
-fn recorded_defaults(prepared: &mut updates::Prepared) {
-    let mut kinds = std::collections::HashMap::new();
-    question_kinds(&prepared.template.interview, &mut kinds);
-    let mut seeded = std::collections::HashSet::new();
-    for submission in &prepared.recorded {
-        for (id, raw) in submission {
-            if seeded.contains(id) {
-                continue;
-            }
-            let Some(kind) = kinds.get(id) else {
-                continue;
-            };
-            if fits(kind, &raw.0) {
-                seeded.insert(id.clone());
-                prepared.configured_defaults.insert(id.clone(), raw.clone());
-            }
-        }
-    }
-}
-
-fn question_kinds<'a>(
-    nodes: &'a [toha::template::Node],
-    kinds: &mut std::collections::HashMap<toha::template::Id, &'a toha::template::QuestionKind>,
-) {
-    use toha::template::Node;
-    for node in nodes {
-        match node {
-            Node::Question(question) => {
-                kinds.insert(question.id.clone(), &question.kind);
-            }
-            Node::Group(group) => question_kinds(&group.nodes, kinds),
-            _ => {}
-        }
-    }
-}
-
-/// Whether a recorded value has the JSON type Toha parses for the question:
-/// a string, a boolean or a list of strings. `null`, the recorded empty
-/// answer, fits every question but a document.
-fn fits(kind: &toha::template::QuestionKind, value: &serde_json::Value) -> bool {
-    use serde_json::Value;
-    use toha::template::QuestionKind as K;
-    match kind {
-        K::Document { .. } => false,
-        _ if value.is_null() => true,
-        K::Text { .. } | K::Multiline { .. } | K::Git { .. } | K::Select { .. } => {
-            value.is_string()
-        }
-        K::Confirm { .. } => value.is_boolean(),
-        K::MultiSelect { .. } | K::TextLoop { .. } => value
-            .as_array()
-            .is_some_and(|items| items.iter().all(Value::is_string)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::fits;
-    use serde_json::json;
-    use toha::template::QuestionKind as K;
-
-    #[test]
-    fn only_a_recorded_value_of_the_question_s_json_type_becomes_a_default() {
-        let text = K::Text { default: None };
-        let flag = K::Confirm { default: None };
-        let list = K::TextLoop {
-            default: None,
-            min: None,
-            max: None,
-        };
-        assert!(fits(&text, &json!("a")));
-        assert!(fits(&text, &json!(null)));
-        assert!(!fits(&text, &json!(["a"])));
-        assert!(fits(&flag, &json!(true)));
-        assert!(!fits(&flag, &json!("true")));
-        assert!(fits(&list, &json!(["a", "b"])));
-        assert!(!fits(&list, &json!(["a", 1])));
-        assert!(!fits(&list, &json!("a")));
-    }
+    )
 }

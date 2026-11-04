@@ -41,13 +41,30 @@ describe("initialForm", () => {
 describe("buildSubmission", () => {
   it("wraps answers in the identity envelope with the batch's template", () => {
     const submission = buildSubmission(doc.context.template, fields, initialForm(fields));
-    expect(submission).toEqual({ template: doc.context.template, answers: {} });
+    expect(submission.template).toBe(doc.context.template);
   });
 
-  it("leaves untouched questions out so Toha applies their defaults", () => {
+  it("sends what it shows: an untouched question with its default, an empty one as null", () => {
+    // Only the untouched document is left out, so Toha reads its input file.
+    const submission = buildSubmission("t", fields, initialForm(fields));
+    expect(submission.answers).toEqual({
+      title: "",
+      notes: null,
+      remote: null,
+      enabled: true,
+      verbose: null,
+      size: "medium",
+      palette: null,
+      features: ["alpha"],
+      labels: [],
+    });
     let form = initialForm(fields);
     form = edit(form, "title", { kind: "text", text: "Sample project" });
-    expect(buildSubmission("t", fields, form).answers).toEqual({ title: "Sample project" });
+    expect(buildSubmission("t", fields, form).answers).toMatchObject({
+      title: "Sample project",
+      size: "medium",
+      features: ["alpha"],
+    });
   });
 
   it("sends typed values for every kind of question", () => {
@@ -164,7 +181,7 @@ describe("JSON answers keep the person's numbers", () => {
       '{"$schema":"https://schemas.example.test/sample-settings/1","name":"sample","count":9007199254740993,"ratio":1.0}';
     form = edit(form, "settings", { kind: "json", text });
     const body = serializeSubmission(buildSubmission("t", fields, form));
-    expect(body).toBe(`{"template":"t","answers":{"settings":${text}}}`);
+    expect(body).toContain(`"settings":${text}`);
   });
 
   it("sends a raw JSON answer exactly as typed", () => {

@@ -500,3 +500,94 @@ async fn an_upgrade_to_the_recorded_version_is_already_current() {
     assert_eq!(head(&folder), before);
     service.stop().await;
 }
+
+/// A template of two batches, the second asked after the first's answer; its
+/// second version adds an option to the first batch's multiselect.
+fn tiered_world() -> World {
+    let holder = tempfile::tempdir().unwrap().keep();
+    let source = holder.join("tiered");
+    let version = |options: &str| {
+        format!(
+            "name: tiered\ninterview:\n  - {{id: tools, type: multiselect, prompt: Tools, options: [{options}], required: true}}\n  - {{id: detail, type: text, prompt: Detail, required: true, default: fallback, when: \"'a' in tools\"}}\n"
+        )
+    };
+    write(&source, "template.yml", version("a, b"));
+    write(
+        &source,
+        "template/out.txt",
+        "tools: {{ tools | join(',') }}\ndetail: {{ detail }}\n",
+    );
+    git(&source, &["init", "-q", "-b", "main"]);
+    commit_all(&source, "v1");
+    git(&source, &["tag", "v1"]);
+    write(&source, "template.yml", version("a, b, c"));
+    commit_all(&source, "v2");
+    git(&source, &["tag", "v2"]);
+    let address = |tag: &str| format!("file://{}@{tag}", source.display());
+    World::with_templates(&[("tiered-v1", &address("v1")), ("tiered-v2", &address("v2"))])
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_accepted_as_shown_moves_on_in_a_create_and_a_reanswered_upgrade() {
+    let world = tiered_world();
+    let service = Running::start(&world).await;
+    let selector = world.select("alpha", "tiered-v1");
+    let mut reply = service.post("/v1/interviews", &selector).await;
+    // The second batch is accepted with its template default.
+    for answers in [json!({"tools": ["a"]}), json!({})] {
+        assert_eq!(reply.json["state"], "questions", "{}", reply.json);
+        reply = service
+            .post(
+                "/v1/interviews/answers",
+                &with(
+                    selector.clone(),
+                    json!({"session": reply.json["session"], "submission": submission(&reply, answers)}),
+                ),
+            )
+            .await;
+    }
+    assert_eq!(reply.json["state"], "completed", "{}", reply.json);
+    let folder = world.initialize("alpha");
+    let generated = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(selector, json!({"session": reply.json["session"]})),
+        )
+        .await;
+    assert_eq!(generated.status, 200, "{}", generated.json);
+    commit_all(&folder, "generated");
+
+    let selector = world.select("alpha", "tiered-v2");
+    let mut reply = service
+        .post(
+            "/v1/upgrades",
+            &with(selector.clone(), json!({"reanswer": true})),
+        )
+        .await;
+    // The first batch takes the new option; the second is left as it was.
+    let mut asked = Vec::new();
+    for answers in [json!({"tools": ["a", "c"]}), json!({})] {
+        assert_eq!(reply.json["state"], "questions", "{}", reply.json);
+        asked.push(questions(&reply));
+        reply = service
+            .post(
+                "/v1/upgrades/answers",
+                &with(
+                    selector.clone(),
+                    json!({"session": reply.json["session"], "submission": submission(&reply, answers)}),
+                ),
+            )
+            .await;
+    }
+    assert_eq!(asked, [vec!["tools"], vec!["detail"]]);
+    assert_eq!(reply.json["state"], "completed", "{}", reply.json);
+    let applied = service
+        .post(
+            "/v1/upgrades/apply",
+            &with(selector, json!({"session": reply.json["session"]})),
+        )
+        .await;
+    assert_eq!(applied.status, 200, "{}", applied.json);
+    assert_eq!(read(&folder, "out.txt"), "tools: a,c\ndetail: fallback\n");
+    service.stop().await;
+}
