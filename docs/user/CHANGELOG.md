@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4
+
+### Fixes
+
+- Usage and configuration describe **Ask every question again** on the upgrade screen.
+
 ## 0.2.3
 
 ### Fixes
