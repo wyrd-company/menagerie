@@ -92,7 +92,8 @@ proposed-design:
     create screen selects an
     approved template, names the workspace and runs the interview. The upgrade
     screen runs the interview for a newer template version, asking only what
-    the recorded answers do not cover.
+    the recorded answers do not cover, or, when the manager asks, every
+    question with the recorded answers as defaults.
   workspace-discovery: >-
     The list is built from the workspace folders under the workspace root.
     Each folder is joined to the container whose `devcontainer.local_folder` label equals

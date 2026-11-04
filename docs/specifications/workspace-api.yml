@@ -60,7 +60,8 @@ description: >-
   `start`, `stop`, `rebuild` and `commit` on an existing workspace folder,
   `apply-branch` on an existing workspace folder, which also names a
   `branch`, and the interview operations `create` and `upgrade`, which also
-  name an approved template's `templateId`. Any other operation is refused as
+  name an approved template's `templateId`; `upgrade` also takes an optional
+  boolean `reanswer`. Any other operation is refused as
   `unknown-operation`. The service acquires the workspace's job slot before
   any work begins. A workspace has at most one unfinished job; another
   request for it gets 409 `workspace-busy` with the holder's id, while other
@@ -223,7 +224,10 @@ description: >-
   deletions, and force-pushes the branch, so the state before the upgrade
   is backed up; an unchanged workspace makes no commit and still pushes.
   Untracked files are not committed. It then runs the upgrade interview
-  and applies it. While a change or an untracked file outside the ignore
+  and applies it. The interview asks only what the recorded answers do not
+  settle; with `reanswer` the service asks the template service to ask every
+  question, with the recorded answers as the defaults, and the console says
+  so. While a change or an untracked file outside the ignore
   rules exists, the template service refuses the upgrade with
   `dirty-target` and writes nothing: at the start the job fails as
   `template-refused`, an answer is refused and the job keeps waiting, and

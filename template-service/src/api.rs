@@ -3,13 +3,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
-/// Starts a create interview or an upgrade.
+/// Starts a create interview.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StartRequest {
     pub workspace: String,
     pub target: PathBuf,
     pub template_id: String,
+}
+
+/// Starts an upgrade. `reanswer` asks every question again, with the
+/// workspace's recorded answers as their defaults.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UpgradeRequest {
+    pub workspace: String,
+    pub target: PathBuf,
+    pub template_id: String,
+    #[serde(default)]
+    pub reanswer: bool,
 }
 
 /// Submits one batch of answers against the session of the latest reply.
@@ -60,6 +72,7 @@ macro_rules! selector {
     };
 }
 selector!(StartRequest);
+selector!(UpgradeRequest);
 selector!(AnswerRequest);
 selector!(ApplyRequest);
 

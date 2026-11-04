@@ -62,6 +62,8 @@ type fakeTemplates struct {
 	sessions map[string]string
 	// tokens holds the hook token of each generate and apply call.
 	tokens map[string]string
+	// reanswered holds the reanswer flag of each upgrade start.
+	reanswered []bool
 
 	startInterview  func(templates.Selector) (*templates.Reply, error)
 	answerInterview func(templates.Selector, json.RawMessage, json.RawMessage) (*templates.Reply, error)
@@ -105,8 +107,11 @@ func (f *fakeTemplates) Generate(_ context.Context, s templates.Selector, sessio
 	f.keepToken("generate", hookToken)
 	return f.generate(s)
 }
-func (f *fakeTemplates) StartUpgrade(_ context.Context, s templates.Selector) (*templates.Reply, error) {
+func (f *fakeTemplates) StartUpgrade(_ context.Context, s templates.Selector, reanswer bool) (*templates.Reply, error) {
 	f.record("start-upgrade", nil)
+	f.mu.Lock()
+	f.reanswered = append(f.reanswered, reanswer)
+	f.mu.Unlock()
 	return f.startUpgrade(s)
 }
 func (f *fakeTemplates) AnswerUpgrade(_ context.Context, s templates.Selector, session, submission json.RawMessage) (*templates.Reply, error) {

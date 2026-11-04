@@ -25,6 +25,9 @@ type JobRequest struct {
 	// Branch names the branch of the workspace repository that
 	// apply-branch applies.
 	Branch string `json:"branch,omitempty"`
+	// Reanswer makes an upgrade ask every question again, with the
+	// workspace's recorded answers as the defaults.
+	Reanswer bool `json:"reanswer,omitempty"`
 }
 
 // RequestError rejects a job request before a job exists.

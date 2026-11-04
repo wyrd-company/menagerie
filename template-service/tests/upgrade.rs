@@ -150,6 +150,72 @@ async fn an_upgrade_asks_only_the_new_question_and_keeps_local_edits() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_reanswered_upgrade_asks_every_question_with_the_recorded_answers_as_defaults() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let folder = create(&world, &service, "alpha", "sample-v1").await;
+
+    // A create start takes no reanswer member.
+    let create = service
+        .post(
+            "/v1/interviews",
+            &with(world.select("beta", "sample-v1"), json!({"reanswer": true})),
+        )
+        .await;
+    assert_eq!((create.status, create.kind()), (400, "malformed-request"));
+
+    let selector = world.select("alpha", "sample-v2");
+    let start = service
+        .post(
+            "/v1/upgrades",
+            &with(selector.clone(), json!({"reanswer": true})),
+        )
+        .await;
+    assert_eq!(start.status, 200, "{}", start.json);
+    assert_eq!(start.json["state"], "questions");
+    // The catalog document is read from its input file in the workspace.
+    assert_eq!(
+        questions(&start),
+        ["extra", "label", "note"],
+        "a recorded answer was not asked again"
+    );
+    let properties = &start.json["document"]["schema"]["properties"];
+    assert_eq!(properties["label"]["default"], "first", "{properties}");
+
+    // Every later request rebuilds the session from its sealed record, which
+    // keeps the re-answer and its defaults: the left-out label keeps its
+    // recorded answer, the note takes the new one.
+    let done = service
+        .post(
+            "/v1/upgrades/answers",
+            &with(
+                selector.clone(),
+                json!({"session": start.json["session"],
+            "submission": submission(&start, json!({"extra": "added", "note": "changed"}))}),
+            ),
+        )
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    let applied = service
+        .post(
+            "/v1/upgrades/apply",
+            &with(selector, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(applied.status, 200, "{}", applied.json);
+    assert_eq!(applied.json["outcome"], "written");
+    let application = application(&folder);
+    assert_eq!(application["commit"], world.v2.as_str());
+    assert_eq!(application["answers"]["label"], "first");
+    assert_eq!(application["answers"]["note"], "changed");
+    assert_eq!(application["answers"]["extra"], "added");
+    let result = read(&folder, "result.txt");
+    assert!(result.contains("label: first\n"), "{result}");
+    assert!(result.contains("note: changed\n"), "{result}");
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_recorded_answer_the_new_version_rejects_is_asked_with_its_error_and_nothing_is_written()
 {
     let world = World::new();

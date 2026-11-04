@@ -44,6 +44,7 @@ export function UpgradeWorkspace({
 function StartUpgrade({ workspace }: { workspace: string }) {
   const [current, setCurrent] = useState<Workspace | null | undefined>(undefined);
   const [templateId, setTemplateId] = useState<string | null>(null);
+  const [reanswer, setReanswer] = useState(false);
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [starting, setStarting] = useState(false);
@@ -63,7 +64,12 @@ function StartUpgrade({ workspace }: { workspace: string }) {
     setStarting(true);
     setError(null);
     try {
-      const job = await startJob({ operation: "upgrade", workspace, templateId });
+      const job = await startJob({
+        operation: "upgrade",
+        workspace,
+        templateId,
+        ...(reanswer ? { reanswer } : {}),
+      });
       navigate(paths.upgrade(workspace, job.jobId), { replace: true });
     } catch (e) {
       setError(e instanceof ApiError ? e : new ApiError(0, null, String(e)));
@@ -109,6 +115,26 @@ function StartUpgrade({ workspace }: { workspace: string }) {
           Choose a template.
         </p>
       ) : null}
+      <fieldset className="field">
+        <legend className="field-label">
+          <span className="field-title">Questions</span>
+        </legend>
+        <label className="choice">
+          <input
+            type="checkbox"
+            checked={reanswer}
+            onChange={(e) => setReanswer(e.target.checked)}
+            aria-describedby="reanswer-desc"
+          />
+          <span>Ask every question again</span>
+        </label>
+        <p className="field-description" id="reanswer-desc">
+          Without it, the interview asks only what the recorded answers do not settle, so an option
+          the new version adds to a question already answered is never offered. With it, every
+          question is asked, starting from the recorded answers; documents are still read from the
+          workspace.
+        </p>
+      </fieldset>
       {error ? (
         <div className="notice notice-bad" role="alert">
           <p>
