@@ -18,7 +18,7 @@ assets:
 products:
   menagerie:
     name: menagerie
-    version: 0.4.1
+    version: 0.4.2
     docs-version: 0.2.4
     tagline: Manage workspaces and fleets of development containers through a web UI.
     blurb: >-
