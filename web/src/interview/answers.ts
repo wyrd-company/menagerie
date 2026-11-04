@@ -1,9 +1,10 @@
 // Form state for one batch and the answers document built from it.
 //
-// Toha gives a question its default, or its empty answer, when the answers
-// document leaves it out, and treats an explicit null as an empty answer that
-// does not take the default. So the form sends only the questions the person
-// changed; an untouched question is left out and Toha applies its own default.
+// Each question starts from the default Toha shows for it, and the form sends
+// what it shows: every question, untouched ones with their defaults, as Toha's
+// terminal does when a blank answer takes the default. An explicit null is an
+// empty answer that does not take the default. Only an untouched document is
+// left out, so Toha reads its input file from the target.
 import { RawValue, stringifyJson } from "../api/rawJson.ts";
 import type { Submission } from "../api/types.ts";
 import { own } from "../own.ts";
@@ -183,7 +184,8 @@ export function buildSubmission(template: string, fields: Field[], form: FormSta
   const answers = Object.fromEntries(
     fields.flatMap((field) => {
       const state = own(form, field.id);
-      return state?.dirty ? [[field.id, answerFor(field, state.value)]] : [];
+      if (!state || (field.kind === "document" && !state.dirty)) return [];
+      return [[field.id, answerFor(field, state.value)]];
     }),
   );
   return { template, answers };

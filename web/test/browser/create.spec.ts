@@ -93,7 +93,7 @@ test("creates a workspace through a rejected batch, a second batch and the job",
     },
   });
 
-  // Enter in a text question submits the batch; the untouched default is left to Toha.
+  // Enter in a text question submits the batch, its untouched default included.
   await page.getByLabel(/^Folder name/).press("Enter");
   const job = page.getByRole("region", { name: "Create job" });
   await expect(page.getByText("Question batch 2")).toBeHidden();
@@ -107,7 +107,7 @@ test("creates a workspace through a rejected batch, a second batch and the job",
   await expect(job.locator(".hook.ok")).toContainText("sample-hook exit 0");
   const last = (await (await request.get("/__fixture/requests")).json()).answers[0];
   expect(last.count).toBe(3);
-  expect(JSON.parse(last.last).answers).toEqual({});
+  expect(JSON.parse(last.last).answers).toEqual({ slug: "sample-project" });
   await shot(page, "create-completed");
 
   await page.getByRole("link", { name: "Back to the workspace list" }).click();

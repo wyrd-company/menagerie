@@ -59,7 +59,7 @@ describe("InterviewForm", () => {
     expect(screen.getByLabelText(/^Title/)).toHaveAttribute("aria-invalid", "true");
   });
 
-  it("submits typed answers with the keyboard, leaving untouched questions out", async () => {
+  it("submits typed answers with the keyboard, untouched questions with their defaults", async () => {
     const { onSubmit, user } = setup(batch1);
     await user.type(screen.getByLabelText(/^Title/), "Sample project");
     await user.click(screen.getByRole("radio", { name: "large" }));
@@ -68,7 +68,17 @@ describe("InterviewForm", () => {
     await user.keyboard("{Control>}{Enter}{/Control}");
     expect(onSubmit).toHaveBeenCalledWith({
       template: batch1.context.template,
-      answers: { title: "Sample project", size: "large", labels: ["one", "two"] },
+      answers: {
+        title: "Sample project",
+        notes: null,
+        remote: null,
+        enabled: true,
+        verbose: null,
+        size: "large",
+        palette: null,
+        features: ["alpha"],
+        labels: ["one", "two"],
+      },
     });
   });
 

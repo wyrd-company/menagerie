@@ -52,7 +52,17 @@ test("renders the whole producer batch it receives and completes the upgrade job
   );
   await expect(job.getByRole("table", { name: "Files" })).toContainText("update");
   const sent = (await (await request.get("/__fixture/requests")).json()).answers[0];
+  // Every question shown is sent, the untouched ones with their defaults.
   expect(JSON.parse(sent.last).answers).toEqual({
+    title: "Sample project",
+    notes: "First line\nSecond line",
+    remote: "https://example.test/sample.git",
+    enabled: true,
+    verbose: false,
+    size: "small",
+    palette: "green",
+    features: ["alpha", "gamma"],
+    labels: ["one", "two"],
     region: "north",
     settings: { $schema: "https://schemas.example.test/sample-settings/1", name: "sample" },
   });
