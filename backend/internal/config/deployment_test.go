@@ -26,8 +26,35 @@ type composeService struct {
 	ContainerName string            `yaml:"container_name"`
 	Ports         []string          `yaml:"ports"`
 	Environment   map[string]string `yaml:"environment"`
-	Volumes       []string          `yaml:"volumes"`
+	Volumes       []composeVolume   `yaml:"volumes"`
 	Restart       string            `yaml:"restart"`
+}
+
+// composeVolume is an entry of a service's volumes, in Compose's short or long
+// form.
+type composeVolume struct {
+	short          string
+	Source         string `yaml:"source"`
+	Target         string `yaml:"target"`
+	CreateHostPath *bool
+}
+
+func (v *composeVolume) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		return node.Decode(&v.short)
+	}
+	var long struct {
+		Source string `yaml:"source"`
+		Target string `yaml:"target"`
+		Bind   struct {
+			CreateHostPath *bool `yaml:"create_host_path"`
+		} `yaml:"bind"`
+	}
+	if err := node.Decode(&long); err != nil {
+		return err
+	}
+	v.Source, v.Target, v.CreateHostPath = long.Source, long.Target, long.Bind.CreateHostPath
+	return nil
 }
 
 // interpolate applies Compose's ${NAME:-default} and ${NAME:?message}
@@ -69,9 +96,13 @@ func TestDeploymentExampleAgreesWithTheImage(t *testing.T) {
 	}
 	mounts := map[string]string{}
 	for _, v := range svc.Volumes {
-		parts := strings.Split(interpolate(t, v), ":")
+		if v.short == "" {
+			mounts[v.Target] = interpolate(t, v.Source)
+			continue
+		}
+		parts := strings.Split(interpolate(t, v.short), ":")
 		if len(parts) < 2 {
-			t.Fatalf("volume %q", v)
+			t.Fatalf("volume %q", v.short)
 		}
 		mounts[parts[1]] = parts[0]
 	}
@@ -88,6 +119,17 @@ func TestDeploymentExampleAgreesWithTheImage(t *testing.T) {
 	// under its consumer root, /run/wyrwood/containers by default.
 	if src, ok := mounts[cfg.WyrwoodDirectory]; !ok || src != "/run/wyrwood/containers/"+svc.ContainerName || svc.ContainerName == "" {
 		t.Errorf("wyrwood-directory %s is mounted from %q, not the default consumer directory of container %q", cfg.WyrwoodDirectory, src, svc.ContainerName)
+	}
+	// Docker must not create a missing consumer directory: it would own it as
+	// root, the start would succeed, and the agent rejects that directory.
+	refused := false
+	for _, v := range svc.Volumes {
+		if v.Target == cfg.WyrwoodDirectory && v.CreateHostPath != nil && !*v.CreateHostPath {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Errorf("the mount at %s does not set bind.create_host_path: false", cfg.WyrwoodDirectory)
 	}
 	if got, want := svc.Environment["SSH_AUTH_SOCK"], path.Join(cfg.WyrwoodDirectory, "ssh-agent.sock"); got != want {
 		t.Errorf("SSH_AUTH_SOCK %q, want %q", got, want)
