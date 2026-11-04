@@ -10,6 +10,9 @@ assets:
   - assets/list.png
   - assets/create-interview.png
   - assets/upgrade-interview.png
+  - assets/provisioning-console.png
+  - assets/t3-code-token.png
+  - assets/delete-workspace.png
   - assets/logo.svg
   - assets/social-image.png
 products:
@@ -20,10 +23,11 @@ products:
     tagline: Manage workspaces and fleets of development containers through a web UI.
     blurb: >-
       One container that creates workspaces from Toha templates through their
-      interviews, shows every workspace with its devcontainer, starts, stops,
-      rebuilds and upgrades them, and backs each one up to its own Git branch.
-      Managers sign in through OpenID Connect; Wyrwood supplies its SSH key and
-      registry credentials.
+      interviews, provisions the Wyrwood binding and Xolotl key a template
+      declares, shows every workspace with its devcontainer, starts, stops,
+      rebuilds, upgrades and deletes them, and backs each one up to its own Git
+      branch. Managers sign in through OpenID Connect; Wyrwood supplies its SSH
+      key and registry credentials.
     status: preview
     category: Dev Containers
     order: 10
@@ -36,42 +40,68 @@ products:
             pages: [overview, install]
           - group: Operate
             pages: [configuration, usage, troubleshooting]
-    # DRAFT highlights, pending the approved text from the highlights task.
     highlights:
       - >-
-        Creates a workspace from a Toha template by answering the template's
-        interview in the browser.
+        Creates a workspace from a Toha template through its interview in the
+        browser. When the template declares what it needs and the host is
+        prepared, the job issues its Xolotl key and makes its Wyrwood binding, so
+        the container has its credentials on its first start, with no step in a
+        CLI or another web interface.
       - >-
-        Lists every workspace with the state of its devcontainer, and starts,
-        stops and rebuilds it as a job with a live console.
+        Lists every workspace with the state of its devcontainer, starts, stops
+        and rebuilds it as a job with a live console, and mints a T3 Code pairing
+        token for a running workspace that has the t3code-server Feature.
       - >-
         Upgrades a workspace to a newer template version, asks only the new
         questions and keeps local edits.
       - >-
+        Deletes a workspace after you type its name: backs it up, then removes
+        its binding, Xolotl key, containers and folder. Its backup branch stays.
+      - >-
         Backs up each workspace to its own branch in one Git repository after
-        every change.
+        each job that changes it, and can commit and back it up on a schedule.
       - >-
-        Signs managers in through your OpenID Connect provider. Git private
-        keys stay in OpenBao and signing uses Wyrwood. Installation tokens stay
-        in memory; the generated interview signing key stays in the data volume.
-      - >-
-        Runs as one container with no database; the workspace files stay the
-        source of truth.
+        Runs as one container with no database. Managers sign in through your
+        OpenID Connect provider; Git private keys stay in OpenBao and signing
+        uses Wyrwood.
     media:
       - src: assets/demo.gif
-        caption: Creating a workspace through its interview, then upgrading it.
+        caption: >-
+          Creating a provisioned workspace, minting a T3 Code pairing token,
+          upgrading and deleting. An earlier job built the image, so this create
+          reads the build cache.
         alt: >-
-          Recording of the Menagerie web UI creating a workspace from a
-          template interview and then upgrading it.
+          Recording of the Menagerie web UI: a template interview creates a
+          workspace, the job console passes issue-key, bind, wait-for-sockets
+          and verify, the row mints a T3 Code token with its text hidden, an
+          upgrade asks one question, and a typed name deletes the workspace.
+      - src: assets/provisioning-console.png
+        caption: A create job that provisioned the workspace's credentials.
+        alt: >-
+          The job console of a completed create, with the phases issue-key, bind,
+          create-container, wait-for-sockets, up and verify, and a log line from
+          the template's check that the sockets work.
       - src: assets/list.png
         caption: The workspace list with the state of each devcontainer.
-        alt: The Menagerie workspace list showing each workspace and its container state.
+        alt: >-
+          The Menagerie workspace list with one stopped and two running
+          workspaces, each with its actions, above the list of jobs.
       - src: assets/create-interview.png
         caption: A template interview that creates a workspace.
         alt: The create-workspace form showing a template's interview questions.
       - src: assets/upgrade-interview.png
         caption: An upgrade that asks one new question.
         alt: The upgrade form asking only the question the newer template added.
+      - src: assets/t3-code-token.png
+        caption: A T3 Code pairing token on its row. This image hides the token's text.
+        alt: >-
+          A workspace row with the time the pairing token ends, a blank block in
+          place of the token, and Copy and Dismiss buttons.
+      - src: assets/delete-workspace.png
+        caption: Delete asks for the workspace's name.
+        alt: >-
+          A workspace row with the delete form open, the workspace's name typed
+          and the Delete workspace button enabled.
     kinds:
       - kind: app
         install:

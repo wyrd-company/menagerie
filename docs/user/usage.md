@@ -35,7 +35,7 @@ usable.
 see its console. Jobs live in memory, so the list starts empty after a
 restart.
 
-![The workspace list after a rebuild](assets/list.png)
+![The workspace list with one stopped and two running workspaces](assets/list.png)
 
 ## Create a workspace
 
@@ -128,6 +128,8 @@ Git keeps no empty folder. The job console names each folder it creates.
 
 A string in `mounts` is read as Docker's `--mount` value: without `type=` it
 is a volume, not a bind, and a space around a field or a value is refused.
+
+![The console of a completed create, with the phases of provisioning](assets/provisioning-console.png)
 
 ![A template interview](assets/create-interview.png)
 
@@ -280,6 +282,8 @@ the page. The button also works while a job runs on the workspace. A refusal
 appears on the row: `workspace-not-running` when the container has stopped,
 `t3-code-not-installed` when the container does not have the Feature.
 
+![A pairing token on its row, with the token's text hidden in this image](assets/t3-code-token.png)
+
 ## Stop, start and rebuild
 
 Start runs `initializeCommand` before it starts the container, as rebuild
@@ -321,6 +325,8 @@ consumer directory stays until the next host restart.
 
 A binding or a key that another workspace's definition declares stays, and the
 console says so.
+
+![The delete form on a row, with the workspace's name typed](assets/delete-workspace.png)
 
 ## Time limits
 

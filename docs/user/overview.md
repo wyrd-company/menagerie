@@ -30,9 +30,9 @@ it defines.
   the workspace up first, fast-forwards or merges file by file, refuses
   anything that would not apply cleanly, and rebuilds the devcontainer.
 - **Back up.** Every workspace is a Git repository, pushed to its own branch
-  in one backup repository after each change. Menagerie can also commit and
-  back up changes on a schedule, and a devcontainer can ask for a commit of
-  its own workspace with `workspace-commit`.
+  in one backup repository after each job that changes it. Menagerie can also
+  commit and back up changes on a schedule, and a devcontainer can ask for a
+  commit of its own workspace with `workspace-commit`.
 
 The workspace files are the source of truth. Menagerie has no database: the
 answers live in each workspace's `.toha.json`, containers live in Docker,

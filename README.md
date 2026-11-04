@@ -23,7 +23,7 @@ builds and runs the devcontainers, and
 [Wyrwood](https://github.com/wyrd-company/wyrwood) gives Menagerie its SSH
 key or GitHub App key and registry credentials.
 
-![Creating a workspace through its interview, then upgrading it](docs/user/assets/demo.gif)
+![Creating a provisioned workspace, minting a T3 Code pairing token, upgrading and deleting it](docs/user/assets/demo.gif)
 
 Documentation is at [wyrd.foo/docs/menagerie](https://wyrd.foo/docs/menagerie),
 published from [`docs/user/`](docs/user).
