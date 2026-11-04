@@ -16,6 +16,8 @@ package main
 //   - a disposable Pocket ID with a manager and a non-manager
 //   - a third template version whose hook waits for a release file, so a
 //     job can be held at a real boundary
+//   - with MENAGERIE_XOLOTL_IMAGE, the host preparation for provisioning and
+//     a template that declares it (acceptance_provisioning_test.go)
 //
 // The test runs in scripts/isolated-docker.sh's runner, beside the Engine;
 // the Engine publishes the site, Pocket ID and the control server on the
@@ -89,6 +91,7 @@ func TestAcceptanceFixture(t *testing.T) {
 
 	base := t.TempDir()
 	openTo(t, base, tmp)
+	provisioned := prepareProvisionedHost(t, w, p, base)
 
 	// The templates and the workspace repository on an SSH Git host that
 	// admits Wyrwood's Transit key.
@@ -114,6 +117,15 @@ func TestAcceptanceFixture(t *testing.T) {
 	heldTemplate(t, work)
 	gitRun(t, work, "commit", "-q", "-am", "held")
 	gitRun(t, work, "tag", "held")
+	if provisioned != nil {
+		for version := 1; version <= 2; version++ {
+			gitRun(t, work, "checkout", "-q", "--detach", fmt.Sprintf("v%d", version))
+			provisionedTemplate(t, work, version)
+			gitRun(t, work, "add", "-A")
+			gitRun(t, work, "commit", "-q", "-m", fmt.Sprintf("provisioned v%d", version))
+			gitRun(t, work, "tag", fmt.Sprintf("provisioned-%d", version))
+		}
+	}
 	gitRun(t, host.Dir, "clone", "-q", "--bare", work, filepath.Join(host.Dir, "sample-kit.git"))
 	bare := filepath.Join(host.Dir, "backups.git")
 	if _, err := git.PlainInit(bare, true); err != nil {
@@ -133,6 +145,15 @@ func TestAcceptanceFixture(t *testing.T) {
 	p.user("sample-other", "Sample", "Other", other["id"].(string))
 	client := p.admin(http.MethodPost, "/api/oidc/clients", map[string]any{"name": "Menagerie sample", "callbackURLs": []string{site + auth.CallbackPath}, "isPublic": true, "pkceEnabled": true})
 	template := host.URL("sample-kit.git")
+	provisionedTemplates, provisioning, menagerieKeys, menageriePolicy := "", "", []string{"sample-git"}, ""
+	if provisioned != nil {
+		provisionedTemplates = fmt.Sprintf(`  - {id: workspace-kit-v1, name: "Workspace kit, version 1", address: '%[1]s@provisioned-1'}
+  - {id: workspace-kit-v2, name: "Workspace kit, version 2", address: '%[1]s@provisioned-2'}
+`, template)
+		provisioning = provisioned.config
+		menagerieKeys = append(menagerieKeys, provisioned.transitKeys...)
+		menageriePolicy = provisioned.policy
+	}
 	writeTo(t, base, "config.yml", fmt.Sprintf(`listen: 0.0.0.0:%d
 workspace-root: %s
 workspace-repository: %s
@@ -145,7 +166,7 @@ templates:
   - {id: sample-kit-v1, name: "Sample kit, version 1", address: '%s@v1'}
   - {id: sample-kit-v2, name: "Sample kit, version 2", address: '%s@v2'}
   - {id: sample-kit-held, name: "Sample kit, held hook", address: '%s@held'}
-`, port, rootDir, host.URL("backups.git"), p.url, client["id"], site+auth.CallbackPath, template, template, template))
+%s%s`, port, rootDir, host.URL("backups.git"), p.url, client["id"], site+auth.CallbackPath, template, template, template, provisionedTemplates, provisioning))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -188,7 +209,7 @@ templates:
 
 	w.savePolicy("sample-menagerie", `path "transit/keys/sample-git" { capabilities = ["read"] }
 path "transit/sign/sample-git" { capabilities = ["update"] }
-`, true, []string{"sample-git"}, "/run/wyrwood")
+`+menageriePolicy, true, menagerieKeys, "/run/wyrwood")
 	w.bind(acceptanceName, []string{"sample-menagerie"}, "1h", "8h", wyrwoodGID)
 	waitFor(t, "a token for Menagerie", func() bool { return w.token(acceptanceName) == "valid" })
 	if err := p.docker.ContainerStart(ctx, c.id, container.StartOptions{}); err != nil {

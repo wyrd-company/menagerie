@@ -49,6 +49,9 @@ vars:
   # The Wyrwood release the acceptance run's controller and agent come from.
   # renovate: datasource=github-releases depName=wyrd-company/wyrwood
   WYRWOOD_VERSION: 0.6.1
+  # The Xolotl release the demo's provisioning uses.
+  # renovate: datasource=docker depName=ghcr.io/wyrd-company/xolotl
+  XOLOTL_VERSION: 0.6.0
   # The YAML this repository's tooling owns; package documents have their
   # own owners and checks.
   REPOSITORY_YAML: >-
@@ -243,6 +246,7 @@ tasks:
     env:
       WYRWOOD_VERSION: '{{.WYRWOOD_VERSION}}'
       OPENBAO_VERSION: '{{.OPENBAO_VERSION}}'
+      MENAGERIE_XOLOTL_IMAGE: 'ghcr.io/wyrd-company/xolotl:{{.XOLOTL_VERSION}}'
     cmds:
       - defer: web/test/integrated/acceptance.sh down '{{.STATE}}'
       - web/test/integrated/acceptance.sh up '{{.STATE}}'

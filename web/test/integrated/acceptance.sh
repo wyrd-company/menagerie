@@ -15,7 +15,9 @@
 # fixture's control server on this host's 127.0.0.1, at the ports below, so
 # the browser here uses the URLs the services use. WYRWOOD_VERSION and
 # OPENBAO_VERSION name the released executables, which up downloads into
-# <scratch>/bin and checks against their releases' checksums. Nothing here
+# <scratch>/bin and checks against their releases' checksums.
+# MENAGERIE_XOLOTL_IMAGE, when set, gives the fixture a host prepared for
+# provisioning, with Xolotl from that image. Nothing here
 # reads a credential; the suites generate every key, token and password.
 # Evidence (screenshots, videos, traces, logs) is written under <scratch>.
 set -euo pipefail
@@ -84,7 +86,7 @@ case "$cmd" in
     "$isolated" shell "$state" "rm -f $info"
     setsid "$isolated" run "$state" "${env[@]}" -e "MENAGERIE_BROWSER_INFO=$info" \
       -e "MENAGERIE_BROWSER_PORT=$port" -e "MENAGERIE_BROWSER_CONTROL_PORT=$control" \
-      -e "MENAGERIE_POCKETID_PORT=$pocket" "$state/acceptance.test" \
+      -e "MENAGERIE_POCKETID_PORT=$pocket" -e "MENAGERIE_XOLOTL_IMAGE=${MENAGERIE_XOLOTL_IMAGE:-}" "$state/acceptance.test" \
       -test.run '^TestAcceptanceFixture$' -test.v -test.count=1 -test.timeout 0 \
       </dev/null >"$scratch/logs/fixture.log" 2>&1 &
     echo $! >"$scratch/fixture.pid"
