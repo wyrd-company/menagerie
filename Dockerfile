@@ -21,7 +21,7 @@ RUN pnpm build && test -f dist/index.html
 # The workspace service, the start-up helper that prepares its folders, and
 # the workspace-commit client the workspace sockets give each devcontainer,
 # static binaries.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS workspace-service
+FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS workspace-service
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
