@@ -40,7 +40,7 @@ import (
 
 const (
 	// registryImage is the private registry the devcontainer images come from.
-	registryImage = "registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2"
+	registryImage = "registry:3.1.2@sha256:38907510915c3f1604c7e83d6ab602ab3020d092f73bdaed8696773693ff768c"
 	// privateBase is pushed to the private registry as the devcontainer image.
 	privateBase = "busybox:1.37"
 	// The binding's tokens live one minute, Wyrwood's shortest lifetime, so
