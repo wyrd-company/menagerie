@@ -45,7 +45,7 @@ const (
 	// limit: devcontainer-builder reads its metadata from the registry on
 	// every build. Its vscode user, uid 1000, is removed so that the remap
 	// to the operator's uid has a free uid to take.
-	devcontainerBase = "mcr.microsoft.com/devcontainers/base:trixie@sha256:6ee2b4097c75d33e9a94d941577a3286e5d629434fba384688b06daeeaaeac99"
+	devcontainerBase = "mcr.microsoft.com/devcontainers/base:trixie@sha256:38f9e6c291f054e3c868d95a5477cbfcf76c0fa7c218dda65dc6aa3fbfe06871"
 	// The Wyrwood access group: not the operator's own group, so the agent
 	// is reachable only through the supplementary group start-up adds.
 	wyrwoodGID = 2001
