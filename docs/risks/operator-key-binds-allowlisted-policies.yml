@@ -23,7 +23,9 @@ description: >-
   the grant in the Wyrwood web interface; each action is audited under the key's
   label. A binding's values are its workspace's name, which no manager, template
   or definition sets, and a workspace's Xolotl key is named after it, so no
-  selection in the interface points one workspace at another's key; a
+  selection in the interface points one workspace at another's key. A
+  workspace taken over from an earlier release keeps the values its binding
+  had, and the start log names each that is not the workspace's name; a
   definition that a devcontainer edits decides only its container name and
   access group. The grant has no default expiry, so that provisioning does not stop in
   silence, and a stolen signature path works until someone revokes it.

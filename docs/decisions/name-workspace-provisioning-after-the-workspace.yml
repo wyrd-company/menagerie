@@ -4,7 +4,7 @@ relationships:
     - menagerie
     - provisioning-declaration
 description: >-
-  A template no longer decides what a binding holds: the values its policies
+  A template does not decide what a binding holds: the values its policies
   read and the Xolotl client key come from Menagerie, so that a template
   change cannot alter them (wyrd-company/menagerie#88). A value is a
   per-binding path segment of a shared Wyrwood policy, such as the

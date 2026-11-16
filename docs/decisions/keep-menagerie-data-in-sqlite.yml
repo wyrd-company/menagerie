@@ -13,8 +13,8 @@ description: >-
   span records: a template a workspace uses cannot be removed, a container
   name or key belongs to one workspace, and marking a policy required changes
   every workspace's selection. The workspace service is Go, and the image
-  builds it without cgo. Before this, Menagerie kept only per-workspace
-  retirement records, one JSON file each.
+  builds it without cgo. The retirement records of earlier releases are
+  one JSON file per workspace.
 considered-options:
   "1": >-
     A SQLite database in the data volume, opened only by the workspace

@@ -42,5 +42,5 @@ expected-outcomes:
     - One reading of a template address, Toha's, for registration, listing, fetching and matching applied records.
     - Listing uses the credentials a fetch of the same address uses, with no new credential path.
   negative:
-    - The template service, which already depends on gix, now also connects to remotes itself and must keep the transports and credential behaviour of Toha's fetch.
+    - The template service, which already depends on gix, connects to remotes itself for the listing and must keep the transports and credential behaviour of Toha's fetch.
     - Version rules (which tags are versions and their order) live in Menagerie, not in Toha.

@@ -7,16 +7,17 @@ relationships:
     - browser-session-value-tampering
     - menagerie-has-host-root
 description: >-
-  The template service fetches only templates a manager approved. While
-  approval was a list in the configuration file, the template service read
-  the list itself and refused any template id it did not hold. Approval
-  becomes registration in Menagerie's data, which only the workspace service
-  opens (keep-menagerie-data-in-sqlite), and registering a template means
-  fetching it before it is approved, to check it. Both services run as one
+  The template service fetches only templates a manager approved. In
+  earlier releases approval was a list in the configuration file, which the
+  template service read itself, refusing any template id it did not hold.
+  Approval is registration in Menagerie's data, which only the workspace
+  service opens (keep-menagerie-data-in-sqlite), and registering a template
+  means fetching it before it is approved, to check it. Both services run as one
   user, the template service's socket is in a folder only that user opens,
   and that user also holds the Docker socket. A browser holds interview
   sessions, so a browser value must never choose what is fetched. Any
-  manager, not only the host's administrator, now names template addresses.
+  manager, not only the host's administrator, names template addresses, and
+  a version a manager approved is a tag, which its repository can move.
 considered-options:
   "1": >-
     The workspace service admits each address before it names it: a
@@ -24,7 +25,10 @@ considered-options:
     job or check, or the address a manager submitted to register or upgrade
     a template, for that request alone. The template service holds no list;
     on every route it refuses any address that is not a remote Git address
-    of the documented forms, and a session's signature covers the address.
+    of the documented forms, refuses a template folder with a link that
+    leaves its checkout, and refuses a tag that resolves to another commit
+    than the checked one; a session's signature covers the address and the
+    tag.
   "2": >-
     The template service opens Menagerie's database read-only and checks
     each address against the registered templates, as it checked the
@@ -57,6 +61,7 @@ expected-outcomes:
     - No address, from any caller, makes the template service read a local folder, a Toha registry entry or a `file://` repository as a template.
     - The template service keeps no copy of the registry to drift from Menagerie's data.
   negative:
-    - The template service no longer refuses an address on its own list; a process running as the services' user can make it fetch any remote Git address, as that user can already reach the Docker socket.
+    - The template service refuses no address by a list of its own; a process running as the services' user can make it fetch any remote Git address, as that user can already reach the Docker socket.
     - Every manager can register a template whose hooks run in throwaway containers, as every manager can already create a workspace with privileged containers (see menagerie-has-host-root).
     - A registration's check fetches an address before it is approved, so a manager's request can make Menagerie fetch from any host its network reaches.
+    - Any manager can register, and so generate into a workspace, any repository the GitHub App's installations or the Git key can read, private ones included.
