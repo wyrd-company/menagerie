@@ -1,13 +1,14 @@
 $schema: https://refinery.systems/ontology/technical-design
 relationships:
-  assumes:
-    - wyrwood-binding-change-checks-the-revision
   related-to:
     - keep-menagerie-data-in-sqlite
     - list-template-versions-in-the-template-service
     - admit-templates-through-the-workspace-service
     - apply-workspace-policies-from-a-stored-selection
     - name-workspace-provisioning-after-the-workspace
+    - let-menagerie-decide-each-binding
+    - issue-a-key-to-every-provisioned-workspace
+    - keep-a-policy-on-every-bound-workspace
   mitigates:
     - menagerie-data-loss
 objective: >-
@@ -160,10 +161,11 @@ proposed-design:
     when it is first listed: joined to the registered template whose source
     its applied record names, with the applied version template-versions
     gives it, no container name, no key, and a selection of the required
-    policies. A workspace in
-    the data whose folder is gone and that still holds a binding name or a
-    Xolotl key is listed as `no-folder`, so a delete can remove what it
-    holds; one that holds neither is removed from the data.
+    policies. A workspace in the data whose folder is gone and that still
+    holds a container name or a Xolotl key is listed as `no-folder`, so a
+    delete can remove what it holds. A workspace whose folder is gone, that
+    holds neither and that no create is making is removed from the data; a
+    create's own workspace is kept (see create-flow).
   menagerie-data: >-
     The workspace service keeps its own data in one SQLite database,
     `/var/lib/menagerie/state/menagerie.db`, through a Go library that needs
@@ -177,16 +179,18 @@ proposed-design:
     schema's version is the database's `user_version`; a start upgrades an
     older schema in one transaction before it serves, and refuses a newer
     one. The data holds the registered templates (see template-registry and
-    template-versions); the workspaces, keyed by folder name, each with its
-    template, the version and commit last applied, its Xolotl key, its
-    per-binding values, its policy selection and that selection's revision,
-    the revision last applied to its binding and the reason the last apply
-    failed, whether its selection is still to be imported, and the folder a
-    delete began to remove; the container names Menagerie bound and the
-    Xolotl keys it issued, each with its workspace and whether it is the
-    workspace's current one; and the policy settings with their revision
-    (see workspace-policies). A delete removes the workspace's data with its
-    folder. See the decision keep-menagerie-data-in-sqlite.
+    template-versions); the workspaces, keyed by folder name, each with
+    whether a create is making it, its template, the version and commit last
+    applied, its Xolotl key, its per-binding values, its policy selection
+    and that selection's revision, the revision last applied to its binding
+    and the reason the last apply failed, whether its selection is still to
+    be imported, and the folder a delete began to remove; the container
+    names Menagerie bound, each with its workspace, whether it is the
+    workspace's current one and the ID Wyrwood gave its binding; the Xolotl
+    keys it issued, each with its workspace; and the policy settings with
+    their revision (see workspace-policies). A delete removes the
+    workspace's data with its folder. See the decision
+    keep-menagerie-data-in-sqlite.
   internal-api: >-
     The template service listens on a Unix socket shared only with the
     workspace service and speaks JSON over HTTP. It exposes: read a template
@@ -214,8 +218,10 @@ proposed-design:
     and load the template's manifest, and answers the `source`, the `commit`
     and `definition`, whether the template's content folder, from which
     Toha renders a workspace's files, holds
-    `.devcontainer/devcontainer.json`. A check runs no hook and no other
-    command of the template. Their refusals are Toha's, such as
+    `.devcontainer/devcontainer.json`. With `"since"`, a commit, it also
+    answers `descends`, whether the fetched commit descends from that one in
+    the repository's history. A check runs no hook and no other command of
+    the template. Their refusals are Toha's, such as
     `template-not-found`, `template-resolve-failed` and `template-invalid`,
     under the rules every route's refusals follow, and the template
     service's own `invalid-address` and `unsafe-template-link`. Each runs
@@ -246,8 +252,12 @@ proposed-design:
     `git@host:path`, `ssh://` and `https://`. It refuses as
     `invalid-address` a local folder, a name from Toha's registry, every
     other transport, `file://`, `git://` and `http://` included, a host or
-    user that starts with `-`, and, on the versions route, an address with a
-    ref. Before a check, a generate or an upgrade reads the template's
+    user that starts with `-`, user information that holds a password, such
+    as `https://user:token@host/repo`, and, on the versions route, an
+    address with a ref. A user name alone stays, as the GitHub App and SSH
+    use one. No refusal, log line or answer of either service quotes an
+    address the template service refuses, so a password given by mistake is
+    stored, shown and logged nowhere. Before a check, a generate or an upgrade reads the template's
     files, the template service refuses as `unsafe-template-link` a template
     whose folder, the checkout joined with the address's `#path` and
     resolved, is outside the checkout, or holds a symbolic link that
@@ -311,7 +321,9 @@ proposed-design:
     run. A check replaces the template's found versions with what it found.
     A failed check keeps the earlier versions and records the time and its
     reason: the template service's refusal kind, or
-    `template-service-unavailable`. The templates screen shows it. A
+    `template-service-unavailable`. A check on request answers the template
+    with that record, whatever the outcome, and the templates screen shows
+    it. A
     template has a newer version while its newest found version is newer
     than its current version. A manager upgrades a template to a found
     version newer than its current one: the version passes the `fetch`,
@@ -324,21 +336,32 @@ proposed-design:
     new commit. A workspace's applied version is the version its create
     generated or its last upgrade applied. It needs an upgrade while its
     template's current version is newer than its applied version. A
-    workspace whose applied version is unknown shows so, with its applied
-    record's commit, needs no upgrade and is refused one, because nothing
-    then shows that the current version is not older than it; a version
-    check gives it the version whose tag is at that commit.
+    workspace whose applied version is unknown, because its applied record's
+    commit has no version tag, shows so, with that commit, and is upgraded
+    only when the template service answers that the current version's
+    commit descends from it, so the upgrade still moves forward; a version
+    check gives it the version whose tag is at that commit. A workspace
+    whose applied record names a source that no registered template has
+    keeps working and joins its template when a manager registers that
+    source, once its repository has a version tag.
   create-flow: >-
     A create names a registered template and takes the workspace's policy
     choices, checked as workspace-policies says before any job exists. On a
     host with a `provisioning` section the workspace name is also refused
     before any job unless it can name a Xolotl key and be a Wyrwood value:
     lower-case letters, digits, `_` and `-`, starting with a letter or digit,
-    at most 63 characters. A create is refused while Menagerie's data holds
-    a workspace of that name, one listed as `no-folder` included, and while
-    the template's current version has moved. The job pins the template's
-    current version and its commit for its whole run and writes the
-    workspace's data, with its template and selection, when it starts. After the interview completes, the workspace
+    at most 63 characters, and a selection with no policy is refused (see
+    workspace-policies). A create is refused while Menagerie's data holds
+    a workspace of that name, one listed as `no-folder` or being created
+    included, and while the template's current version has moved. The job
+    pins the template's current version and its commit for its whole run
+    and writes the workspace's data, with its template and selection and
+    marked as being created, when it starts, so discovery keeps it while
+    the interview waits and the template it uses cannot be removed. The mark
+    ends when the job creates the folder. A create that ends before it
+    created the folder removes the workspace's data, and since a restart
+    ends every job, a start removes each workspace marked as being created
+    whose folder does not exist. After the interview completes, the workspace
     service creates a new folder
     under the workspace root and initializes its git repository. The template
     service builds Toha's plan and applies it into that folder, recording the
@@ -362,9 +385,13 @@ proposed-design:
     An upgrade applies the current version of the workspace's template, which
     the job pins with its commit when it starts. It is refused before any
     job when the workspace has no registered template, when its applied
-    version is unknown, is that version or is a newer one, so no path
-    applies a version older than the one a workspace has, and when the
-    current version's tag has moved (see template-versions).
+    version is that version or a newer one, and when the current version's
+    tag has moved (see template-versions). A workspace whose applied version
+    is unknown is upgraded only when the template service answers that the
+    current version's commit descends from its applied record's commit; the
+    job asks before the interview and otherwise fails as `template-refused`,
+    naming both commits. So no path applies a version older than the one a
+    workspace has.
     The workspace service commits any local changes to tracked files so the
     pre-upgrade state is backed up. Toha fetches the newer template version.
     The template service reads `.toha.json`, replays the recorded answers
@@ -417,8 +444,18 @@ proposed-design:
     the changed paths, each to a free name, removes the moved files,
     records the index with the stat data of what it wrote, moves the
     branch last, backs it up and rebuilds the devcontainer.
-    The applied record is a file like any other. Only the API and the UI
-    start it, never the workspace socket.
+    A planned merge that changes the applied record `.toha.json` is read
+    before any write: the record it would write must name the workspace's
+    template's source, and a version, its ref's or the one whose tag is at
+    its commit, no older than the workspace's applied version. A workspace
+    with no registered template takes no change to its record, and one
+    whose applied version is unknown takes a record whose version is known
+    and whose commit descends from its applied commit, as an upgrade
+    checks. Anything else refuses the apply as `not-applicable`, naming
+    both versions or commits, with nothing changed. After an apply that
+    changed the record, the workspace's applied version and commit are the
+    record's. Only the API and the UI start Apply branch, never the
+    workspace socket.
   container-operations: >-
     Start, stop and rebuild call devcontainer-builder for the workspace
     folder. Rebuild recreates the container from the current definition.
@@ -488,7 +525,9 @@ proposed-design:
     again reads what it read before. With `provisioning.xolotl` and no
     `key-policy`, a job that has to name a new key fails as
     `provisioning-unavailable` and names the missing setting. Without
-    `provisioning.xolotl`, a workspace gets no key. Menagerie sets
+    `provisioning.xolotl`, a workspace gets no key. That every provisioned
+    workspace gets a key is the decision issue-a-key-to-every-provisioned-workspace,
+    which waits for the operator. Menagerie sets
     `MENAGERIE_XOLOTL_KEY` to the key's `<policy>/<name>` in a provisioned
     workspace's container under the rule workspace-socket gives
     `MENAGERIE_WORKSPACE_SOCKET`: at each rebuild, and at each start that
@@ -516,7 +555,13 @@ proposed-design:
     carries the selection's revision, keeps every required policy, and
     leaves no group that had a valid choice without one, so a workspace
     that lacks a choice, for example in a group added after it was created,
-    still changes its other policies and shows which groups need a choice. A
+    still changes its other policies and shows which groups need a choice.
+    Wyrwood holds no binding without a policy, so a workspace that has a
+    container name in Menagerie's data, and a create on a host with
+    `provisioning.wyrwood`, keep at least one policy: a selection change
+    that would leave none is refused, naming the last policy (see the
+    decision keep-a-policy-on-every-bound-workspace, which waits for the
+    operator). A
     policy that a settings change, a create or a selection change adds is
     refused by name before any job runs when it is outside the grant or
     Wyrwood does not have it. A policy that left the grant after it was
@@ -532,37 +577,62 @@ proposed-design:
     Each selection change increments the workspace's selection revision, and
     the binding has its selection once a job records that revision as
     applied. The `apply-policies` operation is a job on the workspace with
-    one phase, `bind`. It reads the selection, the values and the revision;
-    reads the grant and fails as `policy-outside-grant`, naming each
-    selected policy outside it, with no request to Wyrwood, so Menagerie
-    never asks Wyrwood for a policy outside the grant; and reads the binding
-    of the workspace's current container name. With no current name it
-    records the revision, because the `bind` step of the workspace's next
-    provisioning job binds the selection. A current name whose binding
-    Wyrwood does not show was removed in Wyrwood or holds a policy outside
-    the grant, so the job binds the selection under that name as `bind`
-    makes a binding: a removed binding returns, and a hidden one fails the
-    job with Wyrwood's refusal. With a binding that holds the
-    selection it records the revision and writes nothing. Otherwise it
-    changes the binding through the operator protocol's binding change
-    (wyrwood#159): the whole selection, its values and the binding's other
-    settings as read, with the binding revision it read. Wyrwood applies it
-    as an edit in its web interface: the container's token is replaced, and
-    its consumer directory and sockets stay. A change that Wyrwood refuses
-    because the binding changed after the read is read and sent once more,
-    and a second refusal fails the job as `binding-changed`. The step then
-    reads the binding until Wyrwood reports it applied, within
-    `provisioning.readiness-wait`, records the revision, and the console
-    names each policy and value it added or removed. A selection change
-    starts the job at once when the workspace has no job, and otherwise when
-    that job ends; marking a policy required does the same on each
-    workspace. Start-up starts it on each workspace whose binding lacks its
-    selection, and a manager starts it on request. A failed apply is not
-    repeated by itself: the workspace shows the reason until a manager, a
-    start-up, a selection change or a provisioning job applies the selection
-    again. Menagerie decides the binding: a change made to it in Wyrwood's
-    web interface is replaced by the workspace's next apply or provisioning
-    job, whose console names the fields it changed.
+    one phase, `bind`. It reads the selection, the values and the revision,
+    and reads the grant: a selected policy outside it fails the job as
+    `policy-outside-grant`, naming each, with no request to Wyrwood, so
+    Menagerie never asks Wyrwood for a policy outside the grant. With no
+    current container name it records the revision, because the `bind` step
+    of the workspace's next provisioning job binds the selection. Otherwise
+    it brings the binding of that name to the selection as
+    binding-convergence says. A selection change starts the job at once when
+    the workspace has no job, and otherwise when that job ends; marking a
+    policy required does the same on each workspace. Start-up starts it on
+    each workspace whose binding lacks its selection, and a manager starts
+    it on request. A failed apply is not repeated by itself: the workspace
+    shows the reason until a manager, a start-up, a selection change or a
+    provisioning job applies the selection again. Menagerie decides the
+    binding: a change made to it in Wyrwood's web interface is replaced by
+    the workspace's next apply or provisioning job, whose console names the
+    fields it changed (see the decision let-menagerie-decide-each-binding,
+    which waits for the operator).
+  binding-convergence: >-
+    The `bind` step and `apply-policies` bring a workspace's binding to its
+    selection the same way. The binding is the `name` binding of the
+    workspace's current container name on this host's agent. Menagerie reads
+    it by the ID its data records for that name, with `binding-get`, which
+    answers `not-found` for a binding that does not exist and `outside-grant`
+    for one the grant does not cover; for a name with no recorded ID it
+    reads the agent's `binding-list` and records the ID it finds. A binding
+    that is not there is made with `bind`: the selection, its values, the
+    declared access group, `report` enforcement and default token lifetimes;
+    Menagerie records the ID `bind` answers. A `bind` answered
+    `binding-differs` means the binding appeared meanwhile, and Menagerie
+    reads it again. A binding the grant does not cover, read or bound, fails
+    the job as `binding-outside-grant`, naming the container name, and
+    Menagerie changes nothing. A binding that holds the selection, its
+    values and the access group, and that Wyrwood reports `applied`, is not
+    written. One that holds them and is not `applied` carries an assignment
+    Wyrwood saved and OpenBao did not apply: Menagerie sends a binding change
+    of that selection at the binding's revision, which finishes it. Any
+    other binding gets a binding change (`binding-change`, wyrwood#159) by
+    its ID and the revision Menagerie read, with the whole selection and its
+    values, the declared access group, and the binding's other settings as
+    read. Wyrwood applies it as an edit in its web interface: the container's
+    old token is revoked, the container reads with the new selection with no
+    restart, and its consumer directory and sockets stay. A change answered
+    `revision-differs` came after another one: Menagerie reads the binding
+    and decides again, once, and a second `revision-differs` fails the job
+    as `binding-changed`. A `bind` or a change answered `pending` was saved
+    and not applied, a change at a new revision: Menagerie reads the binding
+    and sends the same request again, a change at that new revision, up to
+    three times one second apart within `provisioning.readiness-wait`. A
+    request still `pending` fails the job as `binding-pending`; the saved
+    selection stays in Wyrwood, and the next apply or provisioning job
+    finishes it as above. Menagerie never sends an empty selection, which
+    Wyrwood refuses (see workspace-policies). It records the selection
+    revision as applied only after a read shows the binding with that
+    selection, its values, the access group and `applied`, and the console
+    names each policy and value it added or removed.
   operator-identity: >-
     Menagerie's operator key is an OpenBao Transit key that the agent offers
     on Menagerie's own `ssh-agent.sock`. The Wyrwood client selects it by
@@ -628,23 +698,22 @@ proposed-design:
     unbinding another's container. A provisioning section that
     configuration lacks fails as `provisioning-unavailable`, and so does a
     workspace whose selection is still to be imported while Wyrwood cannot
-    answer (see first-start-import). The console names each legacy member
-    of the declaration it ignores. Host prerequisites are
+    answer (see first-start-import), and as `provisioning-invalid` a
+    workspace whose selection is empty (see workspace-policies). The
+    console names each legacy member of the declaration it ignores. Host
+    prerequisites are
     checked here, so nothing is issued for a workspace that cannot start. 2. `issue-key` issues the workspace's Xolotl key (see
     provisioning-identity), after its data records the key as the
     workspace's, and treats the answer that the key exists as done, so a
     repeat never rotates it. 3. `bind` checks the selection against the
     grant as policy-application does, records the container name as the
-    workspace's current one in its data, and then makes or changes the
-    `name` binding with the workspace's selection and values and the
-    declared access group. An absent binding is made with `report`
-    enforcement and default token lifetimes, and the step waits until the
-    binding reports its consumer directory, which the agent creates before
-    the container exists. An equal binding is not written, so a repeat
-    revokes no token. A binding that differs is changed as
-    policy-application changes it, whether its container runs or not, and
-    the console names the fields. The step records the selection revision
-    as applied. 4. `commit` and
+    workspace's current one in its data, and brings the binding to the
+    workspace's selection, its values and the declared access group as
+    binding-convergence says, whether its container runs or not. A binding
+    it makes, it waits on until the binding reports its consumer directory,
+    which the agent creates before the container exists. A binding that
+    already holds the selection and is applied is not written, so a repeat
+    revokes no token. 4. `commit` and
     `backup` run as in a create. 5. `initialize-command` and `build` run as
     in any start. 6. `create-container` uses devcontainer-builder's create-only mode
     and records the container's id. That mode refuses a bind with an SELinux
@@ -691,8 +760,17 @@ proposed-design:
     declaration, ends with a `retire` phase: it unbinds each name the
     definition no longer declares and, when the definition has no
     declaration, unbinds every name and revokes the key, and removes each
-    from the data as it is confirmed gone. The workspace keeps the identity of its key, so a
-    declaration that returns gets the same key name. A job that fails, or a
+    from the data as it is confirmed gone. An unbind names the binding by
+    the recorded agent and container name, never by what a read shows, so a
+    binding hidden by the grant is not taken for a removed one. Wyrwood
+    confirms a binding gone when it answers that it removed it or that no
+    binding of that key exists; an answer that the binding is outside the
+    grant keeps the name in the data and fails the job as
+    `binding-outside-grant`, naming it, until an operator widens the grant
+    or removes the binding in Wyrwood's web interface. Xolotl confirms a key
+    gone when it answers that it revoked it or that it has no such key. The
+    workspace keeps the identity of its key, so a declaration that returns
+    gets the same key name. A job that fails, or a
     Menagerie that restarts, leaves them for the next one. A failure while
     retiring fails the job, with the devcontainer running. A name or key
     belongs to one workspace at a time, so one workspace's retirement never
@@ -712,8 +790,11 @@ proposed-design:
     `backup` save tracked and new files as the commit operation does, and a
     failure there removes nothing; a folder with no applied record has no
     backup. `unbind` removes each binding the data names while the
-    container exists, and the agent retires its token and sockets; a name
-    whose binding Wyrwood no longer shows is done. `remove-container`
+    container exists, and the agent retires its token and sockets; it
+    confirms each as `retire` does, and a binding Wyrwood answers is
+    outside the grant keeps its name in the data and fails the delete as
+    `binding-outside-grant` before any container, key or folder is removed.
+    `remove-container`
     removes the workspace's containers; for Compose, named volumes and
     networks stay. `revoke-key` revokes each key the data names.
     `remove-folder` removes the socket
@@ -1125,12 +1206,19 @@ proposed-design:
     the one whose declaration names it, and the start log names the other.
     The folder a retirement record names as being removed carries over. The
     retirement record files are removed once the transaction commits.
-    3. Templates: the entries of `templates` that have one source are one
-    template. The newest entry whose ref is a version gives the template's
-    current version, `id`, name and runner image, and its address is that
-    entry's without the ref. Its current version's commit is the one the
-    first version check finds at its tag. An entry whose source has no
-    entry with a version ref is not imported, and the start log names it. Each workspace
+    3. Templates: an entry whose address the template service refuses, a
+    password in it included, is skipped, and the start log names its `id`
+    and the refusal kind, never its address; the import goes on. The
+    remaining entries that have one source are one template. The newest
+    entry whose ref is a version gives the template's current version,
+    `id`, name and runner image, and its address is that entry's without the
+    ref. Its current version's commit is the one the
+    first version check finds at its tag. A source with no entry whose ref
+    is a version, such as one pinned to a branch, a commit or a tag like
+    `v1`, is not imported; the start log names its entries' `id`s and says
+    that a manager registers the template once its repository has a
+    version tag, which joins its workspaces (template-registry), and their
+    applied commits then move forward by descent (template-versions). Each workspace
     whose applied record's source is a registered template's joins it.
     4. Applied versions: a workspace's applied version is its applied
     record's ref when that is a version of its template; otherwise
@@ -1183,9 +1271,21 @@ proposed-design:
     grammar and the upgrade driver from its library, takes the hook runner
     from its caller, and records answers in `.toha.json`, whose template
     names the ref it was applied from. Toha lists no tags, so the template
-    service lists them with gix, the Git library Toha fetches with. Wyrwood's
-    public operator package changes a binding over the operator protocol
-    from the release that has wyrwood#159; Menagerie needs that release.
+    service lists them with gix, the Git library Toha fetches with.
+    Wyrwood's operator protocol has `binding-get`, `binding-list`, `bind`,
+    `binding-change` and `unbind`, as Wyrwood's operator-interface design
+    states them (its sections binding-change and repeating-a-command):
+    `binding-change` names a binding by its ID and the revision read,
+    replaces its policies and settings whole, refuses a stale revision with
+    `revision-differs`, refuses a selection with no policy, needs a grant
+    that covers the binding as it is and every policy it selects, and
+    answers `pending` for a change saved at a new revision that OpenBao did
+    not apply; a change, or a `bind`, of the selection a binding holds at
+    its current revision finishes such an assignment. `binding-get` answers
+    `not-found` and `outside-grant` apart, `unbind` by agent and key answers
+    a binding that does not exist with success and one outside the grant
+    with `outside-grant`, and Wyrwood records every refused change with the
+    key. Menagerie needs the Wyrwood release that has `binding-change`.
   verification: >-
     The acceptance scenario uses a test template with a hook and an
     `initializeCommand`. A manager signs in, creates a workspace, sees it
@@ -1243,6 +1343,68 @@ proposed-design:
     provisioned workspaces, starts with the templates registered, each
     workspace's selection taken from its binding and each key as it was, and
     a delete of each workspace removes its binding and key.
+    A binding that a policy outside the grant hides is not taken for a
+    removed one: the delete fails, naming it, and keeps its record. A change
+    that Wyrwood saves and OpenBao does not apply is not recorded as
+    applied, and the next apply finishes it. Removing a bound workspace's
+    last policy is refused. A workspace whose create waits for answers stays
+    in Menagerie's data while the list is refreshed. Apply branch refuses a
+    branch whose applied record names an older version. An address with a
+    password is refused without being stored, shown or logged. A version
+    check while the template service is down answers the template with the
+    failure recorded.
+  user-documentation: >-
+    The public pages describe what a manager and an operator do, each part
+    written by the task that builds it. `docs/user/usage.md` gains a
+    "Templates" section: registering a template, the checks registration
+    runs and the message that names each, upgrading a template to a newer
+    version, and removing one, which a workspace's use refuses (task 20);
+    the version checks, their schedule, a failed check and a moved tag
+    (task 21). It gains a "Policies" section: the policies inside the
+    operator key's grant, required policies and policy groups (task 22); a
+    workspace's policies, applying a change, a pending or failed apply, the
+    last policy a bound workspace keeps, and a Wyrwood-side edit being
+    replaced (task 24). Its existing sections change too: "The workspace
+    list" shows the template, the applied version, an unknown version and
+    whether an upgrade is needed (task 21), the groups that need a choice
+    (task 22), whether the binding has its selection (task 24), and
+    `no-folder` (task 19); "Create a workspace" picks a registered template
+    (task 20) and the policy choices (task 24); "Upgrade a workspace"
+    applies the template's current version and when it is refused (task
+    21), and leaves policies as they are (task 24); "Apply a reviewed
+    branch" refuses an older applied record (task 21); "Delete a workspace"
+    removes what Menagerie's data holds, also for a definition that does not
+    parse, and fails on a binding outside the grant (task 19).
+    `docs/user/configuration.md` "Templates" keeps the address forms and
+    credentials a registration takes, refuses a password in an address,
+    and describes the `templates` key's one import, its warning, skipped
+    entries and how their templates are registered (task 20), and
+    `template-versions` (task 21); "Xolotl" gains `key-policy` (task 24);
+    "Wyrwood operator key" says that the grant's policies are what managers
+    choose from (task 22). `docs/user/install.md` "Provisioning" gains the
+    key policy setting, `MENAGERIE_XOLOTL_KEY` and the Wyrwood release with
+    `binding-change` (task 24); "Upgrades" says that the first start after
+    an upgrade imports templates (task 20) and provisioning records (task
+    19), and that the data volume belongs in the host's backup (task 19).
+  pending-decisions: >-
+    Three decisions wait for the operator on wyrd-company/menagerie#88; the
+    design follows each recommendation, and each answer changes only the
+    sections named. Q1, Menagerie's selection replaces an edit made in
+    Wyrwood (let-menagerie-decide-each-binding): the alternative, adopting
+    such edits, changes policy-authority, workspace-policies,
+    policy-application, binding-convergence, provisioning-steps 3,
+    first-start-import 5, screens and verification, with tasks 24 and 22.
+    Q3, every provisioned workspace gets a key
+    (issue-a-key-to-every-provisioned-workspace): the alternative, a key
+    only for a qualifying selection, changes workspace-policies,
+    provisioning-identity, provisioning-steps 2, policy-application,
+    provisioning-retries and first-start-import 5, with tasks 22 and 24.
+    Q6, a bound workspace keeps at least one policy
+    (keep-a-policy-on-every-bound-workspace): the alternative, unbinding a
+    workspace whose selection empties, changes workspace-policies,
+    create-flow, binding-convergence, provisioning-steps 1 and
+    policy-application, with task 24. The contract changes they own carry
+    the same task numbers.
   contract-changes: |-
     The specifications and their assets change with the code their contract
     tests bind them to: `openapi_test.go`, `commits_test.go` and
@@ -1257,26 +1419,29 @@ proposed-design:
     Tasks 20 and 22 land in either order: in `workspace-api.yml` and
     `openapi.yaml` they add separate paths, members and enum values, and the
     second rebases onto the first. Task 21 extends what 20 adds, and task 24
-    what 22 adds. Task 24 changes only the policy parts of create, upgrade
-    and the provisioning steps, so it lands before or after 20 and 21, and
-    the later one rebases. Until 24 lands, marking a policy required changes
-    the stored selections only, and 24's start-up apply then applies them
+    what 22 adds. Task 20 brings both registration and the upgrade of a
+    template to a newer version, so at its head a workspace still moves to a
+    newer version: register, upgrade the template, upgrade the workspace.
+    Task 24 changes only the policy parts of create, upgrade and the
+    provisioning steps, so it lands before or after 20 and 21, and the later
+    one rebases. Until 24 lands, marking a policy required changes the
+    stored selections only, and 24's start-up apply then applies them
     (policy-application). A request error is a kind in
     `ErrorEnvelope.error.kind` `examples` and in the specification's prose
     with its status; a job error is a kind in `JobError.kind` `examples` and
     in the prose. Job phases do not change: `apply-policies` runs in
     `bind`. Menagerie's data grows with the same tasks, each in a schema
     version of its own: [19] the database, its schema version, the
-    workspaces with the folder a delete began to remove, the container names
-    and Xolotl keys provisioned, and imports 1 and 2 of first-start-import;
-    [20] the registered templates with their current version and its
-    commit, null for an imported template until a version check records it,
-    each workspace's template, and import 3; [21] the found
-    versions, the last check, each workspace's applied version and commit,
-    and import 4; [22] the policy settings and each workspace's selection
-    with its revision; [24] each workspace's values, Xolotl key identity,
-    applied revision, apply failure and selection still to be imported, and
-    import 5.
+    workspaces with the being-created mark and the folder a delete began to
+    remove, the container names and Xolotl keys provisioned, and imports 1
+    and 2 of first-start-import; [20] the registered templates with their
+    current version and its commit, null for an imported template until a
+    version check records it, each workspace's template, and import 3; [21]
+    the found versions, the last check, each workspace's applied version and
+    commit, and import 4; [22] the policy settings and each workspace's
+    selection with its revision; [24] the binding ID of each container name,
+    each workspace's values, Xolotl key identity, applied revision, apply
+    failure and selection still to be imported, and import 5.
   contract-provisioning-declaration: |-
     `provisioning-declaration.yml` and
     `assets/provisioning-declaration/menagerie-customization.schema.json`:
@@ -1294,8 +1459,8 @@ proposed-design:
       `wyrwood.accessGroup`; the example is
       `"customizations": {"menagerie": {"wyrwood": {"accessGroup": 1000}}}`
       with `"runArgs": ["--name", "devcontainer-sample"]`. The binding's
-      policies are the workspace's selection in Menagerie; every value they
-      read is the workspace's name; the Xolotl key is
+      policies are the workspace's selection in Menagerie, never empty; every
+      value they read is the workspace's name; the Xolotl key is
       `<provisioning.xolotl.key-policy>/<workspace name>`, recorded once for
       the workspace; an imported workspace keeps the policies, values and
       key it had; Menagerie sets `MENAGERIE_XOLOTL_KEY` in the container
@@ -1318,7 +1483,8 @@ proposed-design:
       the workspace service's parser, with `deprecated: true` and a
       description that it is read only by the first-start import
       (templates-key). The prose drops it from what configuration names,
-      says the workspace service imports it once and logs a warning naming
+      says the workspace service imports it once, skips an entry whose
+      address is refused naming only its `id`, and logs a warning naming
       the key at each start that finds it, and says the template service
       reads nothing of it. A template's `runner-image` is said to be read
       only by the import; a registered template's runner image is
@@ -1348,11 +1514,16 @@ proposed-design:
       data, with `Workspace.state` `no-folder`, a new enum value, and
       `containerId` null; `delete` runs on such a workspace instead of
       answering 404 `workspace-not-found`. A `create` is refused 409
-      `workspace-exists` while the data holds a workspace of its name. The
-      prose of delete and create reads what a workspace holds from
-      Menagerie's data, and `retire` retires what the data holds and the
+      `workspace-exists` while the data holds a workspace of its name, one
+      being created included. The prose of delete and create reads what a
+      workspace holds from Menagerie's data, unbinds by the recorded agent
+      and container name, and `retire` retires what the data holds and the
       definition no longer declares, in place of the retirement record; a
-      restart keeps Menagerie's data. No new kind.
+      restart keeps Menagerie's data and removes a create's data that has
+      no folder.
+    - [19] New job kind: `binding-outside-grant`, for a delete or a
+      `retire` whose unbind Wyrwood refuses as outside the grant; the
+      binding's name stays in the data.
     - [20] `Template` gains required `address` (string, the address without
       a ref), `currentVersion` (string), `runnerImage` (string or null) and
       `workspaces` (the names of the workspaces that use it).
@@ -1364,8 +1535,17 @@ proposed-design:
       409 `template-exists`, naming the registration; 422
       `template-check-failed` with the new error member `check`, one of
       `address`, `fetch`, `version`, `read` and `definition`, and a message
-      that names what failed; 503 `template-service-unavailable`. In this
-      task the `version` check is that the address names a version's tag.
+      that names what failed and never quotes the address; 503
+      `template-service-unavailable`. An address without a ref takes the
+      newest version, and the `version` check is that the repository has at
+      least one version.
+    - [20] `POST /api/templates/{id}/upgrades` with `{"version"}`: the
+      template service lists the repository's versions, and the version
+      must be one of them newer than the current one, else 409
+      `version-not-newer`; it then passes the `fetch`, `read` and
+      `definition` checks, else 422 `template-check-failed`, and becomes the
+      current version with its commit: 200 with the `Template`; 404
+      `unknown-template`; 503 `template-service-unavailable`.
     - [20] `PATCH /api/templates/{id}` with `name` and `runnerImage`, either
       optional, `runnerImage` nullable, under the rules above: 200 with the
       `Template`; 400 `invalid-request`; 404 `unknown-template`.
@@ -1386,35 +1566,38 @@ proposed-design:
       `JobRequest.templateId` description says so.
     - [20] New request kinds: `template-check-failed` (422),
       `template-exists` (409), `template-in-use` (409),
-      `template-not-registered` (409).
+      `template-not-registered` (409), `version-not-newer` (409).
     - [21] `POST /api/templates/{id}/version-checks`, no body: 200 with the
-      `Template`, whose `lastCheck` carries a failure; 404
-      `unknown-template`; 503 `template-service-unavailable`.
-    - [21] `POST /api/templates/{id}/upgrades` with `{"version"}`: 200 with
-      the `Template`; 404 `unknown-template`; 409 `version-not-newer` for a
-      version that is not a found version newer than the current one, the
-      current version itself while its tag has moved excepted; 422
-      `template-check-failed` with `check` `fetch`, `read` or `definition`;
-      503 `template-service-unavailable`.
+      `Template`, whose `lastCheck` records the outcome, also
+      `template-service-unavailable` when the template service cannot be
+      reached; 404 `unknown-template`. It has no 503.
+    - [21] `POST /api/templates/{id}/upgrades` also takes the current
+      version while its tag has moved, runs its checks and records the new
+      commit.
     - [21] `Template` gains required `newestVersion` (string or null),
       `versions` (each `{version, tag, commit}`, ascending),
       `currentMoved` (boolean: the current version's tag is at another
       commit than the recorded one) and `lastCheck` (null, or `{at,
       failure}` with `at` a date-time and `failure` null or one of
       `template-not-found`, `template-resolve-failed`, `invalid-address`
-      and `template-service-unavailable`). `POST /api/templates` takes an
-      address without a ref and makes its newest version current, and its
-      `version` check becomes that the repository has at least one version.
+      and `template-service-unavailable`).
     - [21] `Workspace` gains required `appliedVersion` (string or null),
       `appliedCommit` (string or null) and `needsUpgrade` (boolean, false
       while `appliedVersion` is null). `upgrade` is refused 409
       `upgrade-not-needed` when the applied version is the template's
-      current version or a newer one, 409 `applied-version-unknown` while it
-      is unknown, and 409 `template-version-moved` while the current
-      version's tag has moved; `create` is refused 409
-      `template-version-moved` in the same case.
-    - [21] New request kinds: `version-not-newer` (409),
-      `upgrade-not-needed` (409), `applied-version-unknown` (409),
+      current version or a newer one, and 409 `template-version-moved` while
+      the current version's tag has moved; `create` is refused 409
+      `template-version-moved` in the same case. An upgrade of a workspace
+      whose applied version is unknown fails as the job kind
+      `template-refused` when the current version's commit does not descend
+      from its applied commit.
+    - [21] Apply branch's prose: a planned merge whose applied record names
+      another source, an older version, a version no tag gives, or a commit
+      that does not descend from an unknown applied version's commit is
+      refused as the existing job kind `not-applicable`, naming both, with
+      nothing changed; a successful apply records the record's version and
+      commit.
+    - [21] New request kinds: `upgrade-not-needed` (409),
       `template-version-moved` (409).
     - [22] `GET /api/policies`: 200 with `grant`, null without
       `provisioning.wyrwood`, else `{agents, policies, actions}`, each a
@@ -1444,16 +1627,18 @@ proposed-design:
       `wyrwood-unavailable` (503), `provisioning-unavailable` (409).
     - [24] `JobRequest.operation` gains `apply-policies`, on an existing
       workspace, in phase `bind`; the prose describes it as
-      policy-application does.
+      policy-application and binding-convergence do.
     - [24] `JobRequest` gains `policies`, create only: a list of unique
       policy names, the group choices and ordinary policies, empty when
       absent. A create without a valid choice in a group is refused 422
       `policy-choice-required` naming the group, one that adds a policy
-      outside the grant 422 `policy-outside-grant`, one that names policies
-      without `provisioning.wyrwood` 409 `provisioning-unavailable`, and one
-      whose grant cannot be read 503 `wyrwood-unavailable`; on a host with
-      `provisioning` a name that cannot be a Xolotl key name and a Wyrwood
-      value is refused 400 `invalid-workspace-name`, naming the rule.
+      outside the grant 422 `policy-outside-grant`, one whose selection is
+      empty on a host with `provisioning.wyrwood` 422 `selection-empty`,
+      one that names policies without `provisioning.wyrwood` 409
+      `provisioning-unavailable`, and one whose grant cannot be read 503
+      `wyrwood-unavailable`; on a host with `provisioning` a name that
+      cannot be a Xolotl key name and a Wyrwood value is refused 400
+      `invalid-workspace-name`, naming the rule.
     - [24] `PUT /api/workspaces/{name}/policies` with `{"policies",
       "revision"}`: 200 with `{selectionRevision, jobId}`, `jobId` the
       apply job, or null when it starts after the workspace's running job;
@@ -1462,20 +1647,24 @@ proposed-design:
       `provisioning-unavailable`; 422 `policy-required`, naming a required
       policy the change removes; 422 `policy-choice-required`, naming a
       group the change leaves without a valid choice that it had; 422
-      `policy-outside-grant`; 503 `wyrwood-unavailable`.
+      `selection-empty`, naming the last policy of a workspace with a
+      container name; 422 `policy-outside-grant`; 503 `wyrwood-unavailable`.
     - [24] `Workspace` gains required `selectionRevision` (integer),
       `appliedRevision` (integer or null), `applyFailure` (null or
       `{kind, message}`), `selectionImported` (boolean) and `xolotlKey`
       (string or null); `needsChoice` is empty while the selection is still
       to be imported.
     - [24] New request kinds: `selection-changed` (409), `policy-required`
-      (422), `policy-choice-required` (422). New job kinds:
-      `policy-outside-grant`, `binding-changed`.
+      (422), `policy-choice-required` (422), `selection-empty` (422). New
+      job kinds: `policy-outside-grant`, `binding-changed`,
+      `binding-pending`.
     - [24] The policy parts of the prose of create, upgrade and the
       provisioning steps follow create-flow, upgrade-flow,
-      provisioning-declaration and provisioning-steps: the selection at
-      create, policies unchanged by an upgrade, the binding made or changed
-      from the selection, the legacy members ignored and reported.
+      provisioning-declaration, provisioning-steps and binding-convergence:
+      the selection at create, policies unchanged by an upgrade, the binding
+      made or changed from the selection with its pending and stale
+      answers, an empty selection refused, the legacy members ignored and
+      reported.
   contract-template-service-api: |-
     `template-service-api.yml`:
     - [20] The service reads the configuration only for `workspace-root`,
@@ -1495,30 +1684,33 @@ proposed-design:
       address or ref is `session-tampered`. Revisions: "the approved
       address" becomes "the request's address at its ref" throughout.
     - [20] New routes: `/v1/templates/addresses` with `{"address"}`, 200
-      `{"source","reference","base"}`; `/v1/templates/checks` with
-      `{"address","ref"}`, 200 `{"source","commit","definition"}`, which
-      runs no hook. Both take the credential resolver scope of every route,
-      and the contract test's route list gains them.
-    - [20] Errors: `invalid-address` (400) is new, for an address the
-      grammar cannot read or template-admission refuses;
-      `unsafe-template-link` (422) is new, for a template folder that is
-      outside the checkout once its `#path` is resolved, or that holds a
-      symbolic link resolving outside it, on the check, generate and apply
-      routes; `unknown-template` (404) leaves the list,
-      as the service does not use it.
-    - [20] Validation criteria: `tests/requests.rs` refuses each form
-      template-admission refuses on every route and a session replayed into
-      another address or ref; a test of the check route answers
-      `definition` true and false, refuses a manifest Toha cannot load and a
-      link that leaves the checkout, and runs no hook; a test refuses a ref
-      that resolves to another commit than the request names.
-    - [21] New route `/v1/templates/versions` with `{"address"}`, an
-      address without a ref: 200 `{"source","versions"}`, each
-      `{"version","tag","commit"}` in ascending order, by the rules of
-      template-versions; refused as `template-not-found` (422) when the
-      remote answers that the repository does not exist, as
+      `{"source","reference","base"}`; `/v1/templates/versions` with
+      `{"address"}`, an address without a ref, 200 `{"source","versions"}`,
+      each `{"version","tag","commit"}` in ascending order by the rules of
+      template-versions, refused as `template-not-found` (422) when the
+      remote answers that the repository does not exist and as
       `template-resolve-failed` (422) when it cannot be listed for any other
-      reason, and as `invalid-address` (400) for an address with a ref.
-      Validation criteria: a test lists a local remote's tags with release,
-      pre-release, `v`-prefixed and annotated tags, and the contract test's
-      route list gains the route.
+      reason; `/v1/templates/checks` with `{"address","ref"}`, 200
+      `{"source","commit","definition"}`, which runs no hook. Each takes the
+      credential resolver scope of every route, and the contract test's
+      route list gains them.
+    - [20] Errors: `invalid-address` (400) is new, for an address the
+      grammar cannot read or template-admission refuses, a password in its
+      user information and a ref on the versions route included, and no
+      refusal quotes the address; `unsafe-template-link` (422) is new, for a
+      template folder that is outside the checkout once its `#path` is
+      resolved, or that holds a symbolic link resolving outside it, on the
+      check, generate and apply routes; `unknown-template` (404) leaves the
+      list, as the service does not use it.
+    - [20] Validation criteria: `tests/requests.rs` refuses each form
+      template-admission refuses on every route, a password in an address
+      without quoting it, and a session replayed into another address or
+      ref; a test of the check route answers `definition` true and false,
+      refuses a manifest Toha cannot load and a link that leaves the
+      checkout, and runs no hook; a test refuses a ref that resolves to
+      another commit than the request names; a test lists a local remote's
+      tags with release, pre-release, `v`-prefixed and annotated tags.
+    - [21] `/v1/templates/checks` also takes `"since"`, a commit, and then
+      answers `descends`, whether the checked commit descends from it.
+      Validation criteria: a test answers `descends` true for an ancestor
+      and false for a commit off the tag's history.
