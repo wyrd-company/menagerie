@@ -22,7 +22,7 @@ repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 port=${MENAGERIE_BROWSER_PORT:-18630}
 control=${MENAGERIE_BROWSER_CONTROL_PORT:-18631}
 dport=${MENAGERIE_BROWSER_DOCKER_PORT:-23751}
-dind_image=${DIND_IMAGE:-docker:29.9.2-dind}
+dind_image=${DIND_IMAGE:-docker:29.9.3-dind@sha256:7bf70dcb85c822e3fa6f2d332143e474b99147b9d7b39102b0cfe8b04a7dd61b}
 # Anonymous pulls only: never the operator's Docker credential helpers.
 export DOCKER_CONFIG
 DOCKER_CONFIG=$(mktemp -d)
