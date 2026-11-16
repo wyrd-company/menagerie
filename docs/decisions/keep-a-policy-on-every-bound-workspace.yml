@@ -11,8 +11,7 @@ description: >-
   define no group, so a selection can become empty. Wyrwood holds no binding
   without a policy and refuses a change to an empty selection. A bound
   workspace's container depends on its binding for its consumer directory's
-  sockets. The council's review of the design raised this, and it is asked
-  of the operator on #88 as Q6. It waits for the operator, and the design
+  sockets. It is asked of the operator on #88 as Q6. It waits for the operator, and the design
   follows the recommendation until the operator answers; the design's
   pending-decisions field names what the other answer changes.
 considered-options:

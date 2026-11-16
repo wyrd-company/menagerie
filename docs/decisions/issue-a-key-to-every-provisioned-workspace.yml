@@ -9,8 +9,8 @@ description: >-
   A template does not declare a workspace's Xolotl client key
   (wyrd-company/menagerie#88), so Menagerie decides which workspaces get one.
   A key is a credential: it reaches the Xolotl gateway's models and MCP
-  servers through the key policy the host's workspaces share. Today's
-  workspace template declares a key for every workspace. This is Q3 on #88.
+  servers through the key policy the host's workspaces share. The workspace
+  template of earlier releases declares a key for every workspace. This is Q3 on #88.
   It waits for the operator, and the design follows the recommendation until
   the operator answers; the design's pending-decisions field names what the
   other answer changes.
