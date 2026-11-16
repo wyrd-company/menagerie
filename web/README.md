@@ -27,7 +27,7 @@ time limits.
 
 ## Commands
 
-Node 24 and pnpm 11 (pinned by `packageManager`) are required.
+Node 26 and pnpm 12 (pinned by `packageManager`) are required.
 
 ```sh
 pnpm install --frozen-lockfile
