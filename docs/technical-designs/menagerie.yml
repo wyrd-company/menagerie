@@ -247,10 +247,11 @@ proposed-design:
     `invalid-address` a local folder, a name from Toha's registry, every
     other transport, `file://`, `git://` and `http://` included, a host or
     user that starts with `-`, and, on the versions route, an address with a
-    ref. Toha keeps an address's `#path` folder inside the repository's
-    checkout. Before a check, a generate or an upgrade reads the template's
+    ref. Before a check, a generate or an upgrade reads the template's
     files, the template service refuses as `unsafe-template-link` a template
-    whose folder holds a symbolic link that resolves outside the checkout.
+    whose folder, the checkout joined with the address's `#path` and
+    resolved, is outside the checkout, or holds a symbolic link that
+    resolves outside it.
     So no request makes it read Menagerie's own files, such as its session
     key, as a template. Both services run as one user, and only that user
     opens the template service's socket. See the decision
@@ -1500,9 +1501,10 @@ proposed-design:
       and the contract test's route list gains them.
     - [20] Errors: `invalid-address` (400) is new, for an address the
       grammar cannot read or template-admission refuses;
-      `unsafe-template-link` (422) is new, for a template folder that holds
-      a symbolic link resolving outside the checkout, on the check,
-      generate and apply routes; `unknown-template` (404) leaves the list,
+      `unsafe-template-link` (422) is new, for a template folder that is
+      outside the checkout once its `#path` is resolved, or that holds a
+      symbolic link resolving outside it, on the check, generate and apply
+      routes; `unknown-template` (404) leaves the list,
       as the service does not use it.
     - [20] Validation criteria: `tests/requests.rs` refuses each form
       template-admission refuses on every route and a session replayed into
