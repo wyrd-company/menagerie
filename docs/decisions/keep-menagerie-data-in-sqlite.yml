@@ -1,0 +1,52 @@
+$schema: https://refinery.systems/ontology/decision-record
+relationships:
+  contextualizes:
+    - menagerie
+  related-to:
+    - menagerie-data-loss
+description: >-
+  Menagerie keeps data of its own: the registered templates and their
+  versions, each workspace's template, applied version, policy selection,
+  values and Xolotl key, the policy settings, and every container name and
+  Xolotl key it provisioned (wyrd-company/menagerie#75, #87, #88). Jobs, the
+  API and two schedules read and change it at once, and several of its rules
+  span records: a template a workspace uses cannot be removed, a container
+  name or key belongs to one workspace, and marking a policy required changes
+  every workspace's selection. The workspace service is Go, and the image
+  builds it without cgo. Before this, Menagerie kept only per-workspace
+  retirement records, one JSON file each.
+considered-options:
+  "1": >-
+    A SQLite database in the data volume, opened only by the workspace
+    service through a Go library that needs no cgo, as Wyrwood's controller
+    keeps its state (modernc.org/sqlite). Each change is a transaction,
+    foreign keys and unique constraints hold the cross-record rules, and the
+    schema has a version that start-up upgrades.
+  "2": >-
+    JSON documents in the data volume, as the retirement records are: one
+    file per workspace and per template, each replaced in one rename, with a
+    process lock around changes that touch several files.
+  "3": >-
+    An embedded key-value store, bbolt, already an indirect dependency:
+    transactions over buckets, with every cross-record rule and every index
+    written in Go.
+decision-outcome:
+  chosen-option: 1
+  justification: >-
+    The rules that span records become constraints the database enforces in
+    the transaction that changes them, so a required policy reaches every
+    selection or none, and a removal cannot leave a workspace without its
+    template. Option 2 makes each of those rules a scan of files under a
+    lock, and a crash between two renames leaves half a change. Option 3 has
+    transactions but no constraints, queries or schema version, so each rule
+    and each migration is code of Menagerie's own. SQLite is already the
+    company's store for a Go service's state, in Wyrwood.
+expected-outcomes:
+  positive:
+    - A change that touches several records, such as marking a policy required, commits whole or not at all.
+    - Uniqueness of container names and keys, and the template a workspace uses, are enforced by the schema instead of by scans.
+    - The schema version lets a start upgrade the data before it serves and refuse data newer than it understands.
+  negative:
+    - The workspace service gains a database library and a schema with migrations to maintain.
+    - Losing the data volume loses what only the database holds; the first-start import recovers the rest (see menagerie-data-loss).
+    - Agents that work only on files cannot read the data; they reach it through the workspace API (wyrd-company/menagerie#91).

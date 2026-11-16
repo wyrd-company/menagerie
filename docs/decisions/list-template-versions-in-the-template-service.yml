@@ -1,0 +1,46 @@
+$schema: https://refinery.systems/ontology/decision-record
+relationships:
+  contextualizes:
+    - menagerie
+    - template-service-api
+description: >-
+  Menagerie finds a template's new versions by itself, on a schedule and on
+  request, and a version is a semver tag of the template's repository
+  (wyrd-company/menagerie#87). Templates are reached over SSH through the
+  Wyrwood agent, over `https` with a GitHub App token from the hook runner
+  socket's credential route, or anonymously, and their addresses are Toha's
+  grammar, with host shorthands such as `gh:`. Toha's library resolves and
+  fetches templates and keeps the source identity Menagerie matches applied
+  records against, but it lists no tags and orders no versions: its only
+  remote ref listing is private.
+considered-options:
+  "1": >-
+    The template service lists the tags. It parses the address with Toha's
+    public address type, lists the repository's refs with gix, the library
+    Toha fetches with and a dependency of the template service already, over
+    the same transports, inside the request's
+    credential resolver scope, and picks the versions.
+  "2": >-
+    The workspace service lists the tags with go-git's remote listing, with
+    its own SSH agent and GitHub App tokens, after turning Toha addresses into
+    Git URLs itself.
+  "3": >-
+    Toha gains a public tag listing and version ordering, in a Toha release,
+    and the template service calls it.
+decision-outcome:
+  chosen-option: 1
+  justification: >-
+    Toha's address grammar and source identity stay in the one service that
+    already uses Toha, so a registered template is listed exactly as it is
+    fetched, and the credential route and the SSH agent reach the listing as
+    they reach a fetch. Option 2 puts a second reading of Toha's grammar,
+    shorthands and normalization in Go, which drifts from Toha's. Option 3
+    adds a Toha feature and a Toha release to the epic's path for a listing
+    the template service can make with the library Toha already brings.
+expected-outcomes:
+  positive:
+    - One reading of a template address, Toha's, for registration, listing, fetching and matching applied records.
+    - Listing uses the credentials a fetch of the same address uses, with no new credential path.
+  negative:
+    - The template service, which already depends on gix, now also connects to remotes itself and must keep the transports and credential behaviour of Toha's fetch.
+    - Version rules (which tags are versions and their order) live in Menagerie, not in Toha.

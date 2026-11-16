@@ -1,0 +1,50 @@
+$schema: https://refinery.systems/ontology/decision-record
+relationships:
+  contextualizes:
+    - menagerie
+  assumes:
+    - wyrwood-binding-change-checks-the-revision
+description: >-
+  A change to a workspace's policies is applied to its Wyrwood binding at
+  once, as an edit in Wyrwood's web interface is, and marking a policy
+  required adds it to every workspace (wyrd-company/menagerie#88). A
+  workspace can have a job running when its policies change, and a job such
+  as a rebuild binds as one of its steps. Wyrwood's web interface can also
+  edit the binding, the operator key's grant can change between two
+  requests, and Wyrwood can be out of reach. Wyrwood's binding change
+  (wyrd-company/wyrwood#159) replaces the whole selection.
+considered-options:
+  "1": >-
+    Menagerie stores each workspace's selection with a revision and applies
+    it in a job of its own, `apply-policies`. The job starts at once when
+    the workspace is free and otherwise when its job ends. A provisioning
+    job's `bind` step makes the binding hold the stored selection. Each
+    workspace shows whether its binding holds its selection.
+  "2": >-
+    The API request that changes a selection calls Wyrwood itself and
+    answers with the result; a workspace with a job refuses the change as
+    busy, and a required policy is added to each free workspace and skipped
+    on a busy one.
+  "3": >-
+    A selection change is stored and reaches the binding at the workspace's
+    next start or rebuild.
+decision-outcome:
+  chosen-option: 1
+  justification: >-
+    One rule covers a manager's change, a required policy reaching every
+    workspace, a workspace that is busy and a Wyrwood that is out of reach:
+    the binding is brought to the stored selection by the next job that
+    binds, and the interface shows any workspace whose binding does not hold
+    it yet. Each application has a console, a time limit and an alert, as
+    every job does. Option 2 loses a required policy on every busy
+    workspace and leaves a request waiting on Wyrwood. Option 3 misses #88's
+    bar, which applies a change with no rebuild.
+expected-outcomes:
+  positive:
+    - A change made while a workspace is busy reaches its binding when that job ends.
+    - Every application of policies is visible as a job, with its console, and fails with a reason the workspace shows.
+    - A rebuild never fails because the binding and the selection differ; it changes the binding.
+  negative:
+    - A change made in Wyrwood's web interface to a Menagerie workspace's binding is replaced by the workspace's next apply or provisioning job.
+    - A failed apply waits for a manager, a selection change, a start-up or a provisioning job; it is not retried on a timer.
+    - Each application takes the workspace's job slot for as long as Wyrwood takes to apply the change.

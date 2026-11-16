@@ -1,0 +1,52 @@
+$schema: https://refinery.systems/ontology/decision-record
+relationships:
+  contextualizes:
+    - menagerie
+    - provisioning-declaration
+description: >-
+  A template no longer decides what a binding holds: the values its policies
+  read and the Xolotl client key come from Menagerie, so that a template
+  change cannot alter them (wyrd-company/menagerie#88). A value is a
+  per-binding path segment of a shared Wyrwood policy, such as the
+  `xolotl-client-key` policy reading `xolotl_key_name` to reach exactly one
+  workspace's key, so a wrong value gives a workspace another workspace's
+  secret. Menagerie's scoped Xolotl key issues keys only in its host's key
+  policy. The workspace template names each workspace's key after the
+  workspace and rejects any other workspace name.
+considered-options:
+  "1": >-
+    Every value a workspace's policies read is the workspace's name, and its
+    key is `<provisioning.xolotl.key-policy>/<workspace name>`. Both are
+    recorded once for the workspace. A provisioning host refuses a workspace
+    name that cannot be a key name and a value. Menagerie tells the
+    container its key in `MENAGERIE_XOLOTL_KEY`.
+  "2": >-
+    The policies screen sets, for each value name the granted policies read,
+    where its value comes from, such as the workspace's name or its key's
+    name, and Menagerie computes each workspace's values from those sources.
+  "3": >-
+    A manager enters each value a workspace's policies read, at create and
+    when a policy that reads a new value is added.
+  "4": >-
+    The template keeps declaring the values and the key, and Menagerie keeps
+    only the policies.
+decision-outcome:
+  chosen-option: 1
+  justification: >-
+    The workspace's name is unique on its host and already names its key, so
+    one rule gives every binding values no other workspace has, and no
+    person can point one workspace at another's key. Recording the values
+    and the key once keeps them stable across template versions and
+    settings changes, and an imported workspace keeps what it had. Option 2
+    adds a setting whose only safe value is the workspace's name. Option 3
+    lets a mistyped value reach another workspace's secret. Option 4 lets a
+    template change alter the values, which #88 rules out.
+expected-outcomes:
+  positive:
+    - No template, no manager and no settings change can give a workspace values that reach another workspace's secrets.
+    - A workspace's key and values do not change across template versions.
+    - A container reads its key's address from Menagerie, not from a second copy in its template's answers.
+  negative:
+    - A policy that needs a per-binding value other than the workspace's name cannot be bound by Menagerie.
+    - On a host with provisioning, a workspace name holds only lower-case letters, digits, `_` and `-`, starts with a letter or digit, and has at most 63 characters.
+    - Every provisioned workspace on a host with `provisioning.xolotl` gets a client key; a template cannot opt out of one.
