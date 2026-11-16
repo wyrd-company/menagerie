@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
       - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
       - id: airlock
-        uses: wyrd-company/airlock@042095dc6cf7a91cc1eee7c4909d24554c1b9abd # 0.0.0 (unreleased main)
+        uses: wyrd-company/airlock@ae9b9c36406bd83b8f70cc0e18e2a48297c968a2 # 0.0.0 (unreleased main)
         env:
           AIRLOCK_TOKEN: ${{ secrets.AIRLOCK_TOKEN }}
         with:
