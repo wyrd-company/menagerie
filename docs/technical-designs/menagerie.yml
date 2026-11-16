@@ -1316,6 +1316,10 @@ proposed-design:
       `template-in-use`, whose message names the workspaces.
     - [20] `Workspace` gains required `template`: null, or `{id, name}` of
       its registered template.
+    - [20] The prose's runner image of a template's hooks is the registered
+      template's runner image, in place of the template entry's
+      `runner-image`, and "an approved template" becomes "a registered
+      template" throughout.
     - [20] `POST /api/jobs`: `create`'s `templateId` names a registered
       template, whose current version the job pins, and an unknown one stays
       404 `unknown-template`; `upgrade` takes no `templateId`, one given is
