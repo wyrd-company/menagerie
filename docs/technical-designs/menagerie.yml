@@ -1199,3 +1199,226 @@ proposed-design:
     provisioned workspaces, starts with the templates registered, each
     workspace's selection taken from its binding and each key as it was, and
     a delete of each workspace removes its binding and key.
+  contract-changes: |-
+    The specifications and their assets change with the code their contract
+    tests bind them to: `openapi_test.go`, `commits_test.go` and
+    `web/test/contract/openapi.test.ts` read the workspace OpenAPI document,
+    `config/schema_test.go` the configuration schema and its phase and
+    operation lists, `provisioning/declaration_test.go` the declaration
+    schema, and `template-service/tests/contract.rs` the template service
+    specification. Each change in the four lists below names, in brackets,
+    the one task of the epic that makes it, in the pull request with the code
+    those tests bind it to, and that pull request removes the change from
+    its list; the last one removes these five fields. Task 19 lands first.
+    Tasks 20 and 22 land in either order: in `workspace-api.yml` and
+    `openapi.yaml` they add separate paths, members and enum values, and the
+    second rebases onto the first. Task 21 extends what 20 adds, and task 24
+    what 22 adds. A request error is a kind in `ErrorEnvelope.error.kind`
+    `examples` and in the specification's prose with its status; a job error
+    is a kind in `JobError.kind` `examples` and in the prose. Job phases do
+    not change: `apply-policies` runs in `bind`.
+  contract-provisioning-declaration: |-
+    `provisioning-declaration.yml` and
+    `assets/provisioning-declaration/menagerie-customization.schema.json`:
+    - [19] Prose and validation criteria: a container name or Xolotl key
+      that Menagerie's data holds for another workspace is refused, in place
+      of one that another workspace declares. The schema does not change.
+    - [24] Schema: the root keeps `required: ["wyrwood"]` and
+      `additionalProperties: false` and has only `wyrwood`; `wyrwood` has
+      only `accessGroup`, required, with its rule (an integer from 0 to
+      4294967294), and `additionalProperties: false`. `wyrwood.policies`,
+      `wyrwood.values` and `xolotl` leave the schema.
+    - [24] Prose: the block opts a workspace in to provisioning and declares
+      `wyrwood.accessGroup`; the example is
+      `"customizations": {"menagerie": {"wyrwood": {"accessGroup": 1000}}}`
+      with `"runArgs": ["--name", "devcontainer-sample"]`. The binding's
+      policies are the workspace's selection in Menagerie; every value they
+      read is the workspace's name; the Xolotl key is
+      `<provisioning.xolotl.key-policy>/<workspace name>`, recorded once for
+      the workspace; an imported workspace keeps the policies, values and
+      key it had; Menagerie sets `MENAGERIE_XOLOTL_KEY` in the container
+      (provisioning-identity). Menagerie's reader accepts `wyrwood.policies`,
+      `wyrwood.values` and `xolotl` with any value, ignores them, and the
+      job console names each; any other unknown key stays an error. The
+      container name rule, the Compose refusal and the refusal of a name
+      another workspace holds stay.
+    - [24] Validation criteria: the parser reads a block with and without
+      the legacy members, ignores them and reports each, and refuses each
+      invalid `accessGroup`, an unknown key, a Compose definition, a
+      definition with no `--name` and a name another workspace holds; the
+      test checks that the schema's keys equal the keys the parser reads and
+      that the keys it ignores are exactly `wyrwood.policies`,
+      `wyrwood.values` and `xolotl`.
+  contract-configuration: |-
+    `configuration.yml` and `assets/configuration/menagerie.schema.json`:
+    - [20] `templates` keeps its schema entry, its item rules (a unique
+      `id`, `name`, `address`, optional `runner-image`) and its place in
+      both parsers, with `deprecated: true` and a description that it is read
+      only by the first-start import (templates-key). The prose drops it from
+      what configuration names, says the workspace service imports it once
+      and logs a warning naming the key at each start that finds it, and says
+      the template service parses it and reads none of it. A template's
+      `runner-image` is said to be read only by the import; a registered
+      template's runner image is Menagerie's data.
+    - [21] New optional `template-versions`, an object with
+      `additionalProperties: false` and one member, `every`, required in the
+      section: a duration of the shared duration pattern, absent `1h`, the
+      time between two version checks of every template. No error of the
+      field quotes its value. Validation criteria: the config tests parse
+      it, apply the default and refuse an empty or malformed duration
+      without quoting it.
+    - [24] New optional `provisioning.xolotl.key-policy`: a string of
+      pattern `^[a-z0-9][a-z0-9_-]*$`, at most 63 characters, the Xolotl key
+      policy of this host's workspaces' client keys. Without it, a job that
+      has to name a new key fails as `provisioning-unavailable`, and a start
+      with `provisioning.xolotl` logs a warning that names it. The `xolotl`
+      part is required for issuing workspaces' keys, in place of "for a
+      declaration with a Xolotl key".
+    - [24] `job-limits.operations` gains `apply-policies` in the schema and
+      in the prose's list of operations, and `alerts` gives
+      `apply-policies` the console address `/?job={id}`.
+    - [19], [22]: no change.
+  contract-workspace-api: |-
+    `workspace-api.yml` and `assets/workspace-api/openapi.yaml`:
+    - [19] `GET /api/workspaces` also lists each workspace whose folder is
+      gone and that holds a container name or a Xolotl key in Menagerie's
+      data, with `Workspace.state` `no-folder`, a new enum value, and
+      `containerId` null; `delete` runs on such a workspace instead of
+      answering 404 `workspace-not-found`. The prose of delete and create
+      reads what a workspace holds from Menagerie's data, and `retire`
+      retires what the data holds and the definition no longer declares, in
+      place of the retirement record; a restart keeps Menagerie's data. No
+      new kind.
+    - [20] `Template` gains required `address` (string), `currentVersion`
+      (string), `runnerImage` (string or null) and `workspaces` (the names of
+      the workspaces that use it).
+    - [20] `POST /api/templates` with `{"name","address","runnerImage"}`,
+      `runnerImage` optional, no other member: 201 with the `Template` and
+      `Location: /api/templates/{id}`; 400 `invalid-request`; 409
+      `template-exists`, naming the registration; 422
+      `template-check-failed` with the new error member `check`, one of
+      `address`, `fetch`, `version`, `read` and `definition`, and a message
+      that names what failed; 503 `template-service-unavailable`. The
+      `version` check is that the address names a version's tag.
+    - [20] `PATCH /api/templates/{id}` with `name` and `runnerImage`, either
+      optional, `runnerImage` nullable: 200 with the `Template`; 400
+      `invalid-request`; 404 `unknown-template`.
+    - [20] `DELETE /api/templates/{id}`: 204; 404 `unknown-template`; 409
+      `template-in-use`, whose message names the workspaces.
+    - [20] `Workspace` gains required `template`: null, or `{id, name}` of
+      its registered template.
+    - [20] `POST /api/jobs`: `create`'s `templateId` names a registered
+      template, whose current version the job pins, and an unknown one stays
+      404 `unknown-template`; `upgrade` takes no `templateId`, one given is
+      400 `invalid-request`, and it applies the current version of the
+      workspace's template, refused 409 `template-not-registered` when the
+      workspace has none. The `JobRequest.templateId` description says so.
+    - [20] New request kinds: `template-check-failed` (422),
+      `template-exists` (409), `template-in-use` (409),
+      `template-not-registered` (409).
+    - [21] `POST /api/templates/{id}/version-checks`, no body: 200 with the
+      `Template`, whose `lastCheck` carries a failure; 404
+      `unknown-template`; 503 `template-service-unavailable`.
+    - [21] `POST /api/templates/{id}/upgrades` with `{"version"}`: 200 with
+      the `Template`; 404 `unknown-template`; 409 `version-not-newer` for a
+      version that is not a found version newer than the current one; 422
+      `template-check-failed` with `check` `fetch`, `read` or `definition`;
+      503 `template-service-unavailable`.
+    - [21] `Template` gains required `newestVersion` (string or null),
+      `versions` (each `{version, tag, commit}`, ascending) and `lastCheck`
+      (null, or `{at, failure}` with `at` a date-time and `failure` a fixed
+      reason or null). `POST /api/templates` takes an address without a ref
+      and makes its newest version current, and its `version` check becomes
+      that the repository has at least one version.
+    - [21] `Workspace` gains required `appliedVersion` (string or null) and
+      `needsUpgrade` (boolean). `upgrade` is refused 409 `already-current`
+      when the workspace's applied version is its template's current version
+      or a newer one.
+    - [21] New request kinds: `version-not-newer` (409), `already-current`
+      (409).
+    - [22] `GET /api/policies`: 200 with `grant`, null without
+      `provisioning.wyrwood`, else `{agents, policies, actions}` as Wyrwood's
+      `whoami` answers it; `policies`, each `{name, valueNames, inGrant}`:
+      the policies inside the grant, and each policy the settings or a
+      selection names that is outside the grant or that Wyrwood does not
+      have, with `inGrant` false; and `settings`, `{required, groups,
+      revision}`, each group `{id, name, mode, policies}` with `mode`
+      `single` or `multi`. 503 `wyrwood-unavailable` when the grant cannot
+      be read.
+    - [22] `PUT /api/policies/settings` with `{"required","groups",
+      "revision"}`, a new group without `id`: 200 with the settings; 400
+      `invalid-request`; 409 `settings-changed` for an older revision; 409
+      `provisioning-unavailable` without `provisioning.wyrwood`; 422
+      `policy-outside-grant`, naming each policy it adds that is outside the
+      grant or that Wyrwood does not have; 422 `invalid-settings`, naming
+      the rule: a policy both required and in a group or in two groups, a
+      group with no policy, two groups of one name, an unknown mode; 503
+      `wyrwood-unavailable`.
+    - [22] `Workspace` gains required `policies` (the selection's names)
+      and `needsChoice` (the names of the groups without a valid choice).
+    - [22] New request kinds: `settings-changed` (409),
+      `policy-outside-grant` (422), `invalid-settings` (422),
+      `wyrwood-unavailable` (503), `provisioning-unavailable` (409).
+    - [24] `JobRequest.operation` gains `apply-policies`, on an existing
+      workspace, in phase `bind`; the prose describes it as
+      policy-application does.
+    - [24] `JobRequest` gains `policies`, create only: the group choices and
+      ordinary policies; a create without a valid choice in a group is
+      refused 422 `policy-choice-required` naming the group, and one that
+      adds a policy outside the grant 422 `policy-outside-grant`; on a host
+      with `provisioning` a name that cannot be a Xolotl key name and a
+      Wyrwood value is refused 400 `invalid-workspace-name`, naming the rule.
+    - [24] `PUT /api/workspaces/{name}/policies` with `{"policies",
+      "revision"}`: 200 with `{selectionRevision, jobId}`, `jobId` the
+      apply job, or null when it starts after the workspace's running job;
+      400 `invalid-request`; 404 `workspace-not-found`; 409
+      `selection-changed` for an older revision; 409
+      `provisioning-unavailable`; 422 `policy-required`, naming a required
+      policy the change removes; 422 `policy-choice-required`, naming a
+      group the change leaves without a valid choice that it had; 422
+      `policy-outside-grant`; 503 `wyrwood-unavailable`.
+    - [24] `Workspace` gains required `selectionRevision` (integer),
+      `appliedRevision` (integer or null), `applyFailure` (null or
+      `{kind, message}`) and `xolotlKey` (string or null).
+    - [24] New request kinds: `selection-changed` (409), `policy-required`
+      (422), `policy-choice-required` (422). New job kinds:
+      `policy-outside-grant`, `binding-changed`.
+    - [24] The prose of create, upgrade and the provisioning steps follows
+      create-flow, upgrade-flow, provisioning-declaration and
+      provisioning-steps: the selection at create, policies unchanged by an
+      upgrade, the binding made or changed from the selection, the legacy
+      members ignored and reported.
+  contract-template-service-api: |-
+    `template-service-api.yml`:
+    - [20] The service reads the configuration only for `workspace-root`,
+      `template-service.socket`, `template-service.hook-runner-socket` and
+      `template-service.candidate-folder`, and parses `templates` without
+      reading it (templates-key).
+    - [20] `/v1/interviews` and `/v1/upgrades` take
+      `{"workspace","target","address"}`, and the answer, generate and apply
+      routes add their members to those; `templateId` is an unknown member.
+      `address` is admitted as template-admission says and names a ref.
+    - [20] Checks: `address` is admitted in place of `templateId` being
+      approved; a session's signature is the HMAC of the flow, `workspace`,
+      `address` and the record, and a session issued for another address is
+      `session-tampered`. Revisions: "the approved address" becomes "the
+      request's address" throughout.
+    - [20] New routes: `/v1/templates/addresses` with `{"address"}`, 200
+      `{"source","reference"}`; `/v1/templates/checks` with `{"address"}`
+      naming a ref, 200 `{"source","commit","definition"}`, which runs no
+      hook. Both take the credential resolver scope of every route, and the
+      contract test's route list gains them.
+    - [20] Errors: `invalid-address` (400) is new, for an address the
+      grammar cannot read or template-admission refuses; `unknown-template`
+      (404) leaves the list, as the service no longer uses it.
+    - [20] Validation criteria: `tests/requests.rs` refuses each form
+      template-admission refuses on every route and a session replayed into
+      another address; a test of the check route answers `definition` true
+      and false, refuses a manifest Toha cannot load, and runs no hook.
+    - [21] New route `/v1/templates/versions` with `{"address"}`: 200
+      `{"source","versions"}`, each `{"version","tag","commit"}` in
+      ascending order, by the rules of template-versions; refused as
+      `template-not-found` (422) or `template-resolve-failed` (422) when the
+      repository cannot be listed. Validation criteria: a test lists a local
+      remote's tags with release, pre-release, `v`-prefixed and annotated
+      tags, and the contract test's route list gains the route.
