@@ -189,7 +189,7 @@ func pocketIDSignInToken(r io.Reader) (string, error) {
 	}
 	_, token, ok := strings.Cut(strings.TrimSpace(out.String()), "/lc/")
 	if !ok || token == "" || strings.ContainsAny(token, " /?&#\t\r\n") {
-		return "", fmt.Errorf("Pocket ID returned no valid sign-in link")
+		return "", fmt.Errorf("Pocket ID returned no valid sign-in link in %q", out.String())
 	}
 	return token, nil
 }

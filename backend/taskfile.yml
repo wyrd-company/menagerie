@@ -44,7 +44,7 @@ tasks:
   test:pocketid:
     desc: Sign a manager and a non-manager in through a disposable Pocket ID container (pulls the pinned Pocket ID image when missing)
     cmds:
-      - go test -tags pocketid -count=1 -v -run TestSignInThroughPocketID ./cmd/menagerie/
+      - go test -tags pocketid -count=1 -v -run '^Test(SignInThroughPocketID|PocketIDSignInToken)$' ./cmd/menagerie/
 
   test:templateservice:
     desc: Run create and upgrade against the template service binary (builds it; needs git for the test's template repositories and SSH host)
