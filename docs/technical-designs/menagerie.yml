@@ -244,7 +244,9 @@ proposed-design:
     registered template's address with the tag and commit of one of its
     found versions, which the job or the request holds server-side; and, on
     the address, versions and check routes, the address a manager submitted
-    to register a template, for that request alone. Registration is a
+    to register a template, for that request alone; and, on the address
+    route alone, each address of the `templates` configuration that
+    first-start-import reads, which the operator wrote. Registration is a
     manager's request through the API, behind a session and the same-origin
     check, so no other caller names an address, and no browser value
     reaches an interview route's address. The template service accepts on
@@ -353,8 +355,8 @@ proposed-design:
     host with a `provisioning` section the workspace name is also refused
     before any job unless it can name a Xolotl key and be a Wyrwood value:
     lower-case letters, digits, `_` and `-`, starting with a letter or digit,
-    at most 63 characters, and a selection with no policy is refused (see
-    workspace-policies). A create is refused while Menagerie's data holds
+    at most 63 characters; on a host with `provisioning.wyrwood` a
+    selection with no policy is refused too (see workspace-policies). A create is refused while Menagerie's data holds
     a workspace of that name, one listed as `no-folder` or being created
     included, and while the template's current version has moved. The job
     pins the template's current version and its commit for its whole run
@@ -560,7 +562,12 @@ proposed-design:
     leaves no group that had a valid choice without one, so a workspace
     that lacks a choice, for example in a group added after it was created,
     still changes its other policies and shows which groups need a choice.
-    Wyrwood holds no binding without a policy, so a workspace that has a
+    A selection change of a workspace whose selection is still to be
+    imported (first-start-import 5) imports it first, in the request, and
+    only then checks the revision, so a change made from a selection read
+    before the import is refused as stale and the manager decides again
+    from the imported one; while Wyrwood cannot answer, the change is
+    refused and nothing is stored. Wyrwood holds no binding without a policy, so a workspace that has a
     container name in Menagerie's data, and a create on a host with
     `provisioning.wyrwood`, keep at least one policy: a selection change
     that would leave none is refused, naming the last policy (see the
@@ -584,12 +591,13 @@ proposed-design:
     one phase, `bind`. It reads the selection, the values and the revision,
     and reads the grant: a selected policy outside it fails the job as
     `policy-outside-grant`, naming each, with no request to Wyrwood, so
-    Menagerie never asks Wyrwood for a policy outside the grant; an empty
-    selection fails it as `provisioning-invalid`, also with no request. With no
-    current container name it records the revision, because the `bind` step
-    of the workspace's next provisioning job binds the selection. Otherwise
-    it brings the binding of that name to the selection as
-    binding-convergence says. A selection change starts the job at once when
+    Menagerie never asks Wyrwood for a policy outside the grant. With no
+    current container name it records the revision, an empty selection
+    included, because the `bind` step of the workspace's next provisioning
+    job binds the selection, and that step refuses an empty one. With a
+    current name, an empty selection fails the job as
+    `provisioning-invalid` with no request; otherwise the job brings the
+    binding of that name to the selection as binding-convergence says. A selection change starts the job at once when
     the workspace has no job, and otherwise when that job ends; marking a
     policy required does the same on each workspace. Start-up starts it on
     each workspace whose binding lacks its selection, and a manager starts
@@ -606,14 +614,20 @@ proposed-design:
     workspace's current container name on this host's agent. Menagerie reads
     it by the ID its data records for that name, with `binding-get`, which
     answers `not-found` for a binding that does not exist and `outside-grant`
-    for one the grant does not cover; for a name with no recorded ID it
-    reads the agent's `binding-list` and records the ID it finds. A binding
+    for one the grant does not cover. A recorded ID that `binding-get`
+    answers `not-found` is dropped, since an operator may have removed the
+    binding and made another under the name, and a name with no recorded ID
+    is resolved through the agent's `binding-list` by its agent and key: the
+    ID found is recorded and Menagerie goes on with that binding, and a
+    name the list does not show has no binding. A binding
     that is not there is made with `bind`: the selection, its values, the
     declared access group, `report` enforcement and default token lifetimes;
     Menagerie records the ID `bind` answers, or, when `bind` answers
-    `pending` with no binding, the ID a read of `binding-list` finds. A `bind` answered
-    `binding-differs` means the binding appeared meanwhile, and Menagerie
-    reads it again. A binding the grant does not cover, read or bound, fails
+    `pending` with no binding, the ID a read of `binding-list` finds. A
+    `bind` answered `binding-differs` means a binding of that name appeared
+    meanwhile: Menagerie resolves the name through `binding-list` again,
+    records the ID it finds, and converges on that binding, once; a second
+    `binding-differs` fails the job as `binding-changed`. A binding the grant does not cover, read or bound, fails
     the job as `binding-outside-grant`, naming the container name, and
     Menagerie changes nothing. A binding that holds the selection, its
     values and the access group, and that Wyrwood reports `applied`, is not
@@ -1233,8 +1247,9 @@ proposed-design:
     5. Selections and keys: each workspace's Xolotl key identity is the key
     its declaration's `xolotl` member names, taken in one transaction with
     the import's mark, and each workspace whose declaration names a
-    container name has its selection to import. Before its first apply or provisioning
-    job, and at each start while any is left, Menagerie reads the binding of
+    container name has its selection to import. Before its first apply or
+    provisioning job or selection change, and at each start while any is
+    left, Menagerie reads the binding of
     that name and takes its policies and values, with the required policies
     added, as the selection; the binding then holds it or the next apply
     makes it hold it. A binding that Wyrwood does not show gives the
@@ -1355,7 +1370,12 @@ proposed-design:
     that Wyrwood saves and OpenBao does not apply is not recorded as
     applied, and the next apply finishes it. Removing a bound workspace's
     last policy is refused. A workspace whose create waits for answers stays
-    in Menagerie's data while the list is refreshed. Apply branch refuses a
+    in Menagerie's data while the list is refreshed. An unbound workspace
+    gives up its last ordinary policy, and its apply succeeds without a
+    request to Wyrwood. A binding an operator removed and made again under
+    the workspace's name is found by its name and converged on. A selection
+    change made before a workspace's selection was imported is refused as
+    stale once the import runs, and refused while Wyrwood cannot answer. Apply branch refuses a
     branch whose applied record names an older version. An address with a
     password is refused without being stored, shown or logged. A version
     check while the template service is down answers the template with the
@@ -1379,10 +1399,13 @@ proposed-design:
     (task 20) and the policy choices (task 24); "Upgrade a workspace"
     applies the template's current version and when it is refused (task
     21), and leaves policies as they are (task 24); "Apply a reviewed
-    branch" refuses an older applied record (task 21); "Delete a workspace"
+    branch" refuses an older applied record, and any change to the applied
+    record of a workspace with no registered template (task 21); "Delete a workspace"
     removes what Menagerie's data holds, also for a definition that does not
     parse, and fails on a binding outside the grant (task 19).
-    `docs/user/configuration.md` "Templates" keeps the address forms and
+    `docs/user/configuration.md` "Runner images" says that a template's
+    runner image is set when it is registered and edited in the interface
+    (task 20); "Templates" keeps the address forms and
     credentials a registration takes, refuses a password in an address,
     and describes the `templates` key's one import, its warning, skipped
     entries and how their templates are registered (task 20), and
@@ -1602,7 +1625,8 @@ proposed-design:
       same case. An upgrade of a workspace whose applied version is unknown
       goes on when the current version's commit descends from its applied
       commit, and otherwise fails as the job kind `template-refused`.
-    - [21] Apply branch's prose: a planned merge that removes the applied
+    - [21] Apply branch's prose: a planned merge that changes the applied
+      record of a workspace with no registered template, that removes the
       record or leaves one Toha cannot read, or whose record names
       another source, an older version, a version no tag gives, or a commit
       that does not descend from an unknown applied version's commit is
@@ -1651,8 +1675,11 @@ proposed-design:
       cannot be a Xolotl key name and a Wyrwood value is refused 400
       `invalid-workspace-name`, naming the rule.
     - [24] `PUT /api/workspaces/{name}/policies` with `{"policies",
-      "revision"}`: 200 with `{selectionRevision, jobId}`, `jobId` the
-      apply job, or null when it starts after the workspace's running job;
+      "revision"}` imports a selection still to be imported before it checks
+      the revision, so a revision read before the import is 409
+      `selection-changed`, and answers 503 `wyrwood-unavailable`, storing
+      nothing, while the import cannot read Wyrwood. It answers 200 with
+      `{selectionRevision, jobId}`, `jobId` the apply job, or null when it starts after the workspace's running job;
       400 `invalid-request`; 404 `workspace-not-found`; 409
       `selection-changed` for an older revision; 409
       `provisioning-unavailable`; 422 `policy-required`, naming a required
@@ -1665,6 +1692,9 @@ proposed-design:
       `{kind, message}`), `selectionImported` (boolean) and `xolotlKey`
       (string or null); `needsChoice` is empty while the selection is still
       to be imported.
+    - [24] The job kind `binding-outside-grant`, which task 19 adds for
+      delete and `retire`, also fails `bind` and `apply-policies` when
+      binding-convergence reads or binds a binding the grant does not cover.
     - [24] New request kinds: `selection-changed` (409), `policy-required`
       (422), `policy-choice-required` (422), `selection-empty` (422). New
       job kinds: `policy-outside-grant`, `binding-changed`,
