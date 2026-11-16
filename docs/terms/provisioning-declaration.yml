@@ -2,7 +2,9 @@ $schema: https://refinery.systems/ontology/term
 title: Provisioning declaration
 description: >-
   The `customizations.menagerie` block of a workspace's rendered devcontainer
-  definition, which declares what the workspace needs from Wyrwood and Xolotl.
-  A workspace without one is not provisioned.
+  definition, which opts the workspace in to provisioning and declares the
+  access group of its consumer directory. A workspace without one is not
+  provisioned. Its policies, values and Xolotl key are Menagerie's data, not
+  the block's.
 terms:
   - workspace

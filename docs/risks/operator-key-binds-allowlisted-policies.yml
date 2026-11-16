@@ -11,8 +11,7 @@ description: >-
   host's workspaces' Xolotl keys by binding the shared policy with that
   workspace's value. The scoped Xolotl key can issue and revoke keys in its key
   policy, so it can also stop gateway access for any of this host's workspaces.
-  A declaration in a definition that
-  a devcontainer can edit asks for the same things at the next rebuild.
+  Any manager can give any workspace any allowlisted policy in the interface.
   Mitigation: the grant allows only the agent of Menagerie's own host, an
   allowlist of policies, and bind, unbind and read, with no policy write; the
   Xolotl key policy is used only on this host, fixed in the shared policy's path
@@ -22,7 +21,11 @@ description: >-
   binding that holds a policy outside the allowlist
   is outside the grant; the private key stays in OpenBao; an operator revokes
   the grant in the Wyrwood web interface; each action is audited under the key's
-  label. The grant has no default expiry, so that provisioning does not stop in
+  label. A binding's values are its workspace's name, which no manager, template
+  or definition sets, and a workspace's Xolotl key is named after it, so no
+  selection in the interface points one workspace at another's key; a
+  definition that a devcontainer edits decides only its container name and
+  access group. The grant has no default expiry, so that provisioning does not stop in
   silence, and a stolen signature path works until someone revokes it.
 categories:
   - security

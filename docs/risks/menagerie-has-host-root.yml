@@ -12,7 +12,9 @@ description: >-
   sign-in. This is the same access a manager has when running
   devcontainer-builder on the host. Mitigation: only members of the
   `menagerie_managers` group reach the UI; the UI is not exposed to the
-  public internet; only templates on the approved template list are used;
+  public internet; only templates a manager registered are used, and the
+  template service reads no local folder, Toha registry entry or `file://`
+  repository as a template;
   SSH and GitHub App private keys stay in OpenBao and signing uses Wyrwood;
   Menagerie holds GitHub App installation tokens, each for one repository,
   only in memory until shortly before they expire. The generated interview
