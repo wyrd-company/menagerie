@@ -1,8 +1,21 @@
 $schema: https://refinery.systems/ontology/technical-design
+relationships:
+  assumes:
+    - wyrwood-binding-change-checks-the-revision
+  related-to:
+    - keep-menagerie-data-in-sqlite
+    - list-template-versions-in-the-template-service
+    - admit-templates-through-the-workspace-service
+    - apply-workspace-policies-from-a-stored-selection
+    - name-workspace-provisioning-after-the-workspace
+  mitigates:
+    - menagerie-data-loss
 objective: >-
   Let a small group of trusted managers create, list, start, stop, rebuild,
   upgrade and delete the workspaces of one shared fleet from a web UI, with
-  the credentials each workspace needs on its first start, so that no one
+  the credentials each workspace needs on its first start, register the
+  templates workspaces come from, roll workspaces forward to new template
+  versions, and choose each workspace's Wyrwood policies, so that no one
   manages workspaces by hand on the host.
 background:
   problems:
@@ -13,6 +26,12 @@ background:
     - A workspace that uses Wyrwood and Xolotl needs a client key, a binding
       and a consumer directory before its first start, and these take manual
       steps on several systems.
+    - A template that has a problem is fixed by rolling forward to a new
+      version, so taking a version and applying it to workspaces has to need
+      no configuration change and no restart.
+    - The template a workspace has and the Wyrwood policies it is granted are
+      separate concerns, and one workspace needs policies that others of its
+      template do not.
 design-challenges:
   two-languages: >-
     Toha is a Rust crate and devcontainer-builder is a Go package. Both must be
@@ -60,6 +79,27 @@ design-challenges:
   long-running-operations: >-
     Builds and rebuilds take minutes. The UI must show progress and must not
     start two operations on one workspace.
+  template-versions: >-
+    A template's versions are the tags of a remote repository, reached over
+    SSH through the Wyrwood agent, over `https` with a GitHub App token, or
+    anonymously. Toha owns the address grammar and the fetch, and its library
+    lists no tags and orders no versions.
+  policy-authority: >-
+    Menagerie decides each workspace's policies, and Wyrwood holds the
+    binding. Wyrwood's web interface can edit the same binding, the operator
+    key's grant can change between two requests, and a binding that holds a
+    policy outside the grant is invisible to the key.
+  owned-data: >-
+    What Menagerie made for a workspace must outlive the workspace's
+    definition, which a person or the workspace's own devcontainer can edit.
+    Jobs, the API and schedules read and change the same templates,
+    selections and records at once.
+  existing-hosts: >-
+    A host that runs an earlier release keeps its templates in configuration,
+    each workspace's policies, values and Xolotl key in its rendered
+    definition, and its retirement records in files. Its first start takes
+    them over with no step by hand and without changing the access of a
+    running workspace.
 proposed-design:
   high-level-overview: >-
     One container image runs two services under a process supervisor. The
@@ -74,8 +114,13 @@ proposed-design:
     tokens signed through its vault socket. The workspace root is mounted at
     the same path on the host and in the container. A workspace whose
     definition has a provisioning declaration also gets a Xolotl client key
-    and a Wyrwood binding, through Wyrwood's public Go package and Xolotl's
-    HTTP API, and its container exists before its first start.
+    and a Wyrwood binding with the policies Menagerie selects for it, through
+    Wyrwood's public Go package and Xolotl's HTTP API, and its container
+    exists before its first start. The workspace service keeps its own data
+    in a SQLite database in Menagerie's data volume: the registered templates
+    and their versions, each workspace's template, applied version and policy
+    selection, the policy settings, and every binding and Xolotl key it
+    provisioned.
   terms: >-
     A workspace is a folder under the workspace root, generated from a Toha
     template, together with the devcontainer it defines. Every folder directly
@@ -84,44 +129,189 @@ proposed-design:
     the files the template generated; repositories cloned inside the workspace
     are ignored by the template's `.gitignore`.
   screens: >-
-    The UI has three screens. The workspace list shows every workspace with
-    its status (running, stopped, no container, or the operation in progress)
-    and offers start, stop, rebuild, apply branch, upgrade and delete. Apply
-    branch takes a branch name in the row. Delete asks the manager to type
-    the workspace's name and says that ignored files are not backed up. The
-    create screen selects an
-    approved template, names the workspace and runs the interview. The upgrade
-    screen runs the interview for a newer template version, asking only what
-    the recorded answers do not cover, or, when the manager asks, every
-    question with the recorded answers as defaults.
+    The UI has five screens. The workspace list shows every workspace with
+    its status (running, stopped, no container, no folder, or the operation
+    in progress), its template and the version last applied to it, whether
+    it needs an upgrade, which policy groups need a choice, and whether its
+    binding has its selection, and offers start, stop, rebuild, apply branch,
+    upgrade, policies and delete. Apply branch takes a branch name in the
+    row. Delete asks the manager to type the workspace's name and says that
+    ignored files are not backed up. Policies shows the workspace's required
+    policies, its choice in each policy group and its other policies, and a
+    manager adds and removes them there. The create screen selects a
+    registered template, names the workspace, takes a choice in each policy
+    group and any other policies, and runs the interview. The upgrade screen
+    runs the interview for the current version of the workspace's template,
+    asking only what the recorded answers do not cover, or, when the manager
+    asks, every question with the recorded answers as defaults. The templates
+    screen lists the registered templates with their current and newest
+    versions and the time and outcome of the last version check, registers a
+    template from its address, checks a template for new versions, upgrades
+    a template to a newer version and removes a template that no workspace
+    uses. The policies screen lists the policies inside the operator key's
+    grant and those the settings name outside it, marks policies required,
+    and creates, edits and removes policy groups.
   workspace-discovery: >-
     The list is built from the workspace folders under the workspace root.
     Each folder is joined to the container whose `devcontainer.local_folder` label equals
     the folder path. Containers without such a label, or whose label points
-    outside the workspace root, are never shown. Menagerie keeps no database.
+    outside the workspace root, are never shown. Each folder is also joined
+    to its workspace in Menagerie's data. A folder that has none gets one
+    when it is first listed: joined to the registered template whose source
+    its applied record names, with the applied version template-versions
+    gives it, no container name, no key, and a selection of the required
+    policies. A workspace in
+    the data whose folder is gone and that still holds a binding name or a
+    Xolotl key is listed as `no-folder`, so a delete can remove what it
+    holds; one that holds neither is removed from the data.
+  menagerie-data: >-
+    The workspace service keeps its own data in one SQLite database,
+    `/var/lib/menagerie/state/menagerie.db`, through a Go library that needs
+    no cgo. The `state` folder is private to the services' user, and only
+    the workspace service opens the database: the template service,
+    devcontainers and throwaway containers never reach it. Every change is
+    one transaction and foreign keys are enforced, so a constraint, not a
+    scan of files, keeps these rules: a template has one registration per
+    source, a template that a workspace uses cannot be removed, and a
+    container name or a Xolotl key belongs to one workspace at a time. The
+    schema's version is the database's `user_version`; a start upgrades an
+    older schema in one transaction before it serves, and refuses a newer
+    one. The data holds the registered templates (see template-registry and
+    template-versions); the workspaces, keyed by folder name, each with its
+    template, the version and commit last applied, its Xolotl key, its
+    per-binding values, its policy selection and that selection's revision,
+    the revision last applied to its binding and the reason the last apply
+    failed, whether its selection is still to be imported, and the folder a
+    delete began to remove; the container names Menagerie bound and the
+    Xolotl keys it issued, each with its workspace and whether it is the
+    workspace's current one; and the policy settings with their revision
+    (see workspace-policies). A delete removes the workspace's data with its
+    folder. See the decision keep-menagerie-data-in-sqlite.
   internal-api: >-
     The template service listens on a Unix socket shared only with the
-    workspace service and speaks JSON over HTTP. It exposes: start an
-    interview for a template, answer an interview, generate a workspace from a
-    completed interview, start an upgrade for a workspace, answer an upgrade,
-    and apply an upgrade. The template service is stateless between requests.
+    workspace service and speaks JSON over HTTP. It exposes: read a template
+    address, list a template's versions, check a template version, start an
+    interview for a template, answer an interview, generate a workspace from
+    a completed interview, start an upgrade for a workspace, answer an
+    upgrade, and apply an upgrade. The workspace service names the template
+    of each request by its address with a version's tag, so the template
+    service holds no list of templates. The template service is stateless
+    between requests.
+  template-service-routes: >-
+    Reading an address, `POST /v1/templates/addresses` with `{"address"}`,
+    parses it with Toha's address grammar and reaches no network: it answers
+    the address's `source`, the formal name Toha gives its repository and
+    folder without a ref, and its `reference`, or null. Listing versions,
+    `POST /v1/templates/versions` with `{"address"}`, answers the `source`
+    and the `versions`, each `{"version","tag","commit"}`, in ascending
+    order. Checking a version, `POST /v1/templates/checks` with
+    `{"address"}` naming a ref, has Toha resolve and fetch that ref into its
+    cache and load the template's manifest, and answers the `source`, the
+    `commit` and `definition`, whether the template's content folder, from
+    which Toha renders a workspace's files, holds
+    `.devcontainer/devcontainer.json`. A check runs no hook and no other
+    command of the template. Their refusals are Toha's, such as
+    `template-not-found`, `template-resolve-failed` and `template-invalid`,
+    under the rules every route's refusals follow. Each runs inside the
+    request's credential resolver scope (see github-app). The interview,
+    generate and upgrade routes take `"address"`, naming a ref, in place of
+    a template id, and a session's signature covers that address in place
+    of the id, so a session cannot be replayed into another template or
+    version.
+  template-admission: >-
+    The template service fetches only templates a manager approved, and the
+    approval is the registration in Menagerie's data. The template service
+    holds no list: the workspace service admits each address before it names
+    it, and the template service refuses every address it must never read.
+    The workspace service names, on the interview, generate and upgrade
+    routes and to a version check, only a registered template's address with
+    the tag of one of its found versions, which the job or the check holds
+    server-side; and, on the address and check routes, the address a
+    manager submitted to register a template or to upgrade one, for that
+    request alone. Registration is a manager's request through the API,
+    behind a session and the same-origin check, so no other caller names an
+    address, and no browser value reaches an interview route's address. The
+    template service accepts on every route only a remote Git address of the
+    forms the user documentation lists: `gh:` with an owner and a
+    repository, `git@host:path`, `ssh://` and `https://`. It refuses as
+    `invalid-address` a local folder, a name from Toha's registry, every
+    other transport, `file://`, `git://` and `http://` included, and a host
+    or user that starts with `-`, so no request makes it read Menagerie's own
+    files, such as its session key, as a template. The interview, generate
+    and upgrade routes also refuse an address without a ref. Both services
+    run as one user, and only that user opens the template service's socket.
+    See the decision admit-templates-through-the-workspace-service.
   interviews: >-
     A question batch is Toha's JSON Schema batch document; the UI renders a
     form from it. Toha's interview session value carries the pinned template
     identity, context, admitted documents and accepted submissions. The
     browser holds the session value and sends it with each request. The
-    template service checks the pinned template against the approved template
-    list, rebuilds the interview from the session value and returns the next
-    batch or a completed interview.
-  approved-templates: >-
-    Only templates on the approved template list can be used. Each entry names
-    a Toha template address. The list is configuration.
+    template service checks the pinned template against the address the
+    workspace service names for the job, rebuilds the interview from the
+    session value and returns the next batch or a completed interview. The
+    job, not the browser, holds the template and version it was started for.
+  template-registry: >-
+    Only registered templates can be used. A manager registers a template
+    with a display name, its Toha address and an optional runner image. The
+    address takes the forms and credentials the user documentation lists
+    under "Templates" (see git-and-credentials and github-app), names the
+    template's repository and folder, and has either no ref or a version's
+    tag, which then is the current version; any other ref is refused.
+    Registration runs the minimum checks in this order and refuses the
+    template at the first that fails, naming the check: `address`, the
+    template service reads the address; `fetch`, the repository's versions
+    can be listed and the current version fetched; `version`, the repository
+    has at least one version (see template-versions); `read`, Toha loads the
+    template's manifest; `definition`, the content folder holds
+    `.devcontainer/devcontainer.json`, and the refusal names that file. The
+    current version is the address's tag, else the newest version. A
+    template whose source is registered already is refused, naming that
+    registration. The `id` is permanent: the lower-case letters and digits of
+    the name, separated by single dashes, with `-2`, `-3` and on added while
+    the id is taken. A manager can rename a template and change its runner
+    image; its address and source do not change. A template that a workspace
+    uses cannot be removed, and the refusal names those workspaces.
+    Registering a template, taking a new version and removing a template
+    need no configuration change and no restart.
+  template-versions: >-
+    A version of a template is a tag of its repository named
+    `MAJOR.MINOR.PATCH`, with an optional leading `v`, whose numbers have no
+    leading zero. A tag with a pre-release or build part is not a version.
+    Versions order by their numbers, and when `1.2.0` and `v1.2.0` both
+    exist the tag without `v` is the version's. The template service lists
+    a repository's tags without fetching its history, through the transport
+    and credentials a fetch of that address uses, and peels an annotated tag
+    to its commit (see list-template-versions-in-the-template-service). The
+    workspace service checks every registered template's versions when it
+    starts and then every `template-versions.every`, and a manager checks
+    one template on request; two checks of one template at once share one
+    run. A check replaces the template's found versions with what it found.
+    A failed check keeps the earlier versions and records the time and a
+    fixed reason, which the templates screen shows. A template has a newer
+    version while its newest found version is newer than its current
+    version. A manager upgrades a template to a found version newer than its
+    current one: the version passes the `fetch`, `read` and `definition`
+    checks of a registration, then becomes the current version. The current
+    version moves only forward. A workspace's applied version is the version
+    its create generated or its last upgrade applied. It needs an upgrade
+    while its template's current version is newer, or while its applied
+    version is unknown. A version check gives a workspace with no applied
+    version the version whose tag is at the commit of its applied record.
   create-flow: >-
-    After the interview completes, the workspace service creates a new folder
+    A create names a registered template and takes the workspace's policy
+    choices, checked as workspace-policies says before any job exists. On a
+    host with a `provisioning` section the workspace name is also refused
+    before any job unless it can name a Xolotl key and be a Wyrwood value:
+    lower-case letters, digits, `_` and `-`, starting with a letter or digit,
+    at most 63 characters. The job pins the template's current version for
+    its whole run and writes the workspace's data, with its template and
+    selection, when it starts. After the interview completes, the workspace
+    service creates a new folder
     under the workspace root and initializes its git repository. The template
     service builds Toha's plan and applies it into that folder, recording the
     answers in the applied record `.toha.json`. Generation completes when Toha
-    reports that the applied record was written. Without a provisioning
+    reports that the applied record was written, and the workspace's applied
+    version is then the pinned version. Without a provisioning
     declaration, the workspace service commits, backs the commit up to an
     orphan branch named after the workspace in the workspace repository, and
     starts the devcontainer through devcontainer-builder. A branch of that name
@@ -136,13 +326,22 @@ proposed-design:
     create stays refused while the folder exists; delete removes a folder
     whose generation failed.
   upgrade-flow: >-
+    An upgrade applies the current version of the workspace's template, which
+    the job pins when it starts. It is refused before any job when the
+    workspace has no registered template or its applied version is that
+    version or a newer one, so no path applies a version older than the one
+    a workspace has.
     The workspace service commits any local changes to tracked files so the
     pre-upgrade state is backed up. Toha fetches the newer template version.
     The template service reads `.toha.json`, replays the recorded answers
     against the newer template, asks the questions they do not answer, and
-    applies the merge. The workspace service commits, backs up and rebuilds
-    the container. The rebuild reads the merged definition, so a template
-    that declares new needs gets them in that rebuild.
+    applies the merge. A written or conflicted merge, and Toha's
+    `already-current`, record the pinned version as the workspace's applied
+    version, as Toha's applied record does. The workspace service commits,
+    backs up and rebuilds the container. The rebuild reads the merged
+    definition, so a template that declares new needs gets them in that
+    rebuild. An upgrade changes neither the workspace's selection, nor its
+    values, nor its Xolotl key.
   apply-branch-flow: >-
     Apply branch brings a branch of the workspace repository, such as a
     reviewed pull request's head, into a workspace through Git. The manager
@@ -223,17 +422,109 @@ proposed-design:
   provisioning-declaration: >-
     A provisioning declaration is the `customizations.menagerie` block of a
     rendered definition, as the provisioning-declaration specification
-    defines. It declares the access group, the policies and the per-binding
-    values of the Wyrwood binding and, optionally, the policy and name of
-    the Xolotl client key. A template opts in by rendering the block. Absent,
-    no step of provisioning runs and the workspace works as any other, apart
-    from consuming a retirement record that the block's removal left. Only
-    the definition file counts, never metadata from its image or features.
+    defines. A template opts in by rendering the block, and the block
+    declares the numeric access group of the consumer directory and its
+    sockets, which the container's user must have. Everything else the
+    binding and the key hold comes from Menagerie's data: the policies (see
+    workspace-policies), and the values those policies read and the Xolotl
+    client key (see provisioning-identity), so a template change cannot
+    alter them. The members that templates rendered for earlier releases,
+    `wyrwood.policies`, `wyrwood.values` and `xolotl`, are read only by
+    first-start-import; every job ignores them, and its console names each
+    one it ignored. Absent, no step of provisioning runs and the workspace
+    works as any other, apart from retiring what Menagerie's data holds for
+    it. Only the definition file counts, never metadata from its image or features.
     The container name is the `--name` value of `runArgs`, read as
     devcontainer-builder reads it, so the name has one source. A declaration
     in a Compose definition is refused, because `runArgs` does not apply
     there. Provisioning settings of the host, such as the Wyrwood agent's
-    name and the Xolotl URL, are configuration, never part of the definition.
+    name, the Xolotl URL and the Xolotl key policy, are configuration, never
+    part of the definition.
+  provisioning-identity: >-
+    A provisioned workspace's Xolotl client key is
+    `<provisioning.xolotl.key-policy>/<workspace name>`, and every value
+    that its selected policies read is the workspace's name. Both are
+    written to the workspace's data once and never change: the key when the
+    first provisioning job of the workspace runs with `provisioning.xolotl`
+    configured, a value when the selection first holds a policy that reads
+    it. A workspace that first-start-import took over keeps the key and the
+    values it had. A policy's value names are those Wyrwood's policy list
+    gives it. The binding carries the values of the policies it holds;
+    values that no selected policy reads stay in the data, so a policy added
+    again reads what it read before. With `provisioning.xolotl` and no
+    `key-policy`, a job that has to name a new key fails as
+    `provisioning-unavailable` and names the missing setting. Without
+    `provisioning.xolotl`, a workspace gets no key. Menagerie sets
+    `MENAGERIE_XOLOTL_KEY` to the key's `<policy>/<name>` in a provisioned
+    workspace's container under the rule workspace-socket gives
+    `MENAGERIE_WORKSPACE_SOCKET`: at each rebuild, and at each start that
+    creates the container or reuses one that has the variable, unless the
+    definition sets that name itself. So a definition learns its key's
+    address from Menagerie. See the decision
+    name-workspace-provisioning-after-the-workspace.
+  workspace-policies: >-
+    Menagerie decides each workspace's Wyrwood policies; a template does
+    not. The operator key's grant, which Wyrwood's `whoami` answers, and the
+    policies inside it, which its `policy-list` answers with the values each
+    reads, are read again by each request and each job step that shows,
+    checks or applies policies, and are never kept between them. A policy is
+    inside the grant when `policy-list` answers it. The policy settings sort
+    policies: a required policy is in every workspace's selection and cannot
+    be removed from one; a policy group holds policies and is single-select,
+    exactly one, or multi-select, at least one; any other policy inside the
+    grant is an ordinary policy. A policy is required, in one group, or
+    neither. Group names are unique, and a settings change carries the
+    revision it was read at, so a change made from an older read is
+    refused. A workspace's selection is the set of policies its binding is
+    to hold. A create takes a choice in
+    each group, exactly one in a single-select group, and any ordinary
+    policies, and Menagerie adds the required ones. A selection change
+    carries the selection's revision, keeps every required policy, and
+    leaves no group that had a valid choice without one, so a workspace
+    that lacks a choice, for example in a group added after it was created,
+    still changes its other policies and shows which groups need a choice. A
+    policy that a settings change, a create or a selection change adds is
+    refused by name before any job runs when it is outside the grant or
+    Wyrwood does not have it. A policy that left the grant after it was
+    added is shown as outside the grant, and an apply of a selection that
+    holds it fails, naming it. Marking a policy required adds it to every
+    workspace's selection, and each of those workspaces applies it as
+    policy-application
+    says. A policy that stops being required stays, as an ordinary policy,
+    in each selection that has it. A workspace whose definition has no
+    declaration keeps a selection and has no binding. See the decision
+    apply-workspace-policies-from-a-stored-selection.
+  policy-application: >-
+    Each selection change increments the workspace's selection revision, and
+    the binding has its selection once a job records that revision as
+    applied. The `apply-policies` operation is a job on the workspace with
+    one phase, `bind`. It reads the selection, the values and the revision;
+    reads the grant and fails as `policy-outside-grant`, naming each
+    selected policy outside it, with no request to Wyrwood, so Menagerie
+    never asks Wyrwood for a policy outside the grant; and reads the binding
+    of the workspace's current container name. With no binding it records
+    the revision, because the `bind` step of the workspace's next
+    provisioning job binds the selection. With a binding that holds the
+    selection it records the revision and writes nothing. Otherwise it
+    changes the binding through the operator protocol's binding change
+    (wyrwood#159): the whole selection, its values and the binding's other
+    settings as read, with the binding revision it read. Wyrwood applies it
+    as an edit in its web interface: the container's token is replaced, and
+    its consumer directory and sockets stay. A change that Wyrwood refuses
+    because the binding changed after the read is read and sent once more,
+    and a second refusal fails the job as `binding-changed`. The step then
+    reads the binding until Wyrwood reports it applied, within
+    `provisioning.readiness-wait`, records the revision, and the console
+    names each policy and value it added or removed. A selection change
+    starts the job at once when the workspace has no job, and otherwise when
+    that job ends; marking a policy required does the same on each
+    workspace. Start-up starts it on each workspace whose binding lacks its
+    selection, and a manager starts it on request. A failed apply is not
+    repeated by itself: the workspace shows the reason until a manager, a
+    start-up, a selection change or a provisioning job applies the selection
+    again. Menagerie decides the binding: a change made to it in Wyrwood's
+    web interface is replaced by the workspace's next apply or provisioning
+    job, whose console names the fields it changed.
   operator-identity: >-
     Menagerie's operator key is an OpenBao Transit key that the agent offers
     on Menagerie's own `ssh-agent.sock`. The Wyrwood client selects it by
@@ -248,9 +539,11 @@ proposed-design:
     container. Menagerie's Wyrwood policy grants these reads and signatures.
   operator-authority: >-
     Approval sets a grant on the operator key: the agents it may act for, the
-    policy names it may bind and its actions. Menagerie's grant is bind,
-    unbind and read, for the agent of its own host, for an allowlist of
-    policies, with no policy write. A binding that holds a policy outside the
+    policy names it may bind and its actions. Menagerie's grant is `read` and
+    `bind`, which makes, changes and removes bindings, for the agent of its
+    own host, for an allowlist of policies, with no policy write. The
+    allowlist is what managers choose from (see workspace-policies). A
+    binding that holds a policy outside the
     allowlist is outside the grant, so Menagerie cannot change or remove its
     own binding or any binding an operator made for something else. Each
     workspace reads only its own Xolotl key through one shared policy with a
@@ -258,7 +551,8 @@ proposed-design:
     Menagerie writes no policy. Authority over keys stays on this host through
     a Xolotl key policy that only this host's workspaces use: the shared
     Wyrwood policy fixes that key policy in its path, so the value names only
-    the key, and the scoped Xolotl key lists only that key policy. That key
+    the key, and the scoped Xolotl key lists only that key policy, which
+    configuration names as `provisioning.xolotl.key-policy`. That key
     policy grants only `proxy` and `mcp`, because Xolotl refuses a `keys` key
     any other. Preparing a host creates both. Bindings Menagerie creates use `report`
     enforcement, so Wyrwood never recreates a container during a job. The
@@ -289,21 +583,29 @@ proposed-design:
     the old container after `build`.
     1. `read-definition` reads the declaration and the container name and
     refuses, as `provisioning-invalid`, a declaration the schema refuses, a
-    definition with no `--name`, and a container name or Xolotl key that
-    another workspace's definition declares, its retirement record
-    names, or a container of another workspace holds. The last check keeps the delete of one workspace from
-    revoking another's key. A provisioning section that configuration lacks
-    fails as `provisioning-unavailable`. Host prerequisites are
-    checked here, so nothing is issued for a workspace that cannot start. 2. `issue-key` issues the Xolotl key, and treats the answer that
-    the key exists as done, so a repeat never rotates it. 3. `bind` makes the
-    `name` binding, with `report` enforcement and default token lifetimes,
-    and waits until the binding reports its consumer directory, which the
-    agent creates before the container exists. An equal binding is not
-    written, so a repeat revokes no token. Wyrwood refuses a binding that
-    differs in its policies, values or access group and changes nothing, and
-    the definition is the source of these three values. So a job unbinds and
-    binds again while the container is stopped, and the console names the
-    fields. 4. `commit` and
+    definition with no `--name`, and a container name that Menagerie's data
+    holds for another workspace or that a container of another workspace
+    holds. The last check keeps the delete of one workspace from
+    unbinding another's container. A provisioning section that
+    configuration lacks fails as `provisioning-unavailable`, and so does a
+    workspace whose selection is still to be imported while Wyrwood cannot
+    answer (see first-start-import). The console names each legacy member
+    of the declaration it ignores. Host prerequisites are
+    checked here, so nothing is issued for a workspace that cannot start. 2. `issue-key` issues the workspace's Xolotl key (see
+    provisioning-identity), after its data records the key as the
+    workspace's, and treats the answer that the key exists as done, so a
+    repeat never rotates it. 3. `bind` checks the selection against the
+    grant as policy-application does, records the container name as the
+    workspace's current one in its data, and then makes or changes the
+    `name` binding with the workspace's selection and values and the
+    declared access group. An absent binding is made with `report`
+    enforcement and default token lifetimes, and the step waits until the
+    binding reports its consumer directory, which the agent creates before
+    the container exists. An equal binding is not written, so a repeat
+    revokes no token. A binding that differs is changed as
+    policy-application changes it, whether its container runs or not, and
+    the console names the fields. The step records the selection revision
+    as applied. 4. `commit` and
     `backup` run as in a create. 5. `initialize-command` and `build` run as
     in any start. 6. `create-container` uses devcontainer-builder's create-only mode
     and records the container's id. That mode refuses a bind with an SELinux
@@ -341,45 +643,46 @@ proposed-design:
     a rebuild that failed left it, and a binding of the new name would never
     report it. A `name` binding survives a rebuild,
     because the container keeps its name: the agent keeps the directory and
-    its sockets through the gap and gets a new token. Before an upgrade
-    or an apply-branch changes the definition, it adds the container name and
-    Xolotl key the definition declares to a retirement record,
-    `/var/lib/menagerie/provisioning/<workspace>.json`, which holds no secret
-    and which no devcontainer can reach. The record only grows until it is
-    consumed, so a later job never loses what an earlier one left. Any job
-    that ends with the devcontainer started, with or without a declaration,
-    consumes it last, in a `retire` phase: it unbinds each name and revokes each key that the
-    workspace's definition no longer declares, removes those entries as each
-    is confirmed gone, and removes the record when it is empty. A job that
-    fails, or a Menagerie that restarts, leaves the record for the next one.
-    A failure while consuming fails the job, with the devcontainer running.
-    `read-definition` treats a name or key in another workspace's record as
-    taken, as it treats one that workspace declares. An entry the workspace
-    declares again, or another workspace declares, is removed without acting,
-    so one workspace's retirement never takes what another uses. A definition
-    edited by other means has no record; what
-    it stops declaring, or what a lost data volume's record named, stays until
-    an operator removes it, visible in the Wyrwood and Xolotl web interfaces.
-    A definition a devcontainer can edit
+    its sockets through the gap and gets a new token. Menagerie's data holds
+    each container name Menagerie bound and each Xolotl key it issued for a
+    workspace, written before the request that makes it and removed only
+    once Wyrwood or Xolotl confirms it gone, so what a job made is known
+    whatever the definition says later and whether or not it still parses.
+    Any job that ends with the devcontainer started, with or without a
+    declaration, ends with a `retire` phase: it unbinds each name the
+    definition no longer declares and, when the definition has no
+    declaration, unbinds every name and revokes the key, and removes each
+    from the data as it is confirmed gone. The workspace keeps the identity of its key, so a
+    declaration that returns gets the same key name. A job that fails, or a
+    Menagerie that restarts, leaves them for the next one. A failure while
+    retiring fails the job, with the devcontainer running. A name or key
+    belongs to one workspace at a time, so one workspace's retirement never
+    takes what another uses. A definition a devcontainer can edit
     already gets privileged mode at its next rebuild, so the declaration is
-    no boundary against that devcontainer; the allowlist still bounds what
-    the operator key can bind.
+    no boundary against that devcontainer; it decides only the container
+    name and the access group, and the grant still bounds what the operator
+    key can bind.
   delete-flow: >-
     Delete removes a workspace from the host. It refuses while another
     running container mounts the folder, a path inside it, or a folder that
-    contains it. `read-definition` reads the declaration. `stop` stops the
+    contains it. `read-definition` reads what the workspace holds from
+    Menagerie's data, never from its definition, and fails as
+    `provisioning-unavailable`, with nothing changed, when it holds a name
+    or a key and the configuration lacks the section that reaches it. `stop` stops the
     devcontainer, and for Compose every service of its project. `commit` and
     `backup` save tracked and new files as the commit operation does, and a
     failure there removes nothing; a folder with no applied record has no
-    backup. `unbind` removes the binding while the container exists, and the
-    agent retires its token and sockets. `remove-container` removes the
-    workspace's containers; for Compose, named volumes and networks stay.
-    `revoke-key` revokes the Xolotl key. `remove-folder` removes the socket
+    backup. `unbind` removes each binding the data names while the
+    container exists, and the agent retires its token and sockets; a name
+    whose binding Wyrwood no longer shows is done. `remove-container`
+    removes the workspace's containers; for Compose, named volumes and
+    networks stay. `revoke-key` revokes each key the data names.
+    `remove-folder` removes the socket
     folder and then the workspace folder; a throwaway container that runs as
     root, with only that folder mounted, first renames the repository's `.git`,
     so that from then on no job commits what is left, and then removes the rest.
-    Before that container runs, the workspace's retirement record names the
-    folder by its device and inode, in Menagerie's data volume, which no
+    Before that container runs, the workspace's data names the folder by
+    its device and inode, in Menagerie's data volume, which no
     devcontainer can reach and no removal can take part of. Only that record, for
     that folder, with `.git` gone means the removal began: a retried delete then
     skips the backup, and a start or rebuild fails as `delete-unfinished`. Every
@@ -387,23 +690,19 @@ proposed-design:
     after the backup. Any other folder, which a stopped removal did not reach or
     that took the name later, is backed up as usual, and a start or rebuild ends
     the state. The state ends once the folder is empty, before the folder goes.
-    `unbind`
-    and `revoke-key` also take what a retirement record names, and the record
-    goes with the folder. Without a declaration and a record, `unbind` and
-    `revoke-key` do not run. A name or key another workspace's definition
-    declares stays, as does what a declaration names when a container outside
-    the workspace holds its name, and the console says so. A block that is not
-    valid still names what an earlier definition may have provisioned, and it
-    cannot hold up the delete when the section it needs is absent. Each
-    step treats what is already gone as done, and the folder goes last, so a
-    retried delete can still read its declaration. The backup branch stays in
+    A workspace that holds no name and no key calls neither Wyrwood nor
+    Xolotl. Each step treats what is already gone as done, and the folder
+    goes last, followed by the workspace's data, so a retried delete finds
+    what is left. A workspace listed as `no-folder` is deleted by the same
+    steps without the stop, the backup and the folder's removal. The backup
+    branch stays in
     the workspace repository, images stay, bind sources outside the folder
     stay, and the agent's empty consumer directory stays until the next host
     restart. Ignored files, such as cloned repositories, are not in the
     backup and are lost.
   operations-and-jobs: >-
-    Each create, upgrade, apply-branch, start, stop, rebuild, commit or delete
-    is a job. A workspace has at
+    Each create, upgrade, apply-branch, start, stop, rebuild, commit,
+    apply-policies or delete is a job. A workspace has at
     most one job at a time. Jobs and their logs are held in memory and
     streamed to the UI. A restart of Menagerie drops job history. Optional
     time limits, a default, per operation and per phase, count running time
@@ -562,13 +861,13 @@ proposed-design:
     source check, as host-prerequisites describes, carry the same labels and
     run no command.
   runner-images: >-
-    A throwaway container runs the template entry's `runner-image`, else the
-    global `runner-image`, else Menagerie's own image, which the workspace
+    A throwaway container runs the registered template's runner image, else
+    the global `runner-image`, else Menagerie's own image, which the workspace
     service finds by inspecting its own container: the container its mounts
     name, else, only when they name none, the container its hostname names
     when that container carries the hostname. One search runs at a time and
     each job stops waiting for it when the job ends. `initializeCommand` has
-    no template entry and uses the global choice. A missing image is pulled
+    no template and uses the global choice. A missing image is pulled
     with the registry credentials; when no image can be found or pulled, the
     job fails as `runner-image-unavailable`.
   template-hooks: >-
@@ -737,22 +1036,87 @@ proposed-design:
     manager.
   configuration: >-
     Configuration names the workspace root, the workspace repository, the
-    approved template list with optional runner images, the OIDC issuer and
-    client, the Wyrwood consumer directory, the registry credential secrets,
-    the default runner image, the commit schedule, the socket folder, the
-    GitHub App and provisioning. Optional `provisioning` has `readiness-wait`,
+    OIDC issuer and client, the Wyrwood consumer directory, the registry
+    credential secrets, the default runner image, the commit schedule, the
+    template version schedule, the socket folder, the GitHub App and
+    provisioning. Templates, their versions, the policy settings and the
+    selections are Menagerie's data, never configuration. Optional
+    `template-versions` has `every`, a duration, absent `1h`. Optional
+    `provisioning` has `readiness-wait`,
     a duration, absent `2m`; `wyrwood`, with `controller`, the controller's
     SSH address, `host-key`, its pinned host key, `agent`, the name of this
     host's Wyrwood agent, and `operator-key`, the name or public key that
-    selects the operator key on `ssh-agent.sock`; and `xolotl`, with `url` and
+    selects the operator key on `ssh-agent.sock`; and `xolotl`, with `url`,
     `key-secret`, the `kv-mount` and `path` of the secret whose `api_key`
-    field holds the scoped key. Its `wyrwood` part is required for any
-    declaration and its `xolotl` part for a declaration with a Xolotl key.
+    field holds the scoped key, and `key-policy`, the key policy of this
+    host's workspaces' client keys. Its `wyrwood` part is required for any
+    declaration, and its `xolotl` part for issuing workspaces' keys.
+  templates-key: >-
+    `templates`, the list of approved templates of earlier releases, keeps
+    its shape and its rules in the schema and in both services' parsers, so a
+    file that still has it parses, since each parser refuses unknown keys.
+    The workspace service reads it only for first-start-import, which takes
+    it over once and records that it did, so a later edit of the key imports
+    nothing. Every start that finds the key logs one warning that names it
+    and says that templates are registered in the interface. The template
+    service parses it and reads none of it. Its removal from the schema and
+    both parsers is a breaking change of its own (wyrd-company/menagerie#98),
+    made only in a release after one that imported the key; a file that
+    still has it then fails to parse, and the error names the key.
+  first-start-import: >-
+    Menagerie's data takes over what a host of an earlier release keeps
+    elsewhere, with no step by hand. Imports 1 to 4 each have a mark in the
+    data and run, before the workspace service serves, at the first start
+    whose schema has them, each in one transaction with its mark; the
+    template import waits for the template service, which reads each
+    address. Import 5 runs for each workspace as it says. A start that
+    finds no database runs every import, so a lost data volume
+    recovers what the workspaces, their definitions, their containers and
+    Wyrwood still hold (see menagerie-data-loss).
+    1. Workspaces: each workspace folder gets its workspace, as
+    workspace-discovery gives one to a folder listed for the first time.
+    2. Provisioned names and keys: each workspace holds the names and keys
+    its retirement record file names, the name and the key its declaration
+    names, a block that is not valid included, and, when its definition
+    cannot be read and `provisioning.wyrwood` is configured, the names of
+    its containers. A declared name that a container outside the workspace
+    holds is not taken. A name or key that two workspaces would hold goes to
+    the one whose declaration names it, and the start log names the other.
+    The folder a retirement record names as being removed carries over. The
+    workspace's Xolotl key identity is the key its declaration's `xolotl`
+    member names. The retirement record files are removed once the
+    transaction commits.
+    3. Templates: the entries of `templates` that have one source are one
+    template. The newest entry whose ref is a version gives the template's
+    current version, `id`, name and runner image, and its address is that
+    entry's without the ref. An entry whose source has no entry with a
+    version ref is not imported, and the start log names it. Each workspace
+    whose applied record's source is a registered template's joins it.
+    4. Applied versions: a workspace's applied version is its applied
+    record's ref when that is a version of its template; otherwise
+    template-versions completes it from the record's commit.
+    5. Selections: each workspace whose declaration names a container name
+    has its selection to import. Before its first apply or provisioning
+    job, and at each start while any is left, Menagerie reads the binding of
+    that name and takes its policies and values, with the required policies
+    added, as the selection; the binding then holds it or the next apply
+    makes it hold it. A binding that Wyrwood does not show gives the
+    policies and values of the declaration's legacy members, and no
+    declaration gives none. While Wyrwood cannot answer, the import waits,
+    and a job that would bind or change that workspace's binding fails as
+    `provisioning-unavailable`, so no binding is ever changed from a
+    selection that was not imported.
+    The policy settings start empty. A workspace that first-start-import
+    takes over keeps its access: its binding holds what it held, and its
+    key is the one it had.
   deployment: >-
     The Menagerie container mounts the workspace root at the same path as on
     the host, the host Docker socket and the Wyrwood consumer directory,
     and, with workspace sockets, the socket folder at the same path as on
-    the host.
+    the host. Menagerie's data volume at `/var/lib/menagerie` holds its
+    database, so a backup of the host keeps that volume; the image's
+    start-up prepares the private `state` folder in it as it prepares the
+    others.
     Throwaway containers need nothing more: the root's host path is their
     bind source, and Menagerie's own image is their default image. Menagerie
     is itself a bound container, with a Docker restart policy, and returns
@@ -771,9 +1135,13 @@ proposed-design:
     `SSL_CERT_FILE` names when it is set, so a GitHub Enterprise Server
     signed by a private authority is reachable.
   dependencies: >-
-    Toha exposes template resolution, fetching and caching, and the upgrade
-    driver from its library, takes the hook runner from its caller, and
-    records answers in `.toha.json`.
+    Toha exposes template resolution, fetching and caching, the address
+    grammar and the upgrade driver from its library, takes the hook runner
+    from its caller, and records answers in `.toha.json`, whose template
+    names the ref it was applied from. Toha lists no tags, so the template
+    service lists them with gix, the Git library Toha fetches with. Wyrwood's
+    public operator package changes a binding over the operator protocol
+    from the release that has wyrwood#159; Menagerie needs that release.
   verification: >-
     The acceptance scenario uses a test template with a hook and an
     `initializeCommand`. A manager signs in, creates a workspace, sees it
@@ -801,9 +1169,33 @@ proposed-design:
     and no second binding. A wrong access group fails with a clear job error.
     After a host restart the workspace and Menagerie return with no
     host-specific unit. A rebuild keeps the binding and its sockets, and an
-    upgrade that changes a declaration replaces the binding. Delete leaves no binding and no live client key, and a
-    delete stopped at each step can be retried. A workspace with no
-    declaration and no retirement record calls neither Wyrwood's operator
+    upgrade that changes a declaration's container name replaces the
+    binding. Delete leaves no binding and no live client key, and a
+    delete stopped at each step can be retried. A workspace that holds no
+    name and no key calls neither Wyrwood's operator
     interface nor Xolotl. An upgrade that fails after changing a declaration,
-    then a second such upgrade, then a stop and a start retires both old names and keys,
-    and an upgrade that removes the declaration retires them at its end.
+    then a second such upgrade, then a stop and a start retires both old names,
+    and an upgrade that removes the declaration retires the names and the
+    key at its end. A workspace whose definition was edited so that it does
+    not parse, with its binding and key present, is deleted with both
+    removed.
+    A manager registers template X, whose newest tag is `1.0.0`, and creates
+    workspace W from it; W shows `1.0.0` applied. The repository gets the tag
+    `1.1.0`, and with no restart the templates screen shows it. The manager
+    upgrades X to `1.1.0`; W shows `1.0.0` applied and that it needs an
+    upgrade, and applying it shows `1.1.0` with no upgrade needed. A
+    template without `.devcontainer/devcontainer.json` is refused naming
+    that file, a template W uses cannot be removed, and a folder, `file://`
+    or registry-name address is refused before any fetch.
+    With `workspace` and `xolotl-client-key` required and a multi-select
+    group holding `bob-ssh` and `ira-ssh`, a create of W with no choice in
+    the group is refused, and one with `bob-ssh` binds the three. Adding
+    `ira-ssh` to W changes its binding to all four with no rebuild, while
+    its container keeps its sockets; a new version of W's template leaves
+    them as they are, and a template that still declares policies has them
+    ignored and named in the console. A policy outside the grant is refused,
+    naming it, before any job runs.
+    A host of the previous release, with templates in its configuration and
+    provisioned workspaces, starts with the templates registered, each
+    workspace's selection taken from its binding and each key as it was, and
+    a delete of each workspace removes its binding and key.
