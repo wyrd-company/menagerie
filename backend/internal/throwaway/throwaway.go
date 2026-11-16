@@ -149,9 +149,11 @@ func NewDocker(client *dockerclient.Client, opts DockerOptions) *Docker {
 }
 
 // cleanupTimeout bounds the removal of a container after its command ends
-// or its context is cancelled, and the creation of a container, which a
-// cancellation does not interrupt.
+// or its context is cancelled.
 var cleanupTimeout = 30 * time.Second
+
+// createTimeout gives a busy daemon longer to answer than cleanup does.
+var createTimeout = 2 * time.Minute
 
 // ImageError reports that no runner image could be found or pulled.
 type ImageError struct {
@@ -222,6 +224,9 @@ type RunError struct {
 }
 
 func (e *RunError) Error() string {
+	if e.Stage == StageCreate && e.Class == "deadline-exceeded" {
+		return "the Docker daemon did not answer in time while creating the throwaway container; retrying is safe"
+	}
 	if e.Container != "" {
 		return fmt.Sprintf("%s (container %s, %s)", stageText[e.Stage], e.Container, e.Class)
 	}
@@ -291,8 +296,8 @@ func (d *Docker) Run(ctx context.Context, c Command) (code int, err error) {
 	}
 	// A cancellation that arrives while the Engine creates the container
 	// would lose its id, so the creation runs to its reply, bounded by
-	// cleanupTimeout, and a cancelled ctx removes the container after.
-	createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	// createTimeout, and a cancelled ctx removes the container after.
+	createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), createTimeout)
 	var mounts []mount.Mount
 	if c.Folder != "" {
 		mounts = []mount.Mount{{Type: mount.TypeBind, Source: c.Folder, Target: c.Folder}}
@@ -400,7 +405,7 @@ func (d *Docker) BindSourceExists(ctx context.Context, job, ref, source string, 
 	}
 	labels[LabelKind], labels[LabelRoot], labels[LabelJob], labels[LabelID] = KindBindSourceCheck, d.opts.Root, job, id
 	// As in Run, the creation runs to its reply so its id is never lost.
-	createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), createTimeout)
 	created, err := d.client.ContainerCreate(createCtx, &container.Config{
 		Image:      ref,
 		Entrypoint: []string{"true"},

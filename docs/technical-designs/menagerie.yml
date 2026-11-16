@@ -551,7 +551,11 @@ proposed-design:
     container carries Menagerie's labels, with the workspace root, the job
     and a random id of its own, and is force-removed when its command ends.
     A container's creation runs to the Engine's reply, which a cancellation
-    does not interrupt; a creation that fails is followed by a search for
+    does not interrupt. Creation has a two-minute bound, allowing a busy
+    daemon more time than the observed 30-second stalls while keeping the
+    wait bounded; removal has its own 30-second bound. A creation that
+    exceeds its bound reports that the daemon did not answer in time and
+    retrying is safe. A creation that fails is followed by a search for
     its id label, so a lost reply leaves no container. The workspace
     service removes its leftovers when it starts. A cancelled job kills and
     removes its running containers before it ends. The containers of a bind

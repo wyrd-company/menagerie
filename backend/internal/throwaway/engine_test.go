@@ -280,6 +280,50 @@ func TestAContainerWhoseCreationReplyIsLostIsRemoved(t *testing.T) {
 	}
 }
 
+// Both creation paths use their own deadline, independent of cleanup.
+func TestCreateDeadline(t *testing.T) {
+	if createTimeout != 2*time.Minute {
+		t.Fatalf("create bound = %s, want 2m", createTimeout)
+	}
+	oldCreate, oldCleanup := createTimeout, cleanupTimeout
+	t.Cleanup(func() { createTimeout, cleanupTimeout = oldCreate, oldCleanup })
+	cleanupTimeout = 10 * time.Millisecond
+	for _, path := range []string{"run", "bind source"} {
+		for _, timeout := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/timeout=%t", path, timeout), func(t *testing.T) {
+				createTimeout = 200 * time.Millisecond
+				if timeout {
+					createTimeout = 30 * time.Millisecond
+				}
+				e, client := newEngine(t)
+				e.onCreate = func(w http.ResponseWriter, r *http.Request, register func() string) {
+					if timeout {
+						<-r.Context().Done()
+						return
+					}
+					time.Sleep(40 * time.Millisecond) // longer than cleanupTimeout
+					w.WriteHeader(http.StatusCreated)
+					_, _ = fmt.Fprintf(w, `{"Id":%q}`, register())
+				}
+				d := NewDocker(client, DockerOptions{Root: "/srv"})
+				var err error
+				if path == "run" {
+					_, err = d.Run(context.Background(), sample(t))
+				} else {
+					_, err = d.BindSourceExists(context.Background(), "job", "runner:sample", "/source", io.Discard)
+				}
+				if timeout {
+					if err == nil || !strings.Contains(err.Error(), "the Docker daemon did not answer in time while creating the throwaway container; retrying is safe") {
+						t.Fatalf("timeout error: %v", err)
+					}
+				} else if err != nil {
+					t.Fatalf("create exceeding cleanup bound: %v", err)
+				}
+			})
+		}
+	}
+}
+
 // TestACancellationWhileTheContainerIsCreatedRemovesIt cancels Run while
 // a slow Engine creates its container: Run waits for the reply and removes
 // the container it names.
