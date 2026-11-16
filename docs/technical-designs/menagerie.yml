@@ -1083,9 +1083,7 @@ proposed-design:
     holds is not taken. A name or key that two workspaces would hold goes to
     the one whose declaration names it, and the start log names the other.
     The folder a retirement record names as being removed carries over. The
-    workspace's Xolotl key identity is the key its declaration's `xolotl`
-    member names. The retirement record files are removed once the
-    transaction commits.
+    retirement record files are removed once the transaction commits.
     3. Templates: the entries of `templates` that have one source are one
     template. The newest entry whose ref is a version gives the template's
     current version, `id`, name and runner image, and its address is that
@@ -1095,8 +1093,10 @@ proposed-design:
     4. Applied versions: a workspace's applied version is its applied
     record's ref when that is a version of its template; otherwise
     template-versions completes it from the record's commit.
-    5. Selections: each workspace whose declaration names a container name
-    has its selection to import. Before its first apply or provisioning
+    5. Selections and keys: each workspace's Xolotl key identity is the key
+    its declaration's `xolotl` member names, taken in one transaction with
+    the import's mark, and each workspace whose declaration names a
+    container name has its selection to import. Before its first apply or provisioning
     job, and at each start while any is left, Menagerie reads the binding of
     that name and takes its policies and values, with the required policies
     added, as the selection; the binding then holds it or the next apply
@@ -1216,7 +1216,16 @@ proposed-design:
     what 22 adds. A request error is a kind in `ErrorEnvelope.error.kind`
     `examples` and in the specification's prose with its status; a job error
     is a kind in `JobError.kind` `examples` and in the prose. Job phases do
-    not change: `apply-policies` runs in `bind`.
+    not change: `apply-policies` runs in `bind`. Menagerie's data grows with
+    the same tasks, each in a schema version of its own: [19] the database,
+    its schema version, the workspaces with the folder a delete began to
+    remove, the container names and Xolotl keys provisioned, and imports 1
+    and 2 of first-start-import; [20] the registered templates and each
+    workspace's template, and import 3; [21] the found versions, the last
+    check, each workspace's applied version and commit, and import 4; [22]
+    the policy settings and each workspace's selection with its revision;
+    [24] each workspace's values, Xolotl key identity, applied revision,
+    apply failure and selection still to be imported, and import 5.
   contract-provisioning-declaration: |-
     `provisioning-declaration.yml` and
     `assets/provisioning-declaration/menagerie-customization.schema.json`:
