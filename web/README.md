@@ -104,5 +104,5 @@ Toha build from the generic `sample-kit` template; `PRODUCER` names the build.
 
 ## Dependency notes
 
-TypeScript stays on 6.0 because `typescript-eslint` 8.72 supports TypeScript
-below 6.1 only. Move to TypeScript 7 when `typescript-eslint` supports it.
+TypeScript stays on 6.0.3 because `typescript-eslint` 8.72.2 declares the peer
+range `>=4.8.4 <6.1.0`. Move to TypeScript 7 when `typescript-eslint` supports it.
