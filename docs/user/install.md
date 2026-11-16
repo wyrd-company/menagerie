@@ -345,7 +345,7 @@ a Docker Hub access token as the password. See
 
 Menagerie and its workspaces come back with no host unit and no step by hand.
 This needs Wyrwood 0.7.0 or later. See the
-[configuration guide](configuration.md#wyrwood-operator-key) for the stopped
+[configuration guide](configuration.md#upgrading-wyrwood) for the stopped
 rollout when upgrading from 0.6.1.
 
 A host restart empties `/run`, and Docker starts containers before the Wyrwood

@@ -238,12 +238,6 @@ provisioning:
 `provisioning.wyrwood` lets Menagerie manage the bindings of workspaces. Menagerie
 needs Wyrwood 0.7.0 or later. [Prepare the host](install.md#provisioning) first.
 
-When upgrading from Wyrwood 0.6.1, stop every agent and back up the
-controller state directory. Upgrade the controller, then upgrade every agent
-while it is stopped, and start the agents. Wyrwood 0.7.0 migrates the controller
-database to schema 5 and sends binding directories that 0.6.1 agents reject;
-going back requires the backup.
-
 - `controller` is the controller's `ssh://host[:port]`. The port defaults to 22.
 - `host-key` is the controller's SHA256 fingerprint, as
   `wyrwood controller host-key` prints it. Menagerie offers no key to a controller
@@ -256,6 +250,15 @@ going back requires the backup.
 Each connection and each request has 30 seconds. An operator key with no approval,
 or a call outside its grant, fails the job with the operation and the container
 name, and an operator key with no approval also with the key's fingerprint.
+
+### Upgrading Wyrwood
+
+When upgrading from Wyrwood 0.6.1, follow Wyrwood's
+[upgrade order](https://wyrd.foo/docs/wyrwood/install/#upgrade-order) and
+[backup procedure](https://wyrd.foo/docs/wyrwood/install/#back-up-before-an-upgrade).
+Wyrwood 0.7.0 migrates the controller database to schema 5 and sends binding
+directories that 0.6.1 agents reject; rolling back requires the pre-upgrade
+controller backup.
 
 ### Xolotl
 
