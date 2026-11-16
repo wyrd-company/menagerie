@@ -45,13 +45,13 @@ vars:
   IMAGE: '{{.MENAGERIE_IMAGE | default "menagerie:dev"}}'
   IMAGE_REPOSITORY: ghcr.io/wyrd-company/menagerie
   # renovate: datasource=github-releases depName=openbao/openbao extractVersion=^v(?<version>.*)$
-  OPENBAO_VERSION: 2.7.1
+  OPENBAO_VERSION: 2.7.2
   # The Wyrwood release the acceptance run's controller and agent come from.
   # renovate: datasource=github-releases depName=wyrd-company/wyrwood
-  WYRWOOD_VERSION: 0.6.1
+  WYRWOOD_VERSION: 0.7.0
   # The Xolotl release the demo's provisioning uses.
   # renovate: datasource=docker depName=ghcr.io/wyrd-company/xolotl
-  XOLOTL_VERSION: 0.6.0
+  XOLOTL_VERSION: 0.6.1
   # The YAML this repository's tooling owns; package documents have their
   # own owners and checks.
   REPOSITORY_YAML: >-
@@ -346,7 +346,7 @@ tasks:
       - go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - '[ -z "${GITHUB_PATH:-}" ] || go env GOPATH | sed "s|$|/bin|" >> "$GITHUB_PATH"'
       # renovate: datasource=crate depName=ryl
-      - cargo install --locked ryl --version 0.21.0
+      - cargo install --locked ryl --version 0.29.0
       # renovate: datasource=crate depName=rumdl
       - cargo install --locked rumdl --version 0.3.0
 

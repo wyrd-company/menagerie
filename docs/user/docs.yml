@@ -107,4 +107,4 @@ products:
         install:
           - method: docker
             default: true
-            command: docker pull ghcr.io/wyrd-company/menagerie:0.4.0
+            command: docker pull ghcr.io/wyrd-company/menagerie:0.4.2

@@ -1,0 +1,6 @@
+# GitHub hosts these Ubuntu 26.04 labels, but actionlint 1.7.12's built-in
+# label list predates them. Remove this allowance when actionlint knows them.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

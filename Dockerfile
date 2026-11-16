@@ -8,7 +8,7 @@
 # Every build stage runs on the build platform and cross-compiles for the
 # target, so only the final stage's package install runs as the target.
 
-ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
+ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 # The web UI. The workspace service embeds its build, so it builds first.
 FROM --platform=$BUILDPLATFORM node:26.13.1-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS web
@@ -21,7 +21,7 @@ RUN pnpm build && test -f dist/index.html
 # The workspace service, the start-up helper that prepares its folders, and
 # the workspace-commit client the workspace sockets give each devcontainer,
 # static binaries.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS workspace-service
+FROM --platform=$BUILDPLATFORM golang:1.27.4-trixie@sha256:f18c3d73a184fb0582828510722e723b63a93f7188d11dd223d9be6f6880e65d AS workspace-service
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src

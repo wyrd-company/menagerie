@@ -50,7 +50,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     outputs:
@@ -71,7 +71,7 @@ jobs:
   docs-tag:
     name: Check the docs tag
     if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     outputs:
@@ -100,7 +100,7 @@ jobs:
     permissions:
       contents: read
     # ryl disable-line rule:line-length
-    uses: wyrd-company/wyrd.foo/.github/workflows/publish-docs.yml@5475431d96384e67677e50141ff2c6d7df6bc4b3 # 2.3.0
+    uses: wyrd-company/wyrd.foo/.github/workflows/publish-docs.yml@1415f84341b1119357fd744ff8fa9abcce2740c0 # 2.4.0
     with:
       ref: ${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}
       feature: ${{ inputs.feature || false }}

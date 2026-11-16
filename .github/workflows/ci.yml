@@ -25,7 +25,7 @@ concurrency:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -51,7 +51,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -82,7 +82,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -106,7 +106,7 @@ jobs:
 
   release-rehearsal:
     name: Release rehearsal
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -125,7 +125,7 @@ jobs:
 
   docker:
     name: Docker runtime
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -141,7 +141,7 @@ jobs:
 
   openbao:
     name: OpenBao registry credentials
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -157,7 +157,7 @@ jobs:
 
   pocketid:
     name: Pocket ID sign-in
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -172,7 +172,7 @@ jobs:
 
   templateservice:
     name: Template service flows
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -191,7 +191,7 @@ jobs:
 
   integrated:
     name: Integrated browser run
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -216,7 +216,7 @@ jobs:
 
   image:
     name: Image
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -233,7 +233,7 @@ jobs:
   # services on an arm64 host, which cross-compiled binaries do not prove.
   image-arm64:
     name: Image on arm64
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     permissions:
       contents: read
     steps:
@@ -248,7 +248,7 @@ jobs:
 
   acceptance:
     name: Acceptance
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -270,7 +270,7 @@ jobs:
 
   image-cross:
     name: Image binaries for arm64
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -285,7 +285,7 @@ jobs:
   pr-title:
     name: Pull request title
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
