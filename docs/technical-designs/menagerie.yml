@@ -136,9 +136,9 @@ proposed-design:
     binding has its selection, and offers start, stop, rebuild, apply branch,
     upgrade, policies and delete. Apply branch takes a branch name in the
     row. Delete asks the manager to type the workspace's name and says that
-    ignored files are not backed up. Policies shows the workspace's required
-    policies, its choice in each policy group and its other policies, and a
-    manager adds and removes them there. The create screen selects a
+    ignored files are not backed up. Policies opens a panel in the row with
+    the workspace's required policies, its choice in each policy group and
+    its other policies, where a manager adds and removes them. The create screen selects a
     registered template, names the workspace, takes a choice in each policy
     group and any other policies, and runs the interview. The upgrade screen
     runs the interview for the current version of the workspace's template,
