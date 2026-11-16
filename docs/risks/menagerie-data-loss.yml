@@ -1,0 +1,30 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+  related-to:
+    - keep-menagerie-data-in-sqlite
+slug: menagerie-data-loss
+title: Losing Menagerie's data volume loses its registry, settings and records
+description: >-
+  Menagerie's database in `/var/lib/menagerie/state` holds the registered
+  templates and their versions, the policy settings, each workspace's
+  selection, applied version and Xolotl key, and every container name and
+  key Menagerie provisioned. A data volume that is lost, or restored from an
+  older backup, loses or rolls back what only the database held: templates
+  registered in the interface, required policies and policy groups,
+  selections not yet applied to a binding, and names and keys awaiting
+  retirement, whose bindings and keys then stay until an operator removes
+  them in the Wyrwood and Xolotl web interfaces. Mitigation: a start that
+  finds no database runs the first-start import, which takes each workspace
+  back from its folder, applied record, definition and containers, each
+  selection from its binding, and templates from a `templates` key still in
+  configuration, and joins each workspace to a template registered again
+  from the same source; the deployment keeps the data volume in the host's
+  backup.
+categories:
+  - operational
+likelihood: 1
+impact: 3
+response-strategy: mitigate
+status: mitigated
