@@ -1,9 +1,11 @@
 $schema: https://refinery.systems/ontology/decision-record
+status: accepted
 relationships:
   contextualizes:
     - menagerie
-  assumes:
-    - wyrwood-binding-change-checks-the-revision
+  related-to:
+    - let-menagerie-decide-each-binding
+    - keep-a-policy-on-every-bound-workspace
 description: >-
   A change to a workspace's policies is applied to its Wyrwood binding at
   once, as an edit in Wyrwood's web interface is, and marking a policy
@@ -12,7 +14,11 @@ description: >-
   as a rebuild binds as one of its steps. Wyrwood's web interface can also
   edit the binding, the operator key's grant can change between two
   requests, and Wyrwood can be out of reach. Wyrwood's binding change
-  (wyrd-company/wyrwood#159) replaces the whole selection.
+  (wyrd-company/wyrwood#159) names the binding by its ID and the revision
+  read, replaces the whole selection, refuses a stale revision with
+  `revision-differs`, and answers `pending` for a change it saved and
+  OpenBao did not apply. Which side wins over an edit made in Wyrwood is a
+  decision of its own (let-menagerie-decide-each-binding).
 considered-options:
   "1": >-
     Menagerie stores each workspace's selection with a revision and applies
@@ -45,6 +51,5 @@ expected-outcomes:
     - Every application of policies is visible as a job, with its console, and fails with a reason the workspace shows.
     - A rebuild never fails because the binding and the selection differ; it changes the binding.
   negative:
-    - A change made in Wyrwood's web interface to a Menagerie workspace's binding is replaced by the workspace's next apply or provisioning job.
-    - A failed apply waits for a manager, a selection change, a start-up or a provisioning job; it is not retried on a timer.
+    - A failed apply waits for a manager, a selection change, a start-up or a provisioning job; it is not retried on a timer, and a change Wyrwood saved and did not apply stays pending in Wyrwood until then.
     - Each application takes the workspace's job slot for as long as Wyrwood takes to apply the change.

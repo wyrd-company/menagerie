@@ -1,0 +1,41 @@
+$schema: https://refinery.systems/ontology/decision-record
+status: proposed
+relationships:
+  contextualizes:
+    - menagerie
+  related-to:
+    - apply-workspace-policies-from-a-stored-selection
+description: >-
+  A manager can remove any ordinary policy from a workspace
+  (wyrd-company/menagerie#88), and a host may mark no policy required and
+  define no group, so a selection can become empty. Wyrwood holds no binding
+  without a policy and refuses a change to an empty selection. A bound
+  workspace's container depends on its binding for its consumer directory's
+  sockets. The council's review of the design raised this, and it is asked
+  of the operator on #88 as Q6. It waits for the operator, and the design
+  follows the recommendation until the operator answers; the design's
+  pending-decisions field names what the other answer changes.
+considered-options:
+  "1": >-
+    A workspace that has a binding keeps at least one policy. A selection
+    change that would remove the last one is refused, naming it, and a
+    create on a host with `provisioning.wyrwood` needs at least one policy.
+  "2": >-
+    An empty selection means no binding. The apply unbinds the workspace,
+    so its container loses its sockets while it runs, and the next selection
+    with a policy binds it again under the same name.
+decision-outcome:
+  chosen-option: 1
+  justification: >-
+    A container never loses its sockets because of a policy change, and no
+    apply job runs the unbind and re-bind lifecycle against a running
+    container. Whether the agent's consumer directory serves a running
+    container again after a re-bind is not established. Taking a workspace's
+    access away entirely stays an operator's act in Wyrwood, or a delete.
+expected-outcomes:
+  positive:
+    - A policy change never takes a running container's sockets away.
+    - Every binding Menagerie holds has a policy, as Wyrwood requires.
+  negative:
+    - The last policy of a bound workspace cannot be removed in Menagerie, an exception to removing any ordinary policy.
+    - A create on a provisioning host needs a policy even for a template that does not provision.

@@ -1,4 +1,5 @@
 $schema: https://refinery.systems/ontology/decision-record
+status: accepted
 relationships:
   contextualizes:
     - menagerie

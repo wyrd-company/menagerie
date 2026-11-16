@@ -1,8 +1,11 @@
 $schema: https://refinery.systems/ontology/decision-record
+status: accepted
 relationships:
   contextualizes:
     - menagerie
     - provisioning-declaration
+  related-to:
+    - issue-a-key-to-every-provisioned-workspace
 description: >-
   A template does not decide what a binding holds: the values its policies
   read and the Xolotl client key come from Menagerie, so that a template
@@ -12,7 +15,9 @@ description: >-
   workspace's key, so a wrong value gives a workspace another workspace's
   secret. Menagerie's scoped Xolotl key issues keys only in its host's key
   policy. The workspace template names each workspace's key after the
-  workspace and rejects any other workspace name.
+  workspace and rejects any other workspace name. Which workspaces get a
+  key at all is a decision of its own
+  (issue-a-key-to-every-provisioned-workspace).
 considered-options:
   "1": >-
     Every value a workspace's policies read is the workspace's name, and its
@@ -49,4 +54,3 @@ expected-outcomes:
   negative:
     - A policy that needs a per-binding value other than the workspace's name cannot be bound by Menagerie.
     - On a host with provisioning, a workspace name holds only lower-case letters, digits, `_` and `-`, starts with a letter or digit, and has at most 63 characters.
-    - Every provisioned workspace on a host with `provisioning.xolotl` gets a client key; a template cannot opt out of one.

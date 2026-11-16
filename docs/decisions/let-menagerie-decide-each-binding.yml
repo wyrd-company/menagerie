@@ -1,0 +1,46 @@
+$schema: https://refinery.systems/ontology/decision-record
+status: proposed
+relationships:
+  contextualizes:
+    - menagerie
+  related-to:
+    - apply-workspace-policies-from-a-stored-selection
+    - operator-key-binds-allowlisted-policies
+description: >-
+  Menagerie decides each workspace's policies (wyrd-company/menagerie#88),
+  and Wyrwood holds the binding. Wyrwood's web interface can also edit that
+  binding: an operator can add or remove a policy there, change a value or
+  the access group. Menagerie needs one rule for what a later apply or
+  provisioning job does with such an edit. This is Q1 on #88. It waits for
+  the operator, and the design follows the recommendation until the
+  operator answers; the design's pending-decisions field names what the
+  other answer changes.
+considered-options:
+  "1": >-
+    Menagerie's selection wins. A Wyrwood-side edit is replaced by the
+    workspace's next apply or provisioning job, and the console names each
+    field it changed.
+  "2": >-
+    Menagerie adopts a Wyrwood-side edit. When it reads a binding whose
+    selection differs from the one it last applied, it takes the binding's
+    policies and values as the workspace's new selection, if they still keep
+    the required policies, the group rules and the grant, and applies only
+    what changed in Menagerie since.
+decision-outcome:
+  chosen-option: 1
+  justification: >-
+    One writer decides what a binding holds, so every rule of #88 is checked
+    in one place: required policies, the group rules, the grant and the
+    values, which only Menagerie sets. A rebuild never meets a mismatch it
+    has to resolve. Option 2 makes two writers and needs Menagerie to
+    resolve each difference. An edit that breaks a group rule or drops a
+    required policy has no right answer, and an edit that adds a policy
+    outside the operator key's grant makes the binding unreadable to
+    Menagerie altogether.
+expected-outcomes:
+  positive:
+    - Menagerie's interface shows what each binding holds, and the required policies and group rules always hold for it.
+    - A rebuild or an apply changes a binding that differs, and never fails on the difference.
+  negative:
+    - An operator who edits a Menagerie workspace's binding in Wyrwood's web interface loses the edit at the workspace's next apply or provisioning job, and only the job's console names what was replaced.
+    - Giving one workspace another policy always goes through Menagerie's interface.

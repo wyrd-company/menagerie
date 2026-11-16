@@ -1,0 +1,40 @@
+$schema: https://refinery.systems/ontology/decision-record
+status: proposed
+relationships:
+  contextualizes:
+    - menagerie
+  related-to:
+    - name-workspace-provisioning-after-the-workspace
+description: >-
+  A template does not declare a workspace's Xolotl client key
+  (wyrd-company/menagerie#88), so Menagerie decides which workspaces get one.
+  A key is a credential: it reaches the Xolotl gateway's models and MCP
+  servers through the key policy the host's workspaces share. Today's
+  workspace template declares a key for every workspace. This is Q3 on #88.
+  It waits for the operator, and the design follows the recommendation until
+  the operator answers; the design's pending-decisions field names what the
+  other answer changes.
+considered-options:
+  "1": >-
+    Every provisioned workspace gets a key when the configuration has
+    `provisioning.xolotl`. The key is recorded once and revoked when the
+    workspace's definition stops declaring provisioning, or when the
+    workspace is deleted.
+  "2": >-
+    A workspace gets a key only while its selection holds a policy that the
+    policy settings mark as reading the key. Adding the first such policy
+    issues the key, and removing the last one revokes it, in the apply job.
+decision-outcome:
+  chosen-option: 1
+  justification: >-
+    Every workspace of today's fleet uses the gateway, and option 1 keeps
+    the key's lifecycle to the provisioning steps that already issue and
+    retire it. Option 2 adds a policy setting and a key lifecycle to the
+    apply job. A removal there revokes a credential a running container may
+    be using.
+expected-outcomes:
+  positive:
+    - Issuing and revoking a key follows provisioning itself, with no setting to keep in step with the policies.
+  negative:
+    - A provisioned workspace that never uses the gateway still holds a client key.
+    - A template cannot opt a workspace out of a key while the host configures `provisioning.xolotl`.
