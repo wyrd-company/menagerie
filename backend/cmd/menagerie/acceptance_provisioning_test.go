@@ -250,7 +250,7 @@ echo "check-credentials: the Xolotl key reads through vault.sock, and ssh-agent.
 `, provisionedKeyPolicy))
 	writeTo(t, dir, "template/.devcontainer/devcontainer.json", fmt.Sprintf(`{
   "name": "sample",
-  "image": "ghcr.io/wyrd-company/devcontainers/base:noble@sha256:36576d15a0d696b8b0262f3f621edee0af2f82543520f0142c8b7561727e7cc0",
+  "image": "ghcr.io/wyrd-company/devcontainers/base:noble@sha256:585094086d2c9ee76ef1fbcfcd204431c8bda6953ebce6c8b60b21ca2f16db3a",
   "features": {"ghcr.io/wyrd-company/devcontainers/t3code-server:latest": {}},
   "mounts": [{"source": "/run/wyrwood/containers/devcontainer-{{ workspace }}", "target": "/run/wyrwood", "type": "bind"}],
   "customizations": {

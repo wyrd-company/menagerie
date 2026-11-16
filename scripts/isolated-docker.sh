@@ -35,7 +35,7 @@
 set -euo pipefail
 
 dind_image=${DIND_IMAGE:-docker:29.9.2-dind@sha256:9e79b879b177fbd72c34376a3dd3d91747da5db49e1f560f76aea59561471977}
-runner_image=${RUNNER_IMAGE:-ghcr.io/wyrd-company/devcontainers/base:noble@sha256:36576d15a0d696b8b0262f3f621edee0af2f82543520f0142c8b7561727e7cc0}
+runner_image=${RUNNER_IMAGE:-ghcr.io/wyrd-company/devcontainers/base:noble@sha256:585094086d2c9ee76ef1fbcfcd204431c8bda6953ebce6c8b60b21ca2f16db3a}
 work=/menagerie-work
 # Test-only bound on the daemon's start; it listened in under 5 s on the
 # shared host and on CI.
