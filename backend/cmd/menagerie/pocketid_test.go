@@ -172,15 +172,51 @@ func (p *pocketID) signInLink(username string) string {
 		p.t.Fatal(err)
 	}
 	defer att.Close()
-	var out bytes.Buffer
-	if _, err := stdcopy.StdCopy(&out, &out, att.Reader); err != nil {
+	token, err := pocketIDSignInToken(att.Reader)
+	if err != nil {
 		p.t.Fatal(err)
 	}
-	_, token, ok := strings.Cut(out.String(), "/lc/")
-	if !ok {
-		p.t.Fatalf("no sign-in link in %q", out.String())
+	return token
+}
+
+// Pocket ID writes the link to stdout and startup logs to stderr. Keeping
+// the streams separate matters even when a log arrives after the link:
+// the command need not end the URL with a newline.
+func pocketIDSignInToken(r io.Reader) (string, error) {
+	var out bytes.Buffer
+	if _, err := stdcopy.StdCopy(&out, io.Discard, r); err != nil {
+		return "", err
 	}
-	return strings.TrimSpace(token)
+	_, token, ok := strings.Cut(strings.TrimSpace(out.String()), "/lc/")
+	if !ok || token == "" || strings.ContainsAny(token, " /?&#\t\r\n") {
+		return "", fmt.Errorf("Pocket ID returned no valid sign-in link")
+	}
+	return token, nil
+}
+
+func TestPocketIDSignInToken(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		stdout string
+		want   string
+	}{
+		{"link without newline", "http://localhost:1411/lc/sample-code", "sample-code"},
+		{"link with newline", "http://localhost:1411/lc/sample-code\n", "sample-code"},
+		{"missing link", "", ""},
+		{"empty token", "http://localhost:1411/lc/", ""},
+		{"malformed token", "http://localhost:1411/lc/code/extra", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var stream bytes.Buffer
+			_, _ = io.WriteString(stdcopy.NewStdWriter(&stream, stdcopy.Stderr), "startup log before link\n")
+			_, _ = io.WriteString(stdcopy.NewStdWriter(&stream, stdcopy.Stdout), tt.stdout)
+			_, _ = io.WriteString(stdcopy.NewStdWriter(&stream, stdcopy.Stderr), "2026/11/06 INFO Connected to database\n")
+			got, err := pocketIDSignInToken(&stream)
+			if got != tt.want || (err != nil) != (tt.want == "") {
+				t.Fatalf("token = %q, error = %v; want %q", got, err, tt.want)
+			}
+		})
+	}
 }
 
 type step struct {
