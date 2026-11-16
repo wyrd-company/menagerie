@@ -198,49 +198,63 @@ proposed-design:
     service holds no list of templates. The template service is stateless
     between requests.
   template-service-routes: >-
-    Reading an address, `POST /v1/templates/addresses` with `{"address"}`,
-    parses it with Toha's address grammar and reaches no network: it answers
-    the address's `source`, the formal name Toha gives its repository and
-    folder without a ref, and its `reference`, or null. Listing versions,
-    `POST /v1/templates/versions` with `{"address"}`, answers the `source`
-    and the `versions`, each `{"version","tag","commit"}`, in ascending
-    order. Checking a version, `POST /v1/templates/checks` with
-    `{"address"}` naming a ref, has Toha resolve and fetch that ref into its
-    cache and load the template's manifest, and answers the `source`, the
-    `commit` and `definition`, whether the template's content folder, from
-    which Toha renders a workspace's files, holds
+    Every template route names a template by `address`, a Toha address
+    without a ref, and, where it reads a version, by `ref`, the version's
+    tag, and `commit`, the commit Menagerie recorded for it; the template
+    service builds the address of the ref with Toha's address type. Reading
+    an address, `POST /v1/templates/addresses` with `{"address"}`, parses it
+    with Toha's grammar and reaches no network: it answers the `source`, the
+    formal name Toha gives the repository and folder without a ref, the
+    `reference` the address names, or null, and the `base`, the address as
+    given with its ref removed. Listing versions, `POST
+    /v1/templates/versions` with `{"address"}`, answers the `source` and the
+    `versions`, each `{"version","tag","commit"}`, in ascending order.
+    Checking a version, `POST /v1/templates/checks` with
+    `{"address","ref"}`, has Toha resolve and fetch that ref into its cache
+    and load the template's manifest, and answers the `source`, the `commit`
+    and `definition`, whether the template's content folder, from which
+    Toha renders a workspace's files, holds
     `.devcontainer/devcontainer.json`. A check runs no hook and no other
     command of the template. Their refusals are Toha's, such as
     `template-not-found`, `template-resolve-failed` and `template-invalid`,
-    under the rules every route's refusals follow. Each runs inside the
-    request's credential resolver scope (see github-app). The interview,
-    generate and upgrade routes take `"address"`, naming a ref, in place of
-    a template id, and a session's signature covers that address in place
-    of the id, so a session cannot be replayed into another template or
-    version.
+    under the rules every route's refusals follow, and the template
+    service's own `invalid-address` and `unsafe-template-link`. Each runs
+    inside the request's credential resolver scope (see github-app). The
+    interview, generate and upgrade routes take `"address"`, `"ref"` and,
+    when Menagerie recorded one, `"commit"` in place of a template id; a ref
+    that resolves to another commit than the one named is refused as
+    `template-stale-revision`, so a moved tag never brings in content no
+    check saw. A session's signature covers the
+    address and the ref in place of the id, so a session cannot be replayed
+    into another template or version.
   template-admission: >-
     The template service fetches only templates a manager approved, and the
     approval is the registration in Menagerie's data. The template service
     holds no list: the workspace service admits each address before it names
     it, and the template service refuses every address it must never read.
     The workspace service names, on the interview, generate and upgrade
-    routes and to a version check, only a registered template's address with
-    the tag of one of its found versions, which the job or the check holds
-    server-side; and, on the address and check routes, the address a
-    manager submitted to register a template or to upgrade one, for that
-    request alone. Registration is a manager's request through the API,
-    behind a session and the same-origin check, so no other caller names an
-    address, and no browser value reaches an interview route's address. The
-    template service accepts on every route only a remote Git address of the
-    forms the user documentation lists: `gh:` with an owner and a
-    repository, `git@host:path`, `ssh://` and `https://`. It refuses as
+    routes, to a version check and to a template's upgrade, only a
+    registered template's address with the tag and commit of one of its
+    found versions, which the job or the request holds server-side; and, on
+    the address, versions and check routes, the address a manager submitted
+    to register a template, for that request alone. Registration is a
+    manager's request through the API, behind a session and the same-origin
+    check, so no other caller names an address, and no browser value
+    reaches an interview route's address. The template service accepts on
+    every route only a remote Git address of the forms the user
+    documentation lists: `gh:` with an owner and a repository,
+    `git@host:path`, `ssh://` and `https://`. It refuses as
     `invalid-address` a local folder, a name from Toha's registry, every
-    other transport, `file://`, `git://` and `http://` included, and a host
-    or user that starts with `-`, so no request makes it read Menagerie's own
-    files, such as its session key, as a template. The interview, generate
-    and upgrade routes also refuse an address without a ref. Both services
-    run as one user, and only that user opens the template service's socket.
-    See the decision admit-templates-through-the-workspace-service.
+    other transport, `file://`, `git://` and `http://` included, a host or
+    user that starts with `-`, and, on the versions route, an address with a
+    ref. Toha keeps an address's `#path` folder inside the repository's
+    checkout. Before a check, a generate or an upgrade reads the template's
+    files, the template service refuses as `unsafe-template-link` a template
+    whose folder holds a symbolic link that resolves outside the checkout.
+    So no request makes it read Menagerie's own files, such as its session
+    key, as a template. Both services run as one user, and only that user
+    opens the template service's socket. See the decision
+    admit-templates-through-the-workspace-service.
   interviews: >-
     A question batch is Toha's JSON Schema batch document; the UI renders a
     form from it. Toha's interview session value carries the pinned template
@@ -253,26 +267,34 @@ proposed-design:
   template-registry: >-
     Only registered templates can be used. A manager registers a template
     with a display name, its Toha address and an optional runner image. The
-    address takes the forms and credentials the user documentation lists
-    under "Templates" (see git-and-credentials and github-app), names the
+    name is one line of 1 to 100 characters, and the runner image a Docker
+    image reference, as the configuration's `runner-image` is. The address
+    takes the forms and credentials the user documentation lists under
+    "Templates" (see git-and-credentials and github-app), names the
     template's repository and folder, and has either no ref or a version's
     tag, which then is the current version; any other ref is refused.
-    Registration runs the minimum checks in this order and refuses the
-    template at the first that fails, naming the check: `address`, the
-    template service reads the address; `fetch`, the repository's versions
-    can be listed and the current version fetched; `version`, the repository
-    has at least one version (see template-versions); `read`, Toha loads the
-    template's manifest; `definition`, the content folder holds
-    `.devcontainer/devcontainer.json`, and the refusal names that file. The
-    current version is the address's tag, else the newest version. A
+    Menagerie stores the address without its ref, as the address route's
+    `base`. Registration runs the minimum checks in this order and refuses
+    the template at the first that fails, naming the check: `address`, the
+    template service reads and admits the address; `fetch`, the
+    repository's versions can be listed and the current version fetched;
+    `version`, the repository has at least one version (see
+    template-versions); `read`, Toha loads the template's manifest, and its
+    folder holds no link outside the checkout; `definition`, the content
+    folder holds `.devcontainer/devcontainer.json`, and the refusal names
+    that file. The current version is the address's tag, else the newest
+    version, and its commit is the one the `fetch` check fetched. A
     template whose source is registered already is refused, naming that
-    registration. The `id` is permanent: the lower-case letters and digits of
-    the name, separated by single dashes, with `-2`, `-3` and on added while
-    the id is taken. A manager can rename a template and change its runner
-    image; its address and source do not change. A template that a workspace
-    uses cannot be removed, and the refusal names those workspaces.
-    Registering a template, taking a new version and removing a template
-    need no configuration change and no restart.
+    registration. The `id` is permanent: the lower-case letters and digits
+    of the name, separated by single dashes, or `template` when the name has
+    none, with `-2`, `-3` and on added while the id is taken. Registering a
+    template joins it to each workspace that has no template and whose
+    applied record's source is the template's. A manager can rename a
+    template and change its runner image; its address and source do not
+    change. A template that a workspace uses cannot be removed, and the
+    refusal names those workspaces. Registering a template, taking a new
+    version and removing a template need no configuration change and no
+    restart.
   template-versions: >-
     A version of a template is a tag of its repository named
     `MAJOR.MINOR.PATCH`, with an optional leading `v`, whose numbers have no
@@ -286,26 +308,36 @@ proposed-design:
     starts and then every `template-versions.every`, and a manager checks
     one template on request; two checks of one template at once share one
     run. A check replaces the template's found versions with what it found.
-    A failed check keeps the earlier versions and records the time and a
-    fixed reason, which the templates screen shows. A template has a newer
-    version while its newest found version is newer than its current
-    version. A manager upgrades a template to a found version newer than its
-    current one: the version passes the `fetch`, `read` and `definition`
-    checks of a registration, then becomes the current version. The current
-    version moves only forward. A workspace's applied version is the version
-    its create generated or its last upgrade applied. It needs an upgrade
-    while its template's current version is newer, or while its applied
-    version is unknown. A version check gives a workspace with no applied
-    version the version whose tag is at the commit of its applied record.
+    A failed check keeps the earlier versions and records the time and its
+    reason: the template service's refusal kind, or
+    `template-service-unavailable`. The templates screen shows it. A
+    template has a newer version while its newest found version is newer
+    than its current version. A manager upgrades a template to a found
+    version newer than its current one: the version passes the `fetch`,
+    `read` and `definition` checks of a registration, then becomes the
+    current version with the commit those checks fetched. The current
+    version moves only forward. A check that finds the current version's tag
+    at another commit than the recorded one shows the template's current
+    version as moved, and jobs refuse it until a manager upgrades the
+    template to that version again, which runs its checks and records the
+    new commit. A workspace's applied version is the version its create
+    generated or its last upgrade applied. It needs an upgrade while its
+    template's current version is newer than its applied version. A
+    workspace whose applied version is unknown shows so, with its applied
+    record's commit, needs no upgrade and is refused one, because nothing
+    then shows that the current version is not older than it; a version
+    check gives it the version whose tag is at that commit.
   create-flow: >-
     A create names a registered template and takes the workspace's policy
     choices, checked as workspace-policies says before any job exists. On a
     host with a `provisioning` section the workspace name is also refused
     before any job unless it can name a Xolotl key and be a Wyrwood value:
     lower-case letters, digits, `_` and `-`, starting with a letter or digit,
-    at most 63 characters. The job pins the template's current version for
-    its whole run and writes the workspace's data, with its template and
-    selection, when it starts. After the interview completes, the workspace
+    at most 63 characters. A create is refused while Menagerie's data holds
+    a workspace of that name, one listed as `no-folder` included, and while
+    the template's current version has moved. The job pins the template's
+    current version and its commit for its whole run and writes the
+    workspace's data, with its template and selection, when it starts. After the interview completes, the workspace
     service creates a new folder
     under the workspace root and initializes its git repository. The template
     service builds Toha's plan and applies it into that folder, recording the
@@ -327,10 +359,11 @@ proposed-design:
     whose generation failed.
   upgrade-flow: >-
     An upgrade applies the current version of the workspace's template, which
-    the job pins when it starts. It is refused before any job when the
-    workspace has no registered template or its applied version is that
-    version or a newer one, so no path applies a version older than the one
-    a workspace has.
+    the job pins with its commit when it starts. It is refused before any
+    job when the workspace has no registered template, when its applied
+    version is unknown, is that version or is a newer one, so no path
+    applies a version older than the one a workspace has, and when the
+    current version's tag has moved (see template-versions).
     The workspace service commits any local changes to tracked files so the
     pre-upgrade state is backed up. Toha fetches the newer template version.
     The template service reads `.toha.json`, replays the recorded answers
@@ -502,9 +535,13 @@ proposed-design:
     reads the grant and fails as `policy-outside-grant`, naming each
     selected policy outside it, with no request to Wyrwood, so Menagerie
     never asks Wyrwood for a policy outside the grant; and reads the binding
-    of the workspace's current container name. With no binding it records
-    the revision, because the `bind` step of the workspace's next
-    provisioning job binds the selection. With a binding that holds the
+    of the workspace's current container name. With no current name it
+    records the revision, because the `bind` step of the workspace's next
+    provisioning job binds the selection. A current name whose binding
+    Wyrwood does not show was removed in Wyrwood or holds a policy outside
+    the grant, so the job binds the selection under that name as `bind`
+    makes a binding: a removed binding returns, and a hidden one fails the
+    job with Wyrwood's refusal. With a binding that holds the
     selection it records the revision and writes nothing. Otherwise it
     changes the binding through the operator protocol's binding change
     (wyrwood#159): the whole selection, its values and the binding's other
@@ -572,8 +609,8 @@ proposed-design:
     a few times, and a job that still fails is retried as any other. Xolotl
     counts as out of reach when a request gets no connection or no answer in
     time, or a gateway answers that it is not available; any other refusal
-    fails the job. The Xolotl key that a template's `xolotl_key` answer
-    names is the one its definition declares.
+    fails the job. The Xolotl key is the workspace's, as
+    provisioning-identity says.
   provisioning-steps: >-
     With a declaration, the jobs that can create a container run these steps,
     in this order, each its own phase in the job console. Create runs all of
@@ -582,7 +619,8 @@ proposed-design:
     which a start still runs for a folder with no commit. A rebuild removes
     the old container after `build`.
     1. `read-definition` reads the declaration and the container name and
-    refuses, as `provisioning-invalid`, a declaration the schema refuses, a
+    refuses, as `provisioning-invalid`, a declaration Menagerie's reader
+    refuses (see provisioning-declaration), a
     definition with no `--name`, and a container name that Menagerie's data
     holds for another workspace or that a container of another workspace
     holds. The last check keeps the delete of one workspace from
@@ -1053,14 +1091,15 @@ proposed-design:
     declaration, and its `xolotl` part for issuing workspaces' keys.
   templates-key: >-
     `templates`, the list of approved templates of earlier releases, keeps
-    its shape and its rules in the schema and in both services' parsers, so a
-    file that still has it parses, since each parser refuses unknown keys.
+    its shape and its rules in the schema and in the workspace service's
+    parser, which refuses unknown keys, so a file that still has it parses.
     The workspace service reads it only for first-start-import, which takes
     it over once and records that it did, so a later edit of the key imports
     nothing. Every start that finds the key logs one warning that names it
     and says that templates are registered in the interface. The template
-    service parses it and reads none of it. Its removal from the schema and
-    both parsers is a breaking change of its own (wyrd-company/menagerie#98),
+    service ignores the members it does not read, and reads nothing of
+    `templates`. Its removal from the schema and the workspace service's
+    parser is a breaking change of its own (wyrd-company/menagerie#98),
     made only in a release after one that imported the key; a file that
     still has it then fails to parse, and the error names the key.
   first-start-import: >-
@@ -1068,8 +1107,9 @@ proposed-design:
     elsewhere, with no step by hand. Imports 1 to 4 each have a mark in the
     data and run, before the workspace service serves, at the first start
     whose schema has them, each in one transaction with its mark; the
-    template import waits for the template service, which reads each
-    address. Import 5 runs for each workspace as it says. A start that
+    template import waits up to one minute for the template service, which
+    reads each address, and a start that does not get it fails, so the
+    process supervisor starts the workspace service again. Import 5 runs for each workspace as it says. A start that
     finds no database runs every import, so a lost data volume
     recovers what the workspaces, their definitions, their containers and
     Wyrwood still hold (see menagerie-data-loss).
@@ -1087,8 +1127,9 @@ proposed-design:
     3. Templates: the entries of `templates` that have one source are one
     template. The newest entry whose ref is a version gives the template's
     current version, `id`, name and runner image, and its address is that
-    entry's without the ref. An entry whose source has no entry with a
-    version ref is not imported, and the start log names it. Each workspace
+    entry's without the ref. Its current version's commit is the one the
+    first version check finds at its tag. An entry whose source has no
+    entry with a version ref is not imported, and the start log names it. Each workspace
     whose applied record's source is a registered template's joins it.
     4. Applied versions: a workspace's applied version is its applied
     record's ref when that is a version of its template; otherwise
@@ -1102,7 +1143,9 @@ proposed-design:
     added, as the selection; the binding then holds it or the next apply
     makes it hold it. A binding that Wyrwood does not show gives the
     policies and values of the declaration's legacy members, and no
-    declaration gives none. While Wyrwood cannot answer, the import waits,
+    declaration gives none. The start log names each imported value that is
+    not the workspace's name, so an operator sees a workspace whose values
+    reach past its own key. While Wyrwood cannot answer, the import waits,
     and a job that would bind or change that workspace's binding fails as
     `provisioning-unavailable`, so no binding is ever changed from a
     selection that was not imported.
@@ -1213,19 +1256,26 @@ proposed-design:
     Tasks 20 and 22 land in either order: in `workspace-api.yml` and
     `openapi.yaml` they add separate paths, members and enum values, and the
     second rebases onto the first. Task 21 extends what 20 adds, and task 24
-    what 22 adds. A request error is a kind in `ErrorEnvelope.error.kind`
-    `examples` and in the specification's prose with its status; a job error
-    is a kind in `JobError.kind` `examples` and in the prose. Job phases do
-    not change: `apply-policies` runs in `bind`. Menagerie's data grows with
-    the same tasks, each in a schema version of its own: [19] the database,
-    its schema version, the workspaces with the folder a delete began to
-    remove, the container names and Xolotl keys provisioned, and imports 1
-    and 2 of first-start-import; [20] the registered templates and each
-    workspace's template, and import 3; [21] the found versions, the last
-    check, each workspace's applied version and commit, and import 4; [22]
-    the policy settings and each workspace's selection with its revision;
-    [24] each workspace's values, Xolotl key identity, applied revision,
-    apply failure and selection still to be imported, and import 5.
+    what 22 adds. Task 24 changes only the policy parts of create, upgrade
+    and the provisioning steps, so it lands before or after 20 and 21, and
+    the later one rebases. Until 24 lands, marking a policy required changes
+    the stored selections only, and 24's start-up apply then applies them
+    (policy-application). A request error is a kind in
+    `ErrorEnvelope.error.kind` `examples` and in the specification's prose
+    with its status; a job error is a kind in `JobError.kind` `examples` and
+    in the prose. Job phases do not change: `apply-policies` runs in
+    `bind`. Menagerie's data grows with the same tasks, each in a schema
+    version of its own: [19] the database, its schema version, the
+    workspaces with the folder a delete began to remove, the container names
+    and Xolotl keys provisioned, and imports 1 and 2 of first-start-import;
+    [20] the registered templates with their current version and its
+    commit, null for an imported template until a version check records it,
+    each workspace's template, and import 3; [21] the found
+    versions, the last check, each workspace's applied version and commit,
+    and import 4; [22] the policy settings and each workspace's selection
+    with its revision; [24] each workspace's values, Xolotl key identity,
+    applied revision, apply failure and selection still to be imported, and
+    import 5.
   contract-provisioning-declaration: |-
     `provisioning-declaration.yml` and
     `assets/provisioning-declaration/menagerie-customization.schema.json`:
@@ -1236,7 +1286,9 @@ proposed-design:
       `additionalProperties: false` and has only `wyrwood`; `wyrwood` has
       only `accessGroup`, required, with its rule (an integer from 0 to
       4294967294), and `additionalProperties: false`. `wyrwood.policies`,
-      `wyrwood.values` and `xolotl` leave the schema.
+      `wyrwood.values` and `xolotl` leave the schema. The schema states what
+      a template renders; Menagerie's reader also accepts the legacy members
+      below.
     - [24] Prose: the block opts a workspace in to provisioning and declares
       `wyrwood.accessGroup`; the example is
       `"customizations": {"menagerie": {"wyrwood": {"accessGroup": 1000}}}`
@@ -1262,13 +1314,14 @@ proposed-design:
     `configuration.yml` and `assets/configuration/menagerie.schema.json`:
     - [20] `templates` keeps its schema entry, its item rules (a unique
       `id`, `name`, `address`, optional `runner-image`) and its place in
-      both parsers, with `deprecated: true` and a description that it is read
-      only by the first-start import (templates-key). The prose drops it from
-      what configuration names, says the workspace service imports it once
-      and logs a warning naming the key at each start that finds it, and says
-      the template service parses it and reads none of it. A template's
-      `runner-image` is said to be read only by the import; a registered
-      template's runner image is Menagerie's data.
+      the workspace service's parser, with `deprecated: true` and a
+      description that it is read only by the first-start import
+      (templates-key). The prose drops it from what configuration names,
+      says the workspace service imports it once and logs a warning naming
+      the key at each start that finds it, and says the template service
+      reads nothing of it. A template's `runner-image` is said to be read
+      only by the import; a registered template's runner image is
+      Menagerie's data.
     - [21] New optional `template-versions`, an object with
       `additionalProperties: false` and one member, `every`, required in the
       section: a duration of the shared duration pattern, absent `1h`, the
@@ -1293,25 +1346,28 @@ proposed-design:
       gone and that holds a container name or a Xolotl key in Menagerie's
       data, with `Workspace.state` `no-folder`, a new enum value, and
       `containerId` null; `delete` runs on such a workspace instead of
-      answering 404 `workspace-not-found`. The prose of delete and create
-      reads what a workspace holds from Menagerie's data, and `retire`
-      retires what the data holds and the definition no longer declares, in
-      place of the retirement record; a restart keeps Menagerie's data. No
-      new kind.
-    - [20] `Template` gains required `address` (string), `currentVersion`
-      (string), `runnerImage` (string or null) and `workspaces` (the names of
-      the workspaces that use it).
+      answering 404 `workspace-not-found`. A `create` is refused 409
+      `workspace-exists` while the data holds a workspace of its name. The
+      prose of delete and create reads what a workspace holds from
+      Menagerie's data, and `retire` retires what the data holds and the
+      definition no longer declares, in place of the retirement record; a
+      restart keeps Menagerie's data. No new kind.
+    - [20] `Template` gains required `address` (string, the address without
+      a ref), `currentVersion` (string), `runnerImage` (string or null) and
+      `workspaces` (the names of the workspaces that use it).
     - [20] `POST /api/templates` with `{"name","address","runnerImage"}`,
       `runnerImage` optional, no other member: 201 with the `Template` and
-      `Location: /api/templates/{id}`; 400 `invalid-request`; 409
-      `template-exists`, naming the registration; 422
+      `Location: /api/templates/{id}`; 400 `invalid-request` for a body that
+      is not that object, a `name` that is not one line of 1 to 100
+      characters, or a `runnerImage` that is not a Docker image reference;
+      409 `template-exists`, naming the registration; 422
       `template-check-failed` with the new error member `check`, one of
       `address`, `fetch`, `version`, `read` and `definition`, and a message
-      that names what failed; 503 `template-service-unavailable`. The
-      `version` check is that the address names a version's tag.
+      that names what failed; 503 `template-service-unavailable`. In this
+      task the `version` check is that the address names a version's tag.
     - [20] `PATCH /api/templates/{id}` with `name` and `runnerImage`, either
-      optional, `runnerImage` nullable: 200 with the `Template`; 400
-      `invalid-request`; 404 `unknown-template`.
+      optional, `runnerImage` nullable, under the rules above: 200 with the
+      `Template`; 400 `invalid-request`; 404 `unknown-template`.
     - [20] `DELETE /api/templates/{id}`: 204; 404 `unknown-template`; 409
       `template-in-use`, whose message names the workspaces.
     - [20] `Workspace` gains required `template`: null, or `{id, name}` of
@@ -1321,11 +1377,12 @@ proposed-design:
       `runner-image`, and "an approved template" becomes "a registered
       template" throughout.
     - [20] `POST /api/jobs`: `create`'s `templateId` names a registered
-      template, whose current version the job pins, and an unknown one stays
-      404 `unknown-template`; `upgrade` takes no `templateId`, one given is
-      400 `invalid-request`, and it applies the current version of the
-      workspace's template, refused 409 `template-not-registered` when the
-      workspace has none. The `JobRequest.templateId` description says so.
+      template, whose current version and commit the job pins, and an
+      unknown one stays 404 `unknown-template`; `upgrade` takes no
+      `templateId`, one given is 400 `invalid-request`, and it applies the
+      current version of the workspace's template, refused 409
+      `template-not-registered` when the workspace has none. The
+      `JobRequest.templateId` description says so.
     - [20] New request kinds: `template-check-failed` (422),
       `template-exists` (409), `template-in-use` (409),
       `template-not-registered` (409).
@@ -1334,30 +1391,42 @@ proposed-design:
       `unknown-template`; 503 `template-service-unavailable`.
     - [21] `POST /api/templates/{id}/upgrades` with `{"version"}`: 200 with
       the `Template`; 404 `unknown-template`; 409 `version-not-newer` for a
-      version that is not a found version newer than the current one; 422
+      version that is not a found version newer than the current one, the
+      current version itself while its tag has moved excepted; 422
       `template-check-failed` with `check` `fetch`, `read` or `definition`;
       503 `template-service-unavailable`.
     - [21] `Template` gains required `newestVersion` (string or null),
-      `versions` (each `{version, tag, commit}`, ascending) and `lastCheck`
-      (null, or `{at, failure}` with `at` a date-time and `failure` a fixed
-      reason or null). `POST /api/templates` takes an address without a ref
-      and makes its newest version current, and its `version` check becomes
-      that the repository has at least one version.
-    - [21] `Workspace` gains required `appliedVersion` (string or null) and
-      `needsUpgrade` (boolean). `upgrade` is refused 409 `already-current`
-      when the workspace's applied version is its template's current version
-      or a newer one.
-    - [21] New request kinds: `version-not-newer` (409), `already-current`
-      (409).
+      `versions` (each `{version, tag, commit}`, ascending),
+      `currentMoved` (boolean: the current version's tag is at another
+      commit than the recorded one) and `lastCheck` (null, or `{at,
+      failure}` with `at` a date-time and `failure` null or one of
+      `template-not-found`, `template-resolve-failed`, `invalid-address`
+      and `template-service-unavailable`). `POST /api/templates` takes an
+      address without a ref and makes its newest version current, and its
+      `version` check becomes that the repository has at least one version.
+    - [21] `Workspace` gains required `appliedVersion` (string or null),
+      `appliedCommit` (string or null) and `needsUpgrade` (boolean, false
+      while `appliedVersion` is null). `upgrade` is refused 409
+      `upgrade-not-needed` when the applied version is the template's
+      current version or a newer one, 409 `applied-version-unknown` while it
+      is unknown, and 409 `template-version-moved` while the current
+      version's tag has moved; `create` is refused 409
+      `template-version-moved` in the same case.
+    - [21] New request kinds: `version-not-newer` (409),
+      `upgrade-not-needed` (409), `applied-version-unknown` (409),
+      `template-version-moved` (409).
     - [22] `GET /api/policies`: 200 with `grant`, null without
-      `provisioning.wyrwood`, else `{agents, policies, actions}` as Wyrwood's
-      `whoami` answers it; `policies`, each `{name, valueNames, inGrant}`:
-      the policies inside the grant, and each policy the settings or a
-      selection names that is outside the grant or that Wyrwood does not
-      have, with `inGrant` false; and `settings`, `{required, groups,
-      revision}`, each group `{id, name, mode, policies}` with `mode`
-      `single` or `multi`. 503 `wyrwood-unavailable` when the grant cannot
-      be read.
+      `provisioning.wyrwood`, else `{agents, policies, actions}`, each a
+      list of strings as Wyrwood's grant holds them, `["*"]` standing for
+      every name; `policies`, each `{name, valueNames, inGrant}` with
+      `valueNames` a list of strings: the policies inside the grant, and
+      each policy the settings or a selection names that is outside the
+      grant or that Wyrwood does not have, with `inGrant` false; and
+      `settings`, `{required, groups, revision}` with `revision` an integer,
+      each group `{id, name, mode, policies}` with `id` an integer
+      Menagerie assigns and never reuses, `name` one line of 1 to 100
+      characters, `mode` `single` or `multi`, and `policies` a list of
+      names. 503 `wyrwood-unavailable` when the grant cannot be read.
     - [22] `PUT /api/policies/settings` with `{"required","groups",
       "revision"}`, a new group without `id`: 200 with the settings; 400
       `invalid-request`; 409 `settings-changed` for an older revision; 409
@@ -1365,8 +1434,8 @@ proposed-design:
       `policy-outside-grant`, naming each policy it adds that is outside the
       grant or that Wyrwood does not have; 422 `invalid-settings`, naming
       the rule: a policy both required and in a group or in two groups, a
-      group with no policy, two groups of one name, an unknown mode; 503
-      `wyrwood-unavailable`.
+      group with no policy, two groups of one name, an unknown mode or `id`;
+      503 `wyrwood-unavailable`.
     - [22] `Workspace` gains required `policies` (the selection's names)
       and `needsChoice` (the names of the groups without a valid choice).
     - [22] New request kinds: `settings-changed` (409),
@@ -1375,12 +1444,15 @@ proposed-design:
     - [24] `JobRequest.operation` gains `apply-policies`, on an existing
       workspace, in phase `bind`; the prose describes it as
       policy-application does.
-    - [24] `JobRequest` gains `policies`, create only: the group choices and
-      ordinary policies; a create without a valid choice in a group is
-      refused 422 `policy-choice-required` naming the group, and one that
-      adds a policy outside the grant 422 `policy-outside-grant`; on a host
-      with `provisioning` a name that cannot be a Xolotl key name and a
-      Wyrwood value is refused 400 `invalid-workspace-name`, naming the rule.
+    - [24] `JobRequest` gains `policies`, create only: a list of unique
+      policy names, the group choices and ordinary policies, empty when
+      absent. A create without a valid choice in a group is refused 422
+      `policy-choice-required` naming the group, one that adds a policy
+      outside the grant 422 `policy-outside-grant`, one that names policies
+      without `provisioning.wyrwood` 409 `provisioning-unavailable`, and one
+      whose grant cannot be read 503 `wyrwood-unavailable`; on a host with
+      `provisioning` a name that cannot be a Xolotl key name and a Wyrwood
+      value is refused 400 `invalid-workspace-name`, naming the rule.
     - [24] `PUT /api/workspaces/{name}/policies` with `{"policies",
       "revision"}`: 200 with `{selectionRevision, jobId}`, `jobId` the
       apply job, or null when it starts after the workspace's running job;
@@ -1392,46 +1464,59 @@ proposed-design:
       `policy-outside-grant`; 503 `wyrwood-unavailable`.
     - [24] `Workspace` gains required `selectionRevision` (integer),
       `appliedRevision` (integer or null), `applyFailure` (null or
-      `{kind, message}`) and `xolotlKey` (string or null).
+      `{kind, message}`), `selectionImported` (boolean) and `xolotlKey`
+      (string or null); `needsChoice` is empty while the selection is still
+      to be imported.
     - [24] New request kinds: `selection-changed` (409), `policy-required`
       (422), `policy-choice-required` (422). New job kinds:
       `policy-outside-grant`, `binding-changed`.
-    - [24] The prose of create, upgrade and the provisioning steps follows
-      create-flow, upgrade-flow, provisioning-declaration and
-      provisioning-steps: the selection at create, policies unchanged by an
-      upgrade, the binding made or changed from the selection, the legacy
-      members ignored and reported.
+    - [24] The policy parts of the prose of create, upgrade and the
+      provisioning steps follow create-flow, upgrade-flow,
+      provisioning-declaration and provisioning-steps: the selection at
+      create, policies unchanged by an upgrade, the binding made or changed
+      from the selection, the legacy members ignored and reported.
   contract-template-service-api: |-
     `template-service-api.yml`:
     - [20] The service reads the configuration only for `workspace-root`,
       `template-service.socket`, `template-service.hook-runner-socket` and
-      `template-service.candidate-folder`, and parses `templates` without
-      reading it (templates-key).
+      `template-service.candidate-folder`, and ignores its other members,
+      `templates` included (templates-key).
     - [20] `/v1/interviews` and `/v1/upgrades` take
-      `{"workspace","target","address"}`, and the answer, generate and apply
-      routes add their members to those; `templateId` is an unknown member.
-      `address` is admitted as template-admission says and names a ref.
+      `{"workspace","target","address","ref","commit"}`, `commit` optional,
+      and the answer, generate and apply routes add their members to those;
+      `templateId` is an unknown member, and a missing `ref` is
+      `malformed-request` (400). `address` is admitted as template-admission
+      says, and a `ref` that resolves to another commit than a given
+      `commit` is `template-stale-revision` (422).
     - [20] Checks: `address` is admitted in place of `templateId` being
       approved; a session's signature is the HMAC of the flow, `workspace`,
-      `address` and the record, and a session issued for another address is
-      `session-tampered`. Revisions: "the approved address" becomes "the
-      request's address" throughout.
+      `address`, `ref` and the record, and a session issued for another
+      address or ref is `session-tampered`. Revisions: "the approved
+      address" becomes "the request's address at its ref" throughout.
     - [20] New routes: `/v1/templates/addresses` with `{"address"}`, 200
-      `{"source","reference"}`; `/v1/templates/checks` with `{"address"}`
-      naming a ref, 200 `{"source","commit","definition"}`, which runs no
-      hook. Both take the credential resolver scope of every route, and the
-      contract test's route list gains them.
+      `{"source","reference","base"}`; `/v1/templates/checks` with
+      `{"address","ref"}`, 200 `{"source","commit","definition"}`, which
+      runs no hook. Both take the credential resolver scope of every route,
+      and the contract test's route list gains them.
     - [20] Errors: `invalid-address` (400) is new, for an address the
-      grammar cannot read or template-admission refuses; `unknown-template`
-      (404) leaves the list, as the service no longer uses it.
+      grammar cannot read or template-admission refuses;
+      `unsafe-template-link` (422) is new, for a template folder that holds
+      a symbolic link resolving outside the checkout, on the check,
+      generate and apply routes; `unknown-template` (404) leaves the list,
+      as the service does not use it.
     - [20] Validation criteria: `tests/requests.rs` refuses each form
       template-admission refuses on every route and a session replayed into
-      another address; a test of the check route answers `definition` true
-      and false, refuses a manifest Toha cannot load, and runs no hook.
-    - [21] New route `/v1/templates/versions` with `{"address"}`: 200
-      `{"source","versions"}`, each `{"version","tag","commit"}` in
-      ascending order, by the rules of template-versions; refused as
-      `template-not-found` (422) or `template-resolve-failed` (422) when the
-      repository cannot be listed. Validation criteria: a test lists a local
-      remote's tags with release, pre-release, `v`-prefixed and annotated
-      tags, and the contract test's route list gains the route.
+      another address or ref; a test of the check route answers
+      `definition` true and false, refuses a manifest Toha cannot load and a
+      link that leaves the checkout, and runs no hook; a test refuses a ref
+      that resolves to another commit than the request names.
+    - [21] New route `/v1/templates/versions` with `{"address"}`, an
+      address without a ref: 200 `{"source","versions"}`, each
+      `{"version","tag","commit"}` in ascending order, by the rules of
+      template-versions; refused as `template-not-found` (422) when the
+      remote answers that the repository does not exist, as
+      `template-resolve-failed` (422) when it cannot be listed for any other
+      reason, and as `invalid-address` (400) for an address with a ref.
+      Validation criteria: a test lists a local remote's tags with release,
+      pre-release, `v`-prefixed and annotated tags, and the contract test's
+      route list gains the route.
