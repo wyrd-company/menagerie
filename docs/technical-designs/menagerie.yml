@@ -294,9 +294,10 @@ proposed-design:
     `base`. Registration runs the minimum checks in this order and refuses
     the template at the first that fails, naming the check: `address`, the
     template service reads and admits the address; `fetch`, the
-    repository's versions can be listed and the current version fetched;
-    `version`, the repository has at least one version (see
-    template-versions); `read`, Toha loads the template's manifest, and its
+    repository's versions can be listed; `version`, the list holds at least
+    one version and, when the address has a ref, that ref is a version's tag
+    (see template-versions); `fetch` again, the current version can be
+    fetched; `read`, Toha loads the template's manifest, and its
     folder holds no link outside the checkout; `definition`, the content
     folder holds `.devcontainer/devcontainer.json`, and the refusal names
     that file. The current version is the address's tag, else the newest
@@ -583,7 +584,9 @@ proposed-design:
     policy-application
     says. A policy that stops being required stays, as an ordinary policy,
     in each selection that has it. A workspace whose definition has no
-    declaration keeps a selection and has no binding. See the decision
+    declaration keeps a selection. Its binding, while a current name
+    remains, stays until the `retire` phase of its next job that starts its
+    devcontainer removes it, and an apply changes that binding until then. See the decision
     apply-workspace-policies-from-a-stored-selection.
   policy-application: >-
     Each selection change increments the workspace's selection revision, and
@@ -599,7 +602,11 @@ proposed-design:
     `provisioning-invalid`. With a
     current name, an empty selection fails the job as
     `provisioning-invalid` with no request; otherwise the job brings the
-    binding of that name to the selection as binding-convergence says. A selection change starts the job at once when
+    binding of that name to the selection as binding-convergence says,
+    keeping the binding's access group. So a workspace whose definition no
+    longer parses or no longer declares the name, until `retire` removes
+    that current name, still has its binding changed; only a missing
+    binding needs a declaration the reader accepts. A selection change starts the job at once when
     the workspace has no job, and otherwise when that job ends; marking a
     policy required does the same on each workspace. Start-up starts it on
     each workspace whose binding lacks its selection, and a manager starts
@@ -621,9 +628,16 @@ proposed-design:
     binding and made another under the name, and a name with no recorded ID
     is resolved through the agent's `binding-list` by its agent and key: the
     ID found is recorded and Menagerie goes on with that binding, and a
-    name the list does not show has no binding. A binding
+    name the list does not show has no binding. The access group comes
+    from the job. A provisioning job's `bind` step uses the group its
+    declaration names, which `read-definition` accepted. `apply-policies`
+    keeps the group of a binding it reads. When the binding is missing, it
+    reads the workspace's definition: a declaration that Menagerie's reader
+    accepts and that names the current container name gives the group, and
+    any other definition fails the job as `provisioning-invalid`, naming
+    the reason, with no binding request. A binding
     that is not there is made with `bind`: the selection, its values, the
-    declared access group, `report` enforcement and default token lifetimes;
+    job's access group, `report` enforcement and default token lifetimes;
     Menagerie records the ID `bind` answers, or, when `bind` answers
     `pending` with no binding, the ID a read of `binding-list` finds. A
     `bind` answered `binding-differs` means a binding of that name appeared
@@ -632,13 +646,13 @@ proposed-design:
     `binding-differs` fails the job as `binding-changed`. A binding the grant does not cover, read or bound, fails
     the job as `binding-outside-grant`, naming the container name, and
     Menagerie changes nothing. A binding that holds the selection, its
-    values and the access group, and that Wyrwood reports `applied`, is not
+    values and the job's access group, and that Wyrwood reports `applied`, is not
     written. One that holds them and is not `applied` carries an assignment
     Wyrwood saved and OpenBao did not apply: Menagerie sends a binding change
     of that selection at the binding's revision, which finishes it. Any
     other binding gets a binding change (`binding-change`, wyrwood#159) by
     its ID and the revision Menagerie read, with the whole selection and its
-    values, the declared access group, and the binding's other settings as
+    values, the job's access group, and the binding's other settings as
     read. Wyrwood applies it as an edit in its web interface: the container's
     old token is revoked, the container reads with the new selection with no
     restart, and its consumer directory and sockets stay. A change answered
@@ -653,7 +667,7 @@ proposed-design:
     finishes it as above. Menagerie never sends an empty selection, which
     Wyrwood refuses (see workspace-policies). It records the selection
     revision as applied only after a read shows the binding with that
-    selection, its values, the access group and `applied`, and the console
+    selection, its values, the job's access group and `applied`, and the console
     names each policy and value it added or removed.
   operator-identity: >-
     Menagerie's operator key is an OpenBao Transit key that the agent offers
@@ -728,10 +742,12 @@ proposed-design:
     provisioning-identity), after its data records the key as the
     workspace's, and treats the answer that the key exists as done, so a
     repeat never rotates it. 3. `bind` checks the selection against the
-    grant as policy-application does, records the container name as the
-    workspace's current one in its data, and brings the binding to the
-    workspace's selection, its values and the declared access group as
-    binding-convergence says, whether its container runs or not. A binding
+    grant as policy-application does, and, in the transaction that records
+    the container name as the workspace's current one in its data, reads
+    the selection again: one that a selection change emptied after
+    `read-definition` fails the job as `provisioning-invalid` with no
+    request. It then brings the binding to the workspace's selection, its
+    values and the declared access group as binding-convergence says, whether its container runs or not. A binding
     it makes, it waits on until the binding reports its consumer directory,
     which the agent creates before the container exists. A binding that
     already holds the selection and is applied is not written, so a repeat
@@ -793,7 +809,13 @@ proposed-design:
     or removes the binding in Wyrwood's web interface. Xolotl confirms a key
     gone when it answers that it revoked it or that it has no such key. The
     workspace keeps the identity of its key, so a declaration that returns
-    gets the same key name. A job that fails, or a
+    gets the same key name. So a start or a rebuild whose definition no
+    longer names the current binding works this way. A declaration of
+    another name binds that name, makes it current, and retires the old one
+    at the job's end. No declaration runs no provisioning step and retires
+    every name and the key at the end. A declaration the reader refuses
+    fails the job in `read-definition`, leaving the binding, the current
+    name and the container as they are. A job that fails, or a
     Menagerie that restarts, leaves them for the next one. A failure while
     retiring fails the job, with the devcontainer running. A name or key
     belongs to one workspace at a time, so one workspace's retirement never
@@ -1226,8 +1248,15 @@ proposed-design:
     cannot be read and `provisioning.wyrwood` is configured, the names of
     its containers. A declared name that a container outside the workspace
     holds is not taken. A name or key that two workspaces would hold goes to
-    the one whose declaration names it, and the start log names the other.
-    Each imported name is recorded on `provisioning.wyrwood.agent`. The name
+    the one whose declaration names it; when both declarations name it, it
+    goes to the workspace whose container holds the name, else to the first
+    in name order, and the start log names both. The other workspace's next
+    provisioning job then fails in `read-definition`, as a name another
+    workspace holds. Each imported name is recorded on
+    `provisioning.wyrwood.agent`. Without that section, a name is recorded
+    with no agent, and the first start that has the section records its
+    agent for each; until then a job that would bind or unbind it fails as
+    `provisioning-unavailable`, and the name stays in the data. The name
     the declaration names, once it has passed these checks, is the
     workspace's current name, so an apply changes a running workspace's
     binding with no start or rebuild; a name only a retirement record or a
@@ -1386,7 +1415,15 @@ proposed-design:
     binding request to Wyrwood. A binding an operator removed and made again under
     the workspace's name is found by its name and converged on. On a host
     taken over from the previous release, adding a policy to a workspace
-    that runs changes its binding at once, with no start or rebuild. A selection
+    that runs changes its binding at once, with no start or rebuild.
+    Removing a policy from a running workspace whose definition was edited
+    so that it does not parse changes its binding and keeps its access
+    group; with that binding removed in Wyrwood, the apply fails as
+    `provisioning-invalid` and binds nothing. A selection emptied while a
+    first provisioning job runs fails that job at `bind` with no request.
+    A start whose definition no longer declares provisioning retires the
+    binding at its end, and one whose declaration does not parse fails in
+    `read-definition` with the binding in place. A selection
     change made before a workspace's selection was imported is refused as
     stale once the import runs, and refused while Wyrwood cannot answer. Apply branch refuses a
     branch whose applied record names an older version. An address with a
@@ -1489,6 +1526,21 @@ proposed-design:
     selection with its revision; [24] the binding ID of each container name,
     each workspace's values, Xolotl key identity, applied revision, apply
     failure and selection still to be imported, and import 5.
+    Verification belongs to the task that builds what it checks. [19]: a
+    delete after the definition stops parsing or declaring; a delete
+    refused by a hidden binding; a create kept while its interview waits;
+    an import from the previous release that records the current name and
+    its agent. [20]: a test per registration check, a non-version ref
+    giving `version` included; refused and password addresses; template
+    removal; the `templates` import. [21]: version checks on a schedule and
+    on request, an outage answered 200, a moved tag, the descent exit, and
+    Apply branch's forward-only check. [22]: settings, the grant, and a
+    required policy reaching every selection. [24]: binding-convergence's
+    pending, stale, hidden and recreated bindings; an empty selection,
+    unbound and bound and at `bind`; the import before a selection change;
+    a running imported workspace and one whose definition does not parse,
+    changed with no rebuild; `MENAGERIE_XOLOTL_KEY`; and
+    `invalid-workspace-name`.
   contract-provisioning-declaration: |-
     `provisioning-declaration.yml` and
     `assets/provisioning-declaration/menagerie-customization.schema.json`:
@@ -1572,6 +1624,8 @@ proposed-design:
     - [19] New job kind: `binding-outside-grant`, for a delete or a
       `retire` whose unbind Wyrwood refuses as outside the grant; the
       binding's name stays in the data.
+    - [20] `GET /api/templates` lists the registered templates sorted by
+      name, then by `id`, in place of the configuration's order.
     - [20] `Template` gains required `address` (string, the address without
       a ref), `currentVersion` (string), `runnerImage` (string or null) and
       `workspaces` (the names of the workspaces that use it).
@@ -1700,7 +1754,8 @@ proposed-design:
       `{selectionRevision, jobId}`, `jobId` the apply job, or null when it starts after the workspace's running job;
       400 `invalid-request`; 404 `workspace-not-found`; 409
       `selection-changed` for an older revision; 409
-      `provisioning-unavailable`; 422 `policy-required`, naming a required
+      `provisioning-unavailable` without `provisioning.wyrwood`; 422
+      `policy-required`, naming a required
       policy the change removes; 422 `policy-choice-required`, naming a
       group the change leaves without a valid choice that it had; 422
       `selection-empty`, naming the last policy of a workspace with a
