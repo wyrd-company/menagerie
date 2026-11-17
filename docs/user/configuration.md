@@ -249,7 +249,17 @@ needs Wyrwood 0.7.0 or later. [Prepare the host](install.md#provisioning) first.
 
 Each connection and each request has 30 seconds. An operator key with no approval,
 or a call outside its grant, fails the job with the operation and the container
-name, and an operator key with no approval also with the key's fingerprint.
+name. An operator key with no approval also names the key's fingerprint and is
+recorded as pending in Wyrwood under `menagerie-<agent>`. If `ssh-agent.sock`
+does not offer the configured key, the error identifies the configured key
+(and its fingerprint when selected by public key or fingerprint); check that
+Menagerie's Wyrwood policy offers it.
+
+When Menagerie needs another policy, open **Operator keys** in the Wyrwood web
+interface, choose **Edit grant** on Menagerie's key, add the policy to
+**Policies**, and **Save**. The next job uses the wider grant with the same key;
+no new Transit key, Menagerie configuration change, restart or revocation is
+needed.
 
 ### Upgrading Wyrwood
 

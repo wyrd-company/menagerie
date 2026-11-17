@@ -207,9 +207,12 @@ removes it in the Wyrwood and Xolotl web interfaces.
    | **Policy write** | Off |
 
 Approve the key once. It has no expiry, so that provisioning does not stop in
-silence, and **Revoke** ends it. A grant cannot be edited: a wider allowlist needs
-a new Transit key and a new approval under a new label. A binding that holds a
-policy outside the allowlist is outside the grant, so Menagerie cannot change it.
+silence, and **Revoke** ends it. When Menagerie needs another policy, open
+**Operator keys** in Wyrwood, choose **Edit grant** on Menagerie's key, add the
+policy to **Policies**, and **Save**. The next job can bind it: no new Transit
+key, Menagerie configuration change, restart or revocation is needed. A binding
+that holds a policy outside the allowlist is outside the grant, so Menagerie
+cannot change it.
 Keep Menagerie's own policy out of the allowlist, so that Menagerie cannot change
 its own binding.
 
