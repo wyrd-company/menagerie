@@ -277,7 +277,7 @@ test("starts a new redirect when the person acts after cancelling one", async ({
   request,
 }) => {
   await page.goto("/");
-  await expect(page.getByRole("list", { name: "Workspaces" }).getByRole("listitem")).toHaveCount(5);
+  await expect(page.getByRole("list", { name: "Workspaces" }).getByRole("listitem")).toHaveCount(6);
   await control(request, "auth", { signedIn: false });
   const logins: string[] = [];
   page.on("request", (loginRequest) => {
@@ -319,7 +319,7 @@ test.describe("narrow viewport", () => {
   test("stacks the register without sideways scrolling", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("list", { name: "Workspaces" }).getByRole("listitem")).toHaveCount(
-      5,
+      6,
     );
     await expectNoHorizontalScroll(page);
     const actions = entry(page, "sample-alpha").getByRole("group", {
