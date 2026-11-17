@@ -17,7 +17,7 @@ test("lists every workspace folder with its container state", async ({ page }) =
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
   const rows = page.getByRole("list", { name: "Workspaces" }).getByRole("listitem");
-  await expect(rows).toHaveCount(5);
+  await expect(rows).toHaveCount(6);
   await expect(entry(page, "sample-alpha").locator(".status")).toHaveText("Running");
   await expect(entry(page, "sample-beta").locator(".status")).toHaveText("Stopped");
   await expect(entry(page, "sample-gamma").locator(".status")).toHaveText("No container");
@@ -214,7 +214,7 @@ test("explains a job that a Menagerie restart dropped", async ({ page, request }
   await control(request, "restart");
   await page.goto(`/?job=${jobId}`);
   await expect(page.getByRole("status")).toContainText("Menagerie no longer knows this job");
-  await expect(page.getByRole("list", { name: "Workspaces" }).getByRole("listitem")).toHaveCount(5);
+  await expect(page.getByRole("list", { name: "Workspaces" }).getByRole("listitem")).toHaveCount(6);
 });
 
 test("shows an unreachable Docker daemon", async ({ page, request }) => {

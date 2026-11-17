@@ -217,7 +217,7 @@ export function createFixture(options: { distDir: string }) {
       const ws = world.workspaces.find((w) => w.name === name);
       if (operation === "create" && ws)
         return fail(res, 409, "workspace-exists", `workspace ${name} already exists`);
-      if (operation !== "create" && !ws)
+      if (operation !== "create" && (!ws || (ws.state === "no-folder" && operation !== "delete")))
         return fail(res, 404, "workspace-not-found", `no workspace ${name}`);
       const active = [...jobs.values()].find((j) => j.workspace === name && j.finishedAt === null);
       if (active) {

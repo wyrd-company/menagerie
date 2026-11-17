@@ -158,11 +158,26 @@ async function runApplyBranch(world: World, job: FixtureJob) {
   finish(job, "succeeded");
 }
 
-/** Replays a delete; its folder goes last. */
+/** Replays a delete; its folder goes last. One with no folder removes only what Menagerie's data holds. */
 async function runDelete(world: World, job: FixtureJob) {
   const ws = workspace(world, job.workspace);
   if (!ws) return;
   setState(job, "running", "read-definition");
+  if (ws.state === "no-folder") {
+    log(
+      job,
+      "the workspace's folder is gone, so only what Menagerie's data holds for it is removed",
+    );
+    setState(job, "running", "unbind");
+    log(job, `binding of devcontainer-${ws.name} is gone`);
+    setState(job, "running", "remove-container");
+    setState(job, "running", "revoke-key");
+    log(job, `revoked Xolotl key host-sample/${ws.name}`);
+    setState(job, "running", "remove-folder");
+    world.workspaces.splice(world.workspaces.indexOf(ws), 1);
+    finish(job, "succeeded");
+    return;
+  }
   setState(job, "running", "stop");
   ws.state = "stopped";
   setState(job, "running", "commit");

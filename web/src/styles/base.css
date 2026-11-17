@@ -348,6 +348,13 @@ input[type="checkbox"] {
   border-radius: 2px;
 }
 
+.status-no-folder::before {
+  background: transparent;
+  outline: 1.5px dashed var(--status);
+  outline-offset: -1.5px;
+  border-radius: 2px;
+}
+
 .status-waiting-for-answers {
   --status: var(--accent);
   --status-wash: var(--accent-wash);

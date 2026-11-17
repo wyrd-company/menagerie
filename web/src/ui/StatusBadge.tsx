@@ -4,6 +4,7 @@ const labels: Record<string, string> = {
   running: "Running",
   stopped: "Stopped",
   "no-container": "No container",
+  "no-folder": "No folder",
   "waiting-for-answers": "Awaiting answers",
   succeeded: "Succeeded",
   failed: "Failed",

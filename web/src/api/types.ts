@@ -3,7 +3,7 @@
 // workspace and job members these mirror.
 import type { RawJson } from "./rawJson.ts";
 
-export type WorkspaceState = "running" | "stopped" | "no-container";
+export type WorkspaceState = "running" | "stopped" | "no-container" | "no-folder";
 
 export interface ActiveJob {
   jobId: string;

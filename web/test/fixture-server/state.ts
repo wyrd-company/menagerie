@@ -3,7 +3,7 @@ import type { ServerResponse } from "node:http";
 
 export interface FixtureWorkspace {
   name: string;
-  state: "running" | "stopped" | "no-container";
+  state: "running" | "stopped" | "no-container" | "no-folder";
   containerId: string | null;
 }
 
@@ -61,6 +61,8 @@ export function initialWorkspaces(): FixtureWorkspace[] {
     { name: "sample-beta", state: "stopped", containerId: containerId("beta") },
     { name: "sample-broken", state: "stopped", containerId: containerId("broken") },
     { name: "sample-gamma", state: "no-container", containerId: null },
+    // Its folder is gone, and Menagerie's data still holds its binding and key.
+    { name: "sample-gone", state: "no-folder", containerId: null },
     { name: "sample-slow", state: "running", containerId: containerId("slow") },
   ];
 }

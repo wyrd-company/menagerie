@@ -174,6 +174,9 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
             {workspaces.map((ws) => {
               const active = ws.activeJob;
               const busy = active !== null || own(pending, ws.name) !== undefined;
+              // A workspace whose folder is gone still holds a binding or a key, and
+              // only a delete runs on it.
+              const gone = ws.state === "no-folder";
               const rowError = own(rowErrors, ws.name);
               const token = own(tokens, ws.name);
               const isMinting = own(minting, ws.name) !== undefined;
@@ -182,7 +185,11 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                   <div className="entry-name">
                     <h2 className="mono">{ws.name}</h2>
                     <p className="entry-container mono" title={ws.containerId ?? undefined}>
-                      {ws.containerId ? `container ${ws.containerId.slice(0, 12)}` : "no container"}
+                      {ws.containerId
+                        ? `container ${ws.containerId.slice(0, 12)}`
+                        : gone
+                          ? "folder gone"
+                          : "no container"}
                     </p>
                   </div>
                   <div className="entry-state">
@@ -196,7 +203,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                   <div className="entry-actions" role="group" aria-label={`Actions for ${ws.name}`}>
                     <button
                       type="button"
-                      disabled={busy || ws.state === "running"}
+                      disabled={busy || gone || ws.state === "running"}
                       onClick={() => void run(ws.name, "start")}
                     >
                       Start
@@ -225,7 +232,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                     ) : (
                       <button
                         type="button"
-                        disabled={busy}
+                        disabled={busy || gone}
                         onClick={() => {
                           setApplying(null);
                           setDeleting(null);
@@ -264,11 +271,15 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                         </button>
                       </form>
                     ) : (
-                      <button type="button" disabled={busy} onClick={() => openApply(ws.name)}>
+                      <button
+                        type="button"
+                        disabled={busy || gone}
+                        onClick={() => openApply(ws.name)}
+                      >
                         Apply branch
                       </button>
                     )}
-                    {busy ? (
+                    {busy || gone ? (
                       <span className="button disabled" aria-disabled="true">
                         Upgrade
                       </span>
@@ -301,12 +312,20 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                         if (typedName === ws.name) void run(ws.name, "delete");
                       }}
                     >
-                      <p>
-                        Delete removes the container and the folder of{" "}
-                        <span className="mono">{ws.name}</span>. Tracked and new files are backed up
-                        first. Ignored files, such as cloned repositories, are not backed up and are
-                        lost.
-                      </p>
+                      {gone ? (
+                        <p>
+                          The folder of <span className="mono">{ws.name}</span> is gone. Delete
+                          removes the Wyrwood binding and the Xolotl key that Menagerie holds for
+                          it, and any container left of it.
+                        </p>
+                      ) : (
+                        <p>
+                          Delete removes the container and the folder of{" "}
+                          <span className="mono">{ws.name}</span>. Tracked and new files are backed
+                          up first. Ignored files, such as cloned repositories, are not backed up
+                          and are lost.
+                        </p>
+                      )}
                       <input
                         type="text"
                         className="mono"

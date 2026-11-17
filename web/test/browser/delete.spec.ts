@@ -47,6 +47,35 @@ test("deletes a workspace only after its name is typed", async ({ page }) => {
   await expect(entry(page, "sample-alpha")).toHaveCount(0);
 });
 
+test("offers only Delete for a workspace whose folder is gone, and deletes it", async ({
+  page,
+}) => {
+  const posted: unknown[] = [];
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/jobs") && r.method() === "POST") posted.push(r.postDataJSON());
+  });
+  await page.goto("/");
+  const gone = entry(page, "sample-gone");
+  await expect(gone.locator(".status")).toHaveText("No folder");
+  await expect(gone).toContainText("folder gone");
+  for (const action of ["Start", "Stop", "Rebuild", "Apply branch", "T3 Code token"]) {
+    await expect(gone.getByRole("button", { name: action, exact: true })).toBeDisabled();
+  }
+  await expect(gone.getByRole("link", { name: "Upgrade" })).toHaveCount(0);
+  const form = await openDelete(page, "sample-gone");
+  await expect(form).toContainText("is gone");
+  await expect(form).toContainText("binding and the Xolotl key");
+  await form.getByRole("textbox").fill("sample-gone");
+  await shot(page, "delete-no-folder-form");
+  await form.getByRole("button", { name: "Delete workspace" }).click();
+
+  const console = page.getByRole("region", { name: "Job console" });
+  await expect(console.locator(".outcome")).toContainText("Completed.");
+  await expect(console).toContainText("binding of devcontainer-sample-gone is gone");
+  expect(posted).toEqual([{ operation: "delete", workspace: "sample-gone" }]);
+  await expect(entry(page, "sample-gone")).toHaveCount(0);
+});
+
 test("keeps the workspace and clears the typed name", async ({ page }) => {
   await page.goto("/");
   const form = await openDelete(page, "sample-alpha");
