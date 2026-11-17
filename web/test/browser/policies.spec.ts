@@ -24,6 +24,15 @@ test("required policies and group settings reach every workspace selection", asy
   await expect(
     page.getByRole("checkbox", { name: "workspace required", exact: true }),
   ).toBeChecked();
+  await page.getByRole("textbox", { name: "Group name" }).fill("SSH keys");
+  await page.getByRole("combobox", { name: "Selection" }).selectOption("single");
+  await page.getByRole("checkbox", { name: "ira-ssh", exact: true }).uncheck();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved");
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "Group name" })).toHaveValue("SSH keys");
+  await expect(page.getByRole("combobox", { name: "Selection" })).toHaveValue("single");
+  await expect(page.getByRole("checkbox", { name: "ira-ssh", exact: true })).not.toBeChecked();
   await page.getByRole("button", { name: "Remove group" }).click();
   await page.getByRole("checkbox", { name: "workspace required", exact: true }).uncheck();
   await page.getByRole("button", { name: "Save", exact: true }).click();
