@@ -607,6 +607,13 @@ workspace-socket:
 				t.Errorf("%s/%s is %s", data, sub, got)
 			}
 		}
+		// The workspace service keeps Menagerie's data in the volume, private
+		// to the owner.
+		for sub, mode := range map[string]string{"state": "700", "state/menagerie.db": "600"} {
+			if got, want := stamp(filepath.Join(data, sub)), fmt.Sprintf("%d:%d %s", operatorUID, operatorGID, mode); got != want {
+				t.Errorf("%s/%s is %s, want %s", data, sub, got, want)
+			}
+		}
 		if err := p.docker.ContainerStop(ctx, o.id, container.StopOptions{}); err != nil {
 			t.Fatal(err)
 		}
