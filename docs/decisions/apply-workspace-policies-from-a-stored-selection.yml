@@ -49,8 +49,10 @@ decision-outcome:
       A selection may lose its last policy, and Menagerie applies it as any
       other selection, with no rule of its own about it. Wyrwood refuses a
       binding with no policy, so the apply fails as `binding-refused` with
-      Wyrwood's answer, and the binding keeps what it held; a binding Wyrwood
-      removes is recorded as removed. The operator decided this as Q6 on
+      Wyrwood's answer, and the binding keeps what it held. Wyrwood 0.7.1
+      never removes a binding in answer, so Menagerie records no removal;
+      a missing binding is made with `bind`, which Wyrwood refuses with no
+      policy. The operator decided this as Q6 on
       #88: "Again, keep it simple. No policies for policies. If they remove
       the last one, the binding has none. If wyrwood enforces anything that
       is fine. If wyrwood removes the binding, that is fine, but otherwise

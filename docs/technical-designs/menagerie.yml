@@ -664,9 +664,19 @@ proposed-design:
     refusal not named above does; the console and the workspace's apply
     failure carry Wyrwood's answer on one line, the binding keeps what it
     held, and the selection stays stored and not applied. A binding that
-    Wyrwood no longer shows after a change, or that `apply-policies` finds
-    missing while the selection is empty, was removed by Wyrwood: the job
-    makes nothing and records the revision as applied. It records the selection
+    Wyrwood no longer shows after a change has a stale recorded ID: Menagerie
+    drops the ID and resolves the name again within the once-only retry.
+    Wyrwood 0.7.1 never removes a binding in answer to a bind or change, and
+    its reads cannot tell a removed binding from one the grant hides, so
+    Menagerie records no removal. A missing binding needs an accepted
+    declaration naming the current name, whatever the selection; without
+    one the job fails as `provisioning-invalid` with no binding request.
+    Otherwise it is made with `bind`, whatever the selection, and Wyrwood's
+    answer stands. A hidden binding fails as `binding-outside-grant`, and an
+    empty selection as `binding-refused`; neither advances the applied
+    revision. Leaving a name out of `binding-list` never advances it.
+    With no current container name it records the revision without a binding
+    request. Otherwise it records the selection
     revision as applied only after a read shows the binding with that
     selection, its values, the job's access group and `applied`, and the console
     names each policy and value it added or removed.
