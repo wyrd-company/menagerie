@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -157,5 +159,45 @@ func TestNewCreateReplacesAnUnclaimedSelection(t *testing.T) {
 	}
 	if got := selections["reused"]; len(got.Policies) != 0 || got.Revision != 0 {
 		t.Fatalf("new create kept old selection: %+v", got)
+	}
+}
+
+func TestPolicySchemaUpgradeKeepsProvisioningData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "menagerie.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(migrations[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO workspaces (name) VALUES ('existing'); INSERT INTO container_names (name, workspace, agent, current) VALUES ('container','existing','host',1); PRAGMA user_version=1;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	settings, selections, err := s.Policies(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Revision != 0 || selections["existing"].Revision != 0 || len(selections["existing"].Policies) != 0 {
+		t.Fatalf("%+v %+v", settings, selections)
+	}
+	held, err := s.Held(context.Background(), "existing")
+	if err != nil || held.Current() != "container" || held.Names[0].Agent != "host" {
+		t.Fatalf("%+v %v", held, err)
+	}
+	if _, err := s.SavePolicySettings(context.Background(), PolicySettings{Required: []string{"new"}}, []string{"new"}); err != nil {
+		t.Fatal(err)
+	}
+	_, selections, err = s.Policies(context.Background())
+	if err != nil || selections["existing"].Revision != 1 {
+		t.Fatalf("%+v %v", selections, err)
 	}
 }
