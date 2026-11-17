@@ -195,14 +195,16 @@ func (c *Client) Bind(ctx context.Context, name string, selection Selection) (op
 	return binding, err
 }
 
-// Unbind removes a container's name binding. A binding that does not exist is
-// a success with Removed false, so a repeat is safe. The result's Warning and
-// TokenLive say what part of a removal did not finish.
-func (c *Client) Unbind(ctx context.Context, name string) (operator.UnbindResult, error) {
+// Unbind removes a container's name binding on agent, the agent Menagerie
+// recorded it on. A binding that does not exist is a success with Removed
+// false, so a repeat is safe; one outside the grant fails with
+// operator.ErrOutsideGrant in its chain. The result's Warning and TokenLive say
+// what part of a removal did not finish.
+func (c *Client) Unbind(ctx context.Context, agent, name string) (operator.UnbindResult, error) {
 	var result operator.UnbindResult
 	err := c.do(ctx, "unbind", name, func(client *operator.Client) (err error) {
 		key := nameKey(name)
-		result, err = client.Unbind(ctx, operator.UnbindRequest{Agent: c.config.Agent, Key: &key})
+		result, err = client.Unbind(ctx, operator.UnbindRequest{Agent: agent, Key: &key})
 		return err
 	})
 	return result, err

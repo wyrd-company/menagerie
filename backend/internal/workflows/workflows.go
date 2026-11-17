@@ -58,8 +58,6 @@ type Runtime interface {
 	// Create starts a workspace with no commit: it checks the host and runs
 	// save, which commits and backs the workspace up, before the start.
 	Create(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error
-	// Retire records what the definition declares, before a job changes it.
-	Retire(folder string, p devcontainer.Progress) error
 	// Delete removes a workspace from the host, and runs save, which commits
 	// and backs the workspace up, before it removes anything.
 	Delete(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error

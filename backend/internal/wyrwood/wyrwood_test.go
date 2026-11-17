@@ -403,11 +403,11 @@ func TestBindUnbindAndReadLifecycle(t *testing.T) {
 	if read.ID != first.ID || read.Status.Readiness != operator.ReadinessWaiting || read.Status.LastError != "sample-last-error" {
 		t.Fatalf("read = %+v", read)
 	}
-	removed, err := f.client.Unbind(ctx, sampleName)
+	removed, err := f.client.Unbind(ctx, sampleAgent, sampleName)
 	if err != nil || !removed.Removed {
 		t.Fatalf("unbind: %+v, %v", removed, err)
 	}
-	again, err := f.client.Unbind(ctx, sampleName)
+	again, err := f.client.Unbind(ctx, sampleAgent, sampleName)
 	if err != nil || again.Removed {
 		t.Fatalf("repeated unbind: %+v, %v", again, err)
 	}
@@ -564,7 +564,7 @@ func TestPendingKeyFailsNamingItsFingerprint(t *testing.T) {
 	ctx := testContext(t)
 	calls := map[string]func() error{
 		"bind":   func() error { _, err := f.client.Bind(ctx, sampleName, sampleSelection()); return err },
-		"unbind": func() error { _, err := f.client.Unbind(ctx, sampleName); return err },
+		"unbind": func() error { _, err := f.client.Unbind(ctx, sampleAgent, sampleName); return err },
 		"read":   func() error { _, _, err := f.client.Read(ctx, sampleName); return err },
 	}
 	for name, call := range calls {
@@ -631,7 +631,7 @@ func TestACallOutsideTheGrantIsAClearJobError(t *testing.T) {
 		"unbind without the action": {
 			grant: func(g *operator.Grant) { g.Actions = []operator.Action{operator.ActionRead} },
 			call: func(ctx context.Context, c *Client) error {
-				_, err := c.Unbind(ctx, sampleName)
+				_, err := c.Unbind(ctx, sampleAgent, sampleName)
 				return err
 			},
 			wants: []string{"Wyrwood unbind of " + sampleName, "does not allow this unbind"},
@@ -736,6 +736,36 @@ func TestReadDoesNotTakeABindingOfAnotherAgent(t *testing.T) {
 	}
 }
 
+// An unbind names the agent Menagerie recorded the binding on, never the
+// configured one, and the grant decides: an agent outside it is refused as
+// outside the grant.
+func TestUnbindNamesTheRecordedAgent(t *testing.T) {
+	f := newFixture(t)
+	ctx := testContext(t)
+	var asked []string
+	f.controller.set(func(c *fakeController) {
+		c.answer = func(request operator.Request) *operator.Response {
+			var unbind operator.UnbindRequest
+			if err := json.Unmarshal(request.Body, &unbind); err != nil {
+				t.Error(err)
+			}
+			asked = append(asked, unbind.Agent)
+			// The fake controller answers, under the grant.
+			return nil
+		}
+	})
+	if _, err := f.client.Unbind(ctx, sampleAgent, sampleName); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.client.Unbind(ctx, "another-host", sampleName)
+	if !errors.Is(err, operator.ErrOutsideGrant) {
+		t.Fatalf("an agent outside the grant: %v", err)
+	}
+	if !slices.Equal(asked, []string{sampleAgent, "another-host"}) {
+		t.Fatalf("agents asked %v", asked)
+	}
+}
+
 func TestUnbindReportsWhatDidNotFinish(t *testing.T) {
 	f := newFixture(t)
 	f.controller.set(func(c *fakeController) {
@@ -747,7 +777,7 @@ func TestUnbindReportsWhatDidNotFinish(t *testing.T) {
 			return &operator.Response{Body: body}
 		}
 	})
-	result, err := f.client.Unbind(testContext(t), sampleName)
+	result, err := f.client.Unbind(testContext(t), sampleAgent, sampleName)
 	if err != nil || !result.Removed || !result.TokenLive || result.Warning != "sample-warning" {
 		t.Fatalf("unbind = %+v, %v", result, err)
 	}

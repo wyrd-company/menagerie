@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 )
 
 // maxAccessGroup is the largest numeric group the block accepts. The next
@@ -49,12 +50,7 @@ type WyrwoodBlock struct {
 }
 
 // Key addresses a Xolotl client key.
-type Key struct {
-	Policy string `json:"policy"`
-	Name   string `json:"name"`
-}
-
-func (k Key) String() string { return k.Policy + "/" + k.Name }
+type Key = store.Key
 
 // Parse reads the declaration of def. A definition with no block gives nil.
 // An error names the field and the rule, so a block that this Menagerie

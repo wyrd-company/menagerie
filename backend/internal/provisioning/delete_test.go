@@ -3,20 +3,26 @@ package provisioning
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/wyrd-company/wyrwood/operator"
+
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 )
 
-// wholeDelete is the calls of one whole delete of the sample workspace.
+// wholeDelete is the calls of one whole delete of the provisioned sample
+// workspace.
 var wholeDelete = []string{"stop", "save", "unbind container-sample", "remove-containers", "revoke host-sample/sample", "remove-folder"}
 
+// deleteSample deletes the sample workspace in a real folder with a repository.
 func (h *host) deleteSample(s *Steps) error {
-	return h.deleteAt(s, folder)
+	return h.deleteAt(s, sampleAt(h.t, h, true))
 }
 
 func (h *host) deleteAt(s *Steps, at string) error {
@@ -39,8 +45,17 @@ func sampleAt(t *testing.T, h *host, repository bool) string {
 	return real
 }
 
+// wantGone checks that the workspace has no data left.
+func (h *host) wantGone(t *testing.T, workspace string) {
+	t.Helper()
+	if exists, err := h.data.Exists(context.Background(), workspace); err != nil || exists {
+		t.Fatalf("the data of %s stays: %t %v", workspace, exists, err)
+	}
+}
+
 func TestDeleteRunsEachStepInOrder(t *testing.T) {
 	h := newHost(t)
+	h.provisioned()
 	if err := h.deleteSample(h.steps()); err != nil {
 		t.Fatal(err)
 	}
@@ -54,12 +69,28 @@ func TestDeleteRunsEachStepInOrder(t *testing.T) {
 	if !strings.Contains(h.logged.String(), "a part stayed") || !strings.Contains(h.logged.String(), "may stay valid") {
 		t.Errorf("console %q", h.logged.String())
 	}
+	if !slices.Equal(h.unbound, []string{sampleAgent + "/container-sample"}) {
+		t.Errorf("unbound %v", h.unbound)
+	}
+	h.wantGone(t, "sample")
 }
 
 func TestADeleteStoppedAtEachStepCanBeRetried(t *testing.T) {
-	for _, step := range wholeDelete {
+	// What a failed delete confirmed gone left the data, so a retry does not
+	// ask for it again.
+	unbound := slices.DeleteFunc(slices.Clone(wholeDelete), func(c string) bool { return c == "unbind container-sample" })
+	revoked := slices.DeleteFunc(slices.Clone(unbound), func(c string) bool { return c == "revoke host-sample/sample" })
+	for step, retry := range map[string][]string{
+		"stop":                      wholeDelete,
+		"save":                      wholeDelete,
+		"unbind container-sample":   wholeDelete,
+		"remove-containers":         unbound,
+		"revoke host-sample/sample": unbound,
+		"remove-folder":             revoked,
+	} {
 		t.Run(step, func(t *testing.T) {
 			h := newHost(t)
+			h.provisioned()
 			s := h.steps()
 			// The fake removal touches nothing, so the repository stays, and each
 			// retry backs up again.
@@ -73,13 +104,15 @@ func TestADeleteStoppedAtEachStepCanBeRetried(t *testing.T) {
 			if err := h.deleteAt(s, real); err != nil {
 				t.Fatal(err)
 			}
-			h.wantCalls(t, wholeDelete...)
+			h.wantCalls(t, retry...)
+			h.wantGone(t, "sample")
 		})
 	}
 }
 
 func TestAFailedSaveRemovesNothing(t *testing.T) {
 	h := newHost(t)
+	h.provisioned()
 	h.failOn["save"] = errors.New("no backup")
 	if err := h.deleteSample(h.steps()); err == nil {
 		t.Fatal("no failure")
@@ -87,6 +120,9 @@ func TestAFailedSaveRemovesNothing(t *testing.T) {
 	h.wantCalls(t, "stop", "save")
 	if !strings.Contains(h.logged.String(), "nothing was removed") {
 		t.Errorf("console %q", h.logged.String())
+	}
+	if held := h.held("sample"); len(held.Names) != 1 || len(held.Keys) != 1 {
+		t.Fatalf("held %+v", held)
 	}
 }
 
@@ -110,76 +146,66 @@ func TestDeleteRefusesAContainerThatStillMountsAfterTheStop(t *testing.T) {
 	}
 }
 
-func TestDeleteWithNoDeclarationOrRecordCallsNeitherService(t *testing.T) {
+// A workspace that holds no name and no key calls neither service, whatever
+// its definition declares.
+func TestDeleteOfAWorkspaceThatHoldsNothingCallsNeitherService(t *testing.T) {
 	h := newHost(t)
-	h.definitions[folder] = devcontainer.Definition{}
-	s := New(Options{Runtime: h, Workspaces: h, Records: Records{Folder: t.TempDir()}})
-	if err := h.deleteSample(s); err != nil {
+	if err := h.deleteSample(h.with(Clients{})); err != nil {
 		t.Fatal(err)
 	}
 	h.wantCalls(t, "stop", "save", "remove-containers", "remove-folder")
+	h.wantGone(t, "sample")
 }
 
-func TestDeleteOfAnUnreadableDefinitionStillRemovesTheFolder(t *testing.T) {
-	h := newHost(t)
-	h.definedErr = errors.New("no definition")
-	if err := h.deleteSample(h.steps()); err != nil {
-		t.Fatal(err)
-	}
-	h.wantCalls(t, "stop", "save", "remove-containers", "remove-folder")
-	if !strings.Contains(h.logged.String(), "cannot be read") {
-		t.Errorf("console %q", h.logged.String())
-	}
-}
-
-func TestDeleteTakesWhatTheRecordNamesAndRemovesTheRecord(t *testing.T) {
-	h := newHost(t)
-	s := h.steps()
-	record := Record{Names: []string{"container-old"}, Keys: []Key{{Policy: "host-sample", Name: "old-key"}}}
-	if err := s.opts.Records.Write("sample", record); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.deleteSample(s); err != nil {
-		t.Fatal(err)
-	}
-	h.wantCalls(t, "stop", "save", "unbind container-old", "unbind container-sample", "remove-containers", "revoke host-sample/old-key", "revoke host-sample/sample", "remove-folder")
-	if _, err := os.Stat(s.opts.Records.path("sample")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("record stays: %v", err)
-	}
-}
-
-func TestDeleteLeavesWhatAnotherWorkspaceDeclares(t *testing.T) {
-	h := newHost(t)
-	h.definitions["/root/other"] = definition(sampleBlock)
-	if err := h.deleteSample(h.steps()); err != nil {
-		t.Fatal(err)
-	}
-	h.wantCalls(t, "stop", "save", "remove-containers", "remove-folder")
-	if !strings.Contains(h.logged.String(), "the definition of other declares it") {
-		t.Errorf("console %q", h.logged.String())
-	}
-}
-
-func TestDeleteLeavesADeclarationWhoseNameAnotherContainerHolds(t *testing.T) {
-	h := newHost(t)
-	h.holders["container-sample"] = "/root/other"
-	if err := h.deleteSample(h.steps()); err != nil {
-		t.Fatal(err)
-	}
-	h.wantCalls(t, "stop", "save", "remove-containers", "remove-folder")
-}
-
-func TestDeleteNeedsTheSectionsWhatItHoldsNeeds(t *testing.T) {
-	for name, clients := range map[string]func(*host) Clients{
-		"wyrwood": func(h *host) Clients { return Clients{Keys: h} },
-		"xolotl":  func(h *host) Clients { return Clients{Bindings: h} },
+// wyrd-company/menagerie#75: what a delete removes comes from Menagerie's data,
+// never from the definition, so a definition edited so that it no longer
+// parses, or no longer declares the binding and the key, still has both
+// removed.
+func TestADeleteAfterTheDefinitionStopsParsingOrDeclaringRemovesTheBindingAndTheKey(t *testing.T) {
+	another := definition(`{"wyrwood":{"accessGroup":1000,"policies":["a"]},"xolotl":{"keyPolicy":"host-sample","keyName":"another"}}`)
+	another.ContainerName = "container-another"
+	for name, tc := range map[string]struct {
+		def devcontainer.Definition
+		err error
+	}{
+		"a definition that does not parse": {err: errors.New("devcontainer.json: invalid character '}'")},
+		"no declaration":                   {def: devcontainer.Definition{ContainerName: "container-sample"}},
+		"a block that is not valid":        {def: definition(`{"unknown":1}`)},
+		"a declaration of another name":    {def: another},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHost(t)
-			s := New(Options{Clients: clients(h), Runtime: h, Workspaces: h, Records: Records{Folder: t.TempDir()}})
-			err := h.deleteSample(s)
+			h.provisioned()
+			real := sampleAt(t, h, true)
+			h.definitions[real], h.definedErr = tc.def, tc.err
+			if err := h.deleteAt(h.steps(), real); err != nil {
+				t.Fatal(err)
+			}
+			h.wantCalls(t, wholeDelete...)
+			h.wantGone(t, "sample")
+		})
+	}
+}
+
+func TestDeleteNeedsTheSectionsWhatItHoldsNeeds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		clients func(*host) Clients
+		agent   string
+		want    string
+	}{
+		"wyrwood":                        {func(h *host) Clients { return Clients{Keys: h} }, sampleAgent, "provisioning.wyrwood"},
+		"xolotl":                         {func(h *host) Clients { return Clients{Bindings: h, Agent: sampleAgent} }, sampleAgent, "provisioning.xolotl"},
+		"an imported name with no agent": {func(h *host) Clients { return Clients{Bindings: h, Agent: sampleAgent, Keys: h} }, "", "imported with no provisioning.wyrwood"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			if err := h.data.HoldName(context.Background(), "sample", "container-sample", tc.agent, true); err != nil {
+				t.Fatal(err)
+			}
+			h.holdKey("sample", "host-sample", "sample")
+			err := h.deleteSample(h.with(tc.clients(h)))
 			wantKind(t, err, KindUnavailable)
-			if !strings.Contains(err.Error(), "provisioning."+name) {
+			if !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "nothing was removed") {
 				t.Errorf("message %v", err)
 			}
 			h.wantCalls(t)
@@ -187,22 +213,42 @@ func TestDeleteNeedsTheSectionsWhatItHoldsNeeds(t *testing.T) {
 	}
 }
 
-func TestDeleteOfAnInvalidBlockActsOnWhatItNames(t *testing.T) {
-	const invalid = `{"wyrwood":{},"xolotl":{"keyPolicy":"host-sample","keyName":"sample"}}`
+// A binding that a policy outside the grant hides is not taken for a removed
+// one: the delete fails, naming it, before any container, key or folder is
+// removed, and keeps its record.
+func TestADeleteRefusedByAHiddenBindingKeepsItsRecord(t *testing.T) {
 	h := newHost(t)
-	h.definitions[folder] = definition(invalid)
-	if err := h.deleteSample(h.steps()); err != nil {
+	h.provisioned()
+	h.hold("sample", "container-hidden", false)
+	h.failOn["unbind container-hidden"] = fmt.Errorf("wrapped: %w", operator.ErrOutsideGrant)
+	err := h.deleteSample(h.steps())
+	wantKind(t, err, KindBindingOutsideGrant)
+	if !strings.Contains(err.Error(), "container-hidden") {
+		t.Fatalf("message %v", err)
+	}
+	h.wantCalls(t, "stop", "save", "unbind container-hidden")
+	held := h.held("sample")
+	if !slices.ContainsFunc(held.Names, func(n store.Name) bool { return n.Name == "container-hidden" }) || len(held.Keys) != 1 {
+		t.Fatalf("held %+v", held)
+	}
+}
+
+// A workspace whose folder is gone and that holds a name or a key is deleted by
+// the same steps without the stop, the backup and the folder's removal.
+func TestDeleteOfAWorkspaceWithNoFolderRemovesWhatTheDataHolds(t *testing.T) {
+	h := newHost(t)
+	h.provisioned()
+	gone := filepath.Join(t.TempDir(), "sample")
+	if err := h.deleteAt(h.steps(), gone); err != nil {
 		t.Fatal(err)
 	}
-	h.wantCalls(t, wholeDelete...)
-
-	h = newHost(t)
-	h.definitions[folder] = definition(invalid)
-	s := New(Options{Runtime: h, Workspaces: h, Records: Records{Folder: t.TempDir()}})
-	if err := h.deleteSample(s); err != nil {
-		t.Fatalf("an invalid block held up the delete: %v", err)
+	// remove-folder removes only the workspace socket's folder of a folder that
+	// is gone.
+	h.wantCalls(t, "unbind container-sample", "remove-containers", "revoke host-sample/sample", "remove-folder")
+	h.wantGone(t, "sample")
+	if !strings.Contains(h.logged.String(), "folder is gone") {
+		t.Errorf("console %q", h.logged.String())
 	}
-	h.wantCalls(t, "stop", "save", "remove-containers", "remove-folder")
 }
 
 // A removal can stop with any part of the folder left, once it has taken the
@@ -227,9 +273,7 @@ func TestARetryAfterTheRemovalTookTheRepositorySkipsTheSave(t *testing.T) {
 	if !slices.Contains(h.seen(), "remove-folder") {
 		t.Errorf("calls %v", h.seen())
 	}
-	if _, err := os.Stat(s.opts.Records.path("sample")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("record stays: %v", err)
-	}
+	h.wantGone(t, "sample")
 }
 
 func TestNoJobStartsWhatARemovalLeft(t *testing.T) {
@@ -251,9 +295,10 @@ func TestNoJobStartsWhatARemovalLeft(t *testing.T) {
 // of the name makes the same kind of folder, whose generated files may have none.
 func TestADeleteBacksUpAFolderThatHasARepository(t *testing.T) {
 	h := newHost(t)
+	h.provisioned()
 	s := h.steps()
 	real := sampleAt(t, h, true)
-	if err := s.opts.Records.Write("sample", Record{Removing: folderID(real)}); err != nil {
+	if err := h.data.SetRemoving(context.Background(), "sample", folderID(real)); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.deleteAt(s, real); err != nil {
@@ -267,15 +312,14 @@ func TestAStartOfAFolderThatHasARepositoryEndsTheState(t *testing.T) {
 	s := h.steps()
 	real := sampleAt(t, h, true)
 	h.definitions[real] = devcontainer.Definition{}
-	if err := s.opts.Records.Write("sample", Record{Removing: folderID(real)}); err != nil {
+	if err := h.data.SetRemoving(context.Background(), "sample", folderID(real)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Start(context.Background(), real, h); err != nil {
 		t.Fatal(err)
 	}
-	record, err := s.opts.Records.Read("sample")
-	if err != nil || record.Removing != "" {
-		t.Errorf("record %+v %v", record, err)
+	if removing, err := h.data.Removing(context.Background(), "sample"); err != nil || removing != "" {
+		t.Errorf("removing %q %v", removing, err)
 	}
 }
 
@@ -283,6 +327,7 @@ func TestAStartOfAFolderThatHasARepositoryEndsTheState(t *testing.T) {
 // backup, so the save runs, and it fails the job there.
 func TestAFolderWithNoRepositoryAndNoRemovalStillSaves(t *testing.T) {
 	h := newHost(t)
+	h.provisioned()
 	real := sampleAt(t, h, false)
 	if err := h.deleteAt(h.steps(), real); err != nil {
 		t.Fatal(err)
@@ -294,9 +339,10 @@ func TestAFolderWithNoRepositoryAndNoRemovalStillSaves(t *testing.T) {
 // have no backup.
 func TestAFolderOfTheNameThatARemovalWasNotAboutStillSaves(t *testing.T) {
 	h := newHost(t)
+	h.provisioned()
 	s := h.steps()
 	real := sampleAt(t, h, false)
-	if err := s.opts.Records.Write("sample", Record{Removing: "another-folder"}); err != nil {
+	if err := h.data.SetRemoving(context.Background(), "sample", "another-folder"); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.deleteAt(s, real); err != nil {
@@ -315,7 +361,7 @@ func TestTheStateEndsWhileTheEmptyFolderStands(t *testing.T) {
 	if err := h.deleteAt(s, real); err == nil {
 		t.Fatal("no failure")
 	}
-	if _, err := os.Stat(s.opts.Records.path("sample")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("record stays: %v", err)
+	if removing, err := h.data.Removing(context.Background(), "sample"); err != nil || removing != "" {
+		t.Errorf("removing %q %v", removing, err)
 	}
 }

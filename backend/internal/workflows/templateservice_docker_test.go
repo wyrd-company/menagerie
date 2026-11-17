@@ -81,7 +81,7 @@ func TestCreateAndUpgradeRunTheDevcontainer(t *testing.T) {
 	containers := testContainers(t, client)
 	rt := devcontainer.New(client, devcontainer.Options{Containers: containers, RunnerImage: func(context.Context) (string, error) { return initializeImage, nil }})
 	pull(t, client, initializeImage, hookImage)
-	steps := provisioning.New(provisioning.Options{Runtime: provisioning.Adapt(rt), Records: provisioning.Records{Folder: t.TempDir()}})
+	steps := provisioning.New(provisioning.Options{Runtime: provisioning.Adapt(rt), Data: testData(t)})
 	a := newAcceptWith(t, steps, acceptOptions{containers: containers, image: hookImage})
 	// Remove only the containers labelled for this test's workspaces.
 	t.Cleanup(func() {

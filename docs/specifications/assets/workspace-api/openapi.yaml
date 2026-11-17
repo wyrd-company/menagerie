@@ -397,6 +397,7 @@ components:
             - provisioning-invalid
             - provisioning-unavailable
             - provisioning-not-ready
+            - binding-outside-grant
             - internal-error
             - workspace-exists
             - template-refused

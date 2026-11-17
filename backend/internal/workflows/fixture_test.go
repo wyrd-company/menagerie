@@ -21,6 +21,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
@@ -191,8 +192,6 @@ type fakeRuntime struct {
 	onStop func()
 	// onCheck observes each host prerequisites check.
 	onCheck func(folder string)
-	// retired lists the workspaces Retire was called for.
-	retired []string
 	// state is the devcontainer's state before a stop, running when
 	// empty; mounting are the containers Mounting reports.
 	state    string
@@ -301,14 +300,6 @@ func (r *fakeRuntime) Delete(ctx context.Context, folder string, p devcontainer.
 		return err
 	}
 	return os.RemoveAll(folder)
-}
-
-// Retire records the call, apart from what seen reports.
-func (r *fakeRuntime) Retire(folder string, _ devcontainer.Progress) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.retired = append(r.retired, filepath.Base(folder))
-	return r.failOn["retire"]
 }
 
 func (r *fakeRuntime) seen() []string {
@@ -522,4 +513,15 @@ func (w *world) createWorkspace(t *testing.T, name string) {
 	if snap := waitEnded(t, job); snap.State != jobs.Succeeded {
 		t.Fatalf("create %+v %+v", snap, snap.Error)
 	}
+}
+
+// testData is Menagerie's data in a folder of the test's own.
+func testData(t *testing.T) *store.Store {
+	t.Helper()
+	data, err := store.Open(filepath.Join(t.TempDir(), "menagerie.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = data.Close() })
+	return data
 }

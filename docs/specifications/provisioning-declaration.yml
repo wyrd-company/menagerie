@@ -53,11 +53,17 @@ description: >-
   The container name is not in the block. It is the `--name` value of `runArgs`,
   in either the `--name value` or the `--name=value` form, and a definition with
   a block and no name is refused. The block has no variable substitution: the
-  template renders its values. A block in a Compose definition is refused. Two
-  workspaces cannot declare one container name or one Xolotl key.
+  template renders its values. A block in a Compose definition is refused. A
+  container name or a Xolotl key belongs to one workspace at a time: Menagerie's
+  data records each name it binds and each key it issues as the workspace's, and
+  a declaration of a name or a key that the data holds for another workspace,
+  or of a name a container of another workspace holds, is refused. What a
+  workspace was given is removed by its delete, and by a job that retires it,
+  from Menagerie's data, whatever the definition declares by then.
 validation-criteria: >-
   `go test` of the package that reads the block parses a valid block with and
   without `xolotl` and `values`, treats an absent block as no provisioning, and
   rejects each invalid field, an unknown key, a block in a Compose definition, a
-  definition with no `--name`, and a name or key another workspace declares. It
-  checks that the keys of the schema equal the keys the parser accepts.
+  definition with no `--name`, and a name or key that Menagerie's data holds
+  for another workspace. It checks that the keys of the schema equal the keys
+  the parser accepts.

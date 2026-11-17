@@ -142,42 +142,6 @@ func TestACreateKeepsTheBackupOfADeletedWorkspace(t *testing.T) {
 	}
 }
 
-func TestAnUpgradeAndAnApplyRetireBeforeTheyChangeTheDefinition(t *testing.T) {
-	w := newWorld(t)
-	if _, snap := w.create(t, "alpha"); snap.State != jobs.Succeeded {
-		t.Fatalf("%+v", snap)
-	}
-	if _, snap := w.upgraded(t); snap.State != jobs.Succeeded {
-		t.Fatalf("%+v %+v", snap, snap.Error)
-	}
-	if !slices.Equal(w.rt.retired, []string{"alpha"}) {
-		t.Fatalf("retired %v", w.rt.retired)
-	}
-	w.rt.retired = nil
-	w.contribute(t, "alpha", "feature", map[string]string{"file": "content\n"})
-	if _, snap := w.applyBranch(t, "alpha", "feature"); snap.State != jobs.Succeeded {
-		t.Fatalf("%+v %+v", snap, snap.Error)
-	}
-	if !slices.Equal(w.rt.retired, []string{"alpha"}) {
-		t.Fatalf("retired %v", w.rt.retired)
-	}
-}
-
-func TestARetireThatFailsChangesNothing(t *testing.T) {
-	w := newWorld(t)
-	if _, snap := w.create(t, "alpha"); snap.State != jobs.Succeeded {
-		t.Fatalf("%+v", snap)
-	}
-	w.rt.failOn = map[string]error{"retire": errors.New("no record")}
-	if _, snap := w.upgraded(t); snap.State != jobs.Failed || !strings.Contains(snap.Error.Message, "nothing was upgraded") {
-		t.Fatalf("%+v %+v", snap, snap.Error)
-	}
-	w.contribute(t, "alpha", "feature", map[string]string{"file": "content\n"})
-	if _, snap := w.applyBranch(t, "alpha", "feature"); snap.State != jobs.Failed || !strings.Contains(snap.Error.Message, "nothing was applied") {
-		t.Fatalf("%+v %+v", snap, snap.Error)
-	}
-}
-
 // A verify or retire that fails comes after the start, so no message says that
 // the devcontainer did not start or that it is stopped.
 func TestAFailureAfterTheStartIsNotAFailedStart(t *testing.T) {

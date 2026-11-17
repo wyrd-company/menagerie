@@ -149,9 +149,6 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	if failure := a.unmounted(ctx, run); failure != nil {
 		return a.resume(ctx, run, failure)
 	}
-	if err := a.w.opts.Runtime.Retire(a.folder, run); err != nil {
-		return a.resume(ctx, run, &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; nothing was applied", a.branch, err)})
-	}
 	applied, err := plan.Write(a.folder, run.Log("apply: "))
 	var refused *backup.NotApplicableError
 	var failed *backup.ApplyError

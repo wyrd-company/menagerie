@@ -16,16 +16,18 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
-	"github.com/wyrd-company/menagerie/backend/internal/xolotl"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 )
 
 // Delete removes a workspace from the host. It refuses while another running
-// container mounts the folder, reads what the workspace holds, stops the
-// devcontainer and runs save, which commits and backs the workspace up. A
-// failure there removes nothing. It then unbinds, removes the containers,
-// revokes the key, and removes the socket folder and the workspace folder.
-// Each step treats what is already gone as done, and the folder goes last, so a
-// retried delete can still read its declaration.
+// container mounts the folder, reads what the workspace holds from Menagerie's
+// data, never from its definition, stops the devcontainer and runs save, which
+// commits and backs the workspace up. A failure there removes nothing. It then
+// unbinds, removes the containers, revokes the keys, and removes the socket
+// folder and the workspace folder, and last the workspace's data. Each step
+// treats what is already gone as done, so a retried delete finds what is left.
+// A workspace whose folder is gone, listed as no-folder, is deleted by the same
+// steps without the stop, the backup and the folder's removal.
 func (s *Steps) Delete(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error {
 	p.Phase("read-definition")
 	others, err := s.opts.Runtime.MountingOutside(ctx, folder, p)
@@ -35,17 +37,82 @@ func (s *Steps) Delete(ctx context.Context, folder string, p devcontainer.Progre
 	if err := refuseMounted(others, p); err != nil {
 		return err
 	}
-	held, err := s.held(ctx, folder, p)
+	workspace := filepath.Base(folder)
+	held, err := s.opts.Data.Held(ctx, workspace)
 	if err != nil {
 		return err
 	}
-	if len(held.Names) > 0 && s.opts.Bindings == nil {
-		return &jobs.Failure{Kind: KindUnavailable, Err: fmt.Errorf("the workspace holds the binding of %s, and the configuration has no provisioning.wyrwood; nothing was removed", held.Names[0])}
+	if err := s.reaches(held); err != nil {
+		return err
+	}
+	_, err = os.Lstat(folder)
+	gone := errors.Is(err, os.ErrNotExist)
+	if err != nil && !gone {
+		return fmt.Errorf("reading the workspace folder failed: %w; nothing was removed", err)
+	}
+	if gone {
+		fmt.Fprintln(p.Log(""), "the workspace's folder is gone, so only what Menagerie's data holds for it is removed")
+	} else if err := s.saveBeforeRemoval(ctx, folder, p, save); err != nil {
+		return err
+	}
+
+	if len(held.Names) > 0 {
+		p.Phase("unbind")
+	}
+	for _, name := range held.Names {
+		if err := s.removeBinding(ctx, workspace, name, p); err != nil {
+			return err
+		}
+		fmt.Fprintf(p.Log(""), "binding of %s is gone\n", name.Name)
+	}
+	if err := s.opts.Runtime.RemoveContainers(ctx, folder, p); err != nil {
+		return err
+	}
+	if len(held.Keys) > 0 {
+		p.Phase("revoke-key")
+	}
+	for _, key := range held.Keys {
+		if err := s.revokeKey(ctx, workspace, key, p); err != nil {
+			return err
+		}
+	}
+	// Every name and key is gone. Once the removal takes the repository, a retry
+	// does not back up what is left of the folder, and no job starts its
+	// devcontainer. The state ends while the empty folder still stands, so it
+	// never outlives the folder it is about. A folder that is gone has none.
+	if err := s.opts.Data.SetRemoving(ctx, workspace, folderID(folder)); err != nil {
+		return err
+	}
+	err = s.opts.Runtime.RemoveFolder(ctx, folder, p, func() error { return s.opts.Data.SetRemoving(ctx, workspace, "") })
+	if err != nil {
+		return err
+	}
+	return s.opts.Data.RemoveWorkspace(ctx, workspace)
+}
+
+// reaches fails a delete, as KindUnavailable and with nothing changed, when the
+// workspace holds a name or a key and configuration lacks the section that
+// reaches it.
+func (s *Steps) reaches(held store.Held) error {
+	for _, name := range held.Names {
+		if err := s.reachesBinding(name); err != nil {
+			var failure *jobs.Failure
+			if errors.As(err, &failure) {
+				failure.Err = fmt.Errorf("%w; nothing was removed", failure.Err)
+			}
+			return err
+		}
 	}
 	if len(held.Keys) > 0 && s.opts.Keys == nil {
 		return &jobs.Failure{Kind: KindUnavailable, Err: fmt.Errorf("the workspace holds Xolotl key %s, and the configuration has no provisioning.xolotl; nothing was removed", held.Keys[0])}
 	}
+	return nil
+}
 
+// saveBeforeRemoval stops the devcontainer and runs save, unless an earlier
+// delete already backed the folder up and began to remove it. A container that
+// still mounts the folder after the stop refuses the delete.
+func (s *Steps) saveBeforeRemoval(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error {
 	if err := s.opts.Runtime.Stop(ctx, folder, p); err != nil {
 		return err
 	}
@@ -59,54 +126,19 @@ func (s *Steps) Delete(ctx context.Context, folder string, p devcontainer.Progre
 		fmt.Fprintln(p.Log(""), stoppedNotice)
 		return err
 	}
-	began, err := s.opts.Records.Read(filepath.Base(folder))
+	began, err := s.opts.Data.Removing(ctx, filepath.Base(folder))
 	if err != nil {
 		return err
 	}
 	if removalBegan(began, folder) {
 		fmt.Fprintln(p.Log(""), "an earlier delete backed this workspace up and began to remove its folder, so there is no backup to make")
-	} else if err := save(ctx); err != nil {
+		return nil
+	}
+	if err := save(ctx); err != nil {
 		fmt.Fprintln(p.Log(""), stoppedNotice)
 		return err
 	}
-
-	if len(held.Names) > 0 {
-		p.Phase("unbind")
-	}
-	for _, name := range held.Names {
-		if err := s.unbind(ctx, name, p); err != nil {
-			return err
-		}
-		fmt.Fprintf(p.Log(""), "binding of %s is gone\n", name)
-	}
-	if err := s.opts.Runtime.RemoveContainers(ctx, folder, p); err != nil {
-		return err
-	}
-	if len(held.Keys) > 0 {
-		p.Phase("revoke-key")
-	}
-	for _, key := range held.Keys {
-		revocation, err := s.opts.Keys.Revoke(ctx, key.Policy, key.Name)
-		if err != nil {
-			return err
-		}
-		switch revocation {
-		case xolotl.Revoked:
-			fmt.Fprintf(p.Log(""), "revoked Xolotl key %s\n", key)
-		default:
-			fmt.Fprintf(p.Log(""), "Xolotl key %s is already gone\n", key)
-		}
-	}
-	// Every name and key of the record is done, and a retried delete acts on the
-	// declaration again while the folder has one. Once the removal takes the
-	// repository, a retry does not back up what is left of the folder, and no job
-	// starts its devcontainer. The state ends while the empty folder still stands,
-	// so it never outlives the folder it is about.
-	name := filepath.Base(folder)
-	if err := s.opts.Records.Write(name, Record{Removing: folderID(folder)}); err != nil {
-		return err
-	}
-	return s.opts.Runtime.RemoveFolder(ctx, folder, p, func() error { return s.opts.Records.Write(name, Record{}) })
+	return nil
 }
 
 // folderID names a folder as the host's file system knows it, or is "" when it
@@ -124,12 +156,13 @@ func folderID(folder string) string {
 }
 
 // removalBegan says that a delete backed this folder up and has taken its
-// repository. The record alone does not say so: a removal that stopped before it
-// took the repository leaves a folder that jobs can still change, and another
-// folder can stand under this name. Each job that writes to a folder needs its
-// repository, so with the repository gone nothing was written after the backup.
-func removalBegan(record Record, folder string) bool {
-	if record.Removing == "" || record.Removing != folderID(folder) {
+// repository. The recorded folder alone does not say so: a removal that stopped
+// before it took the repository leaves a folder that jobs can still change, and
+// another folder can stand under this name. Each job that writes to a folder
+// needs its repository, so with the repository gone nothing was written after
+// the backup.
+func removalBegan(removing, folder string) bool {
+	if removing == "" || removing != folderID(folder) {
 		return false
 	}
 	_, err := os.Lstat(filepath.Join(folder, ".git"))
@@ -138,17 +171,16 @@ func removalBegan(record Record, folder string) bool {
 
 // refuseRemoving keeps a job from starting a devcontainer on what is left of a
 // folder. Any other folder of this name was not touched, so the state ends.
-func (s *Steps) refuseRemoving(folder string) error {
-	name := filepath.Base(folder)
-	record, err := s.opts.Records.Read(name)
-	if err != nil || record.Removing == "" {
+func (s *Steps) refuseRemoving(ctx context.Context, folder string) error {
+	workspace := filepath.Base(folder)
+	removing, err := s.opts.Data.Removing(ctx, workspace)
+	if err != nil || removing == "" {
 		return err
 	}
-	if removalBegan(record, folder) {
+	if removalBegan(removing, folder) {
 		return &jobs.Failure{Kind: KindDeleteUnfinished, Err: errors.New("a delete began to remove this workspace's folder; delete the workspace again to finish it")}
 	}
-	record.Removing = ""
-	return s.opts.Records.Write(name, record)
+	return s.opts.Data.SetRemoving(ctx, workspace, "")
 }
 
 // stoppedNotice is the console line of a delete that stopped the devcontainer
@@ -165,91 +197,4 @@ func refuseMounted(ids []string, p devcontainer.Progress) error {
 		fmt.Fprintf(p.Log(""), "running container %s mounts the workspace folder\n", id)
 	}
 	return &jobs.Failure{Kind: KindDeleteRefused, Err: errors.New("a running container other than the workspace's own mounts the workspace folder; nothing was removed")}
-}
-
-// held is what a delete unbinds and revokes: what the workspace's retirement
-// record names and what its definition declares. A block that is not valid still
-// names what it names, because an earlier definition may have provisioned it,
-// and without the section it needs it names nothing, so that it cannot hold up
-// the delete. What another workspace's definition declares, or a declared name
-// that a container outside this workspace holds, stays: its create was refused,
-// so nothing was issued for it.
-func (s *Steps) held(ctx context.Context, folder string, p devcontainer.Progress) (Record, error) {
-	record, err := s.opts.Records.Read(filepath.Base(folder))
-	if err != nil {
-		return Record{}, err
-	}
-	declared, err := s.declared(ctx, folder, p)
-	if err != nil {
-		return Record{}, err
-	}
-	if declared.ContainerName != "" {
-		record = record.add(&declared)
-	} else if declared.Xolotl != nil && !containsKey(record.Keys, *declared.Xolotl) {
-		record.Keys = append(record.Keys, *declared.Xolotl)
-	}
-	others, err := s.otherHolders(folder, false)
-	if err != nil {
-		return Record{}, err
-	}
-	var out Record
-	for _, name := range record.Names {
-		if holder := others.names[name]; holder != "" {
-			fmt.Fprintf(p.Log(""), "the binding of %s stays: %s\n", name, holder)
-			continue
-		}
-		out.Names = append(out.Names, name)
-	}
-	for _, key := range record.Keys {
-		if holder := others.keys[key]; holder != "" {
-			fmt.Fprintf(p.Log(""), "Xolotl key %s stays: %s\n", key, holder)
-			continue
-		}
-		out.Keys = append(out.Keys, key)
-	}
-	return out, nil
-}
-
-// declared reads the name and key the definition declares.
-func (s *Steps) declared(ctx context.Context, folder string, p devcontainer.Progress) (Declaration, error) {
-	def, err := s.opts.Runtime.Definition(folder)
-	if err != nil {
-		fmt.Fprintf(p.Log(""), "the definition cannot be read, so only the retirement record says what to unbind and revoke: %v\n", err)
-		return Declaration{}, nil
-	}
-	if def.Block == nil {
-		return Declaration{}, nil
-	}
-	var out Declaration
-	_, invalid := Parse(def)
-	if invalid != nil {
-		fmt.Fprintf(p.Log(""), "the declaration is not valid, so only what it names and the configuration can reach is removed: %v\n", invalid)
-	}
-	if invalid == nil || s.opts.Bindings != nil {
-		out.ContainerName = def.ContainerName
-	}
-	if key, ok := declaredKey(def.Block); ok && (invalid == nil || s.opts.Keys != nil) {
-		out.Xolotl = &key
-	}
-	if out.ContainerName == "" {
-		return out, nil
-	}
-	owner, found, err := s.opts.Runtime.ContainerHolder(ctx, out.ContainerName)
-	if err != nil {
-		return Declaration{}, err
-	}
-	if found && owner != folder {
-		fmt.Fprintf(p.Log(""), "a container outside this workspace has the declared name %s, so its binding and key stay\n", out.ContainerName)
-		return Declaration{}, nil
-	}
-	return out, nil
-}
-
-func containsKey(keys []Key, key Key) bool {
-	for _, k := range keys {
-		if k == key {
-			return true
-		}
-	}
-	return false
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -18,9 +17,13 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/wyrwood"
 	"github.com/wyrd-company/menagerie/backend/internal/xolotl"
 )
+
+// sampleAgent is the agent the sample host's names are bound on.
+const sampleAgent = "sample-host"
 
 // host is one sample host: a fake runtime, Wyrwood and Xolotl that write what
 // each is asked to a shared list, so that a test reads the order across them.
@@ -46,21 +49,64 @@ type host struct {
 	// readErr fails a read.
 	readErr error
 	issued  map[string]bool
-	logged  strings.Builder
-	phases  []string
+	// unbound lists each unbind as agent/name.
+	unbound []string
+	// data is Menagerie's data of the host.
+	data   *store.Store
+	logged strings.Builder
+	phases []string
 	// mounting and mountingOutside are what the two mount checks report.
 	mounting, mountingOutside []string
 	// failAfterEmptied fails a removal after it has emptied the folder.
 	failAfterEmptied error
+	// onCheck runs in the host prerequisites check.
+	onCheck func()
 }
 
 func newHost(t *testing.T) *host {
+	data, err := store.Open(filepath.Join(t.TempDir(), "menagerie.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = data.Close() })
 	return &host{
 		t: t, state: devcontainer.StateNoContainer, created: "created-id", containerName: "container-sample",
 		definitions: map[string]devcontainer.Definition{"/root/sample": definition(sampleBlock)},
 		holders:     map[string]string{}, failOn: map[string]error{},
-		bound: map[string]wyrwood.Selection{}, issued: map[string]bool{},
+		bound: map[string]wyrwood.Selection{}, issued: map[string]bool{}, data: data,
 	}
+}
+
+// hold records in the data a name the workspace holds, bound on sampleAgent.
+func (h *host) hold(workspace, name string, current bool) {
+	h.t.Helper()
+	if err := h.data.HoldName(context.Background(), workspace, name, sampleAgent, current); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// holdKey records in the data a key the workspace holds.
+func (h *host) holdKey(workspace, policy, name string) {
+	h.t.Helper()
+	if err := h.data.HoldKey(context.Background(), workspace, Key{Policy: policy, Name: name}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// provisioned records what a create of the sample gave it.
+func (h *host) provisioned() {
+	h.hold("sample", "container-sample", true)
+	h.holdKey("sample", "host-sample", "sample")
+}
+
+// held is what the data holds for a workspace.
+func (h *host) held(workspace string) store.Held {
+	h.t.Helper()
+	held, err := h.data.Held(context.Background(), workspace)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return held
 }
 
 func (h *host) note(call string) error {
@@ -128,6 +174,9 @@ func (h *host) RemoveFolder(_ context.Context, _ string, _ devcontainer.Progress
 	return h.failAfterEmptied
 }
 func (h *host) CheckHostPrerequisites(context.Context, string, devcontainer.Progress) error {
+	if h.onCheck != nil {
+		h.onCheck()
+	}
 	return h.note("check")
 }
 func (h *host) Definition(folder string) (devcontainer.Definition, error) {
@@ -196,12 +245,13 @@ func (h *host) Bind(_ context.Context, name string, selection wyrwood.Selection)
 	h.bound[name] = selection
 	return operator.Binding{}, nil
 }
-func (h *host) Unbind(_ context.Context, name string) (operator.UnbindResult, error) {
+func (h *host) Unbind(_ context.Context, agent, name string) (operator.UnbindResult, error) {
 	if err := h.note("unbind " + name); err != nil {
 		return operator.UnbindResult{}, err
 	}
 	h.Lock()
 	defer h.Unlock()
+	h.unbound = append(h.unbound, agent+"/"+name)
 	delete(h.bound, name)
 	return operator.UnbindResult{Removed: true, Warning: "a part\nstayed", TokenLive: true}, nil
 }
@@ -252,21 +302,13 @@ func (h *host) Revoke(_ context.Context, policy, name string) (xolotl.Revocation
 	return "revoked", h.note("revoke " + policy + "/" + name)
 }
 
-func (h *host) Names() ([]string, error) {
-	var names []string
-	for folder := range h.definitions {
-		names = append(names, filepath.Base(folder))
-	}
-	slices.Sort(names)
-	return names, nil
-}
-func (h *host) FolderPath(name string) (string, error) { return "/root/" + name, nil }
-
 func (h *host) steps() *Steps {
-	return New(Options{
-		Clients: Clients{Bindings: h, Keys: h, Wait: 200 * time.Millisecond}, Runtime: h, Workspaces: h,
-		Records: Records{Folder: filepath.Join(h.t.TempDir(), "records")}, Poll: time.Millisecond,
-	})
+	return h.with(Clients{Bindings: h, Agent: sampleAgent, Keys: h, Wait: 200 * time.Millisecond})
+}
+
+// with is the host's steps with clients.
+func (h *host) with(clients Clients) *Steps {
+	return New(Options{Clients: clients, Runtime: h, Data: h.data, Poll: time.Millisecond})
 }
 
 func (h *host) seen() []string {
@@ -376,8 +418,7 @@ func TestAMissingSectionFailsBeforeAnyWrite(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHost(t)
-			s := New(Options{Clients: clients, Runtime: h, Workspaces: h, Records: Records{Folder: t.TempDir()}})
-			err := s.Start(context.Background(), folder, h)
+			err := h.with(clients).Start(context.Background(), folder, h)
 			wantKind(t, err, KindUnavailable)
 			if !strings.Contains(err.Error(), "provisioning."+name) {
 				t.Errorf("message %v", err)
@@ -390,62 +431,120 @@ func TestAMissingSectionFailsBeforeAnyWrite(t *testing.T) {
 func TestANameOrKeyAnotherWorkspaceHoldsIsRefused(t *testing.T) {
 	other := "/root/other"
 	for name, tc := range map[string]struct {
-		prepare func(h *host, s *Steps)
+		prepare func(h *host)
 		want    string
 	}{
-		"declared name": {func(h *host, _ *Steps) {
-			h.definitions[other] = definition(`{"wyrwood":{"accessGroup":1,"policies":["a"]}}`)
-		}, "the definition of other declares it"},
-		"declared key": {func(h *host, _ *Steps) {
-			def := definition(sampleBlock)
-			def.ContainerName = "container-other"
-			h.definitions[other] = def
-		}, "Xolotl key host-sample/sample is already taken"},
-		"an invalid block still holds its name": {func(h *host, _ *Steps) {
-			h.definitions[other] = definition(`{"unknown":1}`)
-		}, "the definition of other declares it"},
-		"name in a record": {func(h *host, s *Steps) {
-			h.definitions[other] = devcontainer.Definition{}
-			if err := s.opts.Records.Write("other", Record{Names: []string{"container-sample"}}); err != nil {
-				h.t.Fatal(err)
-			}
-		}, "the retirement record of other names it"},
-		"key in a record": {func(h *host, s *Steps) {
-			h.definitions[other] = devcontainer.Definition{}
-			if err := s.opts.Records.Write("other", Record{Keys: []Key{{Policy: "host-sample", Name: "sample"}}}); err != nil {
-				h.t.Fatal(err)
-			}
-		}, "the retirement record of other names it"},
-		"another workspace's container": {func(h *host, _ *Steps) {
+		"a name the data holds for another workspace": {func(h *host) {
+			h.hold("other", "container-sample", false)
+		}, "Menagerie's data holds it for workspace other"},
+		"a key the data holds for another workspace": {func(h *host) {
+			h.holdKey("other", "host-sample", "sample")
+		}, "Xolotl key host-sample/sample is already taken: Menagerie's data holds it for workspace other"},
+		"another workspace's container": {func(h *host) {
 			h.holders["container-sample"] = other
 		}, "the container of other has that name"},
-		"a container of no workspace": {func(h *host, _ *Steps) {
+		"a container of no workspace": {func(h *host) {
 			h.holders["container-sample"] = ""
 		}, "belongs to no workspace"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHost(t)
-			s := h.steps()
-			tc.prepare(h, s)
-			err := s.Start(context.Background(), folder, h)
+			tc.prepare(h)
+			err := h.steps().Start(context.Background(), folder, h)
 			wantKind(t, err, KindInvalid)
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("message %v, want %q", err, tc.want)
 			}
 			h.wantCalls(t)
+			if held := h.held("sample"); !held.Empty() {
+				t.Errorf("the refused workspace holds %+v", held)
+			}
 		})
 	}
 }
 
-func TestItsOwnContainerAndRecordDoNotTakeItsName(t *testing.T) {
+// Only Menagerie's data and the containers decide who holds a name: another
+// workspace's definition that declares it holds nothing until its job records
+// it, and that job is then refused.
+func TestADeclarationAloneTakesNoName(t *testing.T) {
 	h := newHost(t)
-	s := h.steps()
-	h.holders["container-sample"] = folder
-	if err := s.opts.Records.Write("sample", Record{Names: []string{"container-sample"}}); err != nil {
+	other := definition(sampleBlock)
+	h.definitions["/root/other"] = other
+	if err := h.steps().Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Start(context.Background(), folder, h); err != nil {
+	h.calls = nil
+	err := h.steps().Start(context.Background(), "/root/other", h)
+	wantKind(t, err, KindInvalid)
+	if !strings.Contains(err.Error(), "Menagerie's data holds it for workspace sample") {
+		t.Fatalf("message %v", err)
+	}
+	h.wantCalls(t)
+}
+
+// A job that took the name or the key meanwhile is refused by the constraint,
+// as read-definition refuses it, and nothing is asked of Wyrwood or Xolotl.
+func TestANameOrKeyTakenMeanwhileIsRefusedBeforeItsRequest(t *testing.T) {
+	for name, tc := range map[string]struct {
+		take     func(h *host)
+		notAsked string
+	}{
+		"key":  {func(h *host) { h.holdKey("other", "host-sample", "sample") }, "issue "},
+		"name": {func(h *host) { h.hold("other", "container-sample", true) }, "bind "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			// The other job records it between this job's check and its write.
+			h.onCheck = func() { tc.take(h) }
+			err := h.steps().Start(context.Background(), folder, h)
+			wantKind(t, err, KindInvalid)
+			if !strings.Contains(err.Error(), "workspace other") {
+				t.Errorf("message %v", err)
+			}
+			for _, call := range h.seen() {
+				if strings.HasPrefix(call, tc.notAsked) {
+					t.Errorf("asked %s", call)
+				}
+			}
+		})
+	}
+}
+
+func TestItsOwnContainerAndDataDoNotTakeItsName(t *testing.T) {
+	h := newHost(t)
+	h.holders["container-sample"] = folder
+	h.provisioned()
+	if err := h.steps().Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The data records the key before Xolotl is asked and the name before Wyrwood
+// is, so what a request made is known whatever happens to the job.
+func TestAJobRecordsWhatItProvisionsBeforeItsRequests(t *testing.T) {
+	h := newHost(t)
+	h.failOn["issue host-sample/sample"] = errors.New("the answer was lost")
+	if err := h.steps().Start(context.Background(), folder, h); err == nil {
+		t.Fatal("passed")
+	}
+	if held := h.held("sample"); !slices.Equal(held.Keys, []Key{{Policy: "host-sample", Name: "sample"}}) || len(held.Names) != 0 {
+		t.Fatalf("held %+v", held)
+	}
+	delete(h.failOn, "issue host-sample/sample")
+	h.failOn["bind container-sample"] = errors.New("the answer was lost")
+	if err := h.steps().Start(context.Background(), folder, h); err == nil {
+		t.Fatal("passed")
+	}
+	want := []store.Name{{Name: "container-sample", Agent: sampleAgent, Current: true}}
+	if held := h.held("sample"); !slices.Equal(held.Names, want) {
+		t.Fatalf("held %+v", held)
+	}
+	delete(h.failOn, "bind container-sample")
+	if err := h.steps().Start(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	if held := h.held("sample"); !slices.Equal(held.Names, want) || len(held.Keys) != 1 {
+		t.Fatalf("held %+v", held)
 	}
 }
 
@@ -462,8 +561,7 @@ func TestMissingHostPrerequisitesIssueNothing(t *testing.T) {
 func TestABlockWithoutXolotlIssuesNoKey(t *testing.T) {
 	h := newHost(t)
 	h.definitions[folder] = definition(`{"wyrwood":{"accessGroup":1000,"policies":["a"]}}`)
-	s := New(Options{Clients: Clients{Bindings: h, Wait: time.Second}, Runtime: h, Workspaces: h, Records: Records{Folder: t.TempDir()}, Poll: time.Millisecond})
-	if err := s.Start(context.Background(), folder, h); err != nil {
+	if err := h.with(Clients{Bindings: h, Agent: sampleAgent, Wait: time.Second}).Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
 	}
 	h.wantCalls(t, "begin-start", "check", "bind container-sample", "build", "create", "up")
@@ -517,8 +615,7 @@ func TestAnExistingKeysStateReachesTheConsole(t *testing.T) {
 	expires := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 	keys := issuedKeys{Issued: xolotl.Issued{Disabled: true, ExpiresAt: &expires}}
 	h := newHost(t)
-	s := New(Options{Clients: Clients{Bindings: h, Keys: keys, Wait: time.Second}, Runtime: h, Workspaces: h, Records: Records{Folder: t.TempDir()}, Poll: time.Millisecond})
-	if err := s.Start(context.Background(), folder, h); err != nil {
+	if err := h.with(Clients{Bindings: h, Agent: sampleAgent, Keys: keys, Wait: time.Second}).Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"host-sample/sample is disabled", "host-sample/sample expires at 2030-01-02T03:04:05Z"} {
@@ -774,220 +871,223 @@ func TestAJobThatEndsWhileItWaitsEndsAtOnce(t *testing.T) {
 	}
 }
 
-func TestRetireRecordsWhatTheDefinitionDeclares(t *testing.T) {
+func TestAStartedJobRetiresWhatTheDefinitionNoLongerDeclaresLast(t *testing.T) {
 	h := newHost(t)
-	s := h.steps()
-	if err := s.Retire(folder, h); err != nil {
-		t.Fatal(err)
-	}
-	record, err := s.opts.Records.Read("sample")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := Record{Names: []string{"container-sample"}, Keys: []Key{{Policy: "host-sample", Name: "sample"}}}
-	if !reflect.DeepEqual(record, want) {
-		t.Fatalf("%+v", record)
-	}
-	// A repeat adds nothing.
-	if err := s.Retire(folder, h); err != nil {
-		t.Fatal(err)
-	}
-	if record, _ = s.opts.Records.Read("sample"); !reflect.DeepEqual(record, want) {
-		t.Fatalf("after a repeat: %+v", record)
-	}
-	// It only grows.
-	def := definition(sampleBlock)
-	def.ContainerName = "container-next"
-	h.definitions[folder] = def
-	if err := s.Retire(folder, h); err != nil {
-		t.Fatal(err)
-	}
-	record, _ = s.opts.Records.Read("sample")
-	if !slices.Equal(record.Names, []string{"container-sample", "container-next"}) || len(record.Keys) != 1 {
-		t.Fatalf("%+v", record)
-	}
-}
-
-func TestRetireWithNothingDeclaredWritesNothing(t *testing.T) {
-	for name, def := range map[string]devcontainer.Definition{
-		"no block":      {ContainerName: "a"},
-		"invalid block": definition(`{"other":1}`),
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := newHost(t)
-			h.definitions[folder] = def
-			s := h.steps()
-			if err := s.Retire(folder, h); err != nil {
-				t.Fatal(err)
-			}
-			if entries, err := os.ReadDir(s.opts.Records.Folder); err == nil && len(entries) != 0 {
-				t.Fatalf("%v", entries)
-			}
-		})
-	}
-}
-
-func TestAStartedJobConsumesTheRecordLast(t *testing.T) {
-	h := newHost(t)
-	s := h.steps()
-	retired := Record{Names: []string{"container-old"}, Keys: []Key{{Policy: "host-sample", Name: "old"}}}
-	if err := s.opts.Records.Write("sample", retired); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Start(context.Background(), folder, h); err != nil {
+	h.provisioned()
+	h.hold("sample", "container-old", false)
+	h.holdKey("sample", "host-sample", "old")
+	if err := h.steps().Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
 	}
 	h.wantCalls(t, "begin-start", "check", "issue host-sample/sample", "bind container-sample", "build", "create", "up", "unbind container-old", "revoke host-sample/old")
 	if h.phases[len(h.phases)-1] != "retire" {
 		t.Errorf("phases %v", h.phases)
 	}
-	assertNoRecord(t, s, "sample")
-}
-
-func assertNoRecord(t *testing.T, s *Steps, name string) {
-	t.Helper()
-	if _, err := os.Stat(s.opts.Records.path(name)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the record stays: %v", err)
+	// The unbind names the agent the data recorded.
+	if !slices.Equal(h.unbound, []string{sampleAgent + "/container-old"}) {
+		t.Errorf("unbound %v", h.unbound)
+	}
+	held := h.held("sample")
+	if !slices.Equal(held.Names, []store.Name{{Name: "container-sample", Agent: sampleAgent, Current: true}}) || !slices.Equal(held.Keys, []Key{{Policy: "host-sample", Name: "sample"}}) {
+		t.Fatalf("held %+v", held)
 	}
 }
 
-func TestAJobWithNoDeclarationConsumesTheRecordToo(t *testing.T) {
-	h := newHost(t)
-	h.definitions[folder] = devcontainer.Definition{}
-	s := h.steps()
-	if err := s.opts.Records.Write("sample", Record{Names: []string{"container-old"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Rebuild(context.Background(), folder, h); err != nil {
-		t.Fatal(err)
-	}
-	h.wantCalls(t, "plain-rebuild", "unbind container-old")
-	assertNoRecord(t, s, "sample")
-}
-
-func TestWhatIsStillDeclaredIsRemovedWithoutActing(t *testing.T) {
-	h := newHost(t)
-	s := h.steps()
-	def := definition(`{"wyrwood":{"accessGroup":1,"policies":["a"]},"xolotl":{"keyPolicy":"host-sample","keyName":"other"}}`)
-	def.ContainerName = "container-other"
-	h.definitions["/root/other"] = def
-	record := Record{
-		Names: []string{"container-sample", "container-other"},
-		Keys:  []Key{{Policy: "host-sample", Name: "sample"}, {Policy: "host-sample", Name: "other"}},
-	}
-	if err := s.opts.Records.Write("sample", record); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Start(context.Background(), folder, h); err != nil {
-		t.Fatal(err)
-	}
-	for _, call := range h.seen() {
-		if strings.HasPrefix(call, "unbind") || strings.HasPrefix(call, "revoke") {
-			t.Errorf("acted: %s", call)
-		}
-	}
-	assertNoRecord(t, s, "sample")
-}
-
-// Another workspace's record entry is its own to retire, so it does not keep a
-// name in use as a declaration does.
-func TestAnotherWorkspacesRecordDoesNotKeepARetiredName(t *testing.T) {
-	h := newHost(t)
-	s := h.steps()
-	h.definitions["/root/other"] = devcontainer.Definition{}
-	for _, name := range []string{"sample", "other"} {
-		if err := s.opts.Records.Write(name, Record{Names: []string{"container-old"}, Keys: []Key{{Policy: "host-sample", Name: "old"}}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := s.Start(context.Background(), folder, h); err != nil {
-		t.Fatal(err)
-	}
-	for _, call := range []string{"unbind container-old", "revoke host-sample/old"} {
-		if !slices.Contains(h.seen(), call) {
-			t.Errorf("no %s in %v", call, h.seen())
-		}
-	}
-}
-
-func TestAFailureWhileConsumingFailsTheJobAndKeepsTheRest(t *testing.T) {
-	h := newHost(t)
-	s := h.steps()
-	record := Record{Names: []string{"container-a", "container-b"}, Keys: []Key{{Policy: "host-sample", Name: "old"}}}
-	if err := s.opts.Records.Write("sample", record); err != nil {
-		t.Fatal(err)
-	}
-	h.failOn["unbind container-b"] = errors.New("refused")
-	err := s.Start(context.Background(), folder, h)
-	if err == nil || !strings.Contains(err.Error(), "the devcontainer started") {
-		t.Fatalf("%v", err)
-	}
-	kept, _ := s.opts.Records.Read("sample")
-	if !slices.Equal(kept.Names, []string{"container-b"}) || len(kept.Keys) != 1 {
-		t.Fatalf("%+v", kept)
-	}
-	delete(h.failOn, "unbind container-b")
-	h.failOn["revoke host-sample/old"] = errors.New("refused")
-	if err := s.Start(context.Background(), folder, h); err == nil {
-		t.Fatal("the second start passed")
-	}
-	kept, _ = s.opts.Records.Read("sample")
-	if len(kept.Names) != 0 || len(kept.Keys) != 1 {
-		t.Fatalf("%+v", kept)
-	}
-	delete(h.failOn, "revoke host-sample/old")
-	if err := s.Start(context.Background(), folder, h); err != nil {
-		t.Fatal(err)
-	}
-	assertNoRecord(t, s, "sample")
-}
-
-func TestAFailedJobLeavesTheRecord(t *testing.T) {
-	h := newHost(t)
-	s := h.steps()
-	if err := s.opts.Records.Write("sample", Record{Names: []string{"container-old"}}); err != nil {
-		t.Fatal(err)
-	}
-	h.failOn["up"] = errors.New("failed")
-	if err := s.Start(context.Background(), folder, h); err == nil {
-		t.Fatal("passed")
-	}
-	if slices.Contains(h.seen(), "unbind container-old") {
-		t.Error("consumed by a failed job")
-	}
-}
-
-func TestConsumingWithoutASectionNamesIt(t *testing.T) {
-	for name, tc := range map[string]struct {
-		clients Clients
-		record  Record
-	}{
-		"wyrwood": {Clients{Keys: &host{}}, Record{Names: []string{"container-old"}}},
-		"xolotl":  {Clients{Bindings: &host{}}, Record{Keys: []Key{{Policy: "a", Name: "b"}}}},
+// provisioning-retries: a declaration of another name binds it, makes it
+// current, and retires the old one at the job's end.
+func TestADeclarationOfAnotherNameBindsItAndRetiresTheOldOne(t *testing.T) {
+	for name, run := range map[string]func(*Steps, *host) error{
+		"start":   func(s *Steps, h *host) error { return s.Start(context.Background(), folder, h) },
+		"rebuild": func(s *Steps, h *host) error { return s.Rebuild(context.Background(), folder, h) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHost(t)
-			h.definitions[folder] = devcontainer.Definition{}
-			s := New(Options{Clients: tc.clients, Runtime: h, Workspaces: h, Records: Records{Folder: t.TempDir()}})
-			if err := s.opts.Records.Write("sample", tc.record); err != nil {
+			h.hold("sample", "container-old", true)
+			h.holdKey("sample", "host-sample", "sample")
+			if err := run(h.steps(), h); err != nil {
 				t.Fatal(err)
 			}
-			wantKind(t, s.Start(context.Background(), folder, h), KindUnavailable)
+			calls := h.seen()
+			bind, unbind := slices.Index(calls, "bind container-sample"), slices.Index(calls, "unbind container-old")
+			if bind < 0 || unbind < bind || unbind != len(calls)-1 {
+				t.Fatalf("calls %v", calls)
+			}
+			held := h.held("sample")
+			if held.Current() != "container-sample" || len(held.Names) != 1 || len(held.Keys) != 1 {
+				t.Fatalf("held %+v", held)
+			}
 		})
 	}
 }
 
-func TestAnUnreadableRecordFailsTheJob(t *testing.T) {
+// provisioning-retries: no declaration runs no provisioning step and retires
+// every name and the key at the end.
+func TestNoDeclarationRetiresEveryNameAndTheKey(t *testing.T) {
+	for name, run := range map[string]func(*Steps, *host) error{
+		"start":   func(s *Steps, h *host) error { return s.Start(context.Background(), folder, h) },
+		"rebuild": func(s *Steps, h *host) error { return s.Rebuild(context.Background(), folder, h) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			h.definitions[folder] = devcontainer.Definition{ContainerName: "container-sample"}
+			h.provisioned()
+			h.hold("sample", "container-old", false)
+			if err := run(h.steps(), h); err != nil {
+				t.Fatal(err)
+			}
+			h.wantCalls(t, "plain-"+name, "unbind container-old", "unbind container-sample", "revoke host-sample/sample")
+			if held := h.held("sample"); !held.Empty() {
+				t.Fatalf("held %+v", held)
+			}
+			if !slices.Equal(h.phases, []string{"retire"}) {
+				t.Errorf("phases %v", h.phases)
+			}
+		})
+	}
+}
+
+// provisioning-retries: a declaration the reader refuses fails in
+// read-definition, leaving the binding, the current name and the container as
+// they are.
+func TestADeclarationTheReaderRefusesLeavesTheBinding(t *testing.T) {
+	for name, run := range map[string]func(*Steps, *host) error{
+		"start":   func(s *Steps, h *host) error { return s.Start(context.Background(), folder, h) },
+		"rebuild": func(s *Steps, h *host) error { return s.Rebuild(context.Background(), folder, h) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			h.state, h.container = devcontainer.StateRunning, "old-id"
+			h.definitions[folder] = definition(`{"wyrwood":{"accessGroup":"not a number","policies":["a"]}}`)
+			h.provisioned()
+			before := h.held("sample")
+			wantKind(t, run(h.steps(), h), KindInvalid)
+			h.wantCalls(t)
+			if !slices.Equal(h.phases, []string{"read-definition"}) {
+				t.Errorf("phases %v", h.phases)
+			}
+			if held := h.held("sample"); !reflect.DeepEqual(held, before) {
+				t.Fatalf("held %+v, before %+v", held, before)
+			}
+			if h.container != "old-id" || h.state != devcontainer.StateRunning {
+				t.Fatalf("container %s %s", h.container, h.state)
+			}
+		})
+	}
+}
+
+// A name this workspace's data holds is its own to retire, even when another
+// workspace's definition declares it: that workspace's job is refused the name
+// until it is gone.
+func TestAnotherDeclarationDoesNotKeepARetiredName(t *testing.T) {
 	h := newHost(t)
-	s := h.steps()
-	if err := os.MkdirAll(s.opts.Records.Folder, 0o700); err != nil {
+	h.definitions["/root/other"] = func() devcontainer.Definition {
+		d := definition(`{"wyrwood":{"accessGroup":1,"policies":["a"]}}`)
+		d.ContainerName = "container-old"
+		return d
+	}()
+	h.provisioned()
+	h.hold("sample", "container-old", false)
+	if err := h.steps().Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(s.opts.Records.path("sample"), []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
+	if !slices.Contains(h.seen(), "unbind container-old") {
+		t.Errorf("calls %v", h.seen())
 	}
-	if err := s.Start(context.Background(), folder, h); err == nil || !strings.Contains(err.Error(), "retirement record") {
+}
+
+func TestAFailureWhileRetiringFailsTheJobAndKeepsTheRest(t *testing.T) {
+	h := newHost(t)
+	h.provisioned()
+	h.hold("sample", "container-a", false)
+	h.hold("sample", "container-b", false)
+	h.holdKey("sample", "host-sample", "old")
+	h.failOn["unbind container-b"] = errors.New("refused")
+	err := h.steps().Start(context.Background(), folder, h)
+	var after *AfterStartError
+	if !errors.As(err, &after) || !strings.Contains(err.Error(), "the devcontainer started") {
 		t.Fatalf("%v", err)
+	}
+	if held := h.held("sample"); len(held.Names) != 2 || held.Names[0].Name != "container-b" || len(held.Keys) != 2 {
+		t.Fatalf("held %+v", held)
+	}
+	delete(h.failOn, "unbind container-b")
+	h.failOn["revoke host-sample/old"] = errors.New("refused")
+	if err := h.steps().Start(context.Background(), folder, h); err == nil {
+		t.Fatal("the second start passed")
+	}
+	if held := h.held("sample"); len(held.Names) != 1 || len(held.Keys) != 2 {
+		t.Fatalf("held %+v", held)
+	}
+	delete(h.failOn, "revoke host-sample/old")
+	if err := h.steps().Start(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	if held := h.held("sample"); len(held.Names) != 1 || len(held.Keys) != 1 {
+		t.Fatalf("held %+v", held)
+	}
+}
+
+// A binding the grant hides is not taken for a removed one: it stays in the
+// data and fails the job, naming it, with the devcontainer running.
+func TestABindingOutsideTheGrantStaysAndFailsTheRetire(t *testing.T) {
+	h := newHost(t)
+	h.provisioned()
+	h.hold("sample", "container-hidden", false)
+	h.failOn["unbind container-hidden"] = fmt.Errorf("wrapped: %w", operator.ErrOutsideGrant)
+	err := h.steps().Start(context.Background(), folder, h)
+	wantKind(t, err, KindBindingOutsideGrant)
+	var after *AfterStartError
+	if !errors.As(err, &after) || !strings.Contains(err.Error(), "container-hidden") {
+		t.Fatalf("%v", err)
+	}
+	if held := h.held("sample"); !slices.ContainsFunc(held.Names, func(n store.Name) bool { return n.Name == "container-hidden" }) {
+		t.Fatalf("held %+v", held)
+	}
+}
+
+func TestAFailedJobLeavesWhatTheDataHolds(t *testing.T) {
+	h := newHost(t)
+	h.provisioned()
+	h.hold("sample", "container-old", false)
+	h.failOn["up"] = errors.New("failed")
+	if err := h.steps().Start(context.Background(), folder, h); err == nil {
+		t.Fatal("passed")
+	}
+	if slices.Contains(h.seen(), "unbind container-old") {
+		t.Error("retired by a failed job")
+	}
+	if held := h.held("sample"); len(held.Names) != 2 {
+		t.Fatalf("held %+v", held)
+	}
+}
+
+func TestRetiringWithoutWhatItNeedsNamesIt(t *testing.T) {
+	for name, tc := range map[string]struct {
+		clients func(*host) Clients
+		hold    func(*host)
+		want    string
+	}{
+		"wyrwood": {func(h *host) Clients { return Clients{Keys: h} }, func(h *host) { h.hold("sample", "container-old", false) }, "provisioning.wyrwood"},
+		"xolotl":  {func(h *host) Clients { return Clients{Bindings: h, Agent: sampleAgent} }, func(h *host) { h.holdKey("sample", "a", "b") }, "provisioning.xolotl"},
+		"an imported name with no agent": {func(h *host) Clients { return Clients{Bindings: h, Agent: sampleAgent, Keys: h} }, func(h *host) {
+			if err := h.data.HoldName(context.Background(), "sample", "container-old", "", false); err != nil {
+				h.t.Fatal(err)
+			}
+		}, "imported with no provisioning.wyrwood"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			h.definitions[folder] = devcontainer.Definition{}
+			tc.hold(h)
+			err := h.with(tc.clients(h)).Start(context.Background(), folder, h)
+			wantKind(t, err, KindUnavailable)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("message %v", err)
+			}
+			if held := h.held("sample"); held.Empty() {
+				t.Fatal("the name or key left the data")
+			}
+		})
 	}
 }
 
@@ -1020,18 +1120,17 @@ func TestAStartWithoutABlockReplacesTheContainerBeforeItRetires(t *testing.T) {
 	h := newHost(t)
 	h.definitions[folder] = devcontainer.Definition{}
 	h.state, h.container = devcontainer.StateStopped, "old-id"
-	s := h.steps()
-	if err := s.opts.Records.Write("sample", Record{Names: []string{"container-sample"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Start(context.Background(), folder, h); err != nil {
+	h.hold("sample", "container-sample", true)
+	if err := h.steps().Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
 	}
 	h.wantCalls(t, "plain-rebuild", "unbind container-sample")
-	assertNoRecord(t, s, "sample")
+	if held := h.held("sample"); !held.Empty() {
+		t.Fatalf("held %+v", held)
+	}
 }
 
-func TestAStartWithoutABlockOrARecordKeepsItsContainer(t *testing.T) {
+func TestAStartWithoutABlockOrANameKeepsItsContainer(t *testing.T) {
 	h := newHost(t)
 	h.definitions[folder] = devcontainer.Definition{}
 	h.state, h.container = devcontainer.StateStopped, "old-id"

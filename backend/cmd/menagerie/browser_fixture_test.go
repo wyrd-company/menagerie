@@ -193,7 +193,7 @@ templates:
 		t.Fatal(err)
 	}
 	t.Cleanup(stopHooks)
-	handler, err := newHandler(cfg, root, backupRemote(cfg, nil), devcontainer.New(docker, opts), provisioning.Clients{}, manager, parts.hooks, parts.images)
+	handler, err := newHandler(cfg, root, testData(t), backupRemote(cfg, nil), devcontainer.New(docker, opts), provisioning.Clients{}, manager, parts.hooks, parts.images)
 	if err != nil {
 		t.Fatal(err)
 	}

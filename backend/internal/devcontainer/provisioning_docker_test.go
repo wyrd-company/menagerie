@@ -8,6 +8,8 @@ package devcontainer_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -19,9 +21,21 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
-	"github.com/wyrd-company/menagerie/backend/internal/workspace"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/wyrwood"
+	"github.com/wyrd-company/menagerie/backend/internal/xolotl"
 )
+
+// testData is Menagerie's data in a folder of the test's own.
+func testData(t *testing.T) *store.Store {
+	t.Helper()
+	data, err := store.Open(filepath.Join(t.TempDir(), "menagerie.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = data.Close() })
+	return data
+}
 
 // reportingAgent answers as Wyrwood does for one name binding: before the
 // container exists it reports the directory, and then the container as the
@@ -35,6 +49,8 @@ type reportingAgent struct {
 	bound  bool
 	binds  int
 	group  uint32
+	// unbound lists each unbind as agent/name.
+	unbound []string
 }
 
 func (a *reportingAgent) Bind(_ context.Context, _ string, selection wyrwood.Selection) (operator.Binding, error) {
@@ -45,8 +61,42 @@ func (a *reportingAgent) Bind(_ context.Context, _ string, selection wyrwood.Sel
 	return operator.Binding{}, nil
 }
 
-func (a *reportingAgent) Unbind(context.Context, string) (operator.UnbindResult, error) {
-	return operator.UnbindResult{}, errors.New("nothing unbinds in this test")
+func (a *reportingAgent) Unbind(_ context.Context, agent, name string) (operator.UnbindResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.unbound = append(a.unbound, agent+"/"+name)
+	removed := a.bound && name == a.name
+	if removed {
+		a.bound = false
+	}
+	return operator.UnbindResult{Removed: removed}, nil
+}
+
+// keyRegister issues and revokes Xolotl keys as Xolotl answers.
+type keyRegister struct {
+	mu   sync.Mutex
+	live map[string]bool
+	// revoked lists each revocation as policy/name.
+	revoked []string
+}
+
+func (k *keyRegister) Issue(_ context.Context, policy, name string) (xolotl.Issued, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	created := !k.live[policy+"/"+name]
+	k.live[policy+"/"+name] = true
+	return xolotl.Issued{Created: created}, nil
+}
+
+func (k *keyRegister) Revoke(_ context.Context, policy, name string) (xolotl.Revocation, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.revoked = append(k.revoked, policy+"/"+name)
+	if !k.live[policy+"/"+name] {
+		return xolotl.Absent, nil
+	}
+	delete(k.live, policy+"/"+name)
+	return xolotl.Revoked, nil
 }
 
 func (a *reportingAgent) Read(ctx context.Context, name string) (operator.Binding, bool, error) {
@@ -86,16 +136,11 @@ func TestProvisionedStartCreatesThenWaitsThenStarts(t *testing.T) {
 	name := "menagerie-test-" + h.runID[len(h.runID)-12:]
 	folder := h.workspace("provisioned", map[string]string{".devcontainer/devcontainer.json": provisioned(name)})
 	agent := &reportingAgent{h: h, name: name}
-	root, err := workspace.NewRoot(h.root)
-	if err != nil {
-		t.Fatal(err)
-	}
 	steps := provisioning.New(provisioning.Options{
-		Clients:    provisioning.Clients{Bindings: agent, Wait: 30 * time.Second},
-		Runtime:    provisioning.Adapt(h.rt),
-		Workspaces: root,
-		Records:    provisioning.Records{Folder: t.TempDir()},
-		Poll:       100 * time.Millisecond,
+		Clients: provisioning.Clients{Bindings: agent, Agent: "sample-host", Wait: 30 * time.Second},
+		Runtime: provisioning.Adapt(h.rt),
+		Data:    testData(t),
+		Poll:    100 * time.Millisecond,
 	})
 
 	p := &logProgress{t: t}
@@ -169,6 +214,56 @@ func TestProvisionedStartCreatesThenWaitsThenStarts(t *testing.T) {
 	}
 }
 
+// wyrd-company/menagerie#75: a workspace provisioned with a binding and a key,
+// whose definition is then edited so that it does not parse, is deleted with
+// both removed, because the delete reads what it holds from Menagerie's data.
+func TestADeleteAfterTheDefinitionStopsParsingRemovesTheBindingAndTheKey(t *testing.T) {
+	h := newHarness(t)
+	name := "menagerie-test-" + h.runID[len(h.runID)-12:]
+	keyed := strings.Replace(provisioned(name), `"policies": ["sample-policy"]}`, `"policies": ["sample-policy"]}, "xolotl": {"keyPolicy": "host-sample", "keyName": "unparsed"}`, 1)
+	folder := h.workspace("unparsed", map[string]string{".devcontainer/devcontainer.json": keyed})
+	agent := &reportingAgent{h: h, name: name}
+	keys := &keyRegister{live: map[string]bool{}}
+	data := testData(t)
+	steps := provisioning.New(provisioning.Options{
+		Clients: provisioning.Clients{Bindings: agent, Agent: "sample-host", Keys: keys, Wait: 30 * time.Second},
+		Runtime: provisioning.Adapt(h.rt),
+		Data:    data,
+		Poll:    100 * time.Millisecond,
+	})
+	nothing := func(context.Context) error { return nil }
+	if err := steps.Create(h.ctx, folder, &logProgress{t: t}, nothing); err != nil {
+		t.Fatal(err)
+	}
+	if !agent.bound || !keys.live["host-sample/unparsed"] {
+		t.Fatalf("the create left bound %t, keys %v", agent.bound, keys.live)
+	}
+	running := h.status(folder)
+
+	h.write(folder, map[string]string{".devcontainer/devcontainer.json": "{ \"customizations\": "})
+	if _, err := h.rt.Definition(folder); err == nil {
+		t.Fatal("the edited definition parses")
+	}
+	if err := steps.Delete(h.ctx, folder, &logProgress{t: t}, nothing); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(agent.unbound, []string{"sample-host/" + name}) || agent.bound {
+		t.Errorf("unbound %v, bound %t", agent.unbound, agent.bound)
+	}
+	if !slices.Equal(keys.revoked, []string{"host-sample/unparsed"}) || len(keys.live) != 0 {
+		t.Errorf("revoked %v, live %v", keys.revoked, keys.live)
+	}
+	if _, err := h.client.ContainerInspect(h.ctx, running.ContainerID); err == nil {
+		t.Error("the container stays")
+	}
+	if _, err := os.Lstat(folder); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the folder stays: %v", err)
+	}
+	if exists, err := data.Exists(h.ctx, "unparsed"); err != nil || exists {
+		t.Errorf("the workspace's data stays: %t %v", exists, err)
+	}
+}
+
 func TestAContainerNameAnotherContainerHoldsIsRefused(t *testing.T) {
 	h := newHarness(t)
 	name := "menagerie-test-" + h.runID[len(h.runID)-12:]
@@ -184,11 +279,11 @@ func TestAContainerNameAnotherContainerHoldsIsRefused(t *testing.T) {
 	if _, found, err := h.rt.ContainerHolder(h.ctx, name+"-absent"); err != nil || found {
 		t.Fatalf("absent: %t %v", found, err)
 	}
-	// No root lists the other workspace, so that only the container holds it.
+	// Menagerie's data holds nothing, so that only the container holds it.
 	agent := &reportingAgent{h: h, name: name}
 	steps := provisioning.New(provisioning.Options{
-		Clients: provisioning.Clients{Bindings: agent, Wait: time.Second},
-		Runtime: provisioning.Adapt(h.rt), Records: provisioning.Records{Folder: t.TempDir()},
+		Clients: provisioning.Clients{Bindings: agent, Agent: "sample-host", Wait: time.Second},
+		Runtime: provisioning.Adapt(h.rt), Data: testData(t),
 	})
 	err = steps.Start(h.ctx, other, &logProgress{t: t})
 	var failure *jobs.Failure
@@ -213,8 +308,8 @@ func TestAStartReplacesAContainerWithAnOldName(t *testing.T) {
 	first := h.status(folder)
 	h.write(folder, map[string]string{".devcontainer/devcontainer.json": provisioned(name)})
 	steps := provisioning.New(provisioning.Options{
-		Clients: provisioning.Clients{Bindings: &reportingAgent{h: h, name: name}, Wait: 30 * time.Second},
-		Runtime: provisioning.Adapt(h.rt), Records: provisioning.Records{Folder: t.TempDir()}, Poll: 100 * time.Millisecond,
+		Clients: provisioning.Clients{Bindings: &reportingAgent{h: h, name: name}, Agent: "sample-host", Wait: 30 * time.Second},
+		Runtime: provisioning.Adapt(h.rt), Data: testData(t), Poll: 100 * time.Millisecond,
 	})
 	if err := steps.Start(h.ctx, folder, &logProgress{t: t}); err != nil {
 		t.Fatal(err)

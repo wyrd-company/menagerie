@@ -63,9 +63,6 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	run.Phase("apply")
-	if err := u.w.opts.Runtime.Retire(u.folder, run); err != nil {
-		return fmt.Errorf("%w; nothing was upgraded", err)
-	}
 	grant, err := u.w.grantHooks(ctx, run, u.folder, u.template, throwaway.TargetCandidate)
 	if err != nil {
 		return fmt.Errorf("%w; nothing was upgraded", err)

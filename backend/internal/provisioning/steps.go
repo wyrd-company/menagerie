@@ -10,7 +10,10 @@
 // the sockets, and only then the start. Steps wraps the devcontainer runtime,
 // so every job that can create a container runs the steps. Without a
 // declaration, each job runs as the runtime runs it. Every step is safe to
-// repeat, so a start retries a job that failed.
+// repeat, so a start retries a job that failed. Menagerie's data holds each
+// container name bound and each key issued for a workspace, recorded before the
+// request that makes it and removed once Wyrwood or Xolotl confirms it gone, so
+// what a job made is known whatever the definition says later.
 package provisioning
 
 import (
@@ -26,6 +29,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/wyrwood"
 	"github.com/wyrd-company/menagerie/backend/internal/xolotl"
 )
@@ -41,6 +45,10 @@ const (
 	// KindDeleteUnfinished is a job refused on a folder that a delete began to
 	// remove.
 	KindDeleteUnfinished = "delete-unfinished"
+	// KindBindingOutsideGrant is a delete or a retire whose unbind Wyrwood
+	// answers as outside the operator key's grant. The name stays in
+	// Menagerie's data.
+	KindBindingOutsideGrant = "binding-outside-grant"
 )
 
 // DefaultReadinessWait bounds each wait on a binding's status when
@@ -99,10 +107,12 @@ func (a adapted) BeginRebuild(folder string, p devcontainer.Progress) (BringUp, 
 	return b, nil
 }
 
-// Bindings manages Wyrwood bindings. *wyrwood.Client satisfies it.
+// Bindings manages Wyrwood bindings. *wyrwood.Client satisfies it. Bind and
+// Read act on this host's agent; Unbind names the agent the binding was
+// recorded on.
 type Bindings interface {
 	Bind(ctx context.Context, name string, selection wyrwood.Selection) (operator.Binding, error)
-	Unbind(ctx context.Context, name string) (operator.UnbindResult, error)
+	Unbind(ctx context.Context, agent, name string) (operator.UnbindResult, error)
 	Read(ctx context.Context, name string) (operator.Binding, bool, error)
 }
 
@@ -112,18 +122,14 @@ type Keys interface {
 	Revoke(ctx context.Context, policy, name string) (xolotl.Revocation, error)
 }
 
-// Workspaces lists the workspaces under the root. *workspace.Root satisfies
-// it.
-type Workspaces interface {
-	Names() ([]string, error)
-	FolderPath(name string) (string, error)
-}
-
 // Clients are the host's provisioning services. A nil one is a section that
 // configuration lacks.
 type Clients struct {
 	Bindings Bindings
-	Keys     Keys
+	// Agent is provisioning.wyrwood.agent, which Bindings binds on and each
+	// name bound is recorded with; "" without Bindings.
+	Agent string
+	Keys  Keys
 	// Wait bounds each wait on a binding's status; zero is
 	// DefaultReadinessWait.
 	Wait time.Duration
@@ -132,9 +138,9 @@ type Clients struct {
 // Options compose Steps.
 type Options struct {
 	Clients
-	Runtime    Runtime
-	Workspaces Workspaces
-	Records    Records
+	Runtime Runtime
+	// Data is Menagerie's data, which holds what each workspace was given.
+	Data *store.Store
 	// Poll is the time between two reads of a binding's status; zero is
 	// pollInterval.
 	Poll time.Duration
@@ -194,7 +200,7 @@ type bringKind struct {
 }
 
 func (s *Steps) run(ctx context.Context, folder string, p devcontainer.Progress, kind bringKind) error {
-	if err := s.refuseRemoving(folder); err != nil {
+	if err := s.refuseRemoving(ctx, folder); err != nil {
 		return err
 	}
 	declaration, err := s.declaration(folder, p)
@@ -209,16 +215,15 @@ func (s *Steps) run(ctx context.Context, folder string, p devcontainer.Progress,
 	if err != nil {
 		return err
 	}
-	if err := s.consume(ctx, folder, declaration, p); err != nil {
+	if err := s.retire(ctx, folder, declaration, p); err != nil {
 		return &AfterStartError{Step: "retiring what the definition no longer declares", Err: err}
 	}
 	return nil
 }
 
 // AfterStartError says that a job started the devcontainer and a later step
-// failed: verify, or consuming the retirement record, which keeps the rest for
-// the next job. A job's message must not say that the devcontainer did not
-// start.
+// failed: verify, or retire, which keeps the rest for the next job. A job's
+// message must not say that the devcontainer did not start.
 type AfterStartError struct {
 	// Step says what failed after the start.
 	Step string
@@ -304,7 +309,7 @@ func (s *Steps) provision(ctx context.Context, folder string, d *Declaration, p 
 	}
 	// Only a start of a container that exists goes on without Xolotl.
 	existing := !kind.rebuild && kind.save == nil && before.State != devcontainer.StateNoContainer
-	if err := s.issueKey(ctx, d, p, existing); err != nil {
+	if err := s.issueKey(ctx, folder, d, p, existing); err != nil {
 		return err
 	}
 	if err := s.bind(ctx, folder, d, p); err != nil {
@@ -361,16 +366,17 @@ func (s *Steps) leftBehind(ctx context.Context, folder, name string, before devc
 	return !found || owner != folder, nil
 }
 
-// retiredContainer says that the workspace's container still has a name its
-// record retires: a rebuild that would have removed the block failed, and
-// consuming the record would take what that container uses.
+// retiredContainer says that the workspace's container still has a name
+// Menagerie's data holds for it, which a definition with no declaration retires:
+// a rebuild that would have removed the block failed, and retire would take
+// what that container uses.
 func (s *Steps) retiredContainer(ctx context.Context, folder string) (bool, error) {
-	record, err := s.opts.Records.Read(filepath.Base(folder))
+	held, err := s.opts.Data.Held(ctx, filepath.Base(folder))
 	if err != nil {
 		return false, err
 	}
-	for _, name := range record.Names {
-		owner, found, err := s.opts.Runtime.ContainerHolder(ctx, name)
+	for _, name := range held.Names {
+		owner, found, err := s.opts.Runtime.ContainerHolder(ctx, name.Name)
 		if err != nil {
 			return false, err
 		}
@@ -392,24 +398,29 @@ func (s *Steps) available(d *Declaration) error {
 	return nil
 }
 
-// notTaken refuses a container name or Xolotl key that another workspace's
-// definition declares, its retirement record names, or a container of another
-// workspace holds, so that the delete of one workspace cannot revoke another's
+// notTaken refuses a container name or Xolotl key that Menagerie's data holds
+// for another workspace, or a container name a container of another workspace
+// holds, so that the delete of one workspace cannot take another's binding or
 // key.
 func (s *Steps) notTaken(ctx context.Context, folder string, d *Declaration) error {
-	others, err := s.otherHolders(folder, true)
-	if err != nil {
-		return err
-	}
+	workspace := filepath.Base(folder)
 	refuse := func(what, holder string) error {
 		return &jobs.Failure{Kind: KindInvalid, Err: fmt.Errorf("%s is already taken: %s", what, holder)}
 	}
-	if holder, taken := others.names[d.ContainerName]; taken {
-		return refuse("container name "+d.ContainerName, holder)
+	holder, err := s.opts.Data.NameHolder(ctx, d.ContainerName)
+	if err != nil {
+		return err
+	}
+	if holder != "" && holder != workspace {
+		return refuse("container name "+d.ContainerName, "Menagerie's data holds it for workspace "+holder)
 	}
 	if d.Xolotl != nil {
-		if holder, taken := others.keys[*d.Xolotl]; taken {
-			return refuse("Xolotl key "+d.Xolotl.String(), holder)
+		holder, err := s.opts.Data.KeyHolder(ctx, *d.Xolotl)
+		if err != nil {
+			return err
+		}
+		if holder != "" && holder != workspace {
+			return refuse("Xolotl key "+d.Xolotl.String(), "Menagerie's data holds it for workspace "+holder)
 		}
 	}
 	owner, found, err := s.opts.Runtime.ContainerHolder(ctx, d.ContainerName)
@@ -426,61 +437,27 @@ func (s *Steps) notTaken(ctx context.Context, folder string, d *Declaration) err
 	return nil
 }
 
-// holders says which workspace holds each name and key.
-type holders struct {
-	names map[string]string
-	keys  map[Key]string
+// taken turns a name or key that another workspace took meanwhile into the
+// refusal read-definition gives it.
+func taken(err error) error {
+	var other *store.TakenError
+	if errors.As(err, &other) {
+		return &jobs.Failure{Kind: KindInvalid, Err: fmt.Errorf("%s is already taken: Menagerie's data holds it for workspace %s", other.What, other.Holder)}
+	}
+	return err
 }
 
-// otherHolders reads what every other workspace declares and, with records,
-// keeps in its retirement record. A definition that cannot be read holds
-// nothing, and a block that is not valid still holds what it names.
-func (s *Steps) otherHolders(folder string, records bool) (holders, error) {
-	out := holders{names: map[string]string{}, keys: map[Key]string{}}
-	if s.opts.Workspaces == nil {
-		return out, nil
-	}
-	names, err := s.opts.Workspaces.Names()
-	if err != nil {
-		return out, err
-	}
-	for _, name := range names {
-		other, err := s.opts.Workspaces.FolderPath(name)
-		if err != nil || other == folder {
-			continue
-		}
-		if def, err := s.opts.Runtime.Definition(other); err == nil && def.Block != nil {
-			if def.ContainerName != "" {
-				out.names[def.ContainerName] = "the definition of " + name + " declares it"
-			}
-			if key, ok := declaredKey(def.Block); ok {
-				out.keys[key] = "the definition of " + name + " declares it"
-			}
-		}
-		if !records {
-			continue
-		}
-		record, err := s.opts.Records.Read(name)
-		if err != nil {
-			return out, err
-		}
-		for _, held := range record.Names {
-			out.names[held] = "the retirement record of " + name + " names it"
-		}
-		for _, key := range record.Keys {
-			out.keys[key] = "the retirement record of " + name + " names it"
-		}
-	}
-	return out, nil
-}
-
-// issueKey issues the declared key. The answer that it exists is done, so a
-// repeat never rotates it, and the console shows what a repeat cannot change.
-func (s *Steps) issueKey(ctx context.Context, d *Declaration, p devcontainer.Progress, existing bool) error {
+// issueKey issues the declared key, after Menagerie's data records it as the
+// workspace's. The answer that it exists is done, so a repeat never rotates it,
+// and the console shows what a repeat cannot change.
+func (s *Steps) issueKey(ctx context.Context, folder string, d *Declaration, p devcontainer.Progress, existing bool) error {
 	if d.Xolotl == nil {
 		return nil
 	}
 	p.Phase("issue-key")
+	if err := s.opts.Data.HoldKey(ctx, filepath.Base(folder), *d.Xolotl); err != nil {
+		return taken(err)
+	}
 	issued, err := s.opts.Keys.Issue(ctx, d.Xolotl.Policy, d.Xolotl.Name)
 	var failure *xolotl.Error
 	if existing && errors.As(err, &failure) && failure.Unreachable {
@@ -505,13 +482,17 @@ func (s *Steps) issueKey(ctx context.Context, d *Declaration, p devcontainer.Pro
 	return nil
 }
 
-// bind makes the binding the definition declares, and waits until it reports
-// its consumer directory, because a bind source must exist for a create. An
-// equal binding is not written, so a repeat revokes no token. The definition
-// is the source of the three values Wyrwood will not change, so a binding that
-// differs is replaced while its container is stopped.
+// bind records the container name as the workspace's current one in
+// Menagerie's data, makes the binding the definition declares, and waits until
+// it reports its consumer directory, because a bind source must exist for a
+// create. An equal binding is not written, so a repeat revokes no token. The
+// definition is the source of the three values Wyrwood will not change, so a
+// binding that differs is replaced while its container is stopped.
 func (s *Steps) bind(ctx context.Context, folder string, d *Declaration, p devcontainer.Progress) error {
 	p.Phase("bind")
+	if err := s.opts.Data.HoldName(ctx, filepath.Base(folder), d.ContainerName, s.opts.Agent, true); err != nil {
+		return taken(err)
+	}
 	selection := wyrwood.Selection{Policies: d.Wyrwood.Policies, AccessGroup: d.Wyrwood.AccessGroup, Values: d.Wyrwood.Values}
 	_, err := s.opts.Bindings.Bind(ctx, d.ContainerName, selection)
 	if errors.Is(err, operator.ErrBindingDiffers) {
@@ -539,7 +520,7 @@ func (s *Steps) rebind(ctx context.Context, folder string, d *Declaration, selec
 		return err
 	}
 	p.Phase("bind")
-	if err := s.unbind(ctx, d.ContainerName, p); err != nil {
+	if err := s.unbind(ctx, s.opts.Agent, d.ContainerName, p); err != nil {
 		return err
 	}
 	_, err = s.opts.Bindings.Bind(ctx, d.ContainerName, selection)
@@ -578,8 +559,8 @@ func sameValues(a, b map[string]string) bool {
 }
 
 // unbind removes a binding and shows what part of the removal did not finish.
-func (s *Steps) unbind(ctx context.Context, name string, p devcontainer.Progress) error {
-	result, err := s.opts.Bindings.Unbind(ctx, name)
+func (s *Steps) unbind(ctx context.Context, agent, name string, p devcontainer.Progress) error {
+	result, err := s.opts.Bindings.Unbind(ctx, agent, name)
 	if err != nil {
 		return err
 	}
@@ -712,79 +693,93 @@ func shortID(id string) string {
 	return id
 }
 
-// Retire adds what the definition declares to the workspace's retirement
-// record, before a job changes the definition. A block that cannot be read
-// has given nothing that the job could retire.
-func (s *Steps) Retire(folder string, p devcontainer.Progress) error {
-	def, err := s.opts.Runtime.Definition(folder)
-	if err != nil || def.Block == nil {
-		return nil
-	}
-	d, err := Parse(def)
-	if err != nil {
-		fmt.Fprintf(p.Log(""), "nothing to retire: %v\n", err)
-		return nil
-	}
-	name := filepath.Base(folder)
-	record, err := s.opts.Records.Read(name)
+// retire ends a job that started the devcontainer: it unbinds each name
+// Menagerie's data holds for the workspace that the definition no longer
+// declares and revokes each key it no longer declares, all of them when the
+// definition has no declaration, and removes each from the data once it is
+// gone. A failure fails the job, with the devcontainer running, and leaves the
+// rest for the next job.
+func (s *Steps) retire(ctx context.Context, folder string, d *Declaration, p devcontainer.Progress) error {
+	workspace := filepath.Base(folder)
+	held, err := s.opts.Data.Held(ctx, workspace)
 	if err != nil {
 		return err
 	}
-	return s.opts.Records.Write(name, record.add(d))
-}
-
-// consume ends a job that started the devcontainer: it unbinds each name and
-// revokes each key of the workspace's record that no definition declares any
-// more, and removes each entry once it is gone. An entry this or another
-// workspace declares is removed without acting, so one workspace's retirement
-// never takes what another uses. A failure fails the job, with the devcontainer
-// running, and leaves the rest for the next job.
-func (s *Steps) consume(ctx context.Context, folder string, d *Declaration, p devcontainer.Progress) error {
-	name := filepath.Base(folder)
-	record, err := s.opts.Records.Read(name)
-	if err != nil || record.empty() {
-		return err
+	var names []store.Name
+	for _, name := range held.Names {
+		if d == nil || d.ContainerName != name.Name {
+			names = append(names, name)
+		}
+	}
+	var keys []Key
+	for _, key := range held.Keys {
+		if d == nil || d.Xolotl == nil || *d.Xolotl != key {
+			keys = append(keys, key)
+		}
+	}
+	if len(names) == 0 && len(keys) == 0 {
+		return nil
 	}
 	p.Phase("retire")
-	// Another workspace's record entry is its own to retire; only a
-	// declaration keeps a name in use.
-	others, err := s.otherHolders(folder, false)
-	if err != nil {
-		return err
-	}
-	for len(record.Names) > 0 {
-		retired := record.Names[0]
-		declared := (d != nil && d.ContainerName == retired) || others.names[retired] != ""
-		if !declared {
-			if s.opts.Bindings == nil {
-				return &jobs.Failure{Kind: KindUnavailable, Err: fmt.Errorf("the retirement record of %s names the binding of %s, and the configuration has no provisioning.wyrwood", name, retired)}
-			}
-			if err := s.unbind(ctx, retired, p); err != nil {
-				return err
-			}
-			fmt.Fprintf(p.Log(""), "unbound %s, which the definition no longer declares\n", retired)
-		}
-		record.Names = record.Names[1:]
-		if err := s.opts.Records.Write(name, record); err != nil {
+	for _, name := range names {
+		if err := s.removeBinding(ctx, workspace, name, p); err != nil {
 			return err
 		}
+		fmt.Fprintf(p.Log(""), "unbound %s, which the definition no longer declares\n", name.Name)
 	}
-	for len(record.Keys) > 0 {
-		retired := record.Keys[0]
-		declared := (d != nil && d.Xolotl != nil && *d.Xolotl == retired) || others.keys[retired] != ""
-		if !declared {
-			if s.opts.Keys == nil {
-				return &jobs.Failure{Kind: KindUnavailable, Err: fmt.Errorf("the retirement record of %s names Xolotl key %s, and the configuration has no provisioning.xolotl", name, retired)}
-			}
-			if _, err := s.opts.Keys.Revoke(ctx, retired.Policy, retired.Name); err != nil {
-				return err
-			}
-			fmt.Fprintf(p.Log(""), "revoked Xolotl key %s, which the definition no longer declares\n", retired)
-		}
-		record.Keys = record.Keys[1:]
-		if err := s.opts.Records.Write(name, record); err != nil {
+	for _, key := range keys {
+		if err := s.revokeKey(ctx, workspace, key, p); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// removeBinding unbinds a name the workspace holds, by the agent and the name
+// Menagerie's data recorded, never by what a read shows, so a binding the grant
+// hides is not taken for a removed one. It removes the name from the data once
+// Wyrwood confirms the binding gone. One Wyrwood answers as outside the grant
+// keeps its name and fails as KindBindingOutsideGrant.
+func (s *Steps) removeBinding(ctx context.Context, workspace string, name store.Name, p devcontainer.Progress) error {
+	if err := s.reachesBinding(name); err != nil {
+		return err
+	}
+	err := s.unbind(ctx, name.Agent, name.Name, p)
+	if errors.Is(err, operator.ErrOutsideGrant) {
+		return &jobs.Failure{Kind: KindBindingOutsideGrant, Err: fmt.Errorf("Wyrwood answers that the binding of %s on agent %s is outside the operator key's grant, so Menagerie cannot remove it; it stays in Menagerie's data for workspace %s until an operator widens the grant or removes the binding in the Wyrwood web interface", name.Name, name.Agent, workspace)}
+	}
+	if err != nil {
+		return err
+	}
+	return s.opts.Data.ForgetName(ctx, workspace, name.Name)
+}
+
+// reachesBinding fails, as KindUnavailable, a name no job can unbind: one
+// imported with no provisioning.wyrwood, or any with no such section now.
+func (s *Steps) reachesBinding(name store.Name) error {
+	if s.opts.Bindings == nil {
+		return &jobs.Failure{Kind: KindUnavailable, Err: fmt.Errorf("Menagerie's data holds the binding of %s, and the configuration has no provisioning.wyrwood", name.Name)}
+	}
+	if name.Agent == "" {
+		return &jobs.Failure{Kind: KindUnavailable, Err: fmt.Errorf("the binding of %s was imported with no provisioning.wyrwood, so Menagerie does not know its agent; a start with provisioning.wyrwood records it", name.Name)}
+	}
+	return nil
+}
+
+// revokeKey revokes a key the workspace holds, and removes it from the data
+// once Xolotl confirms it gone.
+func (s *Steps) revokeKey(ctx context.Context, workspace string, key Key, p devcontainer.Progress) error {
+	if s.opts.Keys == nil {
+		return &jobs.Failure{Kind: KindUnavailable, Err: fmt.Errorf("Menagerie's data holds Xolotl key %s, and the configuration has no provisioning.xolotl", key)}
+	}
+	revocation, err := s.opts.Keys.Revoke(ctx, key.Policy, key.Name)
+	if err != nil {
+		return err
+	}
+	if revocation == xolotl.Revoked {
+		fmt.Fprintf(p.Log(""), "revoked Xolotl key %s\n", key)
+	} else {
+		fmt.Fprintf(p.Log(""), "Xolotl key %s is already gone\n", key)
+	}
+	return s.opts.Data.ForgetKey(ctx, workspace, key)
 }

@@ -38,6 +38,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/openbaokv"
 	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/t3code"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
@@ -93,6 +94,11 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
+	data, err := store.Open(store.DefaultPath)
+	if err != nil {
+		return err
+	}
+	defer data.Close()
 	docker, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
@@ -149,7 +155,7 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	handler, err := newHandler(cfg, root, remote, runtime, clients, manager, parts.hooks, parts.images)
+	handler, err := newHandler(cfg, root, data, remote, runtime, clients, manager, parts.hooks, parts.images)
 	if err != nil {
 		return err
 	}
@@ -303,8 +309,8 @@ func hookRoutes(hooks *throwaway.HookRunner, app *githubapp.Minter) http.Handler
 
 // newHandler is the workspace service's whole HTTP surface: the workspace
 // API behind manager sign-in.
-func newHandler(cfg *config.Config, root *workspace.Root, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) (http.Handler, error) {
-	return signedIn(newServer(cfg, root, remote, runtime, clients, manager, hooks, images), cfg.OIDC)
+func newHandler(cfg *config.Config, root *workspace.Root, data *store.Store, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) (http.Handler, error) {
+	return signedIn(newServer(cfg, root, data, remote, runtime, clients, manager, hooks, images), cfg.OIDC)
 }
 
 // signedIn serves server behind manager sign-in: the sign-in routes are
@@ -322,8 +328,9 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 // and upgrade with their interviews, commit, and the web UI embedded at build time.
 // Backups go to remote. Template hooks run through hooks in the template's
 // runner image; nil hooks refuse every hook. Every job that can create a
-// container runs through the provisioning steps.
-func newServer(cfg *config.Config, root *workspace.Root, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) *api.Server {
+// container runs through the provisioning steps, which keep what they provision
+// in data.
+func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) *api.Server {
 	approved := make([]api.Template, 0, len(cfg.Templates))
 	ids := make(map[string]bool, len(cfg.Templates))
 	for _, t := range cfg.Templates {
@@ -339,10 +346,9 @@ func newServer(cfg *config.Config, root *workspace.Root, remote *backup.Remote, 
 		restart = cfg.JobLimits.Operations.Start.Value()
 	}
 	steps := provisioning.New(provisioning.Options{
-		Clients:    clients,
-		Runtime:    provisioning.Adapt(runtime),
-		Workspaces: root,
-		Records:    provisioning.Records{Folder: provisioning.DefaultRecords},
+		Clients: clients,
+		Runtime: provisioning.Adapt(runtime),
+		Data:    data,
 	})
 	flows := workflows.New(workflows.Options{
 		Root:         root,
@@ -421,7 +427,7 @@ func provisioningClients(cfg *config.Config) (provisioning.Clients, error) {
 		if err != nil {
 			return clients, err
 		}
-		clients.Bindings = client
+		clients.Bindings, clients.Agent = client, w.Agent
 	}
 	if x := p.Xolotl; x != nil {
 		secrets, err := openbaokv.New(registrycreds.SocketAddress(cfg.WyrwoodDirectory), x.KeySecret.KVMount)

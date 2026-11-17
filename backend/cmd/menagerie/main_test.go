@@ -17,6 +17,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 	"github.com/wyrd-company/menagerie/web"
 )
@@ -125,7 +126,7 @@ func TestServerServesCreateAndUpgrade(t *testing.T) {
 		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
 		TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")},
 	}
-	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, testData(t), backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
 	defer server.Close()
 	for _, tc := range []struct{ path, body, kind string }{
 		{"/api/jobs", `{"operation":"create","workspace":"a..b","templateId":"sample"}`, "invalid-workspace-name"},
@@ -183,7 +184,7 @@ func TestServerTakesInterviewAnswers(t *testing.T) {
 		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
 		TemplateService: config.TemplateService{Socket: socket},
 	}
-	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, manager, nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, testData(t), backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, manager, nil, nil))
 	defer server.Close()
 	resp, err := http.Post(server.URL+"/api/jobs", "application/json", strings.NewReader(`{"operation":"create","workspace":"alpha","templateId":"sample"}`))
 	if err != nil {
@@ -232,7 +233,7 @@ func TestServerServesTheEmbeddedUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
-	server := httptest.NewServer(newServer(cfg, root, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, testData(t), backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil))
 	defer server.Close()
 	for path, want := range map[string]string{
 		"/":                         "ui-index",
@@ -250,4 +251,15 @@ func TestServerServesTheEmbeddedUI(t *testing.T) {
 			t.Errorf("GET %s answered %d %q, want %q", path, resp.StatusCode, body, want)
 		}
 	}
+}
+
+// testData is Menagerie's data in a folder of the test's own.
+func testData(t *testing.T) *store.Store {
+	t.Helper()
+	data, err := store.Open(filepath.Join(t.TempDir(), "state", "menagerie.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = data.Close() })
+	return data
 }
