@@ -316,6 +316,39 @@ func TestDiscoverJoinsTheFoldersToTheData(t *testing.T) {
 	}
 }
 
+// A name's recorded agent changes only from none: a binding on one agent stays
+// recorded until it is forgotten, so no change can put another agent, or none,
+// in its place.
+func TestARecordedAgentIsNeverReplaced(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if err := s.HoldName(ctx, "alpha", "imported", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HoldName(ctx, "alpha", "imported", "host-a", true); err != nil {
+		t.Fatalf("a name with no agent takes one: %v", err)
+	}
+	for _, agent := range []string{"host-b", ""} {
+		err := s.HoldName(ctx, "alpha", "imported", agent, false)
+		var differs *AgentError
+		if !errors.Is(err, ErrAgentDiffers) || !errors.As(err, &differs) || differs.Recorded != "host-a" {
+			t.Fatalf("agent %q: %v", agent, err)
+		}
+	}
+	if err := s.HoldName(ctx, "alpha", "imported", "host-a", true); err != nil {
+		t.Fatalf("a repeat on the recorded agent: %v", err)
+	}
+	held, _ := s.Held(ctx, "alpha")
+	if !slices.Equal(held.Names, []Name{{Name: "imported", Agent: "host-a", Current: true}}) {
+		t.Fatalf("held %+v", held.Names)
+	}
+	if err := s.ForgetName(ctx, "alpha", "imported"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HoldName(ctx, "alpha", "imported", "host-b", true); err != nil {
+		t.Fatalf("a forgotten name on another agent: %v", err)
+	}
+}
+
 func TestTheAgentIsRecordedOnTheNamesWithout(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	if err := s.HoldName(ctx, "alpha", "imported", "", true); err != nil {

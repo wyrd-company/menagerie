@@ -222,7 +222,11 @@ description: >-
   each key it no longer declares, every name and key when the definition has
   no declaration, and removes each from the data once Wyrwood or Xolotl
   confirms it gone. An unbind names the binding by the agent and container
-  name the data recorded, never by what a read shows. Wyrwood confirms a
+  name the data recorded, never by what a read shows, and a recorded agent
+  stays until its binding is confirmed gone: when the data holds the declared
+  name on another agent than `provisioning.wyrwood.agent`, `bind` first
+  unbinds it there and then records and binds the name on the configured
+  agent. Wyrwood confirms a
   binding gone when it answers that it removed it, a warning that the console
   shows included, or that no such binding exists; an answer that the binding
   is outside the operator key's grant keeps its name in the data and fails the

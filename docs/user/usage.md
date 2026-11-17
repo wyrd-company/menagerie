@@ -100,7 +100,9 @@ prepared](install.md#provisioning). The console shows these phases in a create:
 4. `bind`: the Wyrwood binding, whose container name Menagerie records as the
    workspace's first. A binding that differs from the definition is removed and
    made again while the container is stopped, and the console names the
-   fields.
+   fields. A binding Menagerie made on another Wyrwood agent, before
+   `provisioning.wyrwood.agent` changed, is removed first, and Menagerie keeps
+   its record until Wyrwood confirms it gone.
 5. `commit` and `backup`, `initialize-command` and `build`, as above.
 6. `create-container`: the container, not started. A bind with an SELinux `z` or
    `Z` option or `bind-create-src` fails here, so such a definition uses neither.

@@ -490,7 +490,11 @@ func (s *Steps) issueKey(ctx context.Context, folder string, d *Declaration, p d
 // binding that differs is replaced while its container is stopped.
 func (s *Steps) bind(ctx context.Context, folder string, d *Declaration, p devcontainer.Progress) error {
 	p.Phase("bind")
-	if err := s.opts.Data.HoldName(ctx, filepath.Base(folder), d.ContainerName, s.opts.Agent, true); err != nil {
+	workspace := filepath.Base(folder)
+	if err := s.retireOtherAgent(ctx, workspace, d.ContainerName, p); err != nil {
+		return err
+	}
+	if err := s.opts.Data.HoldName(ctx, workspace, d.ContainerName, s.opts.Agent, true); err != nil {
 		return taken(err)
 	}
 	selection := wyrwood.Selection{Policies: d.Wyrwood.Policies, AccessGroup: d.Wyrwood.AccessGroup, Values: d.Wyrwood.Values}
@@ -505,6 +509,30 @@ func (s *Steps) bind(ctx context.Context, folder string, d *Declaration, p devco
 	return s.await(ctx, d, p, "its consumer directory", func(b operator.Binding) (bool, string) {
 		return slices.ContainsFunc(b.Status.Consumers, func(c operator.ConsumerStatus) bool { return c.Directory != "" }), ""
 	})
+}
+
+// retireOtherAgent removes the binding of a name the workspace holds on
+// another agent than this host's configured one, as an earlier
+// provisioning.wyrwood.agent bound it, before the name is recorded and bound on
+// this one. The data keeps the recorded agent until Wyrwood confirms that
+// binding gone, so a bind that then fails never loses it, and one Wyrwood
+// answers is outside the grant fails the job and stays recorded.
+func (s *Steps) retireOtherAgent(ctx context.Context, workspace, name string, p devcontainer.Progress) error {
+	held, err := s.opts.Data.Held(ctx, workspace)
+	if err != nil {
+		return err
+	}
+	for _, n := range held.Names {
+		if n.Name != name || n.Agent == "" || n.Agent == s.opts.Agent {
+			continue
+		}
+		fmt.Fprintf(p.Log(""), "Menagerie's data records the binding of %s on Wyrwood agent %s, and provisioning.wyrwood.agent is %s; removing that binding before binding the name on %s\n", name, n.Agent, s.opts.Agent, s.opts.Agent)
+		if err := s.removeBinding(ctx, workspace, n, p); err != nil {
+			return err
+		}
+		fmt.Fprintf(p.Log(""), "binding of %s on %s is gone\n", name, n.Agent)
+	}
+	return nil
 }
 
 func (s *Steps) rebind(ctx context.Context, folder string, d *Declaration, selection wyrwood.Selection, p devcontainer.Progress) error {

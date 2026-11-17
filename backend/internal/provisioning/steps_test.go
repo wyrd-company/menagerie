@@ -41,8 +41,11 @@ type host struct {
 	containerName string
 	holders       map[string]string
 	failOn        map[string]error
-	// bound is the binding of each name.
+	// bound is the binding of each name on sampleAgent, the agent Bind binds
+	// on.
 	bound map[string]wyrwood.Selection
+	// elsewhere are the bindings on other agents, as agent/name.
+	elsewhere map[string]bool
 	// status gives a binding's status for each read; nil is a ready binding of
 	// the container that Create gave.
 	status func(name string) operator.BindingStatus
@@ -77,7 +80,7 @@ func newHost(t *testing.T) *host {
 		t: t, state: devcontainer.StateNoContainer, created: "created-id", containerName: "container-sample",
 		definitions: map[string]devcontainer.Definition{"/root/sample": definition(sampleBlock)},
 		holders:     map[string]string{}, failOn: map[string]error{},
-		bound: map[string]wyrwood.Selection{}, issued: map[string]bool{}, data: data,
+		bound: map[string]wyrwood.Selection{}, elsewhere: map[string]bool{}, issued: map[string]bool{}, data: data,
 	}
 }
 
@@ -264,6 +267,13 @@ func (h *host) Unbind(_ context.Context, agent, name string) (operator.UnbindRes
 	h.Lock()
 	defer h.Unlock()
 	h.unbound = append(h.unbound, agent+"/"+name)
+	// Wyrwood removes the binding of that name on that agent only, and
+	// answers one that does not exist with success.
+	if agent != sampleAgent {
+		removed := h.elsewhere[agent+"/"+name]
+		delete(h.elsewhere, agent+"/"+name)
+		return operator.UnbindResult{Removed: removed}, nil
+	}
 	delete(h.bound, name)
 	return operator.UnbindResult{Removed: true, Warning: "a part\nstayed", TokenLive: true}, nil
 }
@@ -1055,6 +1065,87 @@ func TestABindingOutsideTheGrantStaysAndFailsTheRetire(t *testing.T) {
 	if held := h.held("sample"); !slices.ContainsFunc(held.Names, func(n store.Name) bool { return n.Name == "container-hidden" }) {
 		t.Fatalf("held %+v", held)
 	}
+}
+
+// A name bound on the agent an earlier provisioning.wyrwood.agent named keeps
+// that agent in the data until Wyrwood confirms its binding gone: a start on a
+// new agent removes it first, so a bind there that fails loses nothing, and a
+// delete afterwards leaves no binding on either agent (review round 1 of
+// wyrd-company/menagerie#107).
+func TestAChangedAgentNeverLosesTheRecordedBinding(t *testing.T) {
+	const original = "original-host"
+	ctx := context.Background()
+	provisionedOnOriginal := func(t *testing.T) *host {
+		h := newHost(t)
+		if err := h.data.HoldName(ctx, "sample", "container-sample", original, true); err != nil {
+			t.Fatal(err)
+		}
+		h.holdKey("sample", "host-sample", "sample")
+		h.elsewhere[original+"/container-sample"] = true
+		return h
+	}
+
+	t.Run("a failed bind, then a delete", func(t *testing.T) {
+		h := provisionedOnOriginal(t)
+		h.failOn["bind container-sample"] = errors.New("the controller refused the request")
+		if err := h.steps().Start(ctx, folder, h); err == nil {
+			t.Fatal("the start passed")
+		}
+		if h.elsewhere[original+"/container-sample"] {
+			t.Fatal("the binding on the original agent stays")
+		}
+		// The name is recorded on the new agent before its request, as every bind is.
+		if held := h.held("sample"); !slices.Equal(held.Names, []store.Name{{Name: "container-sample", Agent: sampleAgent, Current: true}}) {
+			t.Fatalf("held %+v", held)
+		}
+		delete(h.failOn, "bind container-sample")
+		if err := h.deleteAt(h.steps(), filepath.Join(t.TempDir(), "sample")); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{original + "/container-sample", sampleAgent + "/container-sample"}
+		if !slices.Equal(h.unbound, want) {
+			t.Fatalf("unbound %v, want %v", h.unbound, want)
+		}
+		if len(h.bound) != 0 || len(h.elsewhere) != 0 {
+			t.Fatalf("live bindings %v %v", h.bound, h.elsewhere)
+		}
+		h.wantGone(t, "sample")
+	})
+
+	t.Run("the original agent outside the grant", func(t *testing.T) {
+		h := provisionedOnOriginal(t)
+		h.failOn["unbind container-sample"] = fmt.Errorf("wrapped: %w", operator.ErrOutsideGrant)
+		err := h.steps().Start(ctx, folder, h)
+		wantKind(t, err, KindBindingOutsideGrant)
+		if !strings.Contains(err.Error(), "container-sample on agent "+original) {
+			t.Fatalf("message %v", err)
+		}
+		if slices.Contains(h.seen(), "bind container-sample") {
+			t.Fatal("bound on the new agent while the original binding stays")
+		}
+		recorded := []store.Name{{Name: "container-sample", Agent: original, Current: true}}
+		if held := h.held("sample"); !slices.Equal(held.Names, recorded) {
+			t.Fatalf("held %+v", held)
+		}
+		// A delete fails the same way and keeps the workspace's data.
+		wantKind(t, h.deleteAt(h.steps(), filepath.Join(t.TempDir(), "sample")), KindBindingOutsideGrant)
+		if held := h.held("sample"); !slices.Equal(held.Names, recorded) || len(held.Keys) != 1 {
+			t.Fatalf("held %+v", held)
+		}
+	})
+
+	t.Run("a bind that succeeds", func(t *testing.T) {
+		h := provisionedOnOriginal(t)
+		if err := h.steps().Start(ctx, folder, h); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := h.bound["container-sample"]; !ok || len(h.elsewhere) != 0 {
+			t.Fatalf("bound %v, elsewhere %v", h.bound, h.elsewhere)
+		}
+		if held := h.held("sample"); !slices.Equal(held.Names, []store.Name{{Name: "container-sample", Agent: sampleAgent, Current: true}}) {
+			t.Fatalf("held %+v", held)
+		}
+	})
 }
 
 func TestAFailedJobLeavesWhatTheDataHolds(t *testing.T) {

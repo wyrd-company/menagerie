@@ -73,6 +73,29 @@ var ErrNewer = errors.New("Menagerie's data is newer than this Menagerie")
 // workspace. A *TakenError carries it.
 var ErrTaken = errors.New("taken by another workspace")
 
+// ErrAgentDiffers means a container name is recorded on another Wyrwood agent.
+// An *AgentError carries it.
+var ErrAgentDiffers = errors.New("recorded on another Wyrwood agent")
+
+// AgentError says that a container name's binding is recorded on another
+// agent than the one a change names. The recorded binding has to be confirmed
+// gone, and the name forgotten, before the name can be recorded on another
+// agent.
+type AgentError struct {
+	Name string
+	// Recorded is the agent the name's binding is recorded on.
+	Recorded string
+	// Agent is the agent the change named, "" for none.
+	Agent string
+}
+
+func (e *AgentError) Error() string {
+	return fmt.Sprintf("the binding of container name %s is recorded on Wyrwood agent %s, not %q", e.Name, e.Recorded, e.Agent)
+}
+
+// Is makes errors.Is match ErrAgentDiffers.
+func (e *AgentError) Is(target error) bool { return target == ErrAgentDiffers }
+
 // ErrExists means the data holds a workspace of that name.
 var ErrExists = errors.New("the workspace exists in Menagerie's data")
 

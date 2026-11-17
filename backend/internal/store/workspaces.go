@@ -129,8 +129,11 @@ func (t *Tx) holder(query string, args ...any) (string, error) {
 
 // HoldName records a container name as the workspace's, on agent ("" for
 // none), and as its current one when current is true, which ends any other
-// name's being current. A name another workspace holds is a *TakenError. The
-// workspace gets its data when it has none.
+// name's being current. A name another workspace holds is a *TakenError. A name
+// already recorded on another agent is an *AgentError: the binding on that
+// agent stays recorded until Wyrwood confirms it gone, so only a name with no
+// agent, imported without provisioning.wyrwood, takes one here. The workspace
+// gets its data when it has none.
 func (t *Tx) HoldName(workspace, name, agent string, current bool) error {
 	holder, err := t.NameHolder(name)
 	if err != nil {
@@ -138,6 +141,13 @@ func (t *Tx) HoldName(workspace, name, agent string, current bool) error {
 	}
 	if holder != "" && holder != workspace {
 		return &TakenError{What: "container name " + name, Holder: holder}
+	}
+	recorded, err := t.agentOf(name)
+	if err != nil {
+		return err
+	}
+	if recorded != "" && recorded != agent {
+		return &AgentError{Name: name, Recorded: recorded, Agent: agent}
 	}
 	if err := t.AddWorkspace(workspace); err != nil {
 		return err
@@ -151,6 +161,12 @@ func (t *Tx) HoldName(workspace, name, agent string, current bool) error {
 		ON CONFLICT (name) DO UPDATE SET agent = excluded.agent, current = excluded.current`,
 		name, workspace, nullable(agent), current)
 	return err
+}
+
+// agentOf is the agent a container name is recorded on, or "" for none or no
+// such name.
+func (t *Tx) agentOf(name string) (string, error) {
+	return t.holder(`SELECT coalesce(agent, '') FROM container_names WHERE name = ?`, name)
 }
 
 // ForgetName removes a container name of the workspace, once Wyrwood confirmed
