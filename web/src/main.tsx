@@ -7,6 +7,7 @@ import "./styles/shell.css";
 import "./styles/register.css";
 import "./styles/console.css";
 import "./styles/forms.css";
+import "./styles/policies.css";
 import { App } from "./App.tsx";
 
 const root = document.getElementById("root");

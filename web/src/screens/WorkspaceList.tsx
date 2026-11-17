@@ -191,6 +191,12 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                           ? "folder gone"
                           : "no container"}
                     </p>
+                    <p className="entry-policies mono" aria-label={`Policies for ${ws.name}`}>
+                      {ws.policies.length ? ws.policies.join(" · ") : "No policies"}
+                    </p>
+                    {ws.needsChoice.length ? (
+                      <p className="entry-choice">Needs choice: {ws.needsChoice.join(", ")}</p>
+                    ) : null}
                   </div>
                   <div className="entry-state">
                     <StatusBadge state={ws.state} />

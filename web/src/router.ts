@@ -3,11 +3,13 @@ import { useSyncExternalStore } from "react";
 // Three page routes: the workspace list, create, and a workspace's upgrade.
 export type Route =
   | { screen: "list"; jobId: string | null }
+  | { screen: "policies" }
   | { screen: "create"; jobId: string | null }
   | { screen: "upgrade"; workspace: string; jobId: string | null }
   | { screen: "missing"; path: string };
 
 export function parseRoute(pathname: string, search: string): Route {
+  if (pathname === "/policies") return { screen: "policies" };
   const jobId = new URLSearchParams(search).get("job");
   if (pathname === "/" || pathname === "") return { screen: "list", jobId };
   if (pathname === "/create") return { screen: "create", jobId };
@@ -23,6 +25,7 @@ export function parseRoute(pathname: string, search: string): Route {
 }
 
 export const paths = {
+  policies: () => "/policies",
   list: (jobId?: string) => (jobId ? `/?job=${encodeURIComponent(jobId)}` : "/"),
   create: (jobId?: string) => (jobId ? `/create?job=${encodeURIComponent(jobId)}` : "/create"),
   upgrade: (workspace: string, jobId?: string) =>

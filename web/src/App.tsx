@@ -2,12 +2,14 @@ import { useEffect } from "react";
 import { paths, useRoute } from "./router.ts";
 import { CreateWorkspace } from "./screens/CreateWorkspace.tsx";
 import { UpgradeWorkspace } from "./screens/UpgradeWorkspace.tsx";
+import { PoliciesScreen } from "./screens/Policies.tsx";
 import { WorkspaceList } from "./screens/WorkspaceList.tsx";
 import mark from "./brand/mark.svg";
 import { Link } from "./ui/Link.tsx";
 
 const titles = {
   list: "Workspaces",
+  policies: "Policies",
   create: "New workspace",
   upgrade: "Upgrade",
   missing: "Not found",
@@ -38,6 +40,12 @@ export function App() {
           <Link href={paths.create()} aria-current={route.screen === "create" ? "page" : undefined}>
             New workspace
           </Link>
+          <Link
+            href={paths.policies()}
+            aria-current={route.screen === "policies" ? "page" : undefined}
+          >
+            Policies
+          </Link>
         </nav>
         <form method="post" action="/auth/logout" className="signout">
           <button type="submit" className="ghost">
@@ -46,6 +54,7 @@ export function App() {
         </form>
       </header>
       <main id="main" tabIndex={-1}>
+        {route.screen === "policies" ? <PoliciesScreen /> : null}
         {route.screen === "list" ? <WorkspaceList jobId={route.jobId} /> : null}
         {route.screen === "create" ? <CreateWorkspace jobId={route.jobId} /> : null}
         {route.screen === "upgrade" ? (

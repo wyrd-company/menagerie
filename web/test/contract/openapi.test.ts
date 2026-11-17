@@ -137,6 +137,31 @@ describe("the fixture server keeps the workspace API contract", () => {
     await expectResponse(path, "post", refused);
   });
 
+  it("reads policies and saves revisioned required policies and groups", async () => {
+    await post("/__fixture/reset", {});
+    await expectResponse("/api/policies", "get", await call("/api/policies"));
+    const response = await call("/api/policies/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        required: ["workspace"],
+        groups: [{ name: "Operator SSH", mode: "multi", policies: ["bob-ssh", "ira-ssh"] }],
+        revision: 0,
+      }),
+    });
+    const settings = await expectResponse("/api/policies/settings", "put", response);
+    expect(settings).toMatchObject({ revision: 1, groups: [{ id: 1 }] });
+    await expectResponse("/api/workspaces", "get", await call("/api/workspaces"));
+    const stale = await call("/api/policies/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ required: [], groups: [], revision: 0 }),
+    });
+    expect(await expectResponse("/api/policies/settings", "put", stale)).toMatchObject({
+      error: { kind: "settings-changed" },
+    });
+  });
+
   it("lists workspaces, templates and jobs", async () => {
     await post("/__fixture/reset", {});
     await expectResponse("/api/workspaces", "get", await call("/api/workspaces"));

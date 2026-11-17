@@ -247,6 +247,13 @@ needs Wyrwood 0.7.0 or later. [Prepare the host](install.md#provisioning) first.
   name, its public key or its SHA256 fingerprint. Menagerie offers the controller
   only this key, so the Git key is not recorded as pending.
 
+The policies inside this operator key's grant are the policies managers choose
+from in [**Policies**](usage.md#policies). Menagerie reads the grant and the
+policies Wyrwood lists for each request. A referenced policy outside the grant
+remains visible, and adding one to settings is refused by name. Required
+policies and groups are stored in Menagerie's data, alongside each workspace's
+selection; changing them takes no configuration edit or restart.
+
 Each connection and each request has 30 seconds. An operator key with no approval,
 or a call outside its grant, fails the job with the operation and the container
 name. An operator key with no approval also names the key's fingerprint. Wyrwood

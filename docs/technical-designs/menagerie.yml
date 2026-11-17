@@ -1495,8 +1495,7 @@ proposed-design:
     current version and its commit, null for an imported template until a
     version check records it, each workspace's template, and import 3; [21]
     the found versions, the last check, each workspace's applied version and
-    commit, and import 4; [22] the policy settings and each workspace's
-    selection with its revision; [24] the binding ID of each container name,
+    commit, and import 4; [24] the binding ID of each container name,
     each workspace's values, Xolotl key identity, applied revision, apply
     failure and selection still to be imported, and import 5.
     Verification belongs to the task that builds what it checks. [19]: a
@@ -1507,8 +1506,7 @@ proposed-design:
     giving `version` included; refused and password addresses; template
     removal; the `templates` import. [21]: version checks on a schedule and
     on request, an outage answered 200, a moved tag, the descent exit, and
-    Apply branch's forward-only check. [22]: settings, the grant, and a
-    required policy reaching every selection. [24]: binding-convergence's
+    Apply branch's forward-only check. [24]: binding-convergence's
     pending, stale, hidden and recreated bindings; an empty selection,
     unbound and bound, and Wyrwood's refusal recorded as `binding-refused`;
     the import before a selection change;
@@ -1576,7 +1574,6 @@ proposed-design:
     - [24] `job-limits.operations` gains `apply-policies` in the schema and
       in the prose's list of operations, and `alerts` gives
       `apply-policies` the console address `/?job={id}`.
-    - [22]: no change.
   contract-workspace-api: |-
     `workspace-api.yml` and `assets/workspace-api/openapi.yaml`:
     - [20] `GET /api/templates` lists the registered templates sorted by
@@ -1661,32 +1658,6 @@ proposed-design:
       nothing changed; a successful apply records the record's version and
       commit.
     - [21] New request kind: `template-version-moved` (409).
-    - [22] `GET /api/policies`: 200 with `grant`, null without
-      `provisioning.wyrwood`, else `{agents, policies, actions}`, each a
-      list of strings as Wyrwood's grant holds them, `["*"]` standing for
-      every name; `policies`, each `{name, valueNames, inGrant}` with
-      `valueNames` a list of strings: the policies inside the grant, and
-      each policy the settings or a selection names that is outside the
-      grant or that Wyrwood does not have, with `inGrant` false; and
-      `settings`, `{required, groups, revision}` with `revision` an integer,
-      each group `{id, name, mode, policies}` with `id` an integer
-      Menagerie assigns and never reuses, `name` one line of 1 to 100
-      characters, `mode` `single` or `multi`, and `policies` a list of
-      names. 503 `wyrwood-unavailable` when the grant cannot be read.
-    - [22] `PUT /api/policies/settings` with `{"required","groups",
-      "revision"}`, a new group without `id`: 200 with the settings; 400
-      `invalid-request`; 409 `settings-changed` for an older revision; 409
-      `provisioning-unavailable` without `provisioning.wyrwood`; 422
-      `policy-outside-grant`, naming each policy it adds that is outside the
-      grant or that Wyrwood does not have; 422 `invalid-settings`, naming
-      the rule: a policy both required and in a group or in two groups, a
-      group with no policy, two groups of one name, an unknown mode or `id`;
-      503 `wyrwood-unavailable`.
-    - [22] `Workspace` gains required `policies` (the selection's names)
-      and `needsChoice` (the names of the groups without a valid choice).
-    - [22] New request kinds: `settings-changed` (409),
-      `policy-outside-grant` (422), `invalid-settings` (422),
-      `wyrwood-unavailable` (503), `provisioning-unavailable` (409).
     - [24] `JobRequest.operation` gains `apply-policies`, on an existing
       workspace, in phase `bind`; the prose describes it as
       policy-application and binding-convergence do.

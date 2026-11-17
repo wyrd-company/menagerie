@@ -6,6 +6,7 @@
 //
 // It is not part of Menagerie: no OIDC, no Docker, no Toha. Routes under
 // /__fixture let browser tests steer it.
+import type { PolicySettings } from "../../src/api/types.ts";
 import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -29,6 +30,10 @@ export function createFixture(options: { distDir: string }) {
   let signedIn = true;
   let dockerAvailable = true;
   let sequence = 0;
+  let policySettings: PolicySettings = { required: [], groups: [], revision: 0 };
+  let nextGroupID = 1;
+  let selections = new Map<string, string[]>();
+  const policyNames = ["workspace", "xolotl-client-key", "bob-ssh", "ira-ssh"];
 
   const reset = () => {
     for (const job of jobs.values()) for (const res of job.listeners) res.end();
@@ -38,6 +43,9 @@ export function createFixture(options: { distDir: string }) {
     signedIn = true;
     dockerAvailable = true;
     sequence = 0;
+    policySettings = { required: [], groups: [], revision: 0 };
+    nextGroupID = 1;
+    selections = new Map();
   };
 
   async function readBody(req: IncomingMessage): Promise<string> {
@@ -148,6 +156,68 @@ export function createFixture(options: { distDir: string }) {
     if (!signedIn) return fail(res, 401, "unauthenticated", "Sign in first.");
 
     // ---- API ----
+    if (pathname === "/api/policies" && method === "GET") {
+      return json(res, 200, {
+        grant: { agents: ["sample-host"], policies: ["*"], actions: ["read", "bind"] },
+        policies: policyNames.map((name) => ({ name, valueNames: [], inGrant: true })),
+        settings: policySettings,
+      });
+    }
+    if (pathname === "/api/policies/settings" && method === "PUT") {
+      const settings = JSON.parse(await readBody(req)) as PolicySettings;
+      if (settings.revision !== policySettings.revision)
+        return fail(
+          res,
+          409,
+          "settings-changed",
+          "Policy settings changed. Reload them and try again.",
+        );
+      const assigned = [...settings.required, ...settings.groups.flatMap((g) => g.policies)];
+      const outside = assigned.filter((p) => !policyNames.includes(p));
+      if (outside.length)
+        return fail(
+          res,
+          422,
+          "policy-outside-grant",
+          `Policies outside grant: ${outside.join(", ")}`,
+        );
+      if (new Set(assigned).size !== assigned.length)
+        return fail(
+          res,
+          422,
+          "invalid-settings",
+          "A policy is required, in one group, or neither.",
+        );
+      if (new Set(settings.groups.map((g) => g.name)).size !== settings.groups.length)
+        return fail(res, 422, "invalid-settings", "Group names must be unique.");
+      for (const group of settings.groups) {
+        if (!group.name.trim() || group.name.length > 100 || /[\r\n]/.test(group.name))
+          return fail(
+            res,
+            422,
+            "invalid-settings",
+            "A group name must be one line of 1 to 100 characters.",
+          );
+        if (!["single", "multi"].includes(group.mode))
+          return fail(res, 422, "invalid-settings", `Group ${group.name} has unknown mode.`);
+        if (!group.policies.length)
+          return fail(res, 422, "invalid-settings", `Group ${group.name} has no policy.`);
+        if (group.id !== undefined && !policySettings.groups.some((g) => g.id === group.id))
+          return fail(res, 422, "invalid-settings", `Group ${group.name} has unknown id.`);
+      }
+      policySettings = {
+        ...settings,
+        revision: settings.revision + 1,
+        groups: settings.groups.map((g) => ({ ...g, id: g.id ?? nextGroupID++ })),
+      };
+      for (const workspace of world.workspaces)
+        selections.set(
+          workspace.name,
+          [...new Set([...(selections.get(workspace.name) ?? []), ...settings.required])].sort(),
+        );
+      return json(res, 200, policySettings);
+    }
+
     if (pathname === "/api/workspaces" && method === "GET") {
       if (!dockerAvailable)
         return fail(res, 503, "docker-unavailable", "The Docker daemon is not reachable.");
@@ -158,6 +228,15 @@ export function createFixture(options: { distDir: string }) {
           );
           return {
             ...w,
+            policies: selections.get(w.name) ?? [],
+            needsChoice: policySettings.groups
+              .filter((g) => {
+                const count = g.policies.filter((p) =>
+                  (selections.get(w.name) ?? []).includes(p),
+                ).length;
+                return count === 0 || (g.mode === "single" && count !== 1);
+              })
+              .map((g) => g.name),
             activeJob: active
               ? { jobId: active.jobId, operation: active.operation, state: active.state }
               : null,

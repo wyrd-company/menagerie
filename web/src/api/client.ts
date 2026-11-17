@@ -4,6 +4,8 @@ import type {
   InterviewReply,
   Job,
   Operation,
+  Policies,
+  PolicySettings,
   Submission,
   T3CodePairingToken,
   Template,
@@ -160,3 +162,7 @@ export async function answerJob(
   const text = await response.text();
   return text.trim() === "" ? null : parseInterviewReply(text);
 }
+
+export const listPolicies = () => json<Policies>("/api/policies");
+export const savePolicySettings = (settings: PolicySettings) =>
+  json<PolicySettings>("/api/policies/settings", { method: "PUT", body: JSON.stringify(settings) });

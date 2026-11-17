@@ -26,6 +26,10 @@ folder**: it offers only [**Delete**](#delete-a-workspace), which removes
 them. **Refresh** reads the folders, the containers and Menagerie's data
 again.
 
+Each row lists its selected policies, or **No policies** for an empty selection.
+**Needs choice** names any policy group without a valid choice: exactly one
+policy for a single-select group, at least one for a multi-select group.
+
 Each row has **Stop**, **Start**, **Rebuild**, **Apply branch**, **Upgrade**
 and [**T3 Code token**](#connect-t3-code-to-a-workspace). A commit,
 from the [schedule or the workspace itself](#commit-from-inside-a-workspace),
@@ -40,6 +44,28 @@ see its console. Jobs live in memory, so the list starts empty after a
 restart.
 
 ![The workspace list with one stopped and two running workspaces](assets/list.png)
+
+## Policies
+
+Choose **Policies** to see the policies Menagerie's Wyrwood operator key can
+grant. Each row says **Inside grant** or **Outside grant**. A policy referenced
+by the settings or a workspace stays visible if it leaves the grant or is
+removed from Wyrwood. Widen the operator key's grant in Wyrwood before adding
+that policy to settings.
+
+Mark **Required** to add a policy to every workspace's selection. Removing the
+required mark leaves the policy in each selection that already has it.
+
+Choose **Add group**, enter its name, choose **Single-select** (exactly one
+policy) or **Multi-select** (at least one), and select the group's policies.
+**Remove group** removes the rule and keeps the workspaces' selected policies.
+A policy is required, in one group, or neither; group names are unique and
+each group needs at least one policy. **Save** stores the changes together.
+
+If someone saved settings after you opened the page, your save is refused.
+**Reload settings** reads their changes so you can decide again. When Wyrwood
+cannot answer, the page offers **Retry**; it keeps your edits after a failed
+save. Without `provisioning.wyrwood`, the settings controls are disabled.
 
 ## Create a workspace
 

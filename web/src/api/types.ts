@@ -16,6 +16,8 @@ export interface Workspace {
   state: WorkspaceState | (string & {});
   containerId: string | null;
   activeJob: ActiveJob | null;
+  policies: string[];
+  needsChoice: string[];
 }
 
 export interface Template {
@@ -159,4 +161,21 @@ export type JobEvent =
 export interface T3CodePairingToken {
   token: string;
   expiresAt: string;
+}
+
+export interface PolicyGroup {
+  id?: number;
+  name: string;
+  mode: "single" | "multi";
+  policies: string[];
+}
+export interface PolicySettings {
+  required: string[];
+  groups: PolicyGroup[];
+  revision: number;
+}
+export interface Policies {
+  grant: { agents: string[]; policies: string[]; actions: string[] } | null;
+  policies: { name: string; valueNames: string[]; inGrant: boolean }[];
+  settings: PolicySettings;
 }
