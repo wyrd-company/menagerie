@@ -8,6 +8,10 @@ template service (Toha) under s6-overlay.
 
 Use `task` verbs: `task --list`. `task check` is CI. The live suites
 (`task test:live`) need Docker that may run privileged containers.
+`python3 scripts/prove-policy-guards.py --report /tmp/policy-guards.json` proves
+settings revisions, grant checks, exclusive membership and required-policy
+propagation with compiling Go overlays; it leaves the source unchanged and
+writes a report that passes only after every mutant is rejected.
 
 ## Conventions an agent gets wrong
 
