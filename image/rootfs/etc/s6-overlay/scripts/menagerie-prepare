@@ -55,8 +55,8 @@ else
 fi
 
 # Menagerie's own folders: the template service's socket folder, open to
-# the services' user only, and Toha's data and the user's home in the data
-# volume. menagerie-folders checks each through a descriptor opened without
+# the services' user only, and Toha's data, the user's home and the
+# workspace service's database in the data volume. menagerie-folders checks each through a descriptor opened without
 # following links, refuses data another uid wrote, and gives only the
 # checked folders themselves to the user.
 /usr/local/bin/menagerie-folders -uid "$uid" -gid "$gid" -root "$root" || exit 1

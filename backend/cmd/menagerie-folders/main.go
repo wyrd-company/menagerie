@@ -10,10 +10,12 @@
 //	menagerie-folders -uid UID -gid GID -root WORKSPACE_ROOT
 //
 // The folders are /run/menagerie, the template service's socket folder,
-// and /var/lib/menagerie with its toha, home, candidates and provisioning
-// folders; the candidates folder is the template service's temporary
-// folder, where Toha builds an upgrade's candidate, and the provisioning
-// folder holds the retirement records. Each is opened
+// and /var/lib/menagerie with its toha, home, candidates, state and
+// provisioning folders; the candidates folder is the template service's
+// temporary folder, where Toha builds an upgrade's candidate, the state
+// folder holds the workspace service's database, private to the services'
+// user, and the provisioning folder holds the retirement records of earlier
+// releases until the first start imports them. Each is opened
 // without following a symbolic link and checked through that open
 // descriptor; every change is made through the same descriptor, so a
 // folder replaced after its check is never the one changed. Nothing is
@@ -48,6 +50,7 @@ var folders = []folder{
 	{parent: "/var/lib/menagerie", name: "toha", mode: 0o755, data: true, contents: true},
 	{parent: "/var/lib/menagerie", name: "home", mode: 0o700, data: true, contents: true},
 	{parent: "/var/lib/menagerie", name: "candidates", mode: 0o700, data: true, contents: true},
+	{parent: "/var/lib/menagerie", name: "state", mode: 0o700, data: true, contents: true},
 	{parent: "/var/lib/menagerie", name: "provisioning", mode: 0o700, data: true, contents: true},
 }
 

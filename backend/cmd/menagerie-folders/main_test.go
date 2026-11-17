@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 )
 
 // layout is a test copy of the image's folders under a temporary root, with
@@ -35,6 +37,7 @@ func newLayout(t *testing.T) *layout {
 		{parent: l.lib, name: "menagerie", mode: 0o755, data: true},
 		{parent: l.data, name: "toha", mode: 0o755, data: true, contents: true},
 		{parent: l.data, name: "home", mode: 0o700, data: true, contents: true},
+		{parent: l.data, name: "state", mode: 0o700, data: true, contents: true},
 		{parent: l.data, name: "provisioning", mode: 0o700, data: true, contents: true},
 	}
 	t.Cleanup(func() { afterCheck = func() {}; afterCreate = func(string) {} })
@@ -72,6 +75,7 @@ func TestPrepareCreatesTheFoldersWithTheirModes(t *testing.T) {
 	for path, want := range map[string]os.FileMode{
 		filepath.Join(l.run, "menagerie"): 0o700, l.data: 0o755,
 		filepath.Join(l.data, "toha"): 0o755, filepath.Join(l.data, "home"): 0o700,
+		filepath.Join(l.data, "state"): 0o700,
 	} {
 		if m := mode(t, path); !m.IsDir() || m.Perm() != want {
 			t.Errorf("%s is %v, want a folder with mode %o", path, m, want)
@@ -87,6 +91,20 @@ func TestPrepareCreatesTheFoldersWithTheirModes(t *testing.T) {
 	if m := mode(t, filepath.Join(l.data, "home")).Perm(); m != 0o700 {
 		t.Errorf("home's mode is %o after a second start", m)
 	}
+}
+
+// The workspace service's database is private to the services' user, and the
+// image's start-up checks its folder as it checks the others.
+func TestTheImagesStateFolderIsPrivateData(t *testing.T) {
+	for _, f := range folders {
+		if f.path() == filepath.Dir(store.DefaultPath) {
+			if f.mode != 0o700 || !f.data || !f.contents {
+				t.Fatalf("the state folder is %+v", f)
+			}
+			return
+		}
+	}
+	t.Fatalf("the image does not prepare %s", filepath.Dir(store.DefaultPath))
 }
 
 func TestPrepareRefusesLinksAndFilesBeforeChangingAnything(t *testing.T) {
