@@ -1,4 +1,7 @@
 /* Policy settings follow the task-18 approved settings panel. */
+.policy-screen .muted {
+  color: var(--text-muted);
+}
 .policy-panel {
   margin: 0;
   min-width: 0;
