@@ -8,6 +8,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -100,17 +101,46 @@ func (t *Tx) PolicySettings() (PolicySettings, error) {
 	return out, err
 }
 
-// Selection is a workspace's stored policy names and revision. Task 24 uses
-// this revision to track which selection the binding has applied.
+// ApplyFailure is the last unsuccessful attempt to apply a selection.
+type ApplyFailure struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+
+// Selection holds the desired policies and the last observed application.
 type Selection struct {
-	Policies []string
-	Revision int64
+	Policies        []string
+	Revision        int64
+	AppliedRevision *int64
+	ApplyFailure    *ApplyFailure
+	Imported        bool
+	Values          map[string]string
+	Key             *Key
 }
 
 // Selection reads a workspace's selection in this transaction.
 func (t *Tx) Selection(name string) (Selection, error) {
 	out := Selection{Policies: []string{}}
-	if err := t.tx.QueryRowContext(t.ctx, `SELECT selection_revision FROM workspaces WHERE name = ?`, name).Scan(&out.Revision); err != nil {
+	var applied sql.NullInt64
+	var failure, key sql.NullString
+	var values string
+	if err := t.tx.QueryRowContext(t.ctx, `SELECT selection_revision, applied_revision, apply_failure, selection_imported, policy_values, xolotl_identity FROM workspaces WHERE name = ?`, name).Scan(&out.Revision, &applied, &failure, &out.Imported, &values, &key); err != nil {
+		return out, err
+	}
+	if applied.Valid {
+		out.AppliedRevision = &applied.Int64
+	}
+	if failure.Valid {
+		if err := json.Unmarshal([]byte(failure.String), &out.ApplyFailure); err != nil {
+			return out, err
+		}
+	}
+	if key.Valid {
+		if err := json.Unmarshal([]byte(key.String), &out.Key); err != nil {
+			return out, err
+		}
+	}
+	if err := json.Unmarshal([]byte(values), &out.Values); err != nil {
 		return out, err
 	}
 	names, err := t.names(`SELECT policy FROM workspace_policies WHERE workspace = ? ORDER BY policy`, name)

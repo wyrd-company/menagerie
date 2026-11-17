@@ -23,6 +23,8 @@ type Name struct {
 	Agent string
 	// Current says that it is the workspace's current container name.
 	Current bool
+	// BindingID is the last resolved Wyrwood ID; a missing ID is resolved by name.
+	BindingID string
 }
 
 // Key is a Xolotl client key Menagerie issued for a workspace.
@@ -72,13 +74,13 @@ func (t *Tx) Exists(name string) (bool, error) {
 // Held reads what a workspace holds.
 func (t *Tx) Held(workspace string) (Held, error) {
 	var out Held
-	rows, err := t.tx.QueryContext(t.ctx, `SELECT name, coalesce(agent, ''), current FROM container_names WHERE workspace = ? ORDER BY name`, workspace)
+	rows, err := t.tx.QueryContext(t.ctx, `SELECT name, coalesce(agent, ''), current, coalesce(binding_id, '') FROM container_names WHERE workspace = ? ORDER BY name`, workspace)
 	if err != nil {
 		return Held{}, fmt.Errorf("Menagerie's data: %w", err)
 	}
 	for rows.Next() {
 		var n Name
-		if err := rows.Scan(&n.Name, &n.Agent, &n.Current); err != nil {
+		if err := rows.Scan(&n.Name, &n.Agent, &n.Current, &n.BindingID); err != nil {
 			_ = rows.Close()
 			return Held{}, fmt.Errorf("Menagerie's data: %w", err)
 		}

@@ -80,6 +80,14 @@ var migrations = []string{
 		UPDATE workspaces SET selection_revision = 1 WHERE name = NEW.name
 		AND EXISTS (SELECT 1 FROM workspace_policies WHERE workspace = NEW.name);
 	END;`,
+	// 3: policy application, immutable provisioning identity and binding IDs.
+	`ALTER TABLE container_names ADD COLUMN binding_id TEXT;
+	ALTER TABLE workspaces ADD COLUMN applied_revision INTEGER;
+	ALTER TABLE workspaces ADD COLUMN apply_failure TEXT;
+	ALTER TABLE workspaces ADD COLUMN selection_imported INTEGER NOT NULL DEFAULT 1 CHECK (selection_imported IN (0, 1));
+	UPDATE workspaces SET selection_imported = 0;
+	ALTER TABLE workspaces ADD COLUMN policy_values TEXT NOT NULL DEFAULT '{}';
+	ALTER TABLE workspaces ADD COLUMN xolotl_identity TEXT;`,
 }
 
 // SchemaVersion is the version of the schema this Menagerie reads and writes.
