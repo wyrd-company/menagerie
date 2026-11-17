@@ -2,6 +2,7 @@
 // button: the list and the console still name it.
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Workspace } from "../api/types.ts";
 import { WorkspaceList } from "../screens/WorkspaceList.tsx";
 import { JobConsole } from "./JobConsole.tsx";
 import { initialJobView } from "./jobView.ts";
@@ -38,12 +39,14 @@ describe("a commit job", () => {
             : {
                 workspaces: [
                   {
+                    policies: [],
+                    needsChoice: [],
                     name: "sample",
                     state: "running",
                     containerId: "c1",
                     activeJob: { jobId: "j1", operation: "commit", state: "running" },
                   },
-                ],
+                ] satisfies Workspace[],
               },
         ),
       ),

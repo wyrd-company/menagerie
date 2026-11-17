@@ -3,6 +3,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Workspace } from "../api/types.ts";
 import { UpgradeWorkspace } from "./UpgradeWorkspace.tsx";
 
 const job = {
@@ -27,7 +28,16 @@ function stubApi(): unknown[] {
     vi.fn(async (path: string, init?: RequestInit) => {
       if (path === "/api/workspaces") {
         return Response.json({
-          workspaces: [{ name: "sample", state: "running", containerId: "c1", activeJob: null }],
+          workspaces: [
+            {
+              name: "sample",
+              state: "running",
+              containerId: "c1",
+              activeJob: null,
+              policies: [],
+              needsChoice: [],
+            },
+          ] satisfies Workspace[],
         });
       }
       if (path === "/api/templates") {

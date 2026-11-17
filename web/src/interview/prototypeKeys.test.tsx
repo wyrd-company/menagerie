@@ -3,7 +3,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { BatchDocument, Submission } from "../api/types.ts";
+import type { BatchDocument, Submission, Workspace } from "../api/types.ts";
 import { WorkspaceList } from "../screens/WorkspaceList.tsx";
 import { StatusBadge } from "../ui/StatusBadge.tsx";
 import { JobConsole } from "../jobs/JobConsole.tsx";
@@ -81,7 +81,18 @@ describe.each(names)("a workspace or state named %s", (name) => {
         Response.json(
           path === "/api/jobs"
             ? { jobs: [] }
-            : { workspaces: [{ name, state: "stopped", containerId: null, activeJob: null }] },
+            : {
+                workspaces: [
+                  {
+                    name,
+                    state: "stopped",
+                    containerId: null,
+                    activeJob: null,
+                    policies: [],
+                    needsChoice: [],
+                  },
+                ] satisfies Workspace[],
+              },
         ),
       ),
     );
