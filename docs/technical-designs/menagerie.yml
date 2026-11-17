@@ -622,7 +622,8 @@ proposed-design:
     binding and made another under the name, and a name with no recorded ID
     is resolved through the agent's `binding-list` by its agent and key: the
     ID found is recorded and Menagerie goes on with that binding, and a
-    name the list does not show has no binding. The access group comes
+    name the list does not show is handled as missing, subject to bind's
+    answer below. The access group comes
     from the job. A provisioning job's `bind` step uses the group its
     declaration names, which `read-definition` accepted. `apply-policies`
     keeps the group of a binding it reads. When the binding is missing, it

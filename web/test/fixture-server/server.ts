@@ -274,7 +274,7 @@ export function createFixture(options: { distDir: string }) {
       const revision = input.revision + 1;
       revisions.set(name, revision);
       applied.set(name, revision);
-      return json(res, 202, { selectionRevision: revision, jobId: null });
+      return json(res, 200, { selectionRevision: revision, jobId: null });
     }
     const pairing = /^\/api\/workspaces\/([^/]+)\/t3-code-pairing-tokens$/.exec(pathname);
     if (pairing && method === "POST") {

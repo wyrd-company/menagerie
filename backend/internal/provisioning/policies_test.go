@@ -306,7 +306,7 @@ func TestImportKeepsRunningBindingSelectionAndLegacyKey(t *testing.T) {
 	b.Settings.Values = map[string]string{"key_name": "legacy-name"}
 	h.bindings[b.ID] = b
 	if _, err := h.data.Import(context.Background(), 99, func(tx *store.Tx) error {
-		return tx.PrepareSelectionImport("sample", &Key{"legacy-policy", "legacy-name"}, true)
+		return tx.PrepareSelectionImport("sample", &Key{Policy: "legacy-policy", Name: "legacy-name"}, true)
 	}); err != nil {
 		t.Fatal(err)
 	}

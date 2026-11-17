@@ -113,6 +113,10 @@ func (s *Server) saveWorkspacePolicies(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, apiError{Kind: "provisioning-unavailable", Message: "Configure provisioning.wyrwood before changing workspace policies."})
 		return
 	}
+	if err = s.opts.Data.Update(r.Context(), func(tx *store.Tx) error { return tx.AddWorkspace(r.PathValue("name")) }); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	// Import before any revision check, so a read before import cannot overwrite it.
 	if err = s.opts.PolicyApplication.EnsureImported(r.Context(), folder); err != nil {
 		writeError(w, 503, apiError{Kind: "wyrwood-unavailable", Message: err.Error()})

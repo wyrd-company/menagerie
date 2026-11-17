@@ -161,3 +161,18 @@ func TestCreateWithNoPoliciesIsAccepted(t *testing.T) {
 	}
 	f.manager.Wait()
 }
+
+func TestSelectionHTTPDoesNotRequireListingTheFolderFirst(t *testing.T) {
+	f := newFixture(t, nil)
+	f.server.opts.Policies = &policyFixture{policies: []operator.Policy{{Name: "one"}}}
+	f.server.opts.PolicyApplication = &selectionApplication{data: f.data}
+	response := policyCall(f.server, "PUT", "/api/workspaces/alpha/policies", `{"policies":["one"],"revision":0}`)
+	if response.Code != 200 {
+		t.Fatalf("%d %s", response.Code, response.Body.String())
+	}
+	f.manager.Wait()
+	current, err := f.data.Selection(context.Background(), "alpha")
+	if err != nil || len(current.Policies) != 1 || current.Policies[0] != "one" {
+		t.Fatalf("%+v %v", current, err)
+	}
+}

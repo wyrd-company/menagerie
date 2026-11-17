@@ -348,6 +348,9 @@ func legacySelection(def devcontainer.Definition) ([]string, map[string]string, 
 // checked, or before an apply can write anything to Wyrwood.
 func (s *Steps) EnsureImported(ctx context.Context, folder string) error {
 	workspace := filepath.Base(folder)
+	if err := s.opts.Data.Update(ctx, func(tx *store.Tx) error { return tx.AddWorkspace(workspace) }); err != nil {
+		return err
+	}
 	current, err := s.opts.Data.Selection(ctx, workspace)
 	if err != nil || current.Imported {
 		return err
