@@ -57,6 +57,7 @@ const (
 	WorkspaceSocketTarget = "/run/menagerie"
 	WorkspaceSocketName   = "workspace.sock"
 	WorkspaceSocketEnv    = "MENAGERIE_WORKSPACE_SOCKET"
+	XolotlKeyEnv          = "MENAGERIE_XOLOTL_KEY"
 	WorkspaceSocketPath   = WorkspaceSocketTarget + "/" + WorkspaceSocketName
 )
 
@@ -209,6 +210,7 @@ type BringUp struct {
 	// definition's primary image.
 	image string
 	// imageBuilt says Build built image; features are what it installed.
+	xolotlKey  string
 	imageBuilt bool
 	features   []features.Resolved
 }
@@ -236,10 +238,52 @@ func (r *Runtime) begin(folder string, p Progress, replace bool) (*BringUp, erro
 	return &BringUp{r: r, dc: dc, folder: folder, env: local.values, process: local.process, p: p, replace: replace}, nil
 }
 
+// SetXolotlKey supplies the workspace's stored key address, never a secret.
+func (b *BringUp) SetXolotlKey(key string) { b.xolotlKey = key }
+
+func (b *BringUp) nameXolotlKey(ctx context.Context) error {
+	if b.xolotlKey == "" {
+		return nil
+	}
+	if _, set := b.dc.ContainerEnv[XolotlKeyEnv]; set {
+		return nil
+	}
+	if !b.replace {
+		found, err := hostdocker.New(b.r.client, hostdocker.Options{}).Inspect(ctx, b.folder)
+		if err != nil && !errors.Is(err, hostdocker.ErrContainerNotFound) {
+			return err
+		}
+		if err == nil {
+			info, err := b.r.client.ContainerInspect(ctx, found.ID)
+			if err != nil {
+				return err
+			}
+			present := false
+			for _, value := range info.Config.Env {
+				if strings.HasPrefix(value, XolotlKeyEnv+"=") {
+					present = true
+				}
+			}
+			if !present {
+				fmt.Fprintln(b.p.Log(""), "MENAGERIE_XOLOTL_KEY attaches at the next rebuild: this container was created without it")
+				return nil
+			}
+		}
+	}
+	if b.dc.ContainerEnv == nil {
+		b.dc.ContainerEnv = map[string]any{}
+	}
+	b.dc.ContainerEnv[XolotlKeyEnv] = b.xolotlKey
+	return nil
+}
+
 // Build creates the missing bind source folders inside the workspace
 // folder, runs initializeCommand and builds the current definition when it
 // needs a build.
 func (b *BringUp) Build(ctx context.Context) error {
+	if err := b.nameXolotlKey(ctx); err != nil {
+		return err
+	}
 	r := b.r
 	if err := createBindSources(ctx, b.dc, b.folder, b.env, b.p); err != nil {
 		return err

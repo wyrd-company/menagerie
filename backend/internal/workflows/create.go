@@ -32,6 +32,7 @@ type creation struct {
 	name     string
 	folder   string
 	template string
+	policies []string
 }
 
 func (c *creation) run(ctx context.Context, run *jobs.Run) error {
@@ -57,6 +58,20 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 			fmt.Fprintf(run.Log(""), "removing the data of the create that ended failed: %v; the next start removes it\n", err)
 		}
 	}()
+
+	allowed := []string{}
+	if c.w.opts.Policies != nil {
+		_, policies, err := c.w.opts.Policies.Policies(ctx)
+		if err != nil {
+			return err
+		}
+		for _, p := range policies {
+			allowed = append(allowed, p.Name)
+		}
+	}
+	if err := c.w.opts.Data.SetCreateSelection(ctx, c.name, c.policies, allowed); err != nil {
+		return err
+	}
 
 	t := c.w.opts.Templates
 	sel := c.w.selector(c.name, c.folder, c.template)

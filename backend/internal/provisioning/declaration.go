@@ -26,9 +26,6 @@ const maxAccessGroup = 4294967294
 
 // The block's value rules, as its schema states them.
 var (
-	policyPattern     = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
-	valueNamePattern  = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-	valuePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 	xolotlNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 )
 
@@ -40,13 +37,13 @@ type Declaration struct {
 	Wyrwood       WyrwoodBlock
 	// Xolotl is the client key to issue, or nil for none.
 	Xolotl *Key
+	// Ignored names each legacy member present, regardless of its value.
+	Ignored []string
 }
 
 // WyrwoodBlock is what the workspace's binding holds.
 type WyrwoodBlock struct {
 	AccessGroup uint32
-	Policies    []string
-	Values      map[string]string
 }
 
 // Key addresses a Xolotl client key.
@@ -78,9 +75,14 @@ func Parse(def devcontainer.Definition) (*Declaration, error) {
 		return nil, err
 	}
 	d := &Declaration{ContainerName: def.ContainerName, Wyrwood: block}
-	if raw, ok := root["xolotl"]; ok {
-		if d.Xolotl, err = parseXolotl(raw); err != nil {
-			return nil, err
+	if _, ok := root["xolotl"]; ok {
+		d.Ignored = append(d.Ignored, "xolotl")
+	}
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields)
+	for _, name := range []string{"policies", "values"} {
+		if _, ok := fields[name]; ok {
+			d.Ignored = append(d.Ignored, "wyrwood."+name)
 		}
 	}
 	return d, nil
@@ -97,14 +99,7 @@ func parseWyrwood(raw json.RawMessage) (WyrwoodBlock, error) {
 	if out.AccessGroup, err = parseAccessGroup(fields["accessGroup"]); err != nil {
 		return WyrwoodBlock{}, err
 	}
-	if out.Policies, err = parsePolicies(fields["policies"]); err != nil {
-		return WyrwoodBlock{}, err
-	}
-	if raw, ok := fields["values"]; ok {
-		if out.Values, err = parseValues(raw); err != nil {
-			return WyrwoodBlock{}, err
-		}
-	}
+
 	return out, nil
 }
 
@@ -118,76 +113,6 @@ func parseAccessGroup(raw json.RawMessage) (uint32, error) {
 		return 0, fmt.Errorf("%s must be a whole number from 0 to %d", field, uint64(maxAccessGroup))
 	}
 	return uint32(group), nil
-}
-
-func parsePolicies(raw json.RawMessage) ([]string, error) {
-	const field = wyrwoodField + ".policies"
-	var policies []string
-	if raw == nil {
-		return nil, errors.New(field + " is required")
-	}
-	if json.Unmarshal(raw, &policies) != nil || len(policies) == 0 {
-		return nil, errors.New(field + " must be a list with at least one policy name")
-	}
-	seen := map[string]bool{}
-	for _, policy := range policies {
-		if len(policy) > 64 || !policyPattern.MatchString(policy) {
-			return nil, fmt.Errorf("%s has %q, which is not a policy name", field, policy)
-		}
-		if seen[policy] {
-			return nil, fmt.Errorf("%s has %q twice", field, policy)
-		}
-		seen[policy] = true
-	}
-	return policies, nil
-}
-
-func parseValues(raw json.RawMessage) (map[string]string, error) {
-	const field = wyrwoodField + ".values"
-	if !isObject(raw) {
-		return nil, errors.New(field + " must be an object")
-	}
-	var values map[string]string
-	if json.Unmarshal(raw, &values) != nil {
-		return nil, errors.New(field + " must hold only text values")
-	}
-	for name, value := range values {
-		if !valueNamePattern.MatchString(name) {
-			return nil, fmt.Errorf("%s has %q, which is not a value name", field, name)
-		}
-		if len(value) > 63 || !valuePattern.MatchString(value) {
-			return nil, fmt.Errorf("%s.%s must hold only letters, digits, _ and -, and start with a letter or digit", field, name)
-		}
-	}
-	return values, nil
-}
-
-func parseXolotl(raw json.RawMessage) (*Key, error) {
-	const field = "customizations.menagerie.xolotl"
-	fields, err := object(raw, field, "keyPolicy", "keyName")
-	if err != nil {
-		return nil, err
-	}
-	policy, err := xolotlName(fields["keyPolicy"], field+".keyPolicy")
-	if err != nil {
-		return nil, err
-	}
-	name, err := xolotlName(fields["keyName"], field+".keyName")
-	if err != nil {
-		return nil, err
-	}
-	return &Key{Policy: policy, Name: name}, nil
-}
-
-func xolotlName(raw json.RawMessage, field string) (string, error) {
-	var name string
-	if raw == nil {
-		return "", errors.New(field + " is required")
-	}
-	if json.Unmarshal(raw, &name) != nil || len(name) > 63 || !xolotlNamePattern.MatchString(name) {
-		return "", fmt.Errorf("%s must be 1 to 63 of a-z, 0-9, _ and -, and start with a letter or digit", field)
-	}
-	return name, nil
 }
 
 // object decodes a JSON object and refuses any key outside allowed. Go's

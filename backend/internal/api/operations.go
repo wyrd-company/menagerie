@@ -19,9 +19,10 @@ import (
 
 // JobRequest is the body of POST /api/jobs.
 type JobRequest struct {
-	Operation  string `json:"operation"`
-	Workspace  string `json:"workspace"`
-	TemplateID string `json:"templateId,omitempty"`
+	Policies   []string `json:"policies,omitempty"`
+	Operation  string   `json:"operation"`
+	Workspace  string   `json:"workspace"`
+	TemplateID string   `json:"templateId,omitempty"`
 	// Branch names the branch of the workspace repository that
 	// apply-branch applies.
 	Branch string `json:"branch,omitempty"`

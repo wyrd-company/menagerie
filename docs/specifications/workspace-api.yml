@@ -96,11 +96,77 @@ description: >-
   a selection can be empty and no policy is treated specially.
 
 
+  A create accepts `policies`, a unique list of policy names, empty when
+  absent, with group choices and ordinary policies; Menagerie adds required
+  policies. A missing or invalid group choice is 422 `policy-choice-required`,
+  naming the group; a policy outside the grant is 422 `policy-outside-grant`;
+  policies without `provisioning.wyrwood` are 409 `provisioning-unavailable`;
+  an unreadable grant is 503 `wyrwood-unavailable`. With host provisioning a
+  workspace name is 1 to 63 lowercase letters, digits, `_` or `-`, starting
+  with a letter or digit, else 400 `invalid-workspace-name`. No policy is not
+  a create refusal. A template upgrade preserves the stored selection.
+
+
+  `PUT /api/workspaces/{name}/policies` takes `policies` and its `revision`.
+  A pending selection is imported before checking the revision: an older
+  read is 409 `selection-changed`, and an unreadable Wyrwood during import
+  is 503 `wyrwood-unavailable` with nothing stored. Other errors are 400
+  `invalid-request`, 404 `workspace-not-found`, 409 `provisioning-unavailable`
+  without Wyrwood, 422 `policy-required` naming a required policy removed,
+  422 `policy-choice-required` naming a previously valid group made invalid,
+  and 422 `policy-outside-grant` naming newly added policies. Success is
+  200 `{selectionRevision, jobId}`, with the apply job's ID or null while
+  queued behind the workspace's running job. Each edit increments its
+  revision, and can remove its last policy. Marking a policy required
+  queues an apply on each selection it changes. Failed applies are retried
+  by a manager, start-up, a selection change or a provisioning job.
+
+
+  `Workspace` has `selectionRevision`, nullable `appliedRevision`, nullable
+  `applyFailure` (`{kind,message}`), `selectionImported` and nullable
+  `xolotlKey` (the stored policy/name address, never a secret). `needsChoice`
+  is empty until import completes. A binding holds its selection when
+  its applied revision equals the stored selection revision.
+
+
+  The one-phase `apply-policies` job runs `bind`, reads the stored selection,
+  values and revision and a fresh grant. A selected policy outside it fails
+  as `policy-outside-grant` before a binding request. With no current
+  container name it records the revision. Otherwise it resolves the binding
+  by recorded ID and then the name, and keeps the binding's access group,
+  even when the definition no longer parses or declares provisioning. A
+  missing binding needs an accepted declaration naming the current name,
+  for any selection, else `provisioning-invalid` with no request. It then
+  sends `bind`. A stale ID after a successful change is resolved again
+  within the once-only retry. A hidden binding fails as
+  `binding-outside-grant`, without advancing the applied revision.
+
+
+  Both provisioning `bind` and `apply-policies` converge on the whole
+  selection, its values and the job's access group. Provisioning uses the
+  accepted declaration's group. Matching applied bindings are not written;
+  matching pending bindings get `binding-change` to finish them. Other
+  bindings get `binding-change` at their read revision, preserving their
+  other settings. `revision-differs` or `binding-differs` is decided again
+  once, then fails as `binding-changed`. Pending assignments are retried
+  three times one second apart within `provisioning.readiness-wait`, then
+  fail as `binding-pending`; the next apply finishes a saved assignment.
+  Menagerie sends an empty selection like any other; Wyrwood 0.7.1 refuses
+  it as `binding-refused`, with its answer on one line in the console and
+  `applyFailure`, leaving the binding unchanged and the selection stored
+  but unapplied. Operator-key errors retain their specific messages.
+  Menagerie records no removal from a read. `appliedRevision` advances only
+  without a current name or after a read proves the binding holds the
+  selection, values, group and `applied`. The console names each policy,
+  value and access-group change. A Wyrwood-side edit is replaced by the
+  next apply or provisioning job.
+
+
   `GET /api/templates` returns the approved templates' `id` and `name`.
 
 
   `POST /api/jobs` starts an operation on a workspace. The operations are
-  `start`, `stop`, `rebuild` and `commit` on an existing workspace folder,
+  `start`, `stop`, `rebuild`, `commit` and `apply-policies` on an existing workspace folder,
   `apply-branch` on an existing workspace folder, which also names a
   `branch`, and the interview operations `create` and `upgrade`, which also
   name an approved template's `templateId`; `upgrade` also takes an optional
@@ -124,7 +190,8 @@ description: >-
   `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `runner-image-unavailable`, `provisioning-invalid`, `provisioning-unavailable`,
-  `provisioning-not-ready`, `binding-outside-grant`, `host-prerequisites-missing`,
+  `provisioning-not-ready`, `binding-outside-grant`, `policy-outside-grant`,
+  `binding-changed`, `binding-pending`, `binding-refused`, `host-prerequisites-missing`,
   `delete-refused`, `delete-unfinished`, `operation-failed` or
   `internal-error`, and for interview operations
   `workspace-exists`, `template-refused`, `template-service-unavailable`,

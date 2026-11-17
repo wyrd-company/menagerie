@@ -219,6 +219,9 @@
             },
             "delete": {
               "$ref": "#/$defs/duration"
+            },
+            "apply-policies": {
+              "$ref": "#/$defs/duration"
             }
           }
         },
@@ -364,7 +367,7 @@
         "xolotl": {
           "type": "object",
           "additionalProperties": false,
-          "description": "The Xolotl that issues and revokes workspaces' client keys. Absent, a declaration with a Xolotl key cannot be provisioned.",
+          "description": "The Xolotl that issues and revokes workspaces' client keys. Absent, workspaces get no new key.",
           "required": [
             "url",
             "key-secret"
@@ -394,6 +397,12 @@
                   "description": "The secret's path in the mount."
                 }
               }
+            },
+            "key-policy": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]*$",
+              "maxLength": 63,
+              "description": "Key policy for this host's workspace client keys. Without it a job needing a new key fails as provisioning-unavailable."
             }
           }
         }

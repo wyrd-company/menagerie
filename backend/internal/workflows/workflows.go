@@ -70,6 +70,7 @@ type Options struct {
 	// Data is Menagerie's data, which holds a workspace from the start of its
 	// create.
 	Data      *store.Store
+	Policies  api.PolicySource
 	Templates Templates
 	// Approved holds the approved template ids.
 	Approved map[string]bool
@@ -159,7 +160,7 @@ func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 	if claimed {
 		return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindWorkspaceExists, Message: fmt.Sprintf("workspace %s already exists in Menagerie's data: it is being created, or its folder is gone and it still holds a binding or a key, which its delete removes", req.Workspace)}
 	}
-	return (&creation{w: w, name: req.Workspace, folder: folder, template: req.TemplateID}).run, nil
+	return (&creation{w: w, name: req.Workspace, folder: folder, template: req.TemplateID, policies: req.Policies}).run, nil
 }
 
 func (w *Workflows) upgrade(req api.JobRequest) (jobsRunner, error) {

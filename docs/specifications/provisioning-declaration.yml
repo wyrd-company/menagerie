@@ -24,30 +24,27 @@ description: >-
   "customizations": {
     "menagerie": {
       "wyrwood": {
-        "accessGroup": 1000,
-        "policies": ["workspace", "xolotl-client-key"],
-        "values": {"xolotl_key_name": "sample"}
-      },
-      "xolotl": {"keyPolicy": "host-sample", "keyName": "sample"}
+        "accessGroup": 1000
+      }
     }
   }
 
   ```
 
 
-  `wyrwood` is required. `accessGroup` is the numeric group of the consumer
-  directory and its sockets; the container's user must have it. `policies` lists
-  shared Wyrwood policies, each on the operator key's allowlist. `values`, which
-  is optional, gives the values these policies read for this binding. A value
-  holds letters, digits, `_` and `-` only, so it cannot widen a policy's path.
-  Wyrwood refuses a binding that leaves a value a policy reads unset.
+  `wyrwood` is required. Its required `accessGroup` is a whole number from
+  0 to 4294967294, the numeric group of the consumer directory and sockets;
+  the container's user must have it. The policies are the workspace's stored
+  selection in Menagerie, and every new value they read is the workspace's
+  name. Its Xolotl key is `<provisioning.xolotl.key-policy>/<workspace name>`,
+  recorded once. An imported workspace keeps its policies, values and key.
+  Menagerie supplies the key address as `MENAGERIE_XOLOTL_KEY` in the container.
 
 
-  `xolotl` is optional. `keyPolicy` and `keyName` address the client key
-  `<keyPolicy>/<keyName>`, which Menagerie issues. `keyPolicy` is a key policy
-  only this host's workspaces use, and the Wyrwood policy that reads the key
-  fixes it in its path. That path takes the name from `values`, so the name
-  appears twice: the key and the path are separate systems and share no field.
+  The schema describes what templates render: only `wyrwood.accessGroup`.
+  Menagerie's reader also accepts the legacy `wyrwood.policies`,
+  `wyrwood.values` and `xolotl` members with any value, ignores them, and
+  names each in the job console. Other unknown keys are errors.
 
 
   The container name is not in the block. It is the `--name` value of `runArgs`,
@@ -61,9 +58,9 @@ description: >-
   workspace was given is removed by its delete, and by a job that retires it,
   from Menagerie's data, whatever the definition declares by then.
 validation-criteria: >-
-  `go test` of the package that reads the block parses a valid block with and
-  without `xolotl` and `values`, treats an absent block as no provisioning, and
-  rejects each invalid field, an unknown key, a block in a Compose definition, a
-  definition with no `--name`, and a name or key that Menagerie's data holds
-  for another workspace. It checks that the keys of the schema equal the keys
-  the parser accepts.
+  The parser tests read a block with and without the three legacy members,
+  ignore them and report each, treat an absent block as no provisioning, and
+  refuse invalid access groups, unknown keys, Compose, no container name and
+  a name held by another workspace. The schema's rendered keys equal the
+  keys the parser reads, and the ignored keys are exactly `wyrwood.policies`,
+  `wyrwood.values` and `xolotl`.

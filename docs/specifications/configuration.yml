@@ -84,7 +84,7 @@ description: >-
   `waiting-for-answers` does not count, and no deadline applies while a job
   waits. Interviews keep no expiry. `default` limits every operation
   without its own limit; `operations` gives `start`, `stop`, `rebuild`,
-  `create`, `upgrade`, `commit`, `apply-branch` or `delete` its own limit, which
+  `create`, `upgrade`, `commit`, `apply-branch`, `apply-policies` or `delete` its own limit, which
   replaces `default`; `phases`
   limits each stay in a phase, counted from each entry into the phase
   (an answered interview enters `interview` again), inside any operation.
@@ -108,7 +108,7 @@ description: >-
   "operation", "phase", "state", "error": {"kind", "message"} | null,
   "console"}`, where `console` is the browser address of the job's
   console: the origin of `oidc.redirect-url` followed by `/?job={id}` for
-  start, stop, rebuild, commit, apply-branch and delete, `/create?job={id}` for create and
+  start, stop, rebuild, commit, apply-branch, apply-policies and delete, `/create?job={id}` for create and
   `/workspaces/{name}/upgrade?job={id}` for upgrade. Alerts wait in one
   queue of 64 and one background sender posts them in the order they were
   raised, so a job's `job-long-running` alert is posted before its
@@ -182,7 +182,11 @@ description: >-
   workspaces' client keys: `url` is an http or https URL with a host and no
   user information, query or fragment, and `key-secret` names, with `kv-mount`
   and `path`, the secret whose string field `api_key` holds Menagerie's scoped
-  key. Mount and path follow the rule of `registry-credentials`. Menagerie
+  key. Its optional `key-policy` is the policy of this host's workspace
+  client keys: 1 to 63 lowercase letters, digits, `_` or `-`, starting with
+  a letter or digit. Without it a job that must name a new key fails as
+  `provisioning-unavailable`, and start-up logs a warning naming the setting.
+  Without `xolotl`, workspaces get no new key. Mount and path follow the rule of `registry-credentials`. Menagerie
   reads the secret through the Wyrwood vault socket for each operation on a
   key and keeps the scoped key in memory for that operation only. The scoped
   key goes only to `url`: a redirect ends the operation and is not followed.

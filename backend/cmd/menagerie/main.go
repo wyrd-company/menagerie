@@ -158,6 +158,14 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
+	policySteps := provisioning.New(provisioning.Options{Clients: clients, Runtime: provisioning.Adapt(runtime), Data: data})
+	if err := policySteps.ImportSelections(ctx, root, log.Printf); err != nil {
+		return err
+	}
+	policyServer := api.New(api.Options{Root: root, Data: data, Jobs: manager, Policies: func() api.PolicySource { source, _ := clients.Bindings.(api.PolicySource); return source }(), PolicyApplication: policySteps})
+	if err := policyServer.ApplyPending(ctx); err != nil {
+		return err
+	}
 	handler, err := newHandler(cfg, root, data, remote, runtime, clients, manager, parts.hooks, parts.images)
 	if err != nil {
 		return err
@@ -378,7 +386,9 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 		Runtime: provisioning.Adapt(runtime),
 		Data:    data,
 	})
+	policySource, _ := clients.Bindings.(api.PolicySource)
 	flows := workflows.New(workflows.Options{
+		Policies:     policySource,
 		Root:         root,
 		Data:         data,
 		Templates:    templates.New(cfg.TemplateService.Socket),
@@ -394,21 +404,30 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 		operations[name] = op
 	}
 	operations[api.OperationCommit] = commits.New(commits.Options{Root: root, Remote: remote, Jobs: manager}).Operation()
-	policySource, _ := clients.Bindings.(api.PolicySource)
-	return api.New(api.Options{
-		Policies:   policySource,
-		Root:       root,
-		Data:       data,
-		Status:     runtime,
-		Jobs:       manager,
-		Operations: operations,
-		Interviews: flows,
+	operations[api.OperationApplyPolicies] = func(req api.JobRequest) (jobs.Runner, error) {
+		folder, err := api.ExistingFolder(root, req.Workspace)
+		if err != nil {
+			return nil, err
+		}
+		return func(ctx context.Context, run *jobs.Run) error { return steps.ApplyPolicies(ctx, folder, run) }, nil
+	}
+	server := api.New(api.Options{
+		PolicyApplication: steps,
+		Provisioned:       cfg.Provisioning != nil,
+		Policies:          policySource,
+		Root:              root,
+		Data:              data,
+		Status:            runtime,
+		Jobs:              manager,
+		Operations:        operations,
+		Interviews:        flows,
 		// Runs in the workspace's own container, as the t3code-server
 		// Feature's service user.
 		PairingTokens: t3code.NewMinter(runtime.Docker()),
 		Templates:     approved,
 		UI:            web.FS,
 	})
+	return server
 }
 
 // backupRemote is the workspace repository: over https on the GitHub
@@ -462,6 +481,10 @@ func provisioningClients(cfg *config.Config) (provisioning.Clients, error) {
 		clients.Bindings, clients.Agent = client, w.Agent
 	}
 	if x := p.Xolotl; x != nil {
+		clients.KeyPolicy = x.KeyPolicy
+		if x.KeyPolicy == "" {
+			log.Print("menagerie: provisioning.xolotl.key-policy is absent; a workspace needing a new Xolotl key fails as provisioning-unavailable")
+		}
 		secrets, err := openbaokv.New(registrycreds.SocketAddress(cfg.WyrwoodDirectory), x.KeySecret.KVMount)
 		if err != nil {
 			return clients, err

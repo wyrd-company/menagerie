@@ -523,3 +523,19 @@ func TestParseRunnerImages(t *testing.T) {
 		}
 	}
 }
+
+func TestXolotlKeyPolicyValidation(t *testing.T) {
+	for _, name := range []string{"host-sample", "", "bad/value", "Uppercase", strings.Repeat("a", 64)} {
+		x := Xolotl{URL: "https://gateway.example.test", KeySecret: KeySecret{KVMount: "kv", Path: "scoped"}, KeyPolicy: name}
+		errs := x.validate()
+		valid := name == "host-sample" || name == ""
+		if (len(errs) == 0) != valid {
+			t.Fatalf("key-policy validity %t: %v", valid, errs)
+		}
+		for _, err := range errs {
+			if strings.Contains(err.Error(), name) && name != "" {
+				t.Fatal("validation quoted the value")
+			}
+		}
+	}
+}

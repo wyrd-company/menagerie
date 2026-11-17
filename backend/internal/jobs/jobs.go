@@ -121,7 +121,38 @@ type Manager struct {
 	active map[string]*Job
 	byID   map[string]*Job
 	all    []*Job
+	queued map[string]queuedJob
 	wg     sync.WaitGroup
+}
+
+type queuedJob struct {
+	operation string
+	runner    Runner
+}
+
+// Enqueue starts work at once or retains one latest runner for the workspace
+// after its active job ends. A queued request has no job ID until it starts.
+func (m *Manager) Enqueue(workspace, operation string, runner Runner) (*Job, error) {
+	for {
+		if err := m.ctx.Err(); err != nil {
+			return nil, err
+		}
+		job, err := m.Start(workspace, operation, runner)
+		var busy *BusyError
+		if !errors.As(err, &busy) {
+			return job, err
+		}
+		m.mu.Lock()
+		if m.active[workspace] != nil {
+			if m.queued == nil {
+				m.queued = map[string]queuedJob{}
+			}
+			m.queued[workspace] = queuedJob{operation, runner}
+			m.mu.Unlock()
+			return nil, nil
+		}
+		m.mu.Unlock()
+	}
 }
 
 // NewManager returns a Manager whose jobs run with a context derived from
@@ -185,6 +216,13 @@ func (m *Manager) run(ctx context.Context, job *Job, runner Runner) {
 	}()
 	run.flush()
 	job.finish(err)
+	m.mu.Lock()
+	next, queued := m.queued[job.workspace]
+	delete(m.queued, job.workspace)
+	m.mu.Unlock()
+	if queued {
+		_, _ = m.Enqueue(job.workspace, next.operation, next.runner)
+	}
 }
 
 func toError(err error) *Error {

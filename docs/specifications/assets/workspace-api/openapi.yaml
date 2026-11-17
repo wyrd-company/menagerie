@@ -121,6 +121,55 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/workspaces/{name}/policies:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceName"
+    put:
+      operationId: saveWorkspacePolicies
+      summary: Save and apply a workspace's policy selection.
+      description: >-
+        Imports a pending selection before checking the revision. Starts an
+        apply-policies job at once, or queues it after the workspace's active job.
+        Empty selections are stored and applied like any other selection.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [policies, revision]
+              additionalProperties: false
+              properties:
+                policies:
+                  $ref: "#/components/schemas/PolicyNames"
+                revision:
+                  type: integer
+                  minimum: 0
+      responses:
+        "200":
+          description: The stored revision and the apply job, null when queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [selectionRevision, jobId]
+                additionalProperties: false
+                properties:
+                  selectionRevision:
+                    type: integer
+                    minimum: 0
+                  jobId:
+                    type: [string, "null"]
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/templates:
     get:
       operationId: listTemplates
@@ -183,6 +232,10 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
           $ref: "#/components/responses/Error"
   /api/jobs/{id}:
     parameters:
@@ -282,6 +335,12 @@ components:
         Manager session from sign-in at /auth/login. The cookie is named
         menagerie-session when the redirect URL uses http.
   parameters:
+    WorkspaceName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
     JobID:
       name: id
       in: path
@@ -379,11 +438,26 @@ components:
           $ref: "#/components/schemas/PolicySettings"
     Workspace:
       type: object
-      required: [name, state, containerId, activeJob, policies, needsChoice]
+      required: [name, state, containerId, activeJob, policies, needsChoice, selectionRevision, appliedRevision, applyFailure, selectionImported, xolotlKey]
       additionalProperties: false
       properties:
         policies:
           $ref: "#/components/schemas/PolicyNames"
+        selectionRevision:
+          type: integer
+          minimum: 0
+        appliedRevision:
+          type: [integer, "null"]
+          minimum: 0
+        applyFailure:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/JobError"
+        selectionImported:
+          type: boolean
+        xolotlKey:
+          type: [string, "null"]
+          description: The stored policy/name address, never a key secret.
         needsChoice:
           type: array
           items:
@@ -439,9 +513,12 @@ components:
       properties:
         operation:
           type: string
-          enum: [start, stop, rebuild, create, upgrade, commit, apply-branch, delete]
+          enum: [start, stop, rebuild, create, upgrade, commit, apply-branch, delete, apply-policies]
         workspace:
           type: string
+        policies:
+          $ref: "#/components/schemas/PolicyNames"
+          description: Create only. Group choices and ordinary policies; absent is empty. Required policies are added by Menagerie.
         templateId:
           type: string
           description: >-
@@ -534,6 +611,10 @@ components:
             - provisioning-unavailable
             - provisioning-not-ready
             - binding-outside-grant
+            - policy-outside-grant
+            - binding-changed
+            - binding-pending
+            - binding-refused
             - internal-error
             - workspace-exists
             - template-refused
@@ -674,6 +755,9 @@ components:
             kind:
               type: string
               examples:
+                - selection-changed
+                - policy-required
+                - policy-choice-required
                 - settings-changed
                 - policy-outside-grant
                 - invalid-settings

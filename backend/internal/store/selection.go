@@ -41,7 +41,7 @@ func (settings PolicySettings) ValidateChoices(next, previous []string, create b
 			return n
 		}
 		valid := func(n int) bool { return n > 0 && (g.Mode != "single" || n == 1) }
-		if !valid(count(next)) && (create || valid(count(previous)) || (g.Mode == "single" && count(next) > 1)) {
+		if !valid(count(next)) && (create || valid(count(previous))) {
 			return &PolicyError{"policy-choice-required", fmt.Sprintf("Choose %s policy in group %q.", map[bool]string{true: "exactly one", false: "at least one"}[g.Mode == "single"], g.Name)}
 		}
 	}

@@ -125,6 +125,8 @@ type Wyrwood struct {
 
 // Xolotl locates a Xolotl and the secret that holds Menagerie's scoped key.
 type Xolotl struct {
+	// KeyPolicy is this host's workspace client key policy.
+	KeyPolicy string `yaml:"key-policy"`
 	// URL is Xolotl's http or https address.
 	URL string `yaml:"url"`
 	// KeySecret names the OpenBao secret whose api_key field holds the
@@ -235,13 +237,14 @@ type OperationLimits struct {
 	Upgrade Duration `yaml:"upgrade"`
 	Commit  Duration `yaml:"commit"`
 	// ApplyBranch limits apply-branch jobs.
-	ApplyBranch Duration `yaml:"apply-branch"`
-	Delete      Duration `yaml:"delete"`
+	ApplyBranch   Duration `yaml:"apply-branch"`
+	Delete        Duration `yaml:"delete"`
+	ApplyPolicies Duration `yaml:"apply-policies"`
 }
 
 // ByName maps each operation name to its limit, empty included.
 func (o OperationLimits) ByName() map[string]Duration {
-	return map[string]Duration{"start": o.Start, "stop": o.Stop, "rebuild": o.Rebuild, "create": o.Create, "upgrade": o.Upgrade, "commit": o.Commit, "apply-branch": o.ApplyBranch, "delete": o.Delete}
+	return map[string]Duration{"start": o.Start, "stop": o.Stop, "rebuild": o.Rebuild, "create": o.Create, "upgrade": o.Upgrade, "commit": o.Commit, "apply-branch": o.ApplyBranch, "delete": o.Delete, "apply-policies": o.ApplyPolicies}
 }
 
 // Alerts names the webhook that receives job alerts.
@@ -694,6 +697,9 @@ func (w *Wyrwood) validate() []error {
 
 func (x *Xolotl) validate() []error {
 	var errs []error
+	if x.KeyPolicy != "" && (len(x.KeyPolicy) > 63 || !regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`).MatchString(x.KeyPolicy)) {
+		errs = append(errs, errors.New("provisioning.xolotl.key-policy must be 1 to 63 lowercase letters, digits, _ or -, starting with a letter or digit"))
+	}
 	if x.URL == "" {
 		errs = append(errs, errors.New("provisioning.xolotl.url is required"))
 	} else if err := xolotl.ValidURL(x.URL); err != nil {

@@ -76,6 +76,13 @@ func newHost(t *testing.T) *host {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = data.Close() })
+	ctx := context.Background()
+	if _, err := data.SavePolicySettings(ctx, store.PolicySettings{Required: []string{"workspace", "client-key"}}, []string{"workspace", "client-key"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := data.Discover(ctx, []string{"sample"}); err != nil {
+		t.Fatal(err)
+	}
 	return &host{
 		t: t, state: devcontainer.StateNoContainer, created: "created-id", containerName: "container-sample",
 		definitions: map[string]devcontainer.Definition{"/root/sample": definition(sampleBlock)},
@@ -288,7 +295,7 @@ func (h *host) Read(_ context.Context, name string) (operator.Binding, bool, err
 		return operator.Binding{}, false, nil
 	}
 	group := selection.AccessGroup
-	binding := operator.Binding{Policies: selection.Policies, Settings: operator.Settings{AccessGroup: &group, Values: selection.Values}}
+	binding := operator.Binding{ID: name, Agent: sampleAgent, Key: operator.Key{Kind: operator.KeyName, Value: name}, Revision: 1, Applied: true, Policies: selection.Policies, Settings: operator.Settings{AccessGroup: &group, Values: selection.Values}}
 	if h.status != nil {
 		binding.Status = h.status(name)
 		return binding, true, nil
@@ -330,6 +337,9 @@ func (h *host) steps() *Steps {
 
 // with is the host's steps with clients.
 func (h *host) with(clients Clients) *Steps {
+	if clients.Keys != nil && clients.KeyPolicy == "" {
+		clients.KeyPolicy = "host-sample"
+	}
 	return New(Options{Clients: clients, Runtime: h, Data: h.data, Poll: time.Millisecond})
 }
 
@@ -367,7 +377,7 @@ func TestACreateRunsEveryStepInOrder(t *testing.T) {
 	if got := h.phases; !slices.Equal(got, want) {
 		t.Fatalf("phases %v, want %v", got, want)
 	}
-	if selection := h.bound["container-sample"]; selection.AccessGroup != 1000 || !slices.Equal(selection.Policies, []string{"workspace", "client-key"}) || selection.Values["key_name"] != "sample" {
+	if selection := h.bound["container-sample"]; selection.AccessGroup != 1000 || !slices.Equal(selection.Policies, []string{"client-key", "workspace"}) || selection.Values["key_name"] != "sample" {
 		t.Fatalf("selection %+v", selection)
 	}
 }
@@ -656,39 +666,20 @@ func (k issuedKeys) Revoke(context.Context, string, string) (xolotl.Revocation, 
 	return "", nil
 }
 
-func TestABindingThatDiffersIsReplacedWhileTheContainerIsStopped(t *testing.T) {
+func TestABindingThatDiffersChangesWithoutStoppingTheContainer(t *testing.T) {
 	h := newHost(t)
 	h.state, h.container = devcontainer.StateRunning, "old-id"
 	h.bound["container-sample"] = wyrwood.Selection{Policies: []string{"old"}, AccessGroup: 7, Values: map[string]string{"key_name": "sample"}}
 	if err := h.steps().Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
 	}
-	h.wantCalls(t, "begin-start", "check", "issue host-sample/sample", "bind container-sample", "stop", "unbind container-sample", "bind container-sample", "build", "create", "up")
-	console := h.logged.String()
-	for _, want := range []string{"differs from the definition in policies, access group", "a part stayed", "token may stay valid"} {
-		if !strings.Contains(console, want) {
-			t.Errorf("console lacks %q: %s", want, console)
-		}
+	h.wantCalls(t, "begin-start", "check", "issue host-sample/sample", "change container-sample", "build", "create", "up")
+	if len(h.unbound) != 0 {
+		t.Fatal("binding unbound")
 	}
-	if strings.Contains(console, "values") {
-		t.Errorf("console names a field that did not change: %s", console)
-	}
-}
-
-func TestDifferencesNameEachField(t *testing.T) {
-	group := uint32(1)
-	current := operator.Binding{Policies: []string{"b", "a"}, Settings: operator.Settings{AccessGroup: &group, Values: map[string]string{"x": "1"}}}
-	same := wyrwood.Selection{Policies: []string{"a", "b"}, AccessGroup: 1, Values: map[string]string{"x": "1"}}
-	if got := differences(current, same); !slices.Equal(got, []string{"its settings"}) {
-		t.Errorf("same: %v", got)
-	}
-	for field, selection := range map[string]wyrwood.Selection{
-		"policies":     {Policies: []string{"a"}, AccessGroup: 1, Values: map[string]string{"x": "1"}},
-		"access group": {Policies: []string{"a", "b"}, AccessGroup: 2, Values: map[string]string{"x": "1"}},
-		"values":       {Policies: []string{"a", "b"}, AccessGroup: 1, Values: map[string]string{"x": "2"}},
-	} {
-		if got := differences(current, selection); !slices.Equal(got, []string{field}) {
-			t.Errorf("%s: %v", field, got)
+	for _, want := range []string{"adding policy workspace", "removing policy old", "setting access group to 1000"} {
+		if !strings.Contains(h.logged.String(), want) {
+			t.Fatalf("console lacks %s: %s", want, h.logged.String())
 		}
 	}
 }
@@ -1241,4 +1232,32 @@ func TestAStartWithoutABlockOrANameKeepsItsContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.wantCalls(t, "plain-start")
+}
+
+func (h *host) Policies(context.Context) (operator.Grant, []operator.Policy, error) {
+	return operator.Grant{}, []operator.Policy{{Name: "workspace"}, {Name: "client-key", ValueNames: []string{"key_name"}}, {Name: "old"}, {Name: "a"}}, nil
+}
+func (h *host) Get(ctx context.Context, id string) (operator.Binding, error) {
+	b, found, err := h.Read(ctx, id)
+	if err != nil {
+		return b, err
+	}
+	if !found {
+		return b, operator.ErrNotFound
+	}
+	return b, nil
+}
+func (h *host) Change(_ context.Context, b operator.Binding, selection wyrwood.Selection) (operator.Binding, error) {
+	if err := h.note("change " + b.Key.Value); err != nil {
+		return operator.Binding{}, err
+	}
+	h.Lock()
+	h.bound[b.Key.Value] = selection
+	h.Unlock()
+	b.Policies = selection.Policies
+	b.Settings.Values = selection.Values
+	b.Settings.AccessGroup = &selection.AccessGroup
+	b.Revision++
+	b.Applied = true
+	return b, nil
 }

@@ -130,6 +130,8 @@ type Clients struct {
 	// name bound is recorded with; "" without Bindings.
 	Agent string
 	Keys  Keys
+	// KeyPolicy names the key policy used when a workspace first gets a key.
+	KeyPolicy string
 	// Wait bounds each wait on a binding's status; zero is
 	// DefaultReadinessWait.
 	Wait time.Duration
@@ -247,6 +249,9 @@ func (s *Steps) declaration(folder string, p devcontainer.Progress) (*Declaratio
 	if err != nil {
 		return nil, &jobs.Failure{Kind: KindInvalid, Err: err}
 	}
+	for _, name := range declaration.Ignored {
+		fmt.Fprintln(p.Log(""), "ignoring legacy customizations.menagerie."+name+"; Menagerie supplies the workspace policies, values and key")
+	}
 	return declaration, nil
 }
 
@@ -278,6 +283,31 @@ func (s *Steps) plain(ctx context.Context, folder string, p devcontainer.Progres
 func (s *Steps) provision(ctx context.Context, folder string, d *Declaration, p devcontainer.Progress, kind bringKind) error {
 	if err := s.available(d); err != nil {
 		return err
+	}
+	if err := s.EnsureImported(ctx, folder); err != nil {
+		return fail(KindUnavailable, err.Error())
+	}
+	current, err := s.opts.Data.Selection(ctx, filepath.Base(folder))
+	if err != nil {
+		return err
+	}
+	key := current.Key
+	if key == nil && s.opts.Keys != nil {
+		if s.opts.KeyPolicy == "" {
+			return fail(KindUnavailable, "provisioning.xolotl.key-policy is required to name a new workspace key.")
+		}
+		if !ValidWorkspaceIdentity(filepath.Base(folder)) {
+			return fail(KindInvalid, "A provisioned workspace name must be 1 to 63 lowercase letters, digits, _ or -, starting with a letter or digit.")
+		}
+		key = &Key{Policy: s.opts.KeyPolicy, Name: filepath.Base(folder)}
+	}
+	identity, err := s.opts.Data.Identity(ctx, filepath.Base(folder), nil, key)
+	if err != nil {
+		return err
+	}
+	d.Xolotl = identity.Key
+	if d.Xolotl != nil && s.opts.Keys == nil {
+		return fail(KindUnavailable, "The workspace has a Xolotl key, and the configuration has no provisioning.xolotl.")
 	}
 	if err := s.notTaken(ctx, folder, d); err != nil {
 		return err
@@ -314,6 +344,11 @@ func (s *Steps) provision(ctx context.Context, folder string, d *Declaration, p 
 	}
 	if err := s.bind(ctx, folder, d, p); err != nil {
 		return err
+	}
+	if d.Xolotl != nil {
+		if naming, ok := bringUp.(interface{ SetXolotlKey(string) }); ok {
+			naming.SetXolotlKey(d.Xolotl.String())
+		}
 	}
 	if kind.save != nil {
 		if err := kind.save(ctx); err != nil {
@@ -483,11 +518,8 @@ func (s *Steps) issueKey(ctx context.Context, folder string, d *Declaration, p d
 }
 
 // bind records the container name as the workspace's current one in
-// Menagerie's data, makes the binding the definition declares, and waits until
-// it reports its consumer directory, because a bind source must exist for a
-// create. An equal binding is not written, so a repeat revokes no token. The
-// definition is the source of the three values Wyrwood will not change, so a
-// binding that differs is replaced while its container is stopped.
+// Menagerie's data, converges the binding on its stored selection, and waits
+// until its consumer directory exists for the container's bind source.
 func (s *Steps) bind(ctx context.Context, folder string, d *Declaration, p devcontainer.Progress) error {
 	p.Phase("bind")
 	workspace := filepath.Base(folder)
@@ -497,12 +529,7 @@ func (s *Steps) bind(ctx context.Context, folder string, d *Declaration, p devco
 	if err := s.opts.Data.HoldName(ctx, workspace, d.ContainerName, s.opts.Agent, true); err != nil {
 		return taken(err)
 	}
-	selection := wyrwood.Selection{Policies: d.Wyrwood.Policies, AccessGroup: d.Wyrwood.AccessGroup, Values: d.Wyrwood.Values}
-	_, err := s.opts.Bindings.Bind(ctx, d.ContainerName, selection)
-	if errors.Is(err, operator.ErrBindingDiffers) {
-		err = s.rebind(ctx, folder, d, selection, p)
-	}
-	if err != nil {
+	if err := s.applySelection(ctx, folder, d.ContainerName, &d.Wyrwood.AccessGroup, p); err != nil {
 		return err
 	}
 	fmt.Fprintf(p.Log(""), "binding of %s is in place\n", d.ContainerName)
@@ -533,57 +560,6 @@ func (s *Steps) retireOtherAgent(ctx context.Context, workspace, name string, p 
 		fmt.Fprintf(p.Log(""), "binding of %s on %s is gone\n", name, n.Agent)
 	}
 	return nil
-}
-
-func (s *Steps) rebind(ctx context.Context, folder string, d *Declaration, selection wyrwood.Selection, p devcontainer.Progress) error {
-	current, found, err := s.opts.Bindings.Read(ctx, d.ContainerName)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return &jobs.Failure{Kind: KindNotReady, Err: fmt.Errorf("the binding of %s differs from the definition, and it cannot be read", d.ContainerName)}
-	}
-	fmt.Fprintf(p.Log(""), "the binding of %s differs from the definition in %s; stopping the container and binding it again\n", d.ContainerName, strings.Join(differences(current, selection), ", "))
-	if err := s.opts.Runtime.Stop(ctx, folder, p); err != nil {
-		return err
-	}
-	p.Phase("bind")
-	if err := s.unbind(ctx, s.opts.Agent, d.ContainerName, p); err != nil {
-		return err
-	}
-	_, err = s.opts.Bindings.Bind(ctx, d.ContainerName, selection)
-	return err
-}
-
-// differences names the fields of a binding that a selection changes.
-func differences(current operator.Binding, selection wyrwood.Selection) []string {
-	var fields []string
-	policies, wanted := slices.Sorted(slices.Values(current.Policies)), slices.Sorted(slices.Values(selection.Policies))
-	if !slices.Equal(policies, wanted) {
-		fields = append(fields, "policies")
-	}
-	if group := current.Settings.AccessGroup; group == nil || *group != selection.AccessGroup {
-		fields = append(fields, "access group")
-	}
-	if !sameValues(current.Settings.Values, selection.Values) {
-		fields = append(fields, "values")
-	}
-	if len(fields) == 0 {
-		return []string{"its settings"}
-	}
-	return fields
-}
-
-func sameValues(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for name, value := range a {
-		if other, ok := b[name]; !ok || other != value {
-			return false
-		}
-	}
-	return true
 }
 
 // unbind removes a binding and shows what part of the removal did not finish.

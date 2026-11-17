@@ -72,6 +72,9 @@ func (s *Steps) desired(ctx context.Context, workspace string) (store.Selection,
 	if !current.Imported {
 		return current, wyrwood.Selection{}, fail(KindUnavailable, "The workspace's policy selection still needs to be imported from Wyrwood.")
 	}
+	if s.opts.Bindings == nil && len(current.Policies) == 0 {
+		return current, wyrwood.Selection{Policies: []string{}, Values: map[string]string{}}, nil
+	}
 	client, err := s.policyClient()
 	if err != nil {
 		return current, wyrwood.Selection{}, err

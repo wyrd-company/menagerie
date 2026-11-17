@@ -75,7 +75,7 @@ func TestOpenAPIEnumsAgreeWithCode(t *testing.T) {
 	// The workflows package registers the interview, apply-branch and delete
 	// operations, and the commits package the commit operation, under
 	// these names; their own tests check that they serve them.
-	ops = append(ops, OperationCreate, OperationUpgrade, OperationApplyBranch, OperationCommit, OperationDelete)
+	ops = append(ops, OperationCreate, OperationUpgrade, OperationApplyBranch, OperationCommit, OperationDelete, OperationApplyPolicies)
 	if a, b := joinSorted(schemas["JobRequest"].Properties["operation"].Enum), joinSorted(ops); a != b {
 		t.Errorf("operations documented %q served %q", a, b)
 	}

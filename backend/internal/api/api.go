@@ -50,9 +50,11 @@ type Options struct {
 	// Interviews takes answers for interview jobs. Nil takes none.
 	Interviews Interviews
 	// PairingTokens mints T3 Code pairing tokens. Nil mints none.
-	PairingTokens PairingTokens
-	Policies      PolicySource
-	Templates     []Template
+	PairingTokens     PairingTokens
+	Policies          PolicySource
+	PolicyApplication PolicyApplication
+	Provisioned       bool
+	Templates         []Template
 	// UI holds the built web UI (index.html and assets/). Nil serves no UI.
 	UI fs.FS
 }
@@ -82,6 +84,7 @@ func (s *Server) routes() []struct {
 		{Route{http.MethodPost, "/api/workspaces/{name}/t3-code-pairing-tokens"}, s.mintPairingToken},
 		{Route{http.MethodGet, "/api/policies"}, s.listPolicies},
 		{Route{http.MethodPut, "/api/policies/settings"}, s.savePolicySettings},
+		{Route{http.MethodPut, "/api/workspaces/{name}/policies"}, s.saveWorkspacePolicies},
 		{Route{http.MethodGet, "/api/templates"}, s.listTemplates},
 		{Route{http.MethodGet, "/api/jobs"}, s.listJobs},
 		{Route{http.MethodPost, "/api/jobs"}, s.startJob},
@@ -170,12 +173,17 @@ type activeJob struct {
 }
 
 type workspaceRow struct {
-	Policies    []string   `json:"policies"`
-	NeedsChoice []string   `json:"needsChoice"`
-	Name        string     `json:"name"`
-	State       string     `json:"state"`
-	ContainerID *string    `json:"containerId"`
-	ActiveJob   *activeJob `json:"activeJob"`
+	Policies          []string            `json:"policies"`
+	SelectionRevision int64               `json:"selectionRevision"`
+	AppliedRevision   *int64              `json:"appliedRevision"`
+	ApplyFailure      *store.ApplyFailure `json:"applyFailure"`
+	SelectionImported bool                `json:"selectionImported"`
+	XolotlKey         *string             `json:"xolotlKey"`
+	NeedsChoice       []string            `json:"needsChoice"`
+	Name              string              `json:"name"`
+	State             string              `json:"state"`
+	ContainerID       *string             `json:"containerId"`
+	ActiveJob         *activeJob          `json:"activeJob"`
 }
 
 // listWorkspaces lists the workspace folders, each joined to its container and
@@ -224,7 +232,18 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 		if rows[i].Policies == nil {
 			rows[i].Policies = []string{}
 		}
-		rows[i].NeedsChoice = settings.NeedsChoice(selection.Policies)
+		rows[i].NeedsChoice = []string{}
+		if selection.Imported {
+			rows[i].NeedsChoice = settings.NeedsChoice(selection.Policies)
+		}
+		rows[i].SelectionRevision = selection.Revision
+		rows[i].AppliedRevision = selection.AppliedRevision
+		rows[i].ApplyFailure = selection.ApplyFailure
+		rows[i].SelectionImported = selection.Imported
+		if selection.Key != nil {
+			key := selection.Key.String()
+			rows[i].XolotlKey = &key
+		}
 	}
 	slices.SortFunc(rows, func(a, b workspaceRow) int { return strings.Compare(a.Name, b.Name) })
 	writeJSON(w, http.StatusOK, map[string][]workspaceRow{"workspaces": rows})
@@ -269,6 +288,16 @@ func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Decode(&json.RawMessage{}); !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, apiError{Kind: "invalid-request", Message: "request body must hold exactly one JSON document"})
 		return
+	}
+	if req.Operation != OperationCreate && req.Policies != nil {
+		s.writeRequestError(w, &RequestError{400, "invalid-request", "policies is only accepted for create."})
+		return
+	}
+	if req.Operation == OperationCreate {
+		if err := s.createPolicies(r.Context(), req); err != nil {
+			s.writeRequestError(w, err)
+			return
+		}
 	}
 	op, ok := s.opts.Operations[req.Operation]
 	if !ok {

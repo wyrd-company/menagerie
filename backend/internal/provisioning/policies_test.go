@@ -27,6 +27,9 @@ type policyHost struct {
 func newPolicyHost(t *testing.T, selected []string) *policyHost {
 	h := &policyHost{host: newHost(t), bindings: map[string]operator.Binding{}, allowed: []string{"workspace", "ssh", "key"}}
 	ctx := context.Background()
+	if _, err := h.data.SavePolicySettings(ctx, store.PolicySettings{Revision: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.data.BeginCreate(ctx, "sample"); err != nil {
 		t.Fatal(err)
 	}
@@ -282,5 +285,62 @@ func TestPendingBindIsFinishedByChangeAndNextApply(t *testing.T) {
 	}
 	if h.selection().AppliedRevision == nil || h.binds != 1 {
 		t.Fatal("next apply did not finish saved bind")
+	}
+}
+
+func TestImportKeepsRunningBindingSelectionAndLegacyKey(t *testing.T) {
+	h := newPolicyHost(t, nil)
+	h.existing([]string{"workspace", "ssh"})
+	b := h.bindings["existing"]
+	b.Settings.Values = map[string]string{"key_name": "legacy-name"}
+	h.bindings[b.ID] = b
+	if _, err := h.data.Import(context.Background(), 99, func(tx *store.Tx) error {
+		return tx.PrepareSelectionImport("sample", &Key{"legacy-policy", "legacy-name"}, true)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := h.selection()
+	if err := h.steps().EnsureImported(context.Background(), folder); err != nil {
+		t.Fatal(err)
+	}
+	imported := h.selection()
+	if !imported.Imported || !slices.Equal(imported.Policies, []string{"ssh", "workspace"}) || imported.Values["key_name"] != "legacy-name" || imported.Key == nil || imported.Key.String() != "legacy-policy/legacy-name" || imported.Revision <= before.Revision {
+		t.Fatalf("%+v", imported)
+	}
+	next, err := h.data.SaveSelection(context.Background(), "sample", []string{"workspace", "ssh", "key"}, imported.Revision, h.allowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.steps().ApplyPolicies(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	if h.bindings["existing"].Settings.Values["key_name"] != "legacy-name" || h.selection().AppliedRevision == nil || *h.selection().AppliedRevision != next.Revision || len(h.calls) != 0 {
+		t.Fatal("imported running workspace was not changed without a rebuild")
+	}
+}
+
+func TestProvisioningIgnoresTemplateIdentityAndNeedsConfiguredKeyPolicy(t *testing.T) {
+	h := newHost(t)
+	h.definitions[folder] = definition(`{"wyrwood":{"accessGroup":1000,"policies":null,"values":false},"xolotl":"ignored"}`)
+	if err := h.steps().Start(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	selection, err := h.data.Selection(context.Background(), "sample")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Key == nil || selection.Key.String() != "host-sample/sample" || selection.Values["key_name"] != "sample" {
+		t.Fatalf("%+v", selection)
+	}
+	for _, name := range []string{"wyrwood.policies", "wyrwood.values", "xolotl"} {
+		if !strings.Contains(h.logged.String(), "ignoring legacy customizations.menagerie."+name) {
+			t.Fatalf("unreported member %s", name)
+		}
+	}
+	other := newHost(t)
+	steps := New(Options{Clients: Clients{Bindings: other, Agent: sampleAgent, Keys: other}, Runtime: other, Data: other.data})
+	wantKind(t, steps.Start(context.Background(), folder, other), KindUnavailable)
+	if len(other.calls) != 0 {
+		t.Fatalf("key-policy failure performed operations %v", other.calls)
 	}
 }

@@ -128,6 +128,11 @@ func (s *Server) savePolicySettings(w http.ResponseWriter, r *http.Request) {
 		}
 		groups = append(groups, g)
 	}
+	_, before, err := s.opts.Data.Policies(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	settings, err := s.opts.Data.SavePolicySettings(r.Context(), store.PolicySettings{Required: *request.Required, Groups: groups, Revision: *request.Revision}, allowed)
 	if err != nil {
 		var refusal *store.PolicyError
@@ -141,6 +146,19 @@ func (s *Server) savePolicySettings(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, 500, apiError{Kind: "internal-error", Message: err.Error()})
 		return
+	}
+	_, selections, err := s.opts.Data.Policies(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	for name, selection := range selections {
+		if selection.Revision != before[name].Revision {
+			if _, err = s.queuePolicies(name); err != nil {
+				s.writeRequestError(w, err)
+				return
+			}
+		}
 	}
 	writeJSON(w, 200, settings)
 }
