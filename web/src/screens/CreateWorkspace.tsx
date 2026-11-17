@@ -1,5 +1,7 @@
-import { useState, type FormEvent } from "react";
-import { ApiError, startJob } from "../api/client.ts";
+import { useState, useEffect, type FormEvent } from "react";
+import { ApiError, listPolicies, startJob } from "../api/client.ts";
+import type { Policies } from "../api/types.ts";
+import { PolicyChoices, choiceProblems } from "../ui/PolicyChoices.tsx";
 import { JobPanel } from "../jobs/JobPanel.tsx";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
@@ -46,15 +48,42 @@ function StartCreate() {
   const [error, setError] = useState<ApiError | null>(null);
   const [starting, setStarting] = useState(false);
 
+  const [catalog, setCatalog] = useState<Policies | null>(null);
+  const [policies, setPolicies] = useState<string[]>([]);
+  const [policyError, setPolicyError] = useState("");
+  const [policyAttempt, setPolicyAttempt] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void listPolicies()
+      .then((value) => {
+        if (live) {
+          setCatalog(value);
+          setPolicies((previous) => [...new Set([...previous, ...value.settings.required])]);
+          setPolicyError("");
+        }
+      })
+      .catch((e: unknown) => {
+        if (live) setPolicyError(String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [policyAttempt]);
   const problems = nameProblems(name.trim());
+  const policyProblems = catalog ? choiceProblems(catalog, policies) : [];
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setChecked(true);
-    if (problems.length > 0 || templateId === null) return;
+    if (problems.length > 0 || templateId === null || !catalog || policyProblems.length) return;
     setStarting(true);
     setError(null);
     try {
-      const job = await startJob({ operation: "create", workspace: name.trim(), templateId });
+      const job = await startJob({
+        operation: "create",
+        workspace: name.trim(),
+        templateId,
+        policies,
+      });
       navigate(paths.create(job.jobId), { replace: true });
     } catch (e) {
       setError(e instanceof ApiError ? e : new ApiError(0, null, String(e)));
@@ -100,6 +129,33 @@ function StartCreate() {
           </ul>
         ) : null}
       </div>
+      <fieldset className="create-policies">
+        <legend>Policies</legend>
+        {catalog ? (
+          <PolicyChoices
+            catalog={catalog}
+            selected={policies}
+            onChange={setPolicies}
+            disabled={starting || !catalog.grant}
+          />
+        ) : policyError ? (
+          <div role="alert">
+            <p>{policyError}</p>
+            <button type="button" onClick={() => setPolicyAttempt((n) => n + 1)}>
+              Retry policies
+            </button>
+          </div>
+        ) : (
+          <p role="status">Loading policies…</p>
+        )}
+        {checked && policyProblems.length ? (
+          <ul className="field-errors" role="alert">
+            {policyProblems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        ) : null}
+      </fieldset>
       {error ? (
         <div className="notice notice-bad" role="alert">
           <p>
@@ -111,7 +167,7 @@ function StartCreate() {
         </div>
       ) : null}
       <div className="interview-actions">
-        <button type="submit" className="primary" disabled={starting}>
+        <button type="submit" className="primary" disabled={starting || !catalog}>
           {starting ? "Starting…" : "Begin interview"}
         </button>
       </div>

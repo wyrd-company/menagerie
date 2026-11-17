@@ -18,6 +18,11 @@ export interface Workspace {
   activeJob: ActiveJob | null;
   policies: string[];
   needsChoice: string[];
+  selectionRevision: number;
+  appliedRevision: number | null;
+  applyFailure: { kind: string; message: string } | null;
+  selectionImported: boolean;
+  xolotlKey: string | null;
 }
 
 export interface Template {
@@ -26,7 +31,15 @@ export interface Template {
 }
 
 export type Operation =
-  "create" | "upgrade" | "start" | "stop" | "rebuild" | "commit" | "apply-branch" | "delete";
+  | "create"
+  | "upgrade"
+  | "start"
+  | "stop"
+  | "rebuild"
+  | "commit"
+  | "apply-branch"
+  | "delete"
+  | "apply-policies";
 
 export interface ErrorBody {
   kind: string;

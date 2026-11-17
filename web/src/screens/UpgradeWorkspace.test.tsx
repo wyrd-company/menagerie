@@ -36,6 +36,11 @@ function stubApi(): unknown[] {
               activeJob: null,
               policies: [],
               needsChoice: [],
+              selectionRevision: 0,
+              appliedRevision: 0,
+              applyFailure: null,
+              selectionImported: true,
+              xolotlKey: null,
             },
           ] satisfies Workspace[],
         });

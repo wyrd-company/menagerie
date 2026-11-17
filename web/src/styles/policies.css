@@ -135,3 +135,47 @@
 .group-add {
   width: 100%;
 }
+
+.workspace-policy-panel {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.workspace-policy-panel h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.policy-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 24px;
+  min-width: 0;
+}
+.policy-columns fieldset,
+.create-policies {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.policy-columns legend {
+  margin-bottom: 12px;
+}
+.policy-columns legend .muted {
+  display: block;
+  font-size: 14px;
+}
+.choices-list {
+  display: grid;
+  gap: 8px;
+}
+.choice-line .mono {
+  overflow-wrap: anywhere;
+}
+.muted {
+  color: var(--text-muted);
+  font-size: 14px;
+}

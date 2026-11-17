@@ -113,6 +113,7 @@ export async function getJob(jobId: string): Promise<Job> {
 }
 
 export interface StartJob {
+  policies?: string[];
   operation: Operation;
   workspace: string;
   templateId?: string;
@@ -166,3 +167,9 @@ export async function answerJob(
 export const listPolicies = () => json<Policies>("/api/policies");
 export const savePolicySettings = (settings: PolicySettings) =>
   json<PolicySettings>("/api/policies/settings", { method: "PUT", body: JSON.stringify(settings) });
+
+export const saveWorkspacePolicies = (name: string, policies: string[], revision: number) =>
+  json<{ selectionRevision: number; jobId: string | null }>(
+    `/api/workspaces/${encodeURIComponent(name)}/policies`,
+    { method: "PUT", body: JSON.stringify({ policies, revision }) },
+  );

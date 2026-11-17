@@ -8,6 +8,7 @@ import {
 } from "../api/client.ts";
 import type { Job, Operation, T3CodePairingToken, Workspace } from "../api/types.ts";
 import { JobPanel } from "../jobs/JobPanel.tsx";
+import { WorkspacePolicies, policyStatus } from "./WorkspacePolicies.tsx";
 import { own } from "../own.ts";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
@@ -27,6 +28,7 @@ const operationLabel: Record<string, string> = {
   commit: "committing",
   "apply-branch": "applying a branch",
   delete: "deleting",
+  "apply-policies": "applying policies",
 };
 
 function useFleet() {
@@ -71,6 +73,7 @@ function useFleet() {
 
 export function WorkspaceList({ jobId }: { jobId: string | null }) {
   const { workspaces, jobs, error, loading, refresh, reload } = useFleet();
+  const [policyWorkspace, setPolicyWorkspace] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, Operation>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -197,6 +200,9 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                   </div>
                   <div className="entry-state">
                     <StatusBadge state={ws.state} />
+                    <span className={ws.applyFailure ? "field-errors" : "muted"}>
+                      {policyStatus(ws)}
+                    </span>
                     {ws.needsChoice.length ? (
                       <p className="entry-choice">Needs a choice: {ws.needsChoice.join(", ")}</p>
                     ) : null}
@@ -207,6 +213,16 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                     ) : null}
                   </div>
                   <div className="entry-actions" role="group" aria-label={`Actions for ${ws.name}`}>
+                    <button
+                      type="button"
+                      disabled={gone}
+                      aria-expanded={policyWorkspace === ws.name}
+                      onClick={() =>
+                        setPolicyWorkspace((current) => (current === ws.name ? null : ws.name))
+                      }
+                    >
+                      {policyWorkspace === ws.name ? "Close policies" : "Policies"}
+                    </button>
                     <button
                       type="button"
                       disabled={busy || gone || ws.state === "running"}
@@ -357,6 +373,12 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                         </button>
                       </span>
                     </form>
+                  ) : null}
+                  {policyWorkspace === ws.name ? (
+                    <WorkspacePolicies workspace={ws} onSaved={refresh} />
+                  ) : null}
+                  {ws.applyFailure && policyWorkspace !== ws.name ? (
+                    <p className="entry-error">{ws.applyFailure.message}</p>
                   ) : null}
                   {token ? (
                     <PairingToken

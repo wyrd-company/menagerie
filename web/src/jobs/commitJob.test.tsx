@@ -41,6 +41,11 @@ describe("a commit job", () => {
                   {
                     policies: [],
                     needsChoice: [],
+                    selectionRevision: 0,
+                    appliedRevision: 0,
+                    applyFailure: null,
+                    selectionImported: true,
+                    xolotlKey: null,
                     name: "sample",
                     state: "running",
                     containerId: "c1",

@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
-import { send, summary } from "./events.ts";
+import { finish, log, send, summary } from "./events.ts";
 import { answer, run } from "./scenarios.ts";
 import {
   initialWorkspaces,
@@ -33,6 +33,8 @@ export function createFixture(options: { distDir: string }) {
   let policySettings: PolicySettings = { required: [], groups: [], revision: 0 };
   let nextGroupID = 1;
   let selections = new Map<string, string[]>();
+  const revisions = new Map<string, number>();
+  const applied = new Map<string, number>();
   const policyNames = ["workspace", "xolotl-client-key", "bob-ssh", "ira-ssh"];
 
   const reset = () => {
@@ -46,6 +48,8 @@ export function createFixture(options: { distDir: string }) {
     policySettings = { required: [], groups: [], revision: 0 };
     nextGroupID = 1;
     selections = new Map();
+    revisions.clear();
+    applied.clear();
   };
 
   async function readBody(req: IncomingMessage): Promise<string> {
@@ -229,6 +233,11 @@ export function createFixture(options: { distDir: string }) {
           return {
             ...w,
             policies: selections.get(w.name) ?? [],
+            selectionRevision: revisions.get(w.name) ?? 0,
+            appliedRevision: applied.get(w.name) ?? 0,
+            selectionImported: true,
+            applyFailure: null,
+            xolotlKey: null,
             needsChoice: policySettings.groups
               .filter((g) => {
                 const count = g.policies.filter((p) =>
@@ -243,6 +252,29 @@ export function createFixture(options: { distDir: string }) {
           };
         }),
       });
+    }
+    const selectionMatch = /^\/api\/workspaces\/([^/]+)\/policies$/.exec(pathname);
+    if (selectionMatch && method === "PUT") {
+      const name = decodeURIComponent(selectionMatch[1]!);
+      const ws = world.workspaces.find((w) => w.name === name && w.state !== "no-folder");
+      if (!ws) return fail(res, 404, "workspace-not-found", `no workspace ${name}`);
+      const input = JSON.parse(await readBody(req)) as { policies: string[]; revision: number };
+      if (input.revision !== (revisions.get(name) ?? 0))
+        return fail(
+          res,
+          409,
+          "selection-changed",
+          "Policy selection changed. Reload and try again.",
+        );
+      if (policySettings.required.some((p) => !input.policies.includes(p)))
+        return fail(res, 422, "policy-required", "Required policies cannot be removed.");
+      if (input.policies.some((p) => !policyNames.includes(p)))
+        return fail(res, 422, "policy-outside-grant", "Policy outside grant.");
+      selections.set(name, input.policies);
+      const revision = input.revision + 1;
+      revisions.set(name, revision);
+      applied.set(name, revision);
+      return json(res, 202, { selectionRevision: revision, jobId: null });
     }
     const pairing = /^\/api\/workspaces\/([^/]+)\/t3-code-pairing-tokens$/.exec(pathname);
     if (pairing && method === "POST") {
@@ -273,14 +305,22 @@ export function createFixture(options: { distDir: string }) {
         workspace?: string;
         templateId?: string;
         branch?: string;
+        policies?: string[];
       };
       const { operation, workspace: name } = input;
       if (
         !operation ||
         !name ||
-        !["create", "upgrade", "start", "stop", "rebuild", "apply-branch", "delete"].includes(
-          operation,
-        )
+        ![
+          "create",
+          "upgrade",
+          "start",
+          "stop",
+          "rebuild",
+          "apply-branch",
+          "delete",
+          "apply-policies",
+        ].includes(operation)
       ) {
         return fail(res, 400, "invalid-request", "operation and workspace are required");
       }
@@ -292,6 +332,19 @@ export function createFixture(options: { distDir: string }) {
         !templates.some((t) => t.id === input.templateId)
       ) {
         return fail(res, 404, "unknown-template", `no approved template ${input.templateId}`);
+      }
+      if (operation === "create") {
+        const chosen = [...new Set([...(input.policies ?? []), ...policySettings.required])];
+        if (
+          policySettings.groups.some((g) => {
+            const n = g.policies.filter((p) => chosen.includes(p)).length;
+            return n === 0 || (g.mode === "single" && n !== 1);
+          })
+        )
+          return fail(res, 422, "policy-choice-required", "Choose a policy in each group.");
+        selections.set(name, chosen);
+        revisions.set(name, 1);
+        applied.set(name, 1);
       }
       const ws = world.workspaces.find((w) => w.name === name);
       if (operation === "create" && ws)
@@ -332,7 +385,11 @@ export function createFixture(options: { distDir: string }) {
       if (input.branch) job.branch = input.branch;
       jobs.set(job.jobId, job);
       setImmediate(() => {
-        run(world, job);
+        if (operation === "apply-policies") {
+          applied.set(name, revisions.get(name) ?? 0);
+          log(job, "policies applied");
+          finish(job, "succeeded");
+        } else run(world, job);
       });
       return json(res, 202, summary(job), { Location: `/api/jobs/${job.jobId}` });
     }
