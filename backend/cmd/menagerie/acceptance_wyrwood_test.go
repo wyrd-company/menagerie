@@ -36,6 +36,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 )
 
 const (
@@ -187,6 +188,9 @@ func TestImageWyrwood(t *testing.T) {
 		"data": map[string]any{"username": reg.user, "password": reg.password}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := w.bao.Logical().Write("transit/keys/"+operatorKeyName, map[string]any{"type": "ed25519"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := w.bao.Logical().Write("transit/keys/sample-git", map[string]any{"type": "ed25519"}); err != nil {
 		t.Fatal(err)
 	}
@@ -208,6 +212,18 @@ func TestImageWyrwood(t *testing.T) {
 	gitRun(t, work, "add", "-A")
 	gitRun(t, work, "commit", "-q", "-m", "v2")
 	gitRun(t, work, "tag", "v2")
+	// This template reaches provisioning before any workspace container starts.
+	wyrwoodTemplate(t, work, 1, v1Image)
+	writeTo(t, work, "template/.devcontainer/devcontainer.json", `{
+  "name": "sample",
+  "image": "busybox:1.37",
+  "runArgs": ["--name", "sample-key-check"],
+  "customizations": {"menagerie": {"wyrwood": {"policies": ["sample-workspace"], "accessGroup": 1000}}}
+}
+`)
+	gitRun(t, work, "add", "-A")
+	gitRun(t, work, "commit", "-q", "-m", "operator key check")
+	gitRun(t, work, "tag", "key-check")
 	gitRun(t, host.Dir, "clone", "-q", "--bare", work, filepath.Join(host.Dir, "sample-kit.git"))
 	if _, err := git.PlainInit(filepath.Join(host.Dir, "backups.git"), true); err != nil {
 		t.Fatal(err)
@@ -227,6 +243,11 @@ func TestImageWyrwood(t *testing.T) {
 	group := p.admin(http.MethodPost, "/api/user-groups", map[string]any{"friendlyName": "Managers", "name": auth.ManagersGroup})
 	p.user("sample-manager", "Sample", "Manager", group["id"].(string))
 	client := p.admin(http.MethodPost, "/api/oidc/clients", map[string]any{"name": "Menagerie sample", "callbackURLs": []string{site + auth.CallbackPath}, "isPublic": true, "pkceEnabled": true})
+	var operatorKeys struct {
+		HostKey     string
+		PendingKeys []struct{ Label, Fingerprint string }
+	}
+	pageData(t, fetch(t, w.operator, http.MethodGet, w.site+"/operator-keys", nil, nil), &operatorKeys)
 	writeTo(t, base, "config.yml", fmt.Sprintf(`listen: 127.0.0.1:%d
 workspace-root: %s
 workspace-repository: %s
@@ -238,12 +259,19 @@ oidc:
 templates:
   - {id: sample-kit-v1, name: "Sample kit, version 1", address: '%s@v1'}
   - {id: sample-kit-v2, name: "Sample kit, version 2", address: '%s@v2'}
+  - {id: operator-key-check, name: "Operator key check", address: '%s@key-check'}
+provisioning:
+  wyrwood:
+    controller: ssh://%s
+    host-key: %s
+    agent: %s
+    operator-key: %s
 registry-credentials:
   kv-mount: kv
   registries:
     - {registry: '%s', path: sample/registry}
 `, port, rootDir, host.URL("backups.git"), p.url, client["id"], site+auth.CallbackPath,
-		host.URL("sample-kit.git"), host.URL("sample-kit.git"), reg.addr))
+		host.URL("sample-kit.git"), host.URL("sample-kit.git"), host.URL("sample-kit.git"), w.sshAddr, operatorKeys.HostKey, w.agentName, operatorKeyName, reg.addr))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -282,6 +310,8 @@ registry-credentials:
 	const hcl = `path "kv/data/sample/registry" { capabilities = ["read"] }
 path "transit/keys/sample-git" { capabilities = ["read"] }
 path "transit/sign/sample-git" { capabilities = ["update"] }
+path "transit/keys/sample-operator" { capabilities = ["read"] }
+path "transit/sign/sample-operator" { capabilities = ["update"] }
 `
 	w.savePolicy("sample-menagerie", hcl, true, []string{"sample-git"}, "/run/wyrwood")
 	w.savePolicy("sample-menagerie-fixed", hcl, false, []string{"sample-git"}, "/run/wyrwood")
@@ -339,6 +369,43 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 		if code != 0 || !strings.HasSuffix(out, "sample-git") {
 			t.Errorf("ssh-add with the access group exited %d: %q", code, out)
 		}
+	})
+
+	t.Run("operator key errors identify unavailable and pending keys", func(t *testing.T) {
+		c.t = t
+		checkFailure := func(snap jobs.Snapshot, wants ...string) {
+			t.Helper()
+			if snap.State != jobs.Failed || snap.Error == nil || snap.Error.Kind != provisioning.KindUnavailable {
+				t.Fatalf("job ended %s: %+v", snap.State, snap.Error)
+			}
+			for _, want := range wants {
+				if !strings.Contains(snap.Error.Message, want) {
+					t.Fatalf("job error %q does not name %q", snap.Error.Message, want)
+				}
+			}
+			t.Logf("job error: %s", snap.Error.Message)
+		}
+		snap := runInterviewJob(t, b, site, "create", "key-check", "operator-key-check",
+			map[string]any{"label": "Sample label", "size": "small", "verbose": false, "tags": []string{"alpha"}})
+		checkFailure(snap, "ssh-agent.sock does not offer", operatorKeyName)
+		pageData(t, fetch(t, w.operator, http.MethodGet, w.site+"/operator-keys", nil, nil), &operatorKeys)
+		if len(operatorKeys.PendingKeys) != 0 {
+			t.Fatalf("unoffered key or unrelated Git key recorded as pending: %+v", operatorKeys.PendingKeys)
+		}
+
+		// Offer the same configured Transit key through the real Wyrwood agent.
+		w.savePolicy("sample-menagerie", hcl, true, []string{"sample-git", operatorKeyName}, "/run/wyrwood")
+		fingerprint := ssh.FingerprintSHA256(transitKey(t, w, operatorKeyName))
+		waitFor(t, "the operator key on Menagerie's socket", func() bool {
+			out, code := c.exec("", "sh", "-c", "SSH_AUTH_SOCK=/run/wyrwood/ssh-agent.sock ssh-add -l")
+			return code == 0 && strings.Contains(out, fingerprint)
+		})
+		checkFailure(runJob(t, b, site, "start", "key-check"), "not approved", fingerprint)
+		pageData(t, fetch(t, w.operator, http.MethodGet, w.site+"/operator-keys", nil, nil), &operatorKeys)
+		if len(operatorKeys.PendingKeys) != 1 || operatorKeys.PendingKeys[0].Fingerprint != fingerprint || operatorKeys.PendingKeys[0].Label != "menagerie-"+w.agentName {
+			t.Fatalf("pending keys = %+v, want only %s under menagerie-%s", operatorKeys.PendingKeys, fingerprint, w.agentName)
+		}
+		t.Logf("Wyrwood pending key: %+v", operatorKeys.PendingKeys[0])
 	})
 
 	t.Run("create fetches a private template, pulls a private image and backs up through Wyrwood", func(t *testing.T) {

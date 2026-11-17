@@ -573,7 +573,7 @@ func TestPendingKeyFailsNamingItsFingerprint(t *testing.T) {
 			if !errors.Is(err, operator.ErrNotApproved) {
 				t.Fatalf("error = %v", err)
 			}
-			for _, want := range []string{f.fingerprint, "Wyrwood " + name + " of " + sampleName} {
+			for _, want := range []string{f.fingerprint, "not approved", "Wyrwood " + name + " of " + sampleName} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("error %q does not name %q", err, want)
 				}
@@ -653,7 +653,7 @@ func TestACallOutsideTheGrantIsAClearJobError(t *testing.T) {
 			if !errors.Is(err, operator.ErrOutsideGrant) {
 				t.Fatalf("error = %v", err)
 			}
-			for _, want := range append(test.wants, "new key and a new approval") {
+			for _, want := range append(test.wants, "edit the key's grant in the Wyrwood web interface, then retry the job") {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("error %q does not name %q", err, want)
 				}
@@ -865,22 +865,42 @@ func TestUnreachableController(t *testing.T) {
 }
 
 func TestKeySelectionFailures(t *testing.T) {
-	cases := map[string]func(*Client){
-		"no such key": func(c *Client) { c.config.OperatorKey = "sample-absent" },
-		"no socket":   func(c *Client) { c.config.Socket = filepath.Join(filepath.Dir(c.config.Socket), "absent.sock") },
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, change := range cases {
-		t.Run(name, func(t *testing.T) {
-			f := newFixture(t)
-			change(f.client)
-			_, _, err := f.client.Read(testContext(t), sampleName)
-			if !errors.Is(err, operator.ErrKeySelection) || !strings.Contains(err.Error(), "provisioning.wyrwood.operator-key") {
-				t.Fatalf("error = %v", err)
-			}
-			if got := f.controller.offeredKeys(); len(got) != 0 {
-				t.Fatalf("offered %v", got)
-			}
-		})
+	signer, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := ssh.FingerprintSHA256(signer.PublicKey())
+	public := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+	for _, selection := range []struct{ value, identity string }{
+		{"sample-absent", "sample-absent"},
+		{fingerprint, fingerprint},
+		{public, fingerprint},
+	} {
+		for _, noSocket := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/no-socket=%t", selection.value, noSocket), func(t *testing.T) {
+				f := newFixture(t)
+				f.client.config.OperatorKey = selection.value
+				if noSocket {
+					f.client.config.Socket = filepath.Join(filepath.Dir(f.client.config.Socket), "absent.sock")
+				}
+				_, err := f.client.Bind(testContext(t), sampleName, sampleSelection())
+				if !errors.Is(err, operator.ErrKeySelection) {
+					t.Fatalf("error = %v", err)
+				}
+				for _, want := range []string{"ssh-agent.sock does not offer", "provisioning.wyrwood.operator-key", selection.identity} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("error %q does not name %q", err, want)
+					}
+				}
+				if got := f.controller.offeredKeys(); len(got) != 0 {
+					t.Fatalf("offered %v", got)
+				}
+			})
+		}
 	}
 }
 
@@ -892,7 +912,7 @@ func TestAmbiguousKeyNameFails(t *testing.T) {
 	f.client.config.Socket = filepath.Join(t.TempDir(), "ssh-agent.sock")
 	serveAgent(t, keyring, f.client.config.Socket)
 	_, _, err := f.client.Read(testContext(t), sampleName)
-	if !errors.Is(err, operator.ErrKeySelection) || !strings.Contains(err.Error(), "no single key") {
+	if !errors.Is(err, operator.ErrKeySelection) || !strings.Contains(err.Error(), "does not offer a single usable key") {
 		t.Fatalf("error = %v", err)
 	}
 	if got := f.controller.offeredKeys(); len(got) != 0 {

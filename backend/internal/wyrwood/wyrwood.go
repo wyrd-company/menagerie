@@ -261,7 +261,7 @@ func (c *Client) do(ctx context.Context, operation, name string, request func(*o
 	if err == nil {
 		return nil
 	}
-	failure := &Error{Operation: operation, Name: name, Reason: reason(err, operation, c.config.Agent, fingerprint), causes: []error{err}}
+	failure := &Error{Operation: operation, Name: name, Reason: reason(err, operation, c.config.Agent, c.config.OperatorKey, fingerprint), causes: []error{err}}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		// A closed connection is what the job's end looks like from here.
 		failure.Reason = "the job ended first"
@@ -272,14 +272,19 @@ func (c *Client) do(ctx context.Context, operation, name string, request func(*o
 
 // reason says what a person does next. The controller's own text is kept for a
 // refusal this package has no words for, such as a selection that differs.
-func reason(err error, operation, agent, fingerprint string) string {
+func reason(err error, operation, agent, selection, fingerprint string) string {
 	switch {
 	case errors.Is(err, operator.ErrKeySelection):
-		return "ssh-agent.sock offers no single key that provisioning.wyrwood.operator-key selects; check that the Wyrwood agent runs on this host and that Menagerie's policy offers that key"
+		// A public-key selector already identifies a fingerprint, even when
+		// the socket cannot supply its signer. A name cannot tell us one.
+		if key, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(selection)); parseErr == nil {
+			selection = ssh.FingerprintSHA256(key)
+		}
+		return fmt.Sprintf("ssh-agent.sock does not offer a single usable key for provisioning.wyrwood.operator-key %q; check that the Wyrwood agent runs on this host and that Menagerie's policy offers that key", selection)
 	case errors.Is(err, operator.ErrNotApproved):
-		return fmt.Sprintf("the operator key %s is pending, rejected or revoked; approve a pending key in the Wyrwood web interface", fingerprint)
+		return fmt.Sprintf("the operator key %s is not approved (pending, rejected or revoked); approve a pending key in the Wyrwood web interface", fingerprint)
 	case errors.Is(err, operator.ErrOutsideGrant):
-		return fmt.Sprintf("the operator key's grant does not allow this %s on agent %s; a grant cannot be edited, so a wider one needs a new key and a new approval", operation, agent)
+		return fmt.Sprintf("the operator key's grant does not allow this %s on agent %s; edit the key's grant in the Wyrwood web interface, then retry the job", operation, agent)
 	case errors.Is(err, operator.ErrPending):
 		return "the controller saved the binding and OpenBao has not applied it; a repeat finishes it"
 	case errors.Is(err, operator.ErrHostKeyMismatch), errors.Is(err, operator.ErrHostKeyNotAccepted):
