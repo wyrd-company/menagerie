@@ -573,8 +573,10 @@ proposed-design:
     binding-convergence). A
     policy that a settings change, a create or a selection change adds is
     refused by name before any job runs when it is outside the grant or
-    Wyrwood does not have it. A policy that left the grant after it was
-    added is shown as outside the grant, and an apply of a selection that
+    Wyrwood does not have it. For settings, adding means adding to required
+    policies or to a group's members: retaining a member does not add it,
+    and moving it between those classifications does. A policy that left
+    the grant after it was added is shown as outside the grant, and an apply of a selection that
     holds it fails, naming it. Marking a policy required adds it to every
     workspace's selection, and each of those workspaces applies it as
     policy-application
