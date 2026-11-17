@@ -5,7 +5,6 @@ relationships:
     - menagerie
   related-to:
     - let-menagerie-decide-each-binding
-    - keep-a-policy-on-every-bound-workspace
 description: >-
   A change to a workspace's policies is applied to its Wyrwood binding at
   once, as an edit in Wyrwood's web interface is, and marking a policy
@@ -45,6 +44,18 @@ decision-outcome:
     every job does. Option 2 loses a required policy on every busy
     workspace and leaves a request waiting on Wyrwood. Option 3 misses #88's
     bar, which applies a change with no rebuild.
+  decisions:
+    empty-selection: >-
+      A selection may lose its last policy, and Menagerie applies it as any
+      other selection, with no rule of its own about it. Wyrwood refuses a
+      binding with no policy, so the apply fails as `binding-refused` with
+      Wyrwood's answer, and the binding keeps what it held; a binding Wyrwood
+      removes is recorded as removed. The operator decided this as Q6 on
+      #88: "Again, keep it simple. No policies for policies. If they remove
+      the last one, the binding has none. If wyrwood enforces anything that
+      is fine. If wyrwood removes the binding, that is fine, but otherwise
+      menagerie just adds/removes policies." Keeping a policy on every
+      bound workspace, by refusing the last removal, was the alternative.
 expected-outcomes:
   positive:
     - A change made while a workspace is busy reaches its binding when that job ends.

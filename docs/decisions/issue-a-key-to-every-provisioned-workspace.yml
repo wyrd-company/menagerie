@@ -1,5 +1,5 @@
 $schema: https://refinery.systems/ontology/decision-record
-status: proposed
+status: accepted
 relationships:
   contextualizes:
     - menagerie
@@ -10,10 +10,13 @@ description: >-
   (wyrd-company/menagerie#88), so Menagerie decides which workspaces get one.
   A key is a credential: it reaches the Xolotl gateway's models and MCP
   servers through the key policy the host's workspaces share. The workspace
-  template of earlier releases declares a key for every workspace. This is Q3 on #88.
-  It waits for the operator, and the design follows the recommendation until
-  the operator answers; the design's pending-decisions field names what the
-  other answer changes.
+  template of earlier releases declares a key for every workspace. The
+  operator decided it as Q3 on #88: "Menagerie just has policies the
+  operator key grants. The user configures which are required. The fact
+  that they created one with a xolotl key that is required is a user
+  configuration choice. The system becomes brittle if we start adding
+  policies for policies beyond what we have described the user can
+  configure in menagerie. Keep it simple, don't fool proof it."
 considered-options:
   "1": >-
     Every provisioned workspace gets a key when the configuration has
@@ -27,10 +30,12 @@ considered-options:
 decision-outcome:
   chosen-option: 1
   justification: >-
-    Every workspace of today's fleet uses the gateway, and option 1 keeps
-    the key's lifecycle to the provisioning steps that already issue and
-    retire it. Option 2 adds a policy setting and a key lifecycle to the
-    apply job. A removal there revokes a credential a running container may
+    Option 1 keeps the key's lifecycle to the provisioning steps that
+    already issue and retire it, and Menagerie reads no policy to decide
+    it: no policy is marked or special-cased, and whether a workspace can
+    read its key is the user's own policy configuration, such as a required
+    policy. Option 2 adds a policy for policies, a setting and a key
+    lifecycle in the apply job. A removal there revokes a credential a running container may
     be using.
 expected-outcomes:
   positive:

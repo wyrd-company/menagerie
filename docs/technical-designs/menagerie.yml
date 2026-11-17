@@ -8,7 +8,6 @@ relationships:
     - name-workspace-provisioning-after-the-workspace
     - let-menagerie-decide-each-binding
     - issue-a-key-to-every-provisioned-workspace
-    - keep-a-policy-on-every-bound-workspace
   mitigates:
     - menagerie-data-loss
 objective: >-
@@ -357,8 +356,7 @@ proposed-design:
     host with a `provisioning` section the workspace name is also refused
     before any job unless it can name a Xolotl key and be a Wyrwood value:
     lower-case letters, digits, `_` and `-`, starting with a letter or digit,
-    at most 63 characters; on a host with `provisioning.wyrwood` a
-    selection with no policy is refused too (see workspace-policies). A create is refused while Menagerie's data holds
+    at most 63 characters. A create is refused while Menagerie's data holds
     a workspace of that name, one listed as `no-folder` or being created
     included, and while the template's current version has moved. The job
     pins the template's current version and its commit for its whole run
@@ -533,9 +531,10 @@ proposed-design:
     again reads what it read before. With `provisioning.xolotl` and no
     `key-policy`, a job that has to name a new key fails as
     `provisioning-unavailable` and names the missing setting. Without
-    `provisioning.xolotl`, a workspace gets no key. That every provisioned
-    workspace gets a key is the decision issue-a-key-to-every-provisioned-workspace,
-    which waits for the operator. Menagerie sets
+    `provisioning.xolotl`, a workspace gets no key. Menagerie reads no
+    policy to decide it: whether a workspace can read its key is the
+    selection's, such as a required policy, as the operator decided
+    (issue-a-key-to-every-provisioned-workspace). Menagerie sets
     `MENAGERIE_XOLOTL_KEY` to the key's `<policy>/<name>` in a provisioned
     workspace's container under the rule workspace-socket gives
     `MENAGERIE_WORKSPACE_SOCKET`: at each rebuild, and at each start that
@@ -569,12 +568,9 @@ proposed-design:
     only then checks the revision, so a change made from a selection read
     before the import is refused as stale and the manager decides again
     from the imported one; while Wyrwood cannot answer, the change is
-    refused and nothing is stored. Wyrwood holds no binding without a policy, so a workspace that has a
-    container name in Menagerie's data, and a create on a host with
-    `provisioning.wyrwood`, keep at least one policy: a selection change
-    that would leave none is refused, naming the last policy (see the
-    decision keep-a-policy-on-every-bound-workspace, which waits for the
-    operator). A
+    refused and nothing is stored. A selection can lose its last policy;
+    Menagerie applies it as any other and records what Wyrwood answers (see
+    binding-convergence). A
     policy that a settings change, a create or a selection change adds is
     refused by name before any job runs when it is outside the grant or
     Wyrwood does not have it. A policy that left the grant after it was
@@ -596,14 +592,10 @@ proposed-design:
     and reads the grant: a selected policy outside it fails the job as
     `policy-outside-grant`, naming each, with no request to Wyrwood, so
     Menagerie never asks Wyrwood for a policy outside the grant. With no
-    current container name it records the revision, an empty selection
-    included, because the workspace's next provisioning job binds the
-    selection, and its `read-definition` step refuses an empty one as
-    `provisioning-invalid`. With a
-    current name, an empty selection fails the job as
-    `provisioning-invalid` with no request; otherwise the job brings the
-    binding of that name to the selection as binding-convergence says,
-    keeping the binding's access group. So a workspace whose definition no
+    current container name it records the revision, because the
+    workspace's next provisioning job binds the selection. Otherwise the job
+    brings the binding of that name to the selection as binding-convergence
+    says, an empty selection included, keeping the binding's access group. So a workspace whose definition no
     longer parses or no longer declares the name, until `retire` removes
     that current name, still has its binding changed; only a missing
     binding needs a declaration the reader accepts. A selection change starts the job at once when
@@ -615,8 +607,8 @@ proposed-design:
     provisioning job applies the selection again. Menagerie decides the
     binding: a change made to it in Wyrwood's web interface is replaced by
     the workspace's next apply or provisioning job, whose console names the
-    fields it changed (see the decision let-menagerie-decide-each-binding,
-    which waits for the operator).
+    fields it changed, as the operator decided
+    (let-menagerie-decide-each-binding).
   binding-convergence: >-
     The `bind` step and `apply-policies` bring a workspace's binding to its
     selection the same way. The binding is the `name` binding of the
@@ -664,8 +656,15 @@ proposed-design:
     times one second apart within `provisioning.readiness-wait`. A
     request still `pending` fails the job as `binding-pending`; the saved
     selection stays in Wyrwood, and the next apply or provisioning job
-    finishes it as above. Menagerie never sends an empty selection, which
-    Wyrwood refuses (see workspace-policies). It records the selection
+    finishes it as above. An empty selection is sent as any other, and
+    Wyrwood's answer stands. Wyrwood refuses a binding with no policy, so
+    such a `bind` or change fails the job as `binding-refused`, as any
+    refusal not named above does; the console and the workspace's apply
+    failure carry Wyrwood's answer on one line, the binding keeps what it
+    held, and the selection stays stored and not applied. A binding that
+    Wyrwood no longer shows after a change, or that `apply-policies` finds
+    missing while the selection is empty, was removed by Wyrwood: the job
+    makes nothing and records the revision as applied. It records the selection
     revision as applied only after a read shows the binding with that
     selection, its values, the job's access group and `applied`, and the console
     names each policy and value it added or removed.
@@ -734,19 +733,14 @@ proposed-design:
     unbinding another's container. A provisioning section that
     configuration lacks fails as `provisioning-unavailable`, and so does a
     workspace whose selection is still to be imported while Wyrwood cannot
-    answer (see first-start-import), and as `provisioning-invalid` a
-    workspace whose selection is empty (see workspace-policies). The
-    console names each legacy member of the declaration it ignores. Host
+    answer (see first-start-import). The console names each legacy member of the declaration it ignores. Host
     prerequisites are
     checked here, so nothing is issued for a workspace that cannot start. 2. `issue-key` issues the workspace's Xolotl key (see
     provisioning-identity), after its data records the key as the
     workspace's, and treats the answer that the key exists as done, so a
     repeat never rotates it. 3. `bind` checks the selection against the
-    grant as policy-application does, and, in the transaction that records
-    the container name as the workspace's current one in its data, reads
-    the selection again: one that a selection change emptied after
-    `read-definition` fails the job as `provisioning-invalid` with no
-    request. It then brings the binding to the workspace's selection, its
+    grant as policy-application does, records the container name as the
+    workspace's current one in its data, and brings the binding to the workspace's selection, its
     values and the declared access group as binding-convergence says, whether its container runs or not. A binding
     it makes, it waits on until the binding reports its consumer directory,
     which the agent creates before the container exists. A binding that
@@ -1409,7 +1403,9 @@ proposed-design:
     removed one: the delete fails, naming it, and keeps its record. A change
     that Wyrwood saves and OpenBao does not apply is not recorded as
     applied, and the next apply finishes it. Removing a bound workspace's
-    last policy is refused. A workspace whose create waits for answers stays
+    last policy sends the empty selection, and Wyrwood's refusal is shown
+    as the apply's `binding-refused` failure while the binding keeps its
+    policies. A workspace whose create waits for answers stays
     in Menagerie's data while the list is refreshed. An unbound workspace
     gives up its last ordinary policy, and its apply succeeds without a
     binding request to Wyrwood. A binding an operator removed and made again under
@@ -1419,8 +1415,7 @@ proposed-design:
     Removing a policy from a running workspace whose definition was edited
     so that it does not parse changes its binding and keeps its access
     group; with that binding removed in Wyrwood, the apply fails as
-    `provisioning-invalid` and binds nothing. A selection emptied while a
-    first provisioning job runs fails that job at `bind` with no request.
+    `provisioning-invalid` and binds nothing.
     A start whose definition no longer declares provisioning retires the
     binding at its end, and one whose declaration does not parse fails in
     `read-definition` with the binding in place. A selection
@@ -1439,8 +1434,9 @@ proposed-design:
     the version checks, their schedule, a failed check and a moved tag
     (task 21). It gains a "Policies" section: the policies inside the
     operator key's grant, required policies and policy groups (task 22); a
-    workspace's policies, applying a change, a pending or failed apply, the
-    last policy a bound workspace keeps, and a Wyrwood-side edit being
+    workspace's policies, applying a change, a pending or failed apply,
+    what Wyrwood answers to a selection with no policy, and a Wyrwood-side
+    edit being
     replaced (task 24). Its existing sections change too: "The workspace
     list" shows the template, the applied version, an unknown version and
     whether an upgrade is needed (task 21), the groups that need a choice
@@ -1466,29 +1462,6 @@ proposed-design:
     `binding-change` (task 24); "Upgrades" says that the first start after
     an upgrade imports templates (task 20) and provisioning records (task
     19), and that the data volume belongs in the host's backup (task 19).
-  pending-decisions: >-
-    Three decisions wait for the operator on wyrd-company/menagerie#88; the
-    design follows each recommendation, and each answer changes the
-    sections named. Q1, Menagerie's selection replaces an edit made in
-    Wyrwood (let-menagerie-decide-each-binding): the alternative, adopting
-    such edits, changes policy-authority, workspace-policies,
-    policy-application, binding-convergence, provisioning-steps 3,
-    first-start-import 5, menagerie-data (the selection and applied
-    revisions), screens, user-documentation and verification, with tasks
-    24 and 22.
-    Q3, every provisioned workspace gets a key
-    (issue-a-key-to-every-provisioned-workspace): the alternative, a key
-    only for a qualifying selection, changes workspace-policies,
-    provisioning-identity, provisioning-steps 2, policy-application,
-    provisioning-retries, first-start-import 5, menagerie-data (the key
-    identity), user-documentation and verification, with tasks 22 and 24.
-    Q6, a bound workspace keeps at least one policy
-    (keep-a-policy-on-every-bound-workspace): the alternative, unbinding a
-    workspace whose selection empties, changes workspace-policies,
-    create-flow, binding-convergence, provisioning-steps 1,
-    policy-application, user-documentation (the last policy) and
-    verification, with task 24. The contract changes they own carry
-    the same task numbers.
   contract-changes: |-
     The specifications and their assets change with the code their contract
     tests bind them to: `openapi_test.go`, `commits_test.go` and
@@ -1537,7 +1510,8 @@ proposed-design:
     Apply branch's forward-only check. [22]: settings, the grant, and a
     required policy reaching every selection. [24]: binding-convergence's
     pending, stale, hidden and recreated bindings; an empty selection,
-    unbound and bound and at `bind`; the import before a selection change;
+    unbound and bound, and Wyrwood's refusal recorded as `binding-refused`;
+    the import before a selection change;
     a running imported workspace and one whose definition does not parse,
     changed with no rebuild; `MENAGERIE_XOLOTL_KEY`; and
     `invalid-workspace-name`.
@@ -1739,9 +1713,7 @@ proposed-design:
       policy names, the group choices and ordinary policies, empty when
       absent. A create without a valid choice in a group is refused 422
       `policy-choice-required` naming the group, one that adds a policy
-      outside the grant 422 `policy-outside-grant`, one whose selection is
-      empty on a host with `provisioning.wyrwood` 422 `selection-empty`,
-      one that names policies without `provisioning.wyrwood` 409
+      outside the grant 422 `policy-outside-grant`, one that names policies without `provisioning.wyrwood` 409
       `provisioning-unavailable`, and one whose grant cannot be read 503
       `wyrwood-unavailable`; on a host with `provisioning` a name that
       cannot be a Xolotl key name and a Wyrwood value is refused 400
@@ -1758,8 +1730,7 @@ proposed-design:
       `policy-required`, naming a required
       policy the change removes; 422 `policy-choice-required`, naming a
       group the change leaves without a valid choice that it had; 422
-      `selection-empty`, naming the last policy of a workspace with a
-      container name; 422 `policy-outside-grant`; 503 `wyrwood-unavailable`.
+      `policy-outside-grant`; 503 `wyrwood-unavailable`.
     - [24] `Workspace` gains required `selectionRevision` (integer),
       `appliedRevision` (integer or null), `applyFailure` (null or
       `{kind, message}`), `selectionImported` (boolean) and `xolotlKey`
@@ -1769,16 +1740,16 @@ proposed-design:
       delete and `retire`, also fails `bind` and `apply-policies` when
       binding-convergence reads or binds a binding the grant does not cover.
     - [24] New request kinds: `selection-changed` (409), `policy-required`
-      (422), `policy-choice-required` (422), `selection-empty` (422). New
-      job kinds: `policy-outside-grant`, `binding-changed`,
-      `binding-pending`.
+      (422), `policy-choice-required` (422). New job kinds:
+      `policy-outside-grant`, `binding-changed`, `binding-pending`,
+      `binding-refused`.
     - [24] The policy parts of the prose of create, upgrade and the
       provisioning steps follow create-flow, upgrade-flow,
       provisioning-declaration, provisioning-steps and binding-convergence:
       the selection at create, policies unchanged by an upgrade, the binding
       made or changed from the selection with its pending and stale
-      answers, an empty selection refused or failed as
-      `provisioning-invalid`, the legacy members ignored and reported.
+      answers, an empty selection sent as any other with Wyrwood's refusal
+      failed as `binding-refused`, the legacy members ignored and reported.
   contract-template-service-api: |-
     `template-service-api.yml`:
     - [20] The service reads the configuration only for `workspace-root`,

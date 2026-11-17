@@ -1,5 +1,5 @@
 $schema: https://refinery.systems/ontology/decision-record
-status: proposed
+status: accepted
 relationships:
   contextualizes:
     - menagerie
@@ -11,10 +11,8 @@ description: >-
   and Wyrwood holds the binding. Wyrwood's web interface can also edit that
   binding: an operator can add or remove a policy there, change a value or
   the access group. Menagerie needs one rule for what a later apply or
-  provisioning job does with such an edit. This is Q1 on #88. It waits for
-  the operator, and the design follows the recommendation until the
-  operator answers; the design's pending-decisions field names what the
-  other answer changes.
+  provisioning job does with such an edit. The operator decided it as Q1 on
+  #88: Menagerie's selection wins.
 considered-options:
   "1": >-
     Menagerie's selection wins. A Wyrwood-side edit is replaced by the
