@@ -21,7 +21,7 @@ test("required policies and group settings reach every workspace selection", asy
   await expect(page.getByLabel("Policies for sample-alpha", { exact: true })).toHaveText(
     "workspace",
   );
-  await expect(page.getByText("Needs choice: Operator SSH")).toHaveCount(6);
+  await expect(page.getByText("Needs a choice: Operator SSH")).toHaveCount(6);
   await page.getByRole("link", { name: "Policies", exact: true }).click();
   await expect(
     page.getByRole("checkbox", { name: "workspace required", exact: true }),
@@ -45,7 +45,7 @@ test("required policies and group settings reach every workspace selection", asy
   await expect(page.getByLabel("Policies for sample-alpha", { exact: true })).toHaveText(
     "workspace",
   );
-  await expect(page.getByText("Needs choice: Operator SSH")).toHaveCount(0);
+  await expect(page.getByText("Needs a choice: Operator SSH")).toHaveCount(0);
 });
 test("an empty selection is visible", async ({ page }) => {
   await page.goto("/");
@@ -70,6 +70,41 @@ for (const width of [1280, 390]) {
       await expect(page.getByRole("textbox", { name: "Group name" })).toHaveValue("Operator SSH");
       await expectNoHorizontalScroll(page);
       await shot(page, `task-22-policies-${width}-${colorScheme}`);
+
+      await page.getByRole("button", { name: "Add group" }).click();
+      const newGroup = page.getByRole("region", { name: "Group 2" });
+      await newGroup.getByRole("textbox", { name: "Group name" }).fill("Audit");
+      const refusal = page.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/policies/settings") && response.status() === 422,
+      );
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await refusal;
+      await expect(page.getByRole("alert")).toHaveText("Group Audit has no policy.");
+      await expect(newGroup.getByRole("textbox", { name: "Group name" })).toHaveValue("Audit");
+      await expect(page.getByRole("status")).toHaveText("Unsaved changes");
+      await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Reload settings" })).toHaveCount(0);
+      await expectNoHorizontalScroll(page);
+      await shot(page, `task-22-refused-save-${width}-${colorScheme}`);
+
+      await reset(page.request);
+      await page.request.put("/api/policies/settings", {
+        data: {
+          required: [],
+          groups: [{ name: "Operator SSH", mode: "multi", policies: ["bob-ssh", "ira-ssh"] }],
+          revision: 0,
+        },
+      });
+      await page.goto("/");
+      const needsChoice = page.getByText("Needs a choice: Operator SSH");
+      await expect(needsChoice).toHaveCount(6);
+      await expect(page.locator(".entry-state").filter({ has: needsChoice }).first()).toBeVisible();
+      await expect(page.getByLabel("Policies for sample-alpha", { exact: true })).toHaveText(
+        "No policies",
+      );
+      await expectNoHorizontalScroll(page);
+      await shot(page, `task-22-workspaces-${width}-${colorScheme}`);
     });
   }
 }

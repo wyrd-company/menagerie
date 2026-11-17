@@ -194,12 +194,12 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                     <p className="entry-policies mono" aria-label={`Policies for ${ws.name}`}>
                       {ws.policies.length ? ws.policies.join(" · ") : "No policies"}
                     </p>
-                    {ws.needsChoice.length ? (
-                      <p className="entry-choice">Needs choice: {ws.needsChoice.join(", ")}</p>
-                    ) : null}
                   </div>
                   <div className="entry-state">
                     <StatusBadge state={ws.state} />
+                    {ws.needsChoice.length ? (
+                      <p className="entry-choice">Needs a choice: {ws.needsChoice.join(", ")}</p>
+                    ) : null}
                     {active ? (
                       <Link className="busy-link" href={paths.list(active.jobId)}>
                         {own(operationLabel, active.operation) ?? active.operation} · {active.state}

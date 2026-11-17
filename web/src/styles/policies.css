@@ -83,7 +83,8 @@
   overflow-wrap: anywhere;
 }
 .entry-choice {
-  color: var(--text-muted);
+  color: var(--warn);
+  margin-top: 0;
 }
 .policy-save-error {
   color: var(--danger);
