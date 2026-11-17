@@ -394,7 +394,9 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 		operations[name] = op
 	}
 	operations[api.OperationCommit] = commits.New(commits.Options{Root: root, Remote: remote, Jobs: manager}).Operation()
+	policySource, _ := clients.Bindings.(api.PolicySource)
 	return api.New(api.Options{
+		Policies:   policySource,
 		Root:       root,
 		Data:       data,
 		Status:     runtime,

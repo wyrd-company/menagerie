@@ -315,3 +315,19 @@ func OneLine(text string) string {
 	}
 	return strings.TrimSpace(string(runes))
 }
+
+// Policies reads the operator key's grant and the policies currently inside
+// it on one fresh connection. Neither answer is cached between requests.
+func (c *Client) Policies(ctx context.Context) (operator.Grant, []operator.Policy, error) {
+	var identity operator.Identity
+	var policies []operator.Policy
+	err := c.do(ctx, "policies", "", func(client *operator.Client) (err error) {
+		identity, err = client.Whoami(ctx)
+		if err != nil {
+			return err
+		}
+		policies, err = client.ListPolicies(ctx)
+		return err
+	})
+	return identity.Grant, policies, err
+}

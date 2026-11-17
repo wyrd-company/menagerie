@@ -59,6 +59,43 @@ description: >-
   stops waiting, and a command that hangs stays in the container.
 
 
+  `GET /api/policies` reads Wyrwood afresh and answers 200 with `grant`,
+  `policies` and `settings`. Without `provisioning.wyrwood`, `grant` is null;
+  otherwise it has `agents`, `policies` and `actions`, lists of strings with
+  `["*"]` standing for every name. Each policy has `name`, `valueNames` (the
+  names of its per-binding values) and `inGrant`. The list includes policies
+  Wyrwood lists inside the grant and policies referenced by the settings or
+  any stored selection that are outside it or missing, with `inGrant` false.
+  An unreadable grant or policy list answers 503 `wyrwood-unavailable`.
+
+
+  `PUT /api/policies/settings` takes `required`, `groups` and `revision` and
+  answers 200 with the saved settings and incremented revision. Each group
+  has a unique one-line name of 1 to 100 characters, a `mode` of `single`
+  (exactly one choice) or `multi` (at least one), and a nonempty `policies`
+  list. A new group omits `id`; Menagerie assigns an integer ID it never
+  reuses. A policy is required, in one group, or neither. Duplicate policies,
+  a policy both required and in a group or in two groups, an empty group,
+  duplicate group names, an unknown mode or ID, or an invalid group name
+  answer 422 `invalid-settings`, naming the rule. Malformed requests answer
+  400 `invalid-request`; an older revision 409 `settings-changed`; no
+  `provisioning.wyrwood` 409 `provisioning-unavailable`; and an unreadable
+  grant or policy list 503 `wyrwood-unavailable`. The grant is read again for
+  each change. A policy newly added to settings outside the grant or absent
+  from Wyrwood answers 422 `policy-outside-grant`, naming every such policy,
+  before any job runs. A referenced policy that leaves the grant remains
+  visible and can be removed from settings.
+
+
+  Adding required policies adds them to every stored workspace selection in
+  the same transaction, incrementing each changed selection's revision once.
+  Removing a requirement retains the policy in each selection. A discovered
+  workspace begins with required policies. `Workspace.policies` is its stored
+  selection, an empty list included; `needsChoice` lists group names without
+  a valid choice. Required policies and groups are the only selection rules;
+  a selection can be empty and no policy is treated specially.
+
+
   `GET /api/templates` returns the approved templates' `id` and `name`.
 
 

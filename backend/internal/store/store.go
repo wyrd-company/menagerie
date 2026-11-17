@@ -61,6 +61,25 @@ var migrations = []string{
 		id INTEGER PRIMARY KEY,
 		done_at TEXT NOT NULL
 	);`,
+	// 2: policy settings and workspace selections, with separate revisions.
+	`CREATE TABLE policy_settings (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		document TEXT NOT NULL,
+		next_group_id INTEGER NOT NULL DEFAULT 1
+	);
+	INSERT INTO policy_settings (id, document) VALUES (1, '{"required":[],"groups":[],"revision":0}');
+	ALTER TABLE workspaces ADD COLUMN selection_revision INTEGER NOT NULL DEFAULT 0;
+	CREATE TABLE workspace_policies (
+		workspace TEXT NOT NULL REFERENCES workspaces(name) ON DELETE CASCADE,
+		policy TEXT NOT NULL,
+		PRIMARY KEY (workspace, policy)
+	);
+	CREATE TRIGGER workspace_required_policies AFTER INSERT ON workspaces BEGIN
+		INSERT INTO workspace_policies (workspace, policy)
+		SELECT NEW.name, value FROM policy_settings, json_each(document, '$.required');
+		UPDATE workspaces SET selection_revision = 1 WHERE name = NEW.name
+		AND EXISTS (SELECT 1 FROM workspace_policies WHERE workspace = NEW.name);
+	END;`,
 }
 
 // SchemaVersion is the version of the schema this Menagerie reads and writes.

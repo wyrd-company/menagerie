@@ -1078,3 +1078,48 @@ func TestNewRefusesWhatCannotWork(t *testing.T) {
 		}
 	}
 }
+
+func TestPoliciesReadWhoamiAndPolicyListOnEveryCall(t *testing.T) {
+	f := newFixture(t)
+	f.controller.set(func(c *fakeController) {
+		c.answer = func(request operator.Request) *operator.Response {
+			var body any
+			switch request.Operation {
+			case operator.OperationWhoami:
+				body = operator.Identity{Grant: c.grant}
+			case operator.OperationPolicyList:
+				body = operator.Policies{Policies: []operator.Policy{{Name: bindPolicy, ValueNames: []string{"identity"}}}}
+			default:
+				return nil
+			}
+			raw, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return &operator.Response{Body: raw}
+		}
+	})
+	for i := 0; i < 2; i++ {
+		grant, policies, err := f.client.Policies(testContext(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(grant.Policies) != 1 || len(policies) != 1 || policies[0].ValueNames[0] != "identity" {
+			t.Fatalf("%+v %+v", grant, policies)
+		}
+	}
+	f.controller.mu.Lock()
+	defer f.controller.mu.Unlock()
+	if len(f.controller.requests) != 4 {
+		t.Fatalf("got %d requests", len(f.controller.requests))
+	}
+	for i, r := range f.controller.requests {
+		want := operator.OperationWhoami
+		if i%2 == 1 {
+			want = operator.OperationPolicyList
+		}
+		if r.Operation != want {
+			t.Fatalf("%d: %s", i, r.Operation)
+		}
+	}
+}

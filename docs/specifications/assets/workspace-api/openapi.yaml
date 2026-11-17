@@ -79,6 +79,48 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/policies:
+    get:
+      operationId: listPolicies
+      summary: The current operator grant, policies and revisioned settings.
+      responses:
+        "200":
+          description: Policies inside the grant and referenced policies outside it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policies"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/policies/settings:
+    put:
+      operationId: savePolicySettings
+      summary: Save required policies and groups at the revision read.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicySettings"
+      responses:
+        "200":
+          description: Saved settings with assigned group IDs and the new revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicySettings"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/templates:
     get:
       operationId: listTemplates
@@ -254,11 +296,98 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
-    Workspace:
+    PolicyNames:
+      type: array
+      uniqueItems: true
+      items:
+        type: string
+        minLength: 1
+    PolicyGroup:
       type: object
-      required: [name, state, containerId, activeJob]
+      required: [name, mode, policies]
       additionalProperties: false
       properties:
+        id:
+          type: integer
+          minimum: 1
+          description: Assigned by Menagerie, never reused. Omitted for a new group.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: "^[^\\r\\n]+$"
+        mode:
+          type: string
+          enum: [single, multi]
+        policies:
+          $ref: "#/components/schemas/PolicyNames"
+          minItems: 1
+    PolicySettings:
+      type: object
+      required: [required, groups, revision]
+      additionalProperties: false
+      properties:
+        required:
+          $ref: "#/components/schemas/PolicyNames"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/PolicyGroup"
+        revision:
+          type: integer
+          minimum: 0
+    Policies:
+      type: object
+      required: [grant, policies, settings]
+      additionalProperties: false
+      properties:
+        grant:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [agents, policies, actions]
+              additionalProperties: false
+              properties:
+                agents:
+                  type: array
+                  items:
+                    type: string
+                policies:
+                  type: array
+                  items:
+                    type: string
+                actions:
+                  type: array
+                  items:
+                    type: string
+        policies:
+          type: array
+          items:
+            type: object
+            required: [name, valueNames, inGrant]
+            additionalProperties: false
+            properties:
+              name:
+                type: string
+              valueNames:
+                type: array
+                items:
+                  type: string
+              inGrant:
+                type: boolean
+        settings:
+          $ref: "#/components/schemas/PolicySettings"
+    Workspace:
+      type: object
+      required: [name, state, containerId, activeJob, policies, needsChoice]
+      additionalProperties: false
+      properties:
+        policies:
+          $ref: "#/components/schemas/PolicyNames"
+        needsChoice:
+          type: array
+          items:
+            type: string
         name:
           type: string
         state:
@@ -545,6 +674,11 @@ components:
             kind:
               type: string
               examples:
+                - settings-changed
+                - policy-outside-grant
+                - invalid-settings
+                - wyrwood-unavailable
+                - provisioning-unavailable
                 - invalid-request
                 - unknown-operation
                 - invalid-workspace-name

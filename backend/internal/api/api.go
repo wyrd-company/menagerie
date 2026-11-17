@@ -51,6 +51,7 @@ type Options struct {
 	Interviews Interviews
 	// PairingTokens mints T3 Code pairing tokens. Nil mints none.
 	PairingTokens PairingTokens
+	Policies      PolicySource
 	Templates     []Template
 	// UI holds the built web UI (index.html and assets/). Nil serves no UI.
 	UI fs.FS
@@ -79,6 +80,8 @@ func (s *Server) routes() []struct {
 		{Route{http.MethodGet, "/healthz"}, health},
 		{Route{http.MethodGet, "/api/workspaces"}, s.listWorkspaces},
 		{Route{http.MethodPost, "/api/workspaces/{name}/t3-code-pairing-tokens"}, s.mintPairingToken},
+		{Route{http.MethodGet, "/api/policies"}, s.listPolicies},
+		{Route{http.MethodPut, "/api/policies/settings"}, s.savePolicySettings},
 		{Route{http.MethodGet, "/api/templates"}, s.listTemplates},
 		{Route{http.MethodGet, "/api/jobs"}, s.listJobs},
 		{Route{http.MethodPost, "/api/jobs"}, s.startJob},
@@ -131,6 +134,7 @@ func (s *Server) mountUI(ui fs.FS) {
 	s.mux.Handle("GET /assets/", http.FileServerFS(ui))
 	s.mux.HandleFunc("GET /{$}", index)
 	s.mux.HandleFunc("GET /create", index)
+	s.mux.HandleFunc("GET /policies", index)
 	s.mux.HandleFunc("GET /workspaces/{name}/upgrade", index)
 }
 
@@ -166,6 +170,8 @@ type activeJob struct {
 }
 
 type workspaceRow struct {
+	Policies    []string   `json:"policies"`
+	NeedsChoice []string   `json:"needsChoice"`
 	Name        string     `json:"name"`
 	State       string     `json:"state"`
 	ContainerID *string    `json:"containerId"`
@@ -206,6 +212,16 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, name := range noFolder {
 		rows = append(rows, s.withJob(workspaceRow{Name: name, State: StateNoFolder}))
+	}
+	settings, selections, err := s.opts.Data.Policies(r.Context())
+	if err != nil {
+		writeError(w, 500, apiError{Kind: "internal-error", Message: err.Error()})
+		return
+	}
+	for i := range rows {
+		selection := selections[rows[i].Name]
+		rows[i].Policies = selection.Policies
+		rows[i].NeedsChoice = settings.NeedsChoice(selection.Policies)
 	}
 	slices.SortFunc(rows, func(a, b workspaceRow) int { return strings.Compare(a.Name, b.Name) })
 	writeJSON(w, http.StatusOK, map[string][]workspaceRow{"workspaces": rows})
