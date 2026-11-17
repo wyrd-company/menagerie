@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 64 64">
+  <title>Menagerie</title>
+  <defs>
+    <path id="crate-shape" d="M5 30.5Q5 28.6 6.9 29.2L32 36.8L57.1 29.2Q59 28.6 59 30.5L59 49Q59 50 58 50.5L33 61.2Q32 61.6 31 61.2L6 50.5Q5 50 5 49Z"/>
+    <g id="wrench-shape" transform="translate(40 15.5) rotate(38)">
+      <path d="M-7-10L-4.5 1L4.5 1L7-10A12.5 12.5 0 1 1-7-10Z"/>
+      <rect x="-4.5" y="6" width="9" height="30" rx="3"/>
+    </g>
+  </defs>
+  <g id="wrench" stroke-linejoin="round">
+    <use xlink:href="#wrench-shape" fill="#ffffff" stroke="#ffffff" stroke-width="7"/>
+    <g transform="translate(40 15.5) rotate(38)" stroke="#01204a" stroke-width="2.5">
+      <rect id="wrench-handle" x="-4.5" y="6" width="9" height="30" rx="3" fill="#f97314"/>
+      <path id="wrench-head" d="M-7-10L-4.5 1L4.5 1L7-10A12.5 12.5 0 1 1-7-10Z" fill="#93a0b6"/>
+    </g>
+  </g>
+  <g id="crate" stroke-linejoin="round">
+    <use xlink:href="#crate-shape" fill="#ffffff" stroke="#ffffff" stroke-width="5"/>
+    <use xlink:href="#crate-shape" fill="#01204a"/>
+    <g id="crate-ribs" fill="#2086ee">
+      <polygon points="10,34.6 17,36.5 17,50.2 10,47.2"/>
+      <polygon points="22.5,37.9 29.5,39.8 29.5,55.4 22.5,52.5"/>
+      <polygon points="34.5,39.8 41.5,37.9 41.5,52.5 34.5,55.4"/>
+      <polygon points="47,36.5 54,34.6 54,47.2 47,50.2"/>
+    </g>
+  </g>
+</svg>

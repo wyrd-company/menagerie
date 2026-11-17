@@ -1,0 +1,1380 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Workspaces · Menagerie</title>
+    <link rel="stylesheet" href="incumbent.css" />
+    <style>
+      @font-face {
+        font-family: "Inter Variable";
+        font-weight: 100 900;
+        font-display: swap;
+        src: url(inter.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: "JetBrains Mono Variable";
+        font-weight: 100 800;
+        font-display: swap;
+        src: url(jetbrains-mono.woff2) format("woff2");
+      }
+      :root {
+        --text-faint: var(--text-muted);
+      }
+      .mockup-tools {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px dashed var(--border-strong);
+        font-size: 14px;
+        color: var(--text-muted);
+      }
+      select {
+        font: inherit;
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        padding: 8px;
+        max-width: 100%;
+        min-height: 36px;
+      }
+      .mockup-tools select {
+        max-width: min(100%, 380px);
+        flex: 1;
+      }
+      .mockup-tools button {
+        margin-left: auto;
+      }
+      .masthead {
+        gap: 24px;
+      }
+      .masthead nav {
+        flex-wrap: wrap;
+      }
+      .masthead nav a {
+        padding-inline: 12px;
+      }
+      .signout {
+        color: var(--text-muted);
+        font-size: 14px;
+      }
+      h2 {
+        font-size: 18px;
+      }
+      h3 {
+        font-size: 16px;
+      }
+      .stack {
+        display: grid;
+        gap: 24px;
+      }
+      .compact {
+        gap: 12px;
+      }
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 24px;
+        display: grid;
+        gap: 24px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .row-between {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      label.choice-line {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 36px;
+        cursor: pointer;
+      }
+      .choice-line small {
+        color: var(--text-muted);
+        margin-left: 4px;
+      }
+      .choices-list {
+        display: grid;
+        gap: 4px;
+      }
+      fieldset {
+        min-width: 0;
+        border: 0;
+        padding: 0;
+        margin: 0;
+      }
+      legend {
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      .rule {
+        border-top: 1px solid var(--border);
+        padding-top: 20px;
+      }
+      .help {
+        color: var(--text-muted);
+        font-size: 14px;
+      }
+      .error {
+        color: var(--danger);
+        font-size: 14px;
+      }
+      .success {
+        color: var(--ok);
+        font-size: 14px;
+      }
+      .warning {
+        color: var(--warn);
+        font-size: 14px;
+      }
+      .error:empty,
+      .success:empty {
+        display: none;
+      }
+      .entry .entry-name h2 {
+        font-size: 15px;
+      }
+      .entry {
+        grid-template-columns: minmax(10rem, 1.2fr) minmax(10rem, 1fr) minmax(
+            17rem,
+            1.5fr
+          );
+        grid-template-areas: "name state actions" "policies policies policies" "error error error";
+      }
+      .entry-name .help {
+        margin-top: 4px;
+      }
+      .entry-state {
+        font-size: 14px;
+      }
+      .entry-actions {
+        max-width: 480px;
+      }
+      .policy-panel {
+        grid-area: policies;
+        margin-top: 16px;
+        border-top: 1px solid var(--border);
+        padding: 20px 0 8px;
+        display: grid;
+        gap: 24px;
+      }
+      .policy-columns {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 24px;
+      }
+      .policy-columns legend .help {
+        display: block;
+        margin-top: 4px;
+        font-weight: 400;
+      }
+      .policy-columns legend {
+        font-size: 15px;
+      }
+      .status-warn {
+        --status: var(--warn);
+        --status-wash: var(--warn-wash);
+      }
+      .inline-status {
+        font-size: 14px;
+      }
+      .template-entry {
+        display: grid;
+        grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto;
+        gap: 20px;
+        padding: 20px;
+        border-bottom: 1px solid var(--border);
+        align-items: start;
+      }
+      .template-entry:last-child {
+        border: 0;
+      }
+      .template-entry h2 {
+        font-size: 16px;
+      }
+      .template-entry .help {
+        margin-top: 6px;
+        overflow-wrap: anywhere;
+      }
+      .template-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        max-width: 280px;
+      }
+      .template-versions {
+        font-size: 14px;
+        display: grid;
+        gap: 6px;
+      }
+      .template-edit {
+        grid-column: 1/-1;
+        display: grid;
+        gap: 16px;
+        border-top: 1px solid var(--border);
+        padding-top: 16px;
+      }
+      .policy-settings-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 24px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      .policy-settings-row:last-child {
+        border: 0;
+      }
+      .group-editor {
+        display: grid;
+        gap: 16px;
+        border-top: 1px solid var(--border);
+        padding-top: 20px;
+      }
+      .group-head {
+        display: grid;
+        grid-template-columns: minmax(120px, 1fr) minmax(140px, 1fr) auto;
+        gap: 12px;
+        align-items: end;
+      }
+      .group-head label {
+        display: grid;
+        gap: 6px;
+        font-size: 14px;
+      }
+      .group-options {
+        display: flex;
+        gap: 12px 24px;
+        flex-wrap: wrap;
+      }
+      .field input {
+        max-width: 640px;
+      }
+      .phase-rail {
+        font-size: 13px;
+      }
+      .tape-lines {
+        max-height: none;
+        min-height: 0;
+      }
+      .tape-lines li {
+        grid-template-columns: 2.5rem 1fr;
+        font-size: 13px;
+      }
+      .interview-actions {
+        margin-top: 4px;
+      }
+      .toast {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        max-width: calc(100% - 40px);
+        padding: 12px 20px;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        z-index: 10;
+      }
+      .toast:empty {
+        display: none;
+      }
+      @media (max-width: 1050px) {
+        .entry {
+          grid-template-columns: 1fr 1fr;
+          grid-template-areas: "name state" "actions actions" "policies policies" "error error";
+        }
+        .entry-actions {
+          justify-content: start;
+          max-width: none;
+        }
+        .template-entry {
+          grid-template-columns: 1fr 1fr;
+        }
+        .template-actions {
+          grid-column: 1/-1;
+          max-width: none;
+        }
+      }
+      @media (max-width: 720px) {
+        .masthead {
+          gap: 8px;
+        }
+        .masthead nav {
+          gap: 0;
+        }
+        .masthead nav a {
+          padding: 12px 8px;
+          font-size: 14px;
+        }
+        .policy-columns {
+          grid-template-columns: 1fr;
+        }
+        .panel {
+          padding: 16px;
+        }
+        .template-entry {
+          grid-template-columns: 1fr;
+        }
+        .template-actions {
+          grid-column: auto;
+        }
+        .group-head {
+          grid-template-columns: 1fr;
+        }
+        .group-head button {
+          justify-self: start;
+        }
+        .policy-settings-row {
+          gap: 12px;
+          grid-template-columns: 1fr auto;
+        }
+        .policy-settings-row .scope {
+          grid-column: 1/-1;
+        }
+        .entry {
+          grid-template-columns: minmax(0, 1fr) auto;
+        }
+        .mockup-tools {
+          align-items: start;
+        }
+        .mockup-tools label {
+          padding-top: 6px;
+        }
+        .mockup-tools button {
+          min-height: 36px;
+        }
+        .signout {
+          font-size: 13px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <a class="skip" href="#main">Skip to content</a>
+      <div class="mockup-tools" aria-label="Mockup controls">
+        <label for="scene">Mockup</label
+        ><select id="scene" aria-label="Mockup state"></select
+        ><button id="reset" class="ghost">Reset</button>
+      </div>
+      <header class="masthead">
+        <a href="#workspaces" class="wordmark"
+          ><img
+            class="wordmark-mark"
+            src="mark.svg"
+            alt=""
+            width="28"
+            height="28"
+          /><span class="wordmark-name">Menagerie</span></a
+        >
+        <nav aria-label="Main">
+          <a href="#workspaces">Workspaces</a><a href="#new">New workspace</a
+          ><a href="#templates">Templates</a><a href="#policies">Policies</a>
+        </nav>
+        <span class="signout">boblangley</span>
+      </header>
+      <main id="main" tabindex="-1"></main>
+    </div>
+    <div id="toast" class="toast" role="status"></div>
+    <script>
+      "use strict";
+      // Deterministic review fixtures only. No network, credentials or product APIs.
+      const scenes = [
+        ["workspaces", "Workspaces · versions and states"],
+        ["workspaces/needs-upgrade", "Workspaces · needs upgrade"],
+        ["workspaces/needs-choice", "Workspaces · groups need a choice"],
+        ["workspaces/outside-grant", "Workspaces · policy outside grant"],
+        ["workspaces/pending", "Workspaces · apply pending"],
+        ["workspaces/failed", "Workspaces · apply failed"],
+        [
+          "workspaces/empty-refused",
+          "Workspaces · empty selection refused by Wyrwood",
+        ],
+        [
+          "workspaces/empty-unbound",
+          "Workspaces · empty selection, no binding",
+        ],
+        ["new", "Create · policy choices"],
+        ["new/refused", "Create · group choice refused"],
+        ["new/outside-grant", "Create · policy outside grant refused"],
+        ["new/interview", "Create · template interview"],
+        ["new/done", "Create · completed"],
+        ["templates", "Templates · registered"],
+        ["templates/register", "Templates · register"],
+        ["templates/refused", "Templates · missing definition"],
+        ["templates/address-refused", "Templates · address refused"],
+        ["templates/newer", "Templates · newer version available"],
+        ["templates/checking", "Templates · checking versions"],
+        ["templates/check-failed", "Templates · failed check"],
+        ["templates/moved", "Templates · moved tag"],
+        ["templates/remove-refused", "Templates · removal refused"],
+        ["templates/empty", "Templates · empty registry"],
+        ["upgrade/sample-space", "Upgrade · current template version"],
+        ["upgrade/sample-space/interview", "Upgrade · new question"],
+        ["upgrade/sample-space/done", "Upgrade · completed"],
+        ["upgrade/sample-space/refused", "Upgrade · moved tag refused"],
+        ["policies", "Policies · required and groups"],
+        ["policies/outside-grant", "Policies · outside grant"],
+        ["policies/new-group", "Policies · add a group"],
+        ["policies/empty", "Policies · no required policies or groups"],
+      ];
+      const $ = (s, root = document) => root.querySelector(s);
+      const $$ = (s, root = document) => [...root.querySelectorAll(s)];
+      const esc = (x) =>
+        String(x ?? "").replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+      const btn = (label, action, cls = "", extra = "") =>
+        `<button type="button" class="${cls}" data-action="${action}" ${extra}>${label}</button>`;
+      const status = (text, kind = "") =>
+        `<span class="status status-${kind}">${esc(text)}</span>`;
+      const allPolicies = [
+        "workspace",
+        "xolotl-client-key",
+        "bob-ssh",
+        "ira-ssh",
+        "development",
+        "production",
+        "registry-read",
+        "legacy-admin",
+      ];
+      let settingsDraft = null;
+      let reanswer = false;
+      let data,
+        route = "",
+        openPanel = null,
+        registerOpen = false,
+        registerValidated = false,
+        registerError = "",
+        templateEdit = null,
+        groupDraft = null,
+        newDraft,
+        policyDrafts = {},
+        applyOutcome = "applied",
+        toastTimer;
+      function seed() {
+        data = {
+          templates: [
+            {
+              id: "workspace",
+              name: "Workspace",
+              address: "https://github.com/example/workspace-template",
+              current: "1.0.0",
+              newest: "1.0.0",
+              check: "Checked just now",
+              moved: false,
+            },
+            {
+              id: "notes",
+              name: "Notes",
+              address: "https://github.com/example/notes-template",
+              current: "1.0.0",
+              newest: "1.0.0",
+              check: "Checked 12 minutes ago",
+              moved: false,
+            },
+          ],
+          required: ["workspace", "xolotl-client-key"],
+          groups: [
+            {
+              name: "Operator SSH",
+              mode: "multi",
+              members: ["bob-ssh", "ira-ssh"],
+            },
+            {
+              name: "Environment",
+              mode: "single",
+              members: ["development", "production"],
+            },
+          ],
+          outside: [],
+          workspaces: [
+            {
+              name: "sample-space",
+              state: "Running",
+              version: "1.0.0",
+              template: "workspace",
+              selection: [
+                "workspace",
+                "xolotl-client-key",
+                "bob-ssh",
+                "development",
+              ],
+              applied: [
+                "workspace",
+                "xolotl-client-key",
+                "bob-ssh",
+                "development",
+              ],
+              apply: "applied",
+            },
+            {
+              name: "sample-notes",
+              state: "Stopped",
+              version: "Unknown version",
+              template: "workspace",
+              selection: [
+                "workspace",
+                "xolotl-client-key",
+                "bob-ssh",
+                "development",
+              ],
+              apply: "applied",
+            },
+            {
+              name: "sample-tools",
+              state: "No container",
+              version: "1.0.0",
+              template: "workspace",
+              selection: [
+                "workspace",
+                "xolotl-client-key",
+                "ira-ssh",
+                "development",
+              ],
+              apply: "applied",
+            },
+            {
+              name: "sample-archive",
+              state: "No folder",
+              version: "1.0.0",
+              template: "workspace",
+              selection: [
+                "workspace",
+                "xolotl-client-key",
+                "bob-ssh",
+                "development",
+              ],
+              apply: "applied",
+            },
+          ],
+          jobs: [],
+        };
+        openPanel = null;
+        reanswer = false;
+        registerOpen = false;
+        registerValidated = false;
+        registerError = "";
+        templateEdit = null;
+        groupDraft = null;
+        policyDrafts = {};
+        settingsDraft = null;
+        applyOutcome = "applied";
+        newDraft = {
+          name: "sample-new",
+          template: "workspace",
+          selection: [...data.required],
+          error: "",
+        };
+      }
+      function fixture(path) {
+        seed();
+        const t = data.templates[0],
+          w = data.workspaces[0];
+        if (path === "templates/register") registerOpen = true;
+        if (path === "templates/refused") {
+          registerOpen = true;
+          registerError =
+            "Definition check failed: .devcontainer/devcontainer.json is missing.";
+        }
+        if (path === "templates/address-refused") {
+          registerOpen = true;
+          registerError =
+            "Address check failed: use a Git repository address. Local folders and file:// addresses are not supported.";
+        }
+        if (path === "templates/newer") {
+          t.newest = "1.1.0";
+          templateEdit = "workspace";
+        }
+        if (path === "templates/checking") t.check = "Checking versions…";
+        if (path === "templates/check-failed") {
+          t.newest = "1.1.0";
+          t.check =
+            "Check failed just now: template service is unavailable. Previously found versions are kept.";
+        }
+        if (path === "templates/moved") {
+          t.moved = true;
+          t.check = "Checked just now";
+          templateEdit = "workspace";
+        }
+        if (path === "templates/remove-refused")
+          t.removeError =
+            "Cannot remove Workspace: used by sample-space, sample-notes, sample-tools and sample-archive.";
+        if (path === "templates/empty") data.templates = [];
+        if (path.startsWith("upgrade/")) t.current = t.newest = "1.1.0";
+        if (path.endsWith("/refused") && path.startsWith("upgrade/"))
+          t.moved = true;
+        if (path.endsWith("/done") && path.startsWith("upgrade/")) {
+          w.version = "1.1.0";
+          w.selection.push("ira-ssh");
+          w.applied = [...w.selection];
+        }
+        if (path === "new/refused")
+          newDraft.error =
+            "Choose at least one policy in Operator SSH. Choose exactly one policy in Environment.";
+        if (path === "new/outside-grant") {
+          data.outside = ["registry-read"];
+          newDraft.selection.push("registry-read", "bob-ssh", "development");
+          newDraft.error =
+            "registry-read is outside the operator key’s grant. No job was started.";
+        }
+        if (path === "new/interview" || path === "new/done")
+          newDraft.selection.push("bob-ssh", "development");
+        if (path === "new/done") {
+          data.workspaces.push({
+            name: newDraft.name,
+            state: "Running",
+            version: "1.0.0",
+            template: "workspace",
+            selection: [...newDraft.selection],
+            apply: "applied",
+          });
+        }
+        if (path === "workspaces/needs-upgrade") t.current = t.newest = "1.1.0";
+        if (path === "workspaces/needs-choice") {
+          w.selection = w.selection.filter((p) => p !== "development");
+          openPanel = w.name;
+        }
+        if (path === "workspaces/outside-grant") {
+          data.outside = ["legacy-admin"];
+          w.selection.push("legacy-admin");
+          w.apply = "failed";
+          w.failure =
+            "legacy-admin is outside the operator key’s grant. Remove it or update the grant in Wyrwood.";
+          openPanel = w.name;
+        }
+        if (path === "workspaces/pending") {
+          w.selection.push("ira-ssh");
+          w.apply = "pending";
+          w.failure =
+            "Wyrwood saved the change, but OpenBao has not applied it. Apply again to finish.";
+          openPanel = w.name;
+        }
+        if (path === "workspaces/failed") {
+          w.selection.push("ira-ssh");
+          w.apply = "failed";
+          w.failure =
+            "Wyrwood could not be reached. Your selection is saved. Apply again.";
+          openPanel = w.name;
+        }
+        if (path === "workspaces/empty-refused") {
+          data.required = [];
+          data.groups = [];
+          w.selection = [];
+          w.apply = "failed";
+          w.failure =
+            "Wyrwood refused the change: a binding needs at least one policy. Your empty selection is saved; the binding still has workspace, xolotl-client-key, bob-ssh and development.";
+          openPanel = w.name;
+        }
+        if (path === "workspaces/empty-unbound") {
+          data.required = [];
+          data.groups = [];
+          w.selection = [];
+          w.applied = [];
+          w.apply = "applied";
+          w.unbound = true;
+          openPanel = w.name;
+        }
+        if (path === "policies/outside-grant") {
+          data.outside = ["legacy-admin"];
+          data.required.push("legacy-admin");
+        }
+        if (path === "policies/new-group")
+          groupDraft = { name: "", mode: "multi", members: [] };
+        if (path === "policies/empty") {
+          data.required = [];
+          data.groups = [];
+        }
+        route = path;
+        render();
+      }
+      function toast(message) {
+        $("#toast").textContent = message;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => ($("#toast").textContent = ""), 4000);
+      }
+      function go(path) {
+        if (location.hash.slice(1) === path) {
+          route = path;
+          render(true);
+        } else location.hash = path;
+      }
+      function template(id) {
+        return data.templates.find((t) => t.id === id);
+      }
+      function workspace(name) {
+        return data.workspaces.find((w) => w.name === name);
+      }
+      function missingGroups(selection) {
+        return data.groups.filter(
+          (g) => !g.members.some((p) => selection.includes(p)),
+        );
+      }
+      function choiceErrors(selection, creating = false, previous = []) {
+        const errors = [];
+        for (const p of selection)
+          if (data.outside.includes(p) && !previous.includes(p))
+            errors.push(
+              `${p} is outside the operator key’s grant. No job was started.`,
+            );
+        for (const g of data.groups) {
+          const count = g.members.filter((p) => selection.includes(p)).length,
+            had = g.members.some((p) => previous.includes(p));
+          if ((creating || had) && count === 0)
+            errors.push(
+              `Choose ${g.mode === "single" ? "exactly" : "at least"} one policy in ${g.name}.`,
+            );
+          if (g.mode === "single" && count > 1)
+            errors.push(`Choose exactly one policy in ${g.name}.`);
+        }
+        return errors.join(" ");
+      }
+      function policyControls(selection, context, disabled = false) {
+        const line = (p, kind = "", group = "") =>
+          `<label class="choice-line"><input type="${kind === "single" ? "radio" : "checkbox"}" name="${esc(context + "-" + group)}" value="${esc(p)}" data-policy="${esc(p)}" data-context="${esc(context)}" ${selection.includes(p) ? "checked" : ""} ${disabled || kind === "required" || (data.outside.includes(p) && !selection.includes(p)) ? "disabled" : ""}><span class="mono">${esc(p)}</span>${kind === "required" ? "<small>Required</small>" : ""}${data.outside.includes(p) ? '<small class="error">Outside grant</small>' : ""}</label>`;
+        const used = [
+          ...data.required,
+          ...data.groups.flatMap((g) => g.members),
+        ];
+        const ordinary = allPolicies.filter(
+          (p) =>
+            !used.includes(p) &&
+            (!data.outside.includes(p) || selection.includes(p)),
+        );
+        return `<div class="policy-columns">${data.required.length ? `<fieldset><legend>Required</legend>${data.required.map((p) => line(p, "required")).join("")}</fieldset>` : ""}${data.groups.map((g) => `<fieldset><legend>${esc(g.name)} <span class="help">${g.mode === "single" ? "Choose one" : "Choose at least one"}</span></legend><div class="choices-list">${g.members.map((p) => line(p, g.mode, g.name)).join("")}</div>${!g.members.some((p) => selection.includes(p)) && context !== "new" ? '<p class="warning">Needs a choice</p>' : ""}</fieldset>`).join("")}${ordinary.length ? `<fieldset><legend>Other policies</legend><div class="choices-list">${ordinary.map((p) => line(p)).join("")}</div></fieldset>` : ""}</div>`;
+      }
+      function pageHead(title, actions = "", crumb = "") {
+        return `<header class="screen-head"><div>${crumb ? `<p class="eyebrow">${crumb}</p>` : ""}<h1>${title}</h1></div><div class="screen-actions">${actions}</div></header>`;
+      }
+      function render(focus = false) {
+        const root = route.split("/")[0] || "workspaces";
+        $$("nav a").forEach((a) =>
+          a.setAttribute(
+            "aria-current",
+            a.hash.slice(1) === root ? "page" : "false",
+          ),
+        );
+        $("#scene").value = scenes.some((s) => s[0] === route) ? route : "";
+        document.title = `${{ workspaces: "Workspaces", new: "New workspace", upgrade: "Upgrade", templates: "Templates", policies: "Policies" }[root] || "Workspaces"} · Menagerie`;
+        $("#main").innerHTML =
+          root === "templates"
+            ? renderTemplates()
+            : root === "policies"
+              ? renderPolicies()
+              : root === "new"
+                ? renderNew()
+                : root === "upgrade"
+                  ? renderUpgrade()
+                  : renderWorkspaces();
+        if (focus) $("#main").focus();
+      }
+      function renderWorkspaces() {
+        return (
+          pageHead(
+            "Workspaces",
+            btn("Refresh", "refresh", "ghost") +
+              '<a class="button primary" href="#new">New workspace</a>',
+          ) +
+          `<ol class="ledger" aria-label="Workspaces">${data.workspaces
+            .map((w) => {
+              const t = template(w.template),
+                need =
+                  t &&
+                  w.version !== "Unknown version" &&
+                  w.version !== t.current,
+                missing = missingGroups(w.selection),
+                open = openPanel === w.name,
+                draft = policyDrafts[w.name] || {
+                  selection: [...w.selection],
+                  error: "",
+                };
+              return `<li class="entry"><div class="entry-name"><h2>${esc(w.name)}</h2><p class="help">${esc(t?.name || "Unregistered template")} · ${esc(w.version)}${w.version !== "Unknown version" ? " applied" : ""}</p>${need ? `<p class="warning">Needs upgrade · ${t.current} current</p>` : ""}</div><div class="entry-state">${status(w.state, w.state === "Running" ? "running" : w.state === "Stopped" ? "stopped" : "no-container")}<span class="${w.apply === "applied" ? "help" : w.apply === "pending" ? "warning" : "error"}">Policies ${w.apply === "applied" ? "applied" : w.apply === "pending" ? "pending" : "failed"}</span>${missing.length ? `<span class="warning">Needs a choice: ${missing.map((g) => esc(g.name)).join(", ")}</span>` : ""}</div><div class="entry-actions">${w.state === "No folder" ? btn("Delete", "delete-workspace", "", 'data-name="' + w.name + '"') : btn(w.state === "Running" ? "Stop" : "Start", "toggle-running", "", 'data-name="' + w.name + '"') + btn("Rebuild", "rebuild", "", 'data-name="' + w.name + '"') + btn("Apply branch", "branch", "", 'data-name="' + w.name + '"') + `<a class="button" href="#upgrade/${w.name}" ${!need && w.version !== "Unknown version" ? 'aria-disabled="true" tabindex="-1" style="pointer-events:none;opacity:.6"' : ""}>Upgrade</a>` + btn("Delete", "delete-workspace", "", 'data-name="' + w.name + '"')}${btn(open ? "Close policies" : "Policies", "toggle-policies", "", 'data-name="' + w.name + '" aria-expanded="' + open + '"')}</div>${w.failure && !open ? `<p class="entry-error">${esc(w.failure)}</p>` : ""}${open ? `<section class="policy-panel" aria-label="Policies for ${w.name}"><div class="row-between"><h3>${w.name} policies</h3><span class="${w.apply === "applied" ? "success" : w.apply === "pending" ? "warning" : "error"}">${w.apply === "applied" ? "Applied" : w.apply === "pending" ? "Pending" : "Failed"}</span></div>${policyControls(draft.selection, w.name)}${w.failure ? `<p class="${w.apply === "pending" ? "warning" : "error"}">${esc(w.failure)}</p>` : ""}<p class="error" id="selection-error-${w.name}" role="alert">${esc(draft.error)}</p>${w.applied && w.apply !== "applied" ? `<p class="help">Binding policies: ${w.applied.map(esc).join(", ") || "none"}</p>` : ""}<div class="actions">${btn("Save", "save-selection", "primary", 'data-name="' + w.name + '"')}${w.apply !== "applied" ? btn("Apply again", "apply-again", "", 'data-name="' + w.name + '"') : ""}<span class="help" id="draft-${w.name}"></span></div>${w.lastLog ? renderLog("Policy apply", w.lastLog, w.apply === "applied" ? "Succeeded" : "Failed") : ""}</section>` : ""}</li>`;
+            })
+            .join(
+              "",
+            )}</ol>${data.jobs.length ? `<section class="recent"><h2>Jobs since Menagerie started</h2><ol>${data.jobs.map((j) => `<li><span>${esc(j)}</span>${status("Succeeded", "succeeded")}</li>`).join("")}</ol></section>` : ""}`
+        );
+      }
+      function renderTemplates() {
+        return (
+          pageHead(
+            "Templates",
+            btn("Register template", "open-register", "primary"),
+          ) +
+          `<div class="stack">${registerOpen ? renderRegistration() : ""}${data.templates.length ? `<div class="ledger">${data.templates.map((t) => `<section class="template-entry"><div><h2>${esc(t.name)}</h2><p class="help mono">${esc(t.address)}</p><p class="help ${t.check.includes("failed") ? "error" : ""}">${esc(t.check)}</p>${t.moved ? '<p class="error">Current tag moved. Validate and save this version again before using it.</p>' : ""}${t.removeError ? `<p class="error" role="alert">${esc(t.removeError)}</p>` : ""}</div><div class="template-versions"><span>Current <strong>${t.current}</strong></span><span>Newest <strong>${t.newest}</strong></span>${t.newest !== t.current ? status("New version", "warn") : t.moved ? status("Tag moved", "failed") : ""}</div><div class="template-actions">${btn("Check versions", "check-versions", "", 'data-id="' + t.id + '" ' + (t.check === "Checking versions…" ? "disabled" : ""))}${t.newest !== t.current || t.moved ? btn(t.moved ? "Update version" : "Upgrade template", "template-upgrade", "", 'data-id="' + t.id + '"') : ""}${btn("Edit", "edit-template", "", 'data-id="' + t.id + '"')}${btn("Remove", "remove-template", "", 'data-id="' + t.id + '"')}</div>${templateEdit === t.id ? renderTemplateEditor(t) : ""}</section>`).join("")}</div>` : '<div class="empty"><p>No registered templates.</p>' + btn("Register template", "open-register", "primary") + "</div>"}</div>`
+        );
+      }
+      function renderRegistration() {
+        return `<form id="register-form" class="panel screen"><h2>Register template</h2><div class="field"><label for="template-name">Display name</label><input id="template-name" value="Tools" required maxlength="100"></div><div class="field"><label for="template-address">Address</label><input id="template-address" class="mono" value="https://github.com/example/tools-template" required aria-describedby="registration-error"></div><div class="field"><label for="runner-image">Runner image <span class="help">(optional)</span></label><input id="runner-image" class="mono" placeholder="Use host default"></div><p class="error" id="registration-error" role="alert">${esc(registerError)}</p><p id="registration-result" class="success" role="status">${registerValidated ? "Checks passed · 1.0.0" : ""}</p><div class="actions">${btn("Validate", "validate-registration")}${btn("Save", "save-registration", "primary", registerValidated ? "" : "disabled")}</div></form>`;
+      }
+      function renderTemplateEditor(t) {
+        return `<div class="template-edit">${t.newest !== t.current || t.moved ? `<div class="field"><label for="version-${t.id}">Current version</label><select id="version-${t.id}">${(t.newest === "1.2.0" ? ["1.2.0", "1.1.0"] : [t.newest]).map((v) => `<option>${v}</option>`).join("")}</select></div><p class="success" id="version-result-${t.id}" role="status"></p><div class="actions">${btn("Validate", "validate-version", "", 'data-id="' + t.id + '"')}${btn("Save", "save-version", "primary", 'data-id="' + t.id + '" disabled')}</div>` : `<div class="field"><label for="edit-name">Display name</label><input id="edit-name" value="${esc(t.name)}"></div><div class="field"><label for="edit-runner">Runner image <span class="help">(optional)</span></label><input id="edit-runner" value="${esc(t.runner || "")}"></div>${btn("Save", "save-template", "primary", 'data-id="' + t.id + '"')}`}</div>`;
+      }
+      function renderPolicies() {
+        const settings = settingsDraft || data;
+        const assigned = [
+          ...settings.required,
+          ...settings.groups.flatMap((g) => g.members),
+        ];
+        return (
+          pageHead("Policies") +
+          `<form id="settings-form" class="stack screen"><section class="panel"><h2>Required policies</h2><div>${allPolicies
+            .filter((p) => !data.outside.includes(p) || assigned.includes(p))
+            .map(
+              (p) =>
+                `<div class="policy-settings-row"><span class="mono">${esc(p)}</span><label class="choice-line"><input type="checkbox" data-required="${p}" ${settings.required.includes(p) ? "checked" : ""} ${data.outside.includes(p) && !settings.required.includes(p) ? "disabled" : ""}>Required</label><span class="help scope">${data.outside.includes(p) ? "Outside grant" : "Inside grant"}</span></div>`,
+            )
+            .join(
+              "",
+            )}</div><h2>Policy groups</h2>${settings.groups.map((g, i) => groupEditor(g, i)).join("")}${groupDraft ? groupEditor(groupDraft, "new") : btn("Add group", "add-group", "ghost")}<p class="error" id="settings-error" role="alert"></p><div class="actions"><button class="primary" type="submit">Save</button><span class="help" id="settings-draft"></span></div></section></form>`
+        );
+      }
+      function groupEditor(g, i) {
+        return `<section class="group-editor" data-group="${i}"><div class="group-head"><label>Group name<input data-group-name value="${esc(g.name)}" required maxlength="100"></label><label>Selection<select data-group-mode><option value="single" ${g.mode === "single" ? "selected" : ""}>Single-select</option><option value="multi" ${g.mode === "multi" ? "selected" : ""}>Multi-select</option></select></label>${btn("Remove group", "remove-group", "", 'data-index="' + i + '"')}</div><div class="group-options">${allPolicies
+          .filter(
+            (p) =>
+              !data.required.includes(p) &&
+              (!data.outside.includes(p) || g.members.includes(p)),
+          )
+          .map(
+            (p) =>
+              `<label class="choice-line"><input type="checkbox" data-group-member="${p}" ${g.members.includes(p) ? "checked" : ""} ${data.outside.includes(p) ? "disabled" : ""}><span class="mono">${p}</span>${data.outside.includes(p) ? "<small>Outside grant</small>" : ""}</label>`,
+          )
+          .join("")}</div></section>`;
+      }
+      function renderNew() {
+        const stage = route.split("/")[1];
+        if (stage === "interview")
+          return (
+            pageHead(
+              "New workspace",
+              "",
+              '<a href="#workspaces">Workspaces</a> / new',
+            ) + renderInterview(false)
+          );
+        if (stage === "done")
+          return (
+            pageHead("New workspace") +
+            renderLog(
+              "Create " + newDraft.name,
+              [
+                "generate: Workspace " + template(newDraft.template).current,
+                "bind: " + newDraft.selection.join(", "),
+                "up: container running",
+              ],
+              "Succeeded",
+            ) +
+            '<p class="after-job"><a href="#workspaces">Back to the workspace list</a></p>'
+          );
+        return (
+          pageHead(
+            "New workspace",
+            "",
+            '<a href="#workspaces">Workspaces</a> / new',
+          ) +
+          `<form id="create-form" class="start-form screen"><fieldset><legend>Template</legend><div class="template-cards">${data.templates.map((t) => `<label class="template-card ${newDraft.template === t.id ? "is-selected" : ""}"><input type="radio" name="template" value="${t.id}" ${newDraft.template === t.id ? "checked" : ""}><span class="template-name">${esc(t.name)}</span><span class="template-id">${t.current}</span></label>`).join("") || '<p>No registered templates. <a href="#templates">Register a template</a>.</p>'}</div></fieldset><div class="field"><label for="workspace-name" class="field-label">Workspace name</label><input id="workspace-name" class="mono" value="${esc(newDraft.name)}" required pattern="[a-z0-9](?:[a-z0-9_]|-){0,62}" maxlength="63"></div><h2>Policies</h2>${policyControls(newDraft.selection, "new")}<p class="error" id="create-error" role="alert">${esc(newDraft.error)}</p><div class="interview-actions"><button class="primary" type="submit">Begin interview</button></div></form>`
+        );
+      }
+      function renderUpgrade() {
+        const name = decodeURIComponent(route.split("/")[1] || "sample-space"),
+          w = workspace(name),
+          t = template(w?.template);
+        if (!w)
+          return (
+            pageHead("Workspace not found") +
+            '<a href="#workspaces">Workspaces</a>'
+          );
+        const stage = route.split("/")[2];
+        if (stage === "interview")
+          return (
+            pageHead(
+              "Upgrade " + esc(name),
+              "",
+              '<a href="#workspaces">Workspaces</a> / upgrade',
+            ) + renderInterview(true, name)
+          );
+        if (stage === "done")
+          return (
+            pageHead("Upgrade " + esc(name)) +
+            renderLog(
+              "Upgrade " + name,
+              [
+                "apply: Workspace " + w.version,
+                "bind: policies unchanged — " + w.selection.join(", "),
+                "read-definition: ignored legacy wyrwood.policies",
+                "up: container running",
+              ],
+              "Succeeded",
+            ) +
+            '<p class="after-job"><a href="#workspaces">Back to the workspace list</a></p>'
+          );
+        return (
+          pageHead(
+            "Upgrade " + esc(name),
+            "",
+            '<a href="#workspaces">Workspaces</a> / upgrade',
+          ) +
+          `<form id="upgrade-form" class="start-form screen" data-name="${esc(name)}"><div class="upgrade-current"><span>Applied</span><strong>${esc(w.version)}</strong><span>Current template</span><strong>${esc(t?.name || "Unregistered")} ${t?.current || ""}</strong></div><label class="choice-line"><input type="checkbox" id="reanswer">Ask every question again</label>${t?.moved ? '<p class="error" role="alert">The current tag moved. Validate and save the version on Templates before upgrading.</p>' : !t ? '<p class="error">Register this workspace’s template before upgrading.</p>' : t.current === w.version ? '<p class="help">This workspace already has the current version.</p>' : ""}<div class="interview-actions"><button class="primary" ${!t || t.moved || t.current === w.version ? "disabled" : ""}>Begin upgrade</button></div></form>`
+        );
+      }
+      function renderInterview(upgrade, name) {
+        return `<form id="interview-form" class="interview screen" data-upgrade="${upgrade}" data-name="${esc(name || newDraft.name)}"><header class="interview-head"><h2>${upgrade ? "Upgrade" : "Create"} interview</h2><span class="help">Workspace ${upgrade ? template(workspace(name).template).current : template(newDraft.template).current}</span></header>${upgrade && reanswer ? '<div class="field"><label for="previous-title">Workspace title</label><input id="previous-title" value="Shared workspace" required></div>' : ""}<div class="field"><label for="answer">${upgrade ? "Workspace description" : "Workspace title"}</label><input id="answer" value="${upgrade ? "A shared development workspace" : "Shared workspace"}" required></div><div class="interview-actions"><button class="primary">Submit answers</button></div></form>`;
+      }
+      function renderLog(title, lines, outcome) {
+        return `<section class="console screen"><header class="console-head"><h2 class="console-title">${esc(title)}</h2>${status(outcome, outcome === "Succeeded" ? "succeeded" : "failed")}</header><div class="tape"><div class="tape-head">Console</div><ol class="tape-lines">${lines.map((l, i) => `<li><span class="tape-n">${i + 1}</span><span class="tape-text">${esc(l)}</span></li>`).join("")}</ol></div></section>`;
+      }
+      function readRegistration() {
+        return {
+          name: $("#template-name").value.trim(),
+          address: $("#template-address").value.trim(),
+          runner: $("#runner-image").value.trim(),
+        };
+      }
+      function showRegistrationError(message) {
+        registerError = message;
+        registerValidated = false;
+        $("#registration-error").textContent = message;
+        $("#registration-result").textContent = "";
+        $('[data-action="save-registration"]').disabled = true;
+      }
+      function apply(w) {
+        const outside = w.selection.filter((p) => data.outside.includes(p));
+        if (outside.length) {
+          w.apply = "failed";
+          w.failure =
+            outside.join(", ") +
+            " is outside the operator key’s grant. No binding request was sent.";
+        } else if (w.selection.length === 0 && !w.unbound) {
+          w.apply = "failed";
+          w.failure =
+            "Wyrwood refused the change: a binding needs at least one policy. Your empty selection is saved; the binding is unchanged.";
+          w.lastLog = [
+            "bind: empty selection sent to Wyrwood",
+            "binding-refused: a binding needs at least one policy",
+          ];
+        } else if (applyOutcome === "pending") {
+          w.apply = "pending";
+          w.failure =
+            "Wyrwood saved the change, but OpenBao has not applied it. Apply again to finish.";
+          applyOutcome = "applied";
+        } else {
+          w.apply = "applied";
+          w.failure = "";
+          w.applied = [...w.selection];
+          w.lastLog = [
+            w.unbound
+              ? "bind: no current container name; no binding request"
+              : "bind: applied " + w.selection.join(", "),
+          ];
+          data.jobs.unshift(w.name + " apply policies");
+        }
+      }
+      $("#scene").innerHTML = scenes
+        .map(([value, label]) => `<option value="${value}">${label}</option>`)
+        .join("");
+      $("#scene").addEventListener("change", (e) => {
+        fixture(e.target.value);
+        history.replaceState(null, "", "#" + route);
+      });
+      $("#reset").addEventListener("click", () => {
+        fixture("workspaces");
+        history.replaceState(null, "", "#workspaces");
+        toast("Mockup reset");
+      });
+      window.addEventListener("hashchange", () => {
+        route = location.hash.slice(1) || "workspaces";
+        render(true);
+      });
+      document.addEventListener("input", (e) => {
+        if (e.target.closest("#register-form")) {
+          registerValidated = false;
+          registerError = "";
+          $("#registration-error").textContent = "";
+          $("#registration-result").textContent = "";
+          $('[data-action="save-registration"]').disabled = true;
+        }
+        if (e.target.closest("#settings-form"))
+          $("#settings-draft").textContent = "Unsaved changes";
+        if (e.target.id.startsWith("version-")) {
+          $('[data-action="save-version"]').disabled = true;
+          $("#version-result-" + e.target.id.slice(8)).textContent = "";
+        }
+        if (e.target.id === "workspace-name") newDraft.name = e.target.value;
+      });
+      document.addEventListener("change", (e) => {
+        const input = e.target;
+        if (input.dataset.policy) {
+          const context = input.dataset.context,
+            selection =
+              context === "new"
+                ? newDraft.selection
+                : (policyDrafts[context] ??= {
+                    selection: [...workspace(context).selection],
+                    error: "",
+                  }).selection,
+            p = input.dataset.policy;
+          if (input.type === "radio") {
+            const g = data.groups.find((g) => g.members.includes(p));
+            for (const item of g.members) {
+              const at = selection.indexOf(item);
+              if (at >= 0) selection.splice(at, 1);
+            }
+          }
+          const at = selection.indexOf(p);
+          if (input.checked && at < 0) selection.push(p);
+          if (!input.checked && at >= 0) selection.splice(at, 1);
+          if (context !== "new")
+            $("#draft-" + context).textContent = "Unsaved changes";
+        }
+        if (input.name === "template") newDraft.template = input.value;
+      });
+      document.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-action]");
+        if (!b) return;
+        const action = b.dataset.action,
+          id = b.dataset.id,
+          name = b.dataset.name,
+          t = template(id),
+          w = workspace(name);
+        if (action === "refresh") {
+          toast("Workspaces refreshed");
+        }
+        if (action === "open-register") {
+          registerOpen = true;
+          registerValidated = false;
+          registerError = "";
+          render();
+          $("#template-name").focus();
+        }
+        if (action === "validate-registration") {
+          const r = readRegistration();
+          if (!r.name) return showRegistrationError("Enter a display name.");
+          if (
+            !/^https:\/\/|^git@|^ssh:\/\//.test(r.address) ||
+            /https:\/\/[^/]*@/.test(r.address)
+          ) {
+            $("#template-address").value = "";
+            return showRegistrationError(
+              "Address check failed: use a supported Git address without embedded credentials.",
+            );
+          }
+          if (r.address.includes("missing-definition"))
+            return showRegistrationError(
+              "Definition check failed: .devcontainer/devcontainer.json is missing.",
+            );
+          if (data.templates.some((t) => t.address === r.address))
+            return showRegistrationError(
+              "This template is already registered.",
+            );
+          registerValidated = true;
+          registerError = "";
+          $("#registration-error").textContent = "";
+          $("#registration-result").textContent = "Checks passed · 1.0.0";
+          $('[data-action="save-registration"]').disabled = false;
+        }
+        if (action === "save-registration" && registerValidated) {
+          const r = readRegistration();
+          let id =
+            r.name
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-|-$/g, "") || "template";
+          while (template(id)) id += "-2";
+          data.templates.push({
+            id,
+            name: r.name,
+            address: r.address,
+            runner: r.runner,
+            current: "1.0.0",
+            newest: "1.0.0",
+            check: "Checked just now",
+          });
+          registerOpen = false;
+          render();
+          toast("Template registered");
+        }
+        if (action === "check-versions") {
+          t.check = "Checking versions…";
+          render();
+          setTimeout(() => {
+            t.check = "Checked just now";
+            t.newest = "1.1.0";
+            render();
+            toast("Version check complete");
+          }, 650);
+        }
+        if (action === "template-upgrade" || action === "edit-template") {
+          templateEdit = templateEdit === id ? null : id;
+          render();
+        }
+        if (action === "validate-version") {
+          $("#version-result-" + id).textContent =
+            "Checks passed · " + $("#version-" + id).value;
+          $('[data-action="save-version"][data-id="' + id + '"]').disabled =
+            false;
+        }
+        if (action === "save-version") {
+          t.current = $("#version-" + id).value;
+          t.moved = false;
+          templateEdit = null;
+          render();
+          toast("Current version saved");
+        }
+        if (action === "save-template") {
+          t.name = $("#edit-name").value.trim() || t.name;
+          t.runner = $("#edit-runner").value;
+          templateEdit = null;
+          render();
+          toast("Template saved");
+        }
+        if (action === "remove-template") {
+          const used = data.workspaces.filter((w) => w.template === id);
+          if (used.length) {
+            t.removeError =
+              "Cannot remove " +
+              t.name +
+              ": used by " +
+              used.map((w) => w.name).join(", ") +
+              ".";
+            render();
+          } else {
+            data.templates = data.templates.filter((x) => x.id !== id);
+            render();
+            toast("Template removed");
+          }
+        }
+        if (action === "toggle-policies") {
+          openPanel = openPanel === name ? null : name;
+          if (!policyDrafts[name])
+            policyDrafts[name] = { selection: [...w.selection], error: "" };
+          render();
+        }
+        if (action === "save-selection") {
+          const draft = policyDrafts[name] || {
+            selection: [...w.selection],
+            error: "",
+          };
+          draft.error = choiceErrors(draft.selection, false, w.selection);
+          policyDrafts[name] = draft;
+          if (!draft.error) {
+            w.selection = [...new Set([...draft.selection, ...data.required])];
+            apply(w);
+            policyDrafts[name] = { selection: [...w.selection], error: "" };
+          }
+          render();
+          if (!draft.error && w.apply === "applied") toast("Policies applied");
+        }
+        if (action === "apply-again") {
+          apply(w);
+          render();
+          if (w.apply === "applied") toast("Policies applied");
+        }
+        if (action === "toggle-running") {
+          w.state = w.state === "Running" ? "Stopped" : "Running";
+          data.jobs.unshift(
+            w.name + " " + (w.state === "Running" ? "start" : "stop"),
+          );
+          render();
+        }
+        if (action === "rebuild") {
+          data.jobs.unshift(w.name + " rebuild");
+          render();
+          toast("Rebuild completed");
+        }
+        if (action === "branch") {
+          b.outerHTML = `<form class="apply-branch" data-workspace="${name}"><input name="branch" aria-label="Branch name for ${name}" placeholder="review/workspace" required><button>Apply</button></form>`;
+        }
+        if (action === "delete-workspace") {
+          const li = b.closest(".entry");
+          if (!$(".delete-form", li)) {
+            li.insertAdjacentHTML(
+              "beforeend",
+              `<form class="delete-form entry-error" data-name="${name}"><p>Delete ${name}? Ignored files are not backed up.</p><label>Workspace name<input name="confirmation" required autocomplete="off"></label><button class="danger">Delete workspace</button><p class="error" role="alert"></p></form>`,
+            );
+            $("input", li.querySelector(".delete-form")).focus();
+          }
+        }
+        if (action === "add-group") {
+          readSettingsDraft();
+          groupDraft = { name: "", mode: "multi", members: [] };
+          render();
+          $("#settings-draft").textContent = "Unsaved changes";
+        }
+        if (action === "remove-group") {
+          readSettingsDraft();
+          if (b.dataset.index === "new") groupDraft = null;
+          else settingsDraft.groups.splice(Number(b.dataset.index), 1);
+          render();
+          $("#settings-draft").textContent = "Unsaved changes";
+        }
+      });
+      function readSettingsDraft() {
+        const groups = $$("[data-group]")
+          .filter((el) => el.dataset.group !== "new")
+          .map((el) => ({
+            name: $("[data-group-name]", el).value,
+            mode: $("[data-group-mode]", el).value,
+            members: $$("[data-group-member]:checked", el).map(
+              (x) => x.dataset.groupMember,
+            ),
+          }));
+        settingsDraft = {
+          required: $$("[data-required]:checked").map(
+            (x) => x.dataset.required,
+          ),
+          groups,
+        };
+        const fresh = $('[data-group="new"]');
+        if (fresh)
+          groupDraft = {
+            name: $("[data-group-name]", fresh).value,
+            mode: $("[data-group-mode]", fresh).value,
+            members: $$("[data-group-member]:checked", fresh).map(
+              (x) => x.dataset.groupMember,
+            ),
+          };
+      }
+      document.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const f = e.target;
+        if (f.id === "register-form") {
+          return;
+        }
+        if (f.id === "create-form") {
+          newDraft.name = $("#workspace-name").value.trim();
+          const t = template(newDraft.template);
+          newDraft.error = choiceErrors(newDraft.selection, true);
+          if (!t) newDraft.error = "Choose a registered template.";
+          else if (t.moved)
+            newDraft.error =
+              "The current tag moved. Validate and save it on Templates first.";
+          if (data.workspaces.some((w) => w.name === newDraft.name))
+            newDraft.error =
+              "A workspace named " + newDraft.name + " already exists.";
+          if (newDraft.error) {
+            $("#create-error").textContent = newDraft.error;
+            return;
+          }
+          go("new/interview");
+        }
+        if (f.id === "upgrade-form") {
+          reanswer = $("#reanswer").checked;
+          go("upgrade/" + f.dataset.name + "/interview");
+        }
+        if (f.id === "interview-form") {
+          if (f.dataset.upgrade === "true") {
+            const w = workspace(f.dataset.name);
+            w.version = template(w.template).current;
+            data.jobs.unshift(w.name + " upgrade");
+            go("upgrade/" + w.name + "/done");
+          } else {
+            const w = {
+              name: newDraft.name,
+              state: "Running",
+              version: template(newDraft.template).current,
+              template: newDraft.template,
+              selection: [...newDraft.selection],
+              applied: [...newDraft.selection],
+              apply: "applied",
+            };
+            data.workspaces.push(w);
+            data.jobs.unshift(w.name + " create");
+            go("new/done");
+          }
+        }
+        if (f.id === "settings-form") {
+          const required = $$("[data-required]:checked").map(
+              (x) => x.dataset.required,
+            ),
+            groups = $$("[data-group]").map((el) => ({
+              name: $("[data-group-name]", el).value.trim(),
+              mode: $("[data-group-mode]", el).value,
+              members: $$("[data-group-member]:checked", el).map(
+                (x) => x.dataset.groupMember,
+              ),
+            })),
+            error = $("#settings-error");
+          const used = new Set(required);
+          for (const g of groups) {
+            if (!g.name || !g.members.length) {
+              error.textContent =
+                "Give every group a name and at least one policy.";
+              return;
+            }
+            for (const p of g.members) {
+              if (used.has(p)) {
+                error.textContent =
+                  p + " can be required or in one group only.";
+                return;
+              }
+              if (data.outside.includes(p)) {
+                error.textContent =
+                  p +
+                  " is outside the operator key’s grant. No job was started.";
+                return;
+              }
+              used.add(p);
+            }
+          }
+          if (new Set(groups.map((g) => g.name)).size !== groups.length) {
+            error.textContent = "Group names must be unique.";
+            return;
+          }
+          data.required = required;
+          data.groups = groups;
+          groupDraft = null;
+          settingsDraft = null;
+          for (const w of data.workspaces) {
+            const added = required.filter((p) => !w.selection.includes(p));
+            w.selection = [...new Set([...w.selection, ...required])];
+            if (added.length && w.state !== "No folder") apply(w);
+          }
+          policyDrafts = {};
+          render();
+          toast("Policy settings saved");
+        }
+        if (f.classList.contains("apply-branch")) {
+          data.jobs.unshift(f.dataset.workspace + " apply branch");
+          render();
+          toast("Branch applied");
+        }
+        if (f.classList.contains("delete-form")) {
+          if (f.elements.confirmation.value !== f.dataset.name) {
+            $(".error", f).textContent =
+              "Type " + f.dataset.name + " to delete it.";
+            return;
+          }
+          data.workspaces = data.workspaces.filter(
+            (w) => w.name !== f.dataset.name,
+          );
+          render();
+          toast("Workspace deleted");
+        }
+      });
+      seed();
+      fixture(location.hash.slice(1) || "workspaces");
+    </script>
+  </body>
+</html>
