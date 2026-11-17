@@ -288,7 +288,8 @@ proposed-design:
     takes the forms and credentials the user documentation lists under
     "Templates" (see git-and-credentials and github-app), names the
     template's repository and folder, and has either no ref or a version's
-    tag, which then is the current version; any other ref is refused.
+    tag, which then is the current version; the `version` check refuses an
+    address whose ref is anything else.
     Menagerie stores the address without its ref, as the address route's
     `base`. Registration runs the minimum checks in this order and refuses
     the template at the first that fails, naming the check: `address`, the
@@ -593,8 +594,9 @@ proposed-design:
     `policy-outside-grant`, naming each, with no request to Wyrwood, so
     Menagerie never asks Wyrwood for a policy outside the grant. With no
     current container name it records the revision, an empty selection
-    included, because the `bind` step of the workspace's next provisioning
-    job binds the selection, and that step refuses an empty one. With a
+    included, because the workspace's next provisioning job binds the
+    selection, and its `read-definition` step refuses an empty one as
+    `provisioning-invalid`. With a
     current name, an empty selection fails the job as
     `provisioning-invalid` with no request; otherwise the job brings the
     binding of that name to the selection as binding-convergence says. A selection change starts the job at once when
@@ -1225,7 +1227,12 @@ proposed-design:
     its containers. A declared name that a container outside the workspace
     holds is not taken. A name or key that two workspaces would hold goes to
     the one whose declaration names it, and the start log names the other.
-    The folder a retirement record names as being removed carries over. The
+    Each imported name is recorded on `provisioning.wyrwood.agent`. The name
+    the declaration names, once it has passed these checks, is the
+    workspace's current name, so an apply changes a running workspace's
+    binding with no start or rebuild; a name only a retirement record or a
+    container names is not current, and `retire` takes it. The folder a
+    retirement record names as being removed carries over. The
     retirement record files are removed once the transaction commits.
     3. Templates: an entry whose address the template service refuses, a
     password in it included, is skipped, and the start log names its `id`
@@ -1252,9 +1259,13 @@ proposed-design:
     left, Menagerie reads the binding of
     that name and takes its policies and values, with the required policies
     added, as the selection; the binding then holds it or the next apply
-    makes it hold it. A binding that Wyrwood does not show gives the
-    policies and values of the declaration's legacy members, and no
-    declaration gives none. The start log names each imported value that is
+    makes it hold it. A binding that Wyrwood does not show, because none
+    exists or because the grant hides it, gives the policies and values of
+    the declaration's legacy members, and no declaration gives none. A
+    hidden binding that the grant later covers then has its policies
+    replaced by that selection at the next apply, as
+    let-menagerie-decide-each-binding decides; until then binding-convergence
+    fails the workspace's jobs as `binding-outside-grant`. The start log names each imported value that is
     not the workspace's name, so an operator sees a workspace whose values
     reach past its own key. While Wyrwood cannot answer, the import waits,
     and a job that would bind or change that workspace's binding fails as
@@ -1372,8 +1383,10 @@ proposed-design:
     last policy is refused. A workspace whose create waits for answers stays
     in Menagerie's data while the list is refreshed. An unbound workspace
     gives up its last ordinary policy, and its apply succeeds without a
-    request to Wyrwood. A binding an operator removed and made again under
-    the workspace's name is found by its name and converged on. A selection
+    binding request to Wyrwood. A binding an operator removed and made again under
+    the workspace's name is found by its name and converged on. On a host
+    taken over from the previous release, adding a policy to a workspace
+    that runs changes its binding at once, with no start or rebuild. A selection
     change made before a workspace's selection was imported is refused as
     stale once the import runs, and refused while Wyrwood cannot answer. Apply branch refuses a
     branch whose applied record names an older version. An address with a
@@ -1418,22 +1431,26 @@ proposed-design:
     19), and that the data volume belongs in the host's backup (task 19).
   pending-decisions: >-
     Three decisions wait for the operator on wyrd-company/menagerie#88; the
-    design follows each recommendation, and each answer changes only the
+    design follows each recommendation, and each answer changes the
     sections named. Q1, Menagerie's selection replaces an edit made in
     Wyrwood (let-menagerie-decide-each-binding): the alternative, adopting
     such edits, changes policy-authority, workspace-policies,
     policy-application, binding-convergence, provisioning-steps 3,
-    first-start-import 5, screens and verification, with tasks 24 and 22.
+    first-start-import 5, menagerie-data (the selection and applied
+    revisions), screens, user-documentation and verification, with tasks
+    24 and 22.
     Q3, every provisioned workspace gets a key
     (issue-a-key-to-every-provisioned-workspace): the alternative, a key
     only for a qualifying selection, changes workspace-policies,
     provisioning-identity, provisioning-steps 2, policy-application,
-    provisioning-retries and first-start-import 5, with tasks 22 and 24.
+    provisioning-retries, first-start-import 5, menagerie-data (the key
+    identity), user-documentation and verification, with tasks 22 and 24.
     Q6, a bound workspace keeps at least one policy
     (keep-a-policy-on-every-bound-workspace): the alternative, unbinding a
     workspace whose selection empties, changes workspace-policies,
-    create-flow, binding-convergence, provisioning-steps 1 and
-    policy-application, with task 24. The contract changes they own carry
+    create-flow, binding-convergence, provisioning-steps 1,
+    policy-application, user-documentation (the last policy) and
+    verification, with task 24. The contract changes they own carry
     the same task numbers.
   contract-changes: |-
     The specifications and their assets change with the code their contract
@@ -1569,7 +1586,8 @@ proposed-design:
       that names what failed and never quotes the address; 503
       `template-service-unavailable`. An address without a ref takes the
       newest version, and the `version` check is that the repository has at
-      least one version.
+      least one version and that an address's ref, when it has one, is a
+      version's tag.
     - [20] `POST /api/templates/{id}/upgrades` with `{"version"}`: the
       template service lists the repository's versions, and the version
       must be one of them newer than the current one, else 409
