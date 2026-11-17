@@ -76,6 +76,7 @@ func TestPolicyHTTPUnavailableAndRefusals(t *testing.T) {
 	}{
 		{`{"required":["missing","outside"],"groups":[],"revision":0}`, "policy-outside-grant", 422},
 		{`{"required":[],"groups":[{"name":"SSH","mode":"other","policies":["one"]}],"revision":0}`, "invalid-settings", 422},
+		{`{"required":[],"groups":[{"id":0,"name":"SSH","mode":"single","policies":["one"]}],"revision":0}`, "invalid-settings", 422},
 		{`{"required":[],"groups":[],"revision":1}`, "settings-changed", 409},
 		{`{"required":[],"groups":[]}`, "invalid-request", 400},
 		{`{"required":[],"groups":[],"revision":0} {}`, "invalid-request", 400},

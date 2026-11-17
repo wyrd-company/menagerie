@@ -84,9 +84,14 @@ func (s *Server) listPolicies(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) savePolicySettings(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Required *[]string            `json:"required"`
-		Groups   *[]store.PolicyGroup `json:"groups"`
-		Revision *int64               `json:"revision"`
+		Required *[]string `json:"required"`
+		Groups   *[]struct {
+			ID       *int64   `json:"id"`
+			Name     string   `json:"name"`
+			Mode     string   `json:"mode"`
+			Policies []string `json:"policies"`
+		} `json:"groups"`
+		Revision *int64 `json:"revision"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
 	decoder.DisallowUnknownFields()
@@ -111,7 +116,19 @@ func (s *Server) savePolicySettings(w http.ResponseWriter, r *http.Request) {
 	for _, p := range policies {
 		allowed = append(allowed, p.Name)
 	}
-	settings, err := s.opts.Data.SavePolicySettings(r.Context(), store.PolicySettings{Required: *request.Required, Groups: *request.Groups, Revision: *request.Revision}, allowed)
+	groups := make([]store.PolicyGroup, 0, len(*request.Groups))
+	for _, group := range *request.Groups {
+		g := store.PolicyGroup{Name: group.Name, Mode: group.Mode, Policies: group.Policies}
+		if group.ID != nil {
+			if *group.ID <= 0 {
+				writeError(w, 422, apiError{Kind: "invalid-settings", Message: "A group id must name an existing group; omit id for a new group."})
+				return
+			}
+			g.ID = *group.ID
+		}
+		groups = append(groups, g)
+	}
+	settings, err := s.opts.Data.SavePolicySettings(r.Context(), store.PolicySettings{Required: *request.Required, Groups: groups, Revision: *request.Revision}, allowed)
 	if err != nil {
 		var refusal *store.PolicyError
 		if errors.As(err, &refusal) {
