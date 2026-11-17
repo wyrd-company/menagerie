@@ -197,7 +197,7 @@ export function PoliciesScreen() {
             <div>
               <button
                 type="button"
-                className="ghost"
+                className="ghost group-add"
                 onClick={() =>
                   update({
                     ...draft,
