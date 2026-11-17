@@ -1518,9 +1518,6 @@ proposed-design:
   contract-provisioning-declaration: |-
     `provisioning-declaration.yml` and
     `assets/provisioning-declaration/menagerie-customization.schema.json`:
-    - [19] Prose and validation criteria: a container name or Xolotl key
-      that Menagerie's data holds for another workspace is refused, in place
-      of one that another workspace declares. The schema does not change.
     - [24] Schema: the root keeps `required: ["wyrwood"]` and
       `additionalProperties: false` and has only `wyrwood`; `wyrwood` has
       only `accessGroup`, required, with its rule (an integer from 0 to
@@ -1579,25 +1576,9 @@ proposed-design:
     - [24] `job-limits.operations` gains `apply-policies` in the schema and
       in the prose's list of operations, and `alerts` gives
       `apply-policies` the console address `/?job={id}`.
-    - [19], [22]: no change.
+    - [22]: no change.
   contract-workspace-api: |-
     `workspace-api.yml` and `assets/workspace-api/openapi.yaml`:
-    - [19] `GET /api/workspaces` also lists each workspace whose folder is
-      gone and that holds a container name or a Xolotl key in Menagerie's
-      data, with `Workspace.state` `no-folder`, a new enum value, and
-      `containerId` null; `delete` runs on such a workspace instead of
-      answering 404 `workspace-not-found`. A `create` is refused 409
-      `workspace-exists` while the data holds a workspace of its name, one
-      being created included. The prose of delete and create reads what a
-      workspace holds from Menagerie's data, unbinds by the recorded agent
-      and container name, and `retire` retires what the data holds and the
-      definition no longer declares, in place of the retirement record, and
-      an unbind's warning is shown and confirms the removal; a
-      restart keeps Menagerie's data and removes a create's data that has
-      no folder.
-    - [19] New job kind: `binding-outside-grant`, for a delete or a
-      `retire` whose unbind Wyrwood refuses as outside the grant; the
-      binding's name stays in the data.
     - [20] `GET /api/templates` lists the registered templates sorted by
       name, then by `id`, in place of the configuration's order.
     - [20] `Template` gains required `address` (string, the address without
