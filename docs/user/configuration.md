@@ -249,8 +249,8 @@ needs Wyrwood 0.7.0 or later. [Prepare the host](install.md#provisioning) first.
 
 Each connection and each request has 30 seconds. An operator key with no approval,
 or a call outside its grant, fails the job with the operation and the container
-name. An operator key with no approval also names the key's fingerprint and is
-recorded as pending in Wyrwood under `menagerie-<agent>`. If `ssh-agent.sock`
+name. An operator key with no approval also names the key's fingerprint. Wyrwood
+records a newly offered key as pending under `menagerie-<agent>`. If `ssh-agent.sock`
 does not offer the configured key, the error identifies the configured key
 (and its fingerprint when selected by public key or fingerprint); check that
 Menagerie's Wyrwood policy offers it.
