@@ -1,0 +1,227 @@
+// ---
+// relationships:
+//   implements: [menagerie, keep-menagerie-data-in-sqlite]
+//   references: menagerie-data-loss
+// ---
+
+// Package store keeps Menagerie's own data in one SQLite database that only
+// the workspace service opens: the workspaces, each container name Menagerie
+// bound and each Xolotl key it issued, and the marks of the first-start
+// imports. Every change is one transaction and foreign keys are enforced, so
+// a constraint, not a scan of files, keeps a container name or a key with one
+// workspace at a time. The schema's version is the database's user_version: an
+// open upgrades an older schema in one transaction and refuses a newer one. The
+// database holds no secret.
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+// DefaultPath is the database in Menagerie's data volume, in a folder private
+// to the services' user, which no devcontainer and no throwaway container
+// reaches.
+const DefaultPath = "/var/lib/menagerie/state/menagerie.db"
+
+// migrations bring the schema from the version of their index to the next. A
+// later task appends its own; none is ever changed once released.
+var migrations = []string{
+	// 1: the workspaces, with the being-created mark and the folder a delete
+	// began to remove; the container names and Xolotl keys provisioned for
+	// them; and the marks of the first-start imports.
+	`CREATE TABLE workspaces (
+		name TEXT PRIMARY KEY CHECK (name != ''),
+		creating INTEGER NOT NULL DEFAULT 0 CHECK (creating IN (0, 1)),
+		removing TEXT CHECK (removing != '')
+	);
+	CREATE TABLE container_names (
+		name TEXT PRIMARY KEY CHECK (name != ''),
+		workspace TEXT NOT NULL REFERENCES workspaces(name),
+		agent TEXT CHECK (agent != ''),
+		current INTEGER NOT NULL DEFAULT 0 CHECK (current IN (0, 1))
+	);
+	CREATE INDEX container_names_workspace ON container_names(workspace);
+	CREATE UNIQUE INDEX container_names_current ON container_names(workspace) WHERE current = 1;
+	CREATE TABLE xolotl_keys (
+		policy TEXT NOT NULL CHECK (policy != ''),
+		name TEXT NOT NULL CHECK (name != ''),
+		workspace TEXT NOT NULL REFERENCES workspaces(name),
+		PRIMARY KEY (policy, name)
+	);
+	CREATE INDEX xolotl_keys_workspace ON xolotl_keys(workspace);
+	CREATE TABLE imports (
+		id INTEGER PRIMARY KEY,
+		done_at TEXT NOT NULL
+	);`,
+}
+
+// SchemaVersion is the version of the schema this Menagerie reads and writes.
+var SchemaVersion = len(migrations)
+
+// ErrNewer means the database was written by a newer Menagerie.
+var ErrNewer = errors.New("Menagerie's data is newer than this Menagerie")
+
+// ErrTaken means a container name or a Xolotl key belongs to another
+// workspace. A *TakenError carries it.
+var ErrTaken = errors.New("taken by another workspace")
+
+// ErrExists means the data holds a workspace of that name.
+var ErrExists = errors.New("the workspace exists in Menagerie's data")
+
+// TakenError says which workspace holds a container name or a key.
+type TakenError struct {
+	// What is "container name <name>" or "Xolotl key <policy>/<name>".
+	What string
+	// Holder is the workspace that holds it.
+	Holder string
+}
+
+func (e *TakenError) Error() string {
+	return fmt.Sprintf("%s belongs to workspace %s in Menagerie's data", e.What, e.Holder)
+}
+
+// Is makes errors.Is match ErrTaken.
+func (e *TakenError) Is(target error) bool { return target == ErrTaken }
+
+// Store is Menagerie's data.
+type Store struct {
+	db   *sql.DB
+	path string
+}
+
+// Open opens the database at path, creating it and its folder when missing,
+// and upgrades an older schema before it returns. It refuses a database whose
+// schema is newer than SchemaVersion.
+func Open(path string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("Menagerie's data: %w", err)
+	}
+	// One connection: every change is serialized, and foreign keys, which
+	// SQLite sets per connection, hold for all of them.
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)&_txlock=immediate")
+	if err != nil {
+		return nil, fmt.Errorf("Menagerie's data %s: %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+	s := &Store{db: db, path: path}
+	if err := s.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("Menagerie's data %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("Menagerie's data %s: %w", path, err)
+	}
+	return s, nil
+}
+
+// Close closes the database.
+func (s *Store) Close() error { return s.db.Close() }
+
+// Path is the database's file.
+func (s *Store) Path() string { return s.path }
+
+func (s *Store) migrate() error {
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return fmt.Errorf("Menagerie's data %s: read the schema version: %w", s.path, err)
+	}
+	if version > SchemaVersion {
+		return fmt.Errorf("%w: %s has schema version %d, and this Menagerie reads up to %d; run the newer Menagerie, or restore the data volume from a backup this release wrote", ErrNewer, s.path, version, SchemaVersion)
+	}
+	if version == SchemaVersion {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("Menagerie's data %s: %w", s.path, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for v := version; v < SchemaVersion; v++ {
+		if _, err := tx.Exec(migrations[v]); err != nil {
+			return fmt.Errorf("Menagerie's data %s: upgrade the schema to version %d: %w", s.path, v+1, err)
+		}
+	}
+	// PRAGMA takes no parameter; the version is this package's own number.
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, SchemaVersion)); err != nil {
+		return fmt.Errorf("Menagerie's data %s: %w", s.path, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("Menagerie's data %s: upgrade the schema: %w", s.path, err)
+	}
+	return nil
+}
+
+// Tx is one transaction on the data.
+type Tx struct {
+	ctx context.Context
+	tx  *sql.Tx
+}
+
+// Update runs fn in one transaction, which commits when fn returns nil and
+// changes nothing otherwise. fn must not call the Store: the transaction holds
+// its only connection.
+func (s *Store) Update(ctx context.Context, fn func(*Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("Menagerie's data: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(&Tx{ctx: ctx, tx: tx}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("Menagerie's data: %w", err)
+	}
+	return nil
+}
+
+func (t *Tx) exec(query string, args ...any) (sql.Result, error) {
+	result, err := t.tx.ExecContext(t.ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("Menagerie's data: %w", err)
+	}
+	return result, nil
+}
+
+// Import runs fn and records the import's mark in one transaction, unless the
+// mark is already there. It says whether fn ran.
+func (s *Store) Import(ctx context.Context, id int, fn func(*Tx) error) (bool, error) {
+	ran := false
+	err := s.Update(ctx, func(tx *Tx) error {
+		var done int
+		if err := tx.tx.QueryRowContext(ctx, `SELECT count(*) FROM imports WHERE id = ?`, id).Scan(&done); err != nil {
+			return fmt.Errorf("Menagerie's data: %w", err)
+		}
+		if done > 0 {
+			return nil
+		}
+		if err := fn(tx); err != nil {
+			return err
+		}
+		ran = true
+		_, err := tx.exec(`INSERT INTO imports (id, done_at) VALUES (?, ?)`, id, time.Now().UTC().Format(time.RFC3339))
+		return err
+	})
+	return ran && err == nil, err
+}
+
+// nullable stores "" as NULL.
+func nullable(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}

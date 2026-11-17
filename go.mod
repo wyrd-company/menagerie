@@ -18,6 +18,7 @@ require (
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.62.0
 )
 
 require (
@@ -68,6 +69,7 @@ require (
 	github.com/docker/buildx v0.38.1 // indirect
 	github.com/docker/docker-credential-helpers v0.9.12 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
+	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fvbommel/sortorder v1.2.0 // indirect
@@ -130,6 +132,7 @@ require (
 	github.com/lestrrat-go/httprc/v3 v3.0.5 // indirect
 	github.com/lestrrat-go/jwx/v3 v3.1.1 // indirect
 	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.30 // indirect
 	github.com/mattn/go-shellwords v1.0.13 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
@@ -147,6 +150,7 @@ require (
 	github.com/moby/sys/signal v0.7.1 // indirect
 	github.com/moby/term v0.5.2 // indirect
 	github.com/morikuni/aec v1.1.0 // indirect
+	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/open-policy-agent/opa v1.19.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -157,6 +161,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.11.0 // indirect
@@ -221,5 +226,8 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
+	modernc.org/libc v1.80.1 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.12.1 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
