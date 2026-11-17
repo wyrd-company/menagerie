@@ -148,9 +148,10 @@ group Wyrwood's sockets are open only to Wyrwood's own user.
 
 To let Menagerie provision workspaces, prepare the host once. After this, a
 [create](usage.md#a-workspace-with-a-provisioning-declaration) needs no step in a
-CLI or a web interface. Keep Menagerie's data volume: the retirement records are
-in its `provisioning` folder, and what a lost record named stays until an operator
-removes it.
+CLI or a web interface. Keep Menagerie's data volume in the host's backup:
+Menagerie's data, in its `state` folder, holds each binding and key Menagerie
+provisioned for a workspace, and what lost data named stays until an operator
+removes it in the Wyrwood and Xolotl web interfaces.
 
 1. Create an Ed25519 Transit key, here `menagerie-operator`, and offer it in
    Menagerie's policy beside any SSH key. Also grant `read` on the secret that
@@ -226,7 +227,7 @@ edit both files.
 | `SSH_AUTH_SOCK=/run/wyrwood/ssh-agent.sock` | With an SSH identity: Toha's Git transport runs the image's `ssh` client with this agent. Leave it out with only a GitHub App. |
 | `config.yml` at `/etc/menagerie/config.yml` | Both services read it. |
 | `SSL_CERT_FILE` and the bundle it names | Optional: a Git server whose certificate a private authority signed. See [Git hosts](#git-hosts). |
-| A volume at `/var/lib/menagerie` | Toha's template cache, the template service's session key, the services' home and the folder Toha builds an upgrade's candidate in. Without it they are lost when the container is recreated. |
+| A volume at `/var/lib/menagerie` | Menagerie's data in `state/menagerie.db`: each binding and key Menagerie provisioned for a workspace. Also Toha's template cache, the template service's session key, the services' home and the folder Toha builds an upgrade's candidate in. Without it they are lost when the container is recreated. Keep the volume in the host's backup. |
 | `restart: unless-stopped` | Docker restarts Menagerie after either service stops. After a host restart the Wyrwood agent starts it: see [After a host restart](#after-a-host-restart). |
 | Port `8080` | The web UI and workspace API. Publish it on a private address only. |
 
@@ -373,8 +374,44 @@ rules.
 
 Pull the new image tag and recreate the container. Running jobs end with the
 container, and job history starts empty; workspace folders, their answers in
-`.toha.json`, their containers and the sign-in configuration remain.
-Everyone signs in again.
+`.toha.json`, their containers, Menagerie's data and the sign-in configuration
+remain. Everyone signs in again.
+
+Back up the `/var/lib/menagerie` volume before an upgrade, with the rest of the
+host. Menagerie's data in it holds what Menagerie provisioned for each workspace,
+and a release refuses to start on data that a newer release wrote, so going back
+needs the backup. A start that finds no data takes back what the workspaces,
+their definitions, their containers and Wyrwood still hold, as the first start
+after an upgrade does.
+
+### The first start that keeps Menagerie's data
+
+The first start of a release that keeps Menagerie's data, after a release that
+did not, takes over what the earlier release kept elsewhere, before it serves and
+with no step by hand:
+
+- every workspace folder;
+- the container names and Xolotl keys in the retirement records of the volume's
+  `provisioning` folder, which it then removes;
+- the container name and the Xolotl key each workspace's definition declares in
+  `customizations.menagerie`, a block that is not valid included. The declared
+  name becomes the workspace's current one, unless a container outside the
+  workspace has it.
+
+When two workspaces would hold one name or key, the start log names both and
+the one that has it, and a provisioning job of the other fails until it is gone.
+Without [`provisioning.wyrwood`](configuration.md#wyrwood-operator-key), the names
+are kept with no Wyrwood agent: a job that would bind or unbind one fails as
+`provisioning-unavailable` until the first start with that section records the
+agent.
+
+Before the upgrade, repair every workspace whose `.devcontainer/devcontainer.json`
+cannot be read, such as one edited by hand so that it no longer parses. At the
+first start, such a workspace keeps the names of its containers,
+when `provisioning.wyrwood` is configured, so that a later job or its delete
+retires them, but its policies are not imported. If you upgrade without the
+repair, pick that workspace's policies again in the interface once its definition
+is repaired.
 
 ## What Menagerie can do to the host
 

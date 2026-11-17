@@ -20,7 +20,11 @@ Every folder in the workspace root is a row, unless its name starts with a
 dot, with its container's state:
 **Running**, **Stopped**, or **No container** for a folder whose
 devcontainer was never created. Containers that belong to no folder in the
-root do not appear. **Refresh** reads the folders and containers again.
+root do not appear. A workspace whose folder is gone, for which Menagerie
+still holds a Wyrwood binding or a Xolotl key, is a row too, marked **No
+folder**: it offers only [**Delete**](#delete-a-workspace), which removes
+them. **Refresh** reads the folders, the containers and Menagerie's data
+again.
 
 Each row has **Stop**, **Start**, **Rebuild**, **Apply branch**, **Upgrade**
 and [**T3 Code token**](#connect-t3-code-to-a-workspace). A commit,
@@ -84,16 +88,19 @@ prepared](install.md#provisioning). The console shows these phases in a create:
 
 1. `read-definition`: the block is read and checked. The job fails as
    `provisioning-invalid` when the block is not valid, when the definition has
-   no `--name` in `runArgs`, and when another workspace holds the container name
-   or the key. The job fails as `provisioning-unavailable` when
+   no `--name` in `runArgs`, when Menagerie holds the container name or the key
+   for another workspace, and when a container of another workspace has the
+   name. The job fails as `provisioning-unavailable` when
    [`provisioning`](configuration.md#provisioning) lacks the section the block
    needs.
 2. `host-prerequisites`, as above.
-3. `issue-key`: the Xolotl key. A key that exists stays as it is, and the
-   console says when it is disabled or expires.
-4. `bind`: the Wyrwood binding. A binding that differs from the definition is
-   removed and made again while the container is stopped, and the console names
-   the fields.
+3. `issue-key`: the Xolotl key, which Menagerie records as the workspace's
+   first. A key that exists stays as it is, and the console says when it is
+   disabled or expires.
+4. `bind`: the Wyrwood binding, whose container name Menagerie records as the
+   workspace's first. A binding that differs from the definition is removed and
+   made again while the container is stopped, and the console names the
+   fields.
 5. `commit` and `backup`, `initialize-command` and `build`, as above.
 6. `create-container`: the container, not started. A bind with an SELinux `z` or
    `Z` option or `bind-create-src` fails here, so such a definition uses neither.
@@ -115,12 +122,20 @@ rebuild and an apply-branch's rebuild run the same steps without the commit and
 backup. A start of a container that exists goes on when Xolotl cannot be
 reached, with a note in the console; any other failure of a step fails the job.
 
-Before an upgrade or an apply-branch changes the definition, Menagerie records the
-container name and key it declares. A job that ends with the devcontainer started
-then runs `retire`: it unbinds each recorded name and revokes each recorded key
-that no workspace declares any more. A definition edited by other means has no
-record, so what it stops declaring stays until an operator removes it in the
-Wyrwood and Xolotl web interfaces.
+Menagerie keeps each container name it binds and each Xolotl key it issues for a
+workspace in its own data, not in the definition, so what it made is known
+however the definition changes later. Any job that ends with the devcontainer
+started, with or without a block, then runs `retire`: it unbinds each name and
+revokes each key the definition no longer declares, every one when the
+definition has no block, and forgets each once Wyrwood or Xolotl confirms it
+gone. So an upgrade, an apply-branch or a hand edit that declares another
+container name binds the new name and retires the old one at the job's end. A
+block that is not valid fails the job in `read-definition` and changes nothing:
+the binding, its name and the container stay as they were. A binding that Wyrwood
+answers is outside the operator key's grant stays, Menagerie keeps its name, and
+the job fails as `binding-outside-grant`, naming it, with the devcontainer
+running; widen the grant or remove the binding in the Wyrwood web interface, then
+start the workspace again.
 
 Before each create, start, rebuild and upgrade, Menagerie creates any missing
 bind source folder inside the workspace folder, so a clone of a backup starts:
@@ -303,18 +318,25 @@ does. When `initializeCommand` fails, the job fails with
 workspace from the host. Ignored files, such as cloned repositories, are not in
 the backup and are lost. The console shows these phases:
 
-1. `read-definition`: the job fails as `delete-refused` while a running container
-   outside the workspace mounts its folder, and as `provisioning-unavailable`
-   when the workspace holds a binding or a key that
-   [`provisioning`](configuration.md#provisioning) cannot reach. Nothing changes.
+1. `read-definition`: what the workspace holds comes from Menagerie's data, never
+   from its definition, so a definition edited so that it no longer parses, or no
+   longer declares its binding and key, still has both removed. The job fails as
+   `delete-refused` while a running container outside the workspace mounts its
+   folder, and as `provisioning-unavailable` when the workspace holds a binding
+   or a key that [`provisioning`](configuration.md#provisioning) cannot reach.
+   Nothing changes.
 2. `stop`: the devcontainer, and for Compose every service of its project.
 3. `commit` and `backup`: tracked and new files, as a commit does. A folder with
    no applied record, such as one whose generation failed, has no backup. A
    failure here removes nothing and leaves the devcontainer stopped.
-4. `unbind`: the Wyrwood binding, when the workspace has one. The console shows
-   a warning, or a token that may stay valid until it expires.
+4. `unbind`: each Wyrwood binding Menagerie holds for the workspace. The console
+   shows a warning, or a token that may stay valid until it expires. A binding
+   that Wyrwood answers is outside the operator key's grant fails the delete as
+   `binding-outside-grant`, naming it, before any container, key or folder is
+   removed, and Menagerie keeps its name: widen the grant or remove the binding
+   in the Wyrwood web interface, then **Delete** again.
 5. `remove-container`: the workspace's containers.
-6. `revoke-key`: the Xolotl key, when the workspace has one.
+6. `revoke-key`: each Xolotl key Menagerie holds for the workspace.
 7. `remove-folder`: the workspace socket's folder, then the workspace folder. A
    throwaway container that runs as root removes the folder, in the
    [runner image](configuration.md#runner-images), which needs `sh`, `mv` and
@@ -330,8 +352,9 @@ volumes and networks, and bind sources outside the folder. A later create of tha
 name copies the branch to `archive/<name>-<UTC stamp>` first. The agent's empty
 consumer directory stays until the next host restart.
 
-A binding or a key that another workspace's definition declares stays, and the
-console says so.
+A workspace marked **No folder** is deleted by the same phases without `stop`,
+`commit` and `backup`, and its `remove-folder` removes only its workspace socket's
+folder. Menagerie forgets the workspace once its folder is gone.
 
 ![The delete form on a row, with the workspace's name typed](assets/delete-workspace.png)
 
