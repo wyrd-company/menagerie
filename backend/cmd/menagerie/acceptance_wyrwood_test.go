@@ -36,7 +36,6 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
-	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 )
 
 const (
@@ -375,7 +374,7 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 		c.t = t
 		checkFailure := func(snap jobs.Snapshot, wants ...string) {
 			t.Helper()
-			if snap.State != jobs.Failed || snap.Error == nil || snap.Error.Kind != provisioning.KindUnavailable {
+			if snap.State != jobs.Failed || snap.Error == nil || snap.Error.Kind != "operation-failed" {
 				t.Fatalf("job ended %s: %+v", snap.State, snap.Error)
 			}
 			for _, want := range wants {
