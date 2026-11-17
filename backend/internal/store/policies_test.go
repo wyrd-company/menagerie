@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -118,6 +119,10 @@ func TestPolicySettingsRejectEachInvalidRuleWithoutChangingData(t *testing.T) {
 			var e *PolicyError
 			if !errors.As(err, &e) || e.Kind != tc.kind {
 				t.Fatalf("%v", err)
+			}
+			rule := map[string]string{"required and group": "both required policies and group", "two groups": "both group", "empty group": "no policy", "duplicate group name": "must be unique", "unknown mode": "unknown mode", "unknown id": "unknown or repeated id", "multiline name": "one line", "outside grant": "missing, outside"}[tc.name]
+			if !strings.Contains(e.Message, rule) {
+				t.Fatalf("refusal does not name rule %q: %s", rule, e.Message)
 			}
 			got, _, err := s.Policies(ctx)
 			if err != nil || got.Revision != 0 || len(got.Names()) != 0 {
