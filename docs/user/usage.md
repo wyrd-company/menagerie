@@ -65,7 +65,8 @@ each group needs at least one policy. **Save** stores the changes together.
 If someone saved settings after you opened the page, your save is refused.
 **Reload settings** reads their changes so you can decide again. A refused
 save shows its error beside **Save** and keeps your edits. If the first read
-fails, **Retry** reads the settings again. Without `provisioning.wyrwood`, the settings controls are disabled.
+fails, **Retry** reads the settings again. Without `provisioning.wyrwood`, the
+settings controls are disabled.
 
 ## Create a workspace
 
