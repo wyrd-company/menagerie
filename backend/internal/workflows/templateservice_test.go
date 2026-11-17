@@ -702,7 +702,12 @@ func TestTemplateServiceFailuresAreVisibleJobs(t *testing.T) {
 		_ = json.Unmarshal([]byte(body), &snap)
 		job, _ := a.manager.Get(snap.JobID)
 		waitWaiting(t, job, 0)
-		if status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"zeta","templateId":"sample-v1"}`); status != 409 || !strings.Contains(body, "workspace-busy") {
+		// The waiting create holds the slot, and its data in Menagerie's data
+		// refuses a second create of the name before any job.
+		if active, ok := a.manager.Active("zeta"); !ok || active.ID() != job.ID() {
+			t.Fatalf("the slot is not held by %s", job.ID())
+		}
+		if status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"zeta","templateId":"sample-v1"}`); status != 409 || !strings.Contains(body, "workspace-exists") {
 			t.Fatalf("%d %s", status, body)
 		}
 	})
