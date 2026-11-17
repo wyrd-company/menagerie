@@ -221,6 +221,9 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 	for i := range rows {
 		selection := selections[rows[i].Name]
 		rows[i].Policies = selection.Policies
+		if rows[i].Policies == nil {
+			rows[i].Policies = []string{}
+		}
 		rows[i].NeedsChoice = settings.NeedsChoice(selection.Policies)
 	}
 	slices.SortFunc(rows, func(a, b workspaceRow) int { return strings.Compare(a.Name, b.Name) })

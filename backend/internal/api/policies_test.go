@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/wyrwood/operator"
 )
@@ -141,4 +144,49 @@ func TestPolicyHTTPExposesOutsideSelectionEvenAfterSettingsRemoval(t *testing.T)
 	if !strings.Contains(r.Body.String(), `"name":"lost","valueNames":[],"inGrant":false`) {
 		t.Fatal(r.Body.String())
 	}
+}
+
+// Deletion can finish after folder discovery but before the policy read.
+func TestWorkspacePoliciesRemainAnArrayAfterConcurrentDeletion(t *testing.T) {
+	f := newFixture(t, nil)
+	f.server.opts.Status = statusFunc(func(ctx context.Context, folder string) (devcontainer.Status, error) {
+		if filepath.Base(folder) == "alpha" {
+			if err := os.Remove(folder); err != nil {
+				return devcontainer.Status{}, err
+			}
+			if err := f.data.RemoveWorkspace(ctx, "alpha"); err != nil {
+				return devcontainer.Status{}, err
+			}
+		}
+		return f.rt.Status(ctx, folder)
+	})
+	r := policyCall(f.server, "GET", "/api/workspaces", "")
+	if r.Code != 200 {
+		t.Fatal(r.Code, r.Body.String())
+	}
+	var body struct {
+		Workspaces []struct {
+			Name        string   `json:"name"`
+			Policies    []string `json:"policies"`
+			NeedsChoice []string `json:"needsChoice"`
+		}
+	}
+	if err := json.Unmarshal(r.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Workspaces) != 3 || body.Workspaces[0].Name != "alpha" {
+		t.Fatal(r.Body.String())
+	}
+	if body.Workspaces[0].Policies == nil || len(body.Workspaces[0].Policies) != 0 || body.Workspaces[0].NeedsChoice == nil {
+		t.Fatal(r.Body.String())
+	}
+	if exists, err := f.data.Exists(context.Background(), "alpha"); err != nil || exists {
+		t.Fatalf("deleted workspace exists=%t: %v", exists, err)
+	}
+}
+
+type statusFunc func(context.Context, string) (devcontainer.Status, error)
+
+func (f statusFunc) Status(ctx context.Context, folder string) (devcontainer.Status, error) {
+	return f(ctx, folder)
 }
