@@ -331,8 +331,12 @@ func (s *Store) BeginCreate(ctx context.Context, name string) error {
 		if claimed {
 			return fmt.Errorf("%w: %s", ErrExists, name)
 		}
-		_, err = t.exec(`INSERT INTO workspaces (name, creating) VALUES (?, 1)
-			ON CONFLICT (name) DO UPDATE SET creating = 1, removing = NULL`, name)
+		// Replace any unclaimed data, including its policy selection. A new
+		// create starts with the current required policies through the trigger.
+		if _, err := t.exec(`DELETE FROM workspaces WHERE name = ?`, name); err != nil {
+			return err
+		}
+		_, err = t.exec(`INSERT INTO workspaces (name, creating) VALUES (?, 1)`, name)
 		return err
 	})
 }

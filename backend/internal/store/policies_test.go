@@ -133,3 +133,29 @@ func TestPolicyNeedsChoice(t *testing.T) {
 		}
 	}
 }
+
+func TestNewCreateReplacesAnUnclaimedSelection(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	if _, err := s.Discover(ctx, []string{"reused"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := s.SavePolicySettings(ctx, PolicySettings{Required: []string{"old"}}, []string{"old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Required = []string{}
+	if _, err := s.SavePolicySettings(ctx, settings, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BeginCreate(ctx, "reused"); err != nil {
+		t.Fatal(err)
+	}
+	_, selections, err := s.Policies(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := selections["reused"]; len(got.Policies) != 0 || got.Revision != 0 {
+		t.Fatalf("new create kept old selection: %+v", got)
+	}
+}
