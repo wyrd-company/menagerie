@@ -206,3 +206,29 @@ func TestPolicySchemaUpgradeKeepsProvisioningData(t *testing.T) {
 		t.Fatalf("%+v %v", selections, err)
 	}
 }
+
+func TestPolicySettingsCannotPropagateALostGroupPolicyByMakingItRequired(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	saved, err := s.SavePolicySettings(ctx, PolicySettings{Groups: []PolicyGroup{{Name: "SSH", Mode: "single", Policies: []string{"lost"}}}}, []string{"lost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Discover(ctx, []string{"alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.SavePolicySettings(ctx, PolicySettings{Required: []string{"lost"}, Revision: saved.Revision}, nil)
+	var refusal *PolicyError
+	if !errors.As(err, &refusal) || refusal.Kind != "policy-outside-grant" || !strings.Contains(refusal.Message, "lost") {
+		t.Fatalf("%v", err)
+	}
+	_, selections, err := s.Policies(ctx)
+	if err != nil || len(selections["alpha"].Policies) != 0 {
+		t.Fatalf("%+v %v", selections, err)
+	}
+	// Retaining the group's member is allowed, so unrelated edits still work.
+	saved.Groups[0].Name = "Renamed SSH"
+	if _, err := s.SavePolicySettings(ctx, saved, nil); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -121,7 +121,7 @@ func (t *Tx) Selection(name string) (Selection, error) {
 }
 
 // SavePolicySettings checks and stores a settings change atomically. Only
-// policies newly added to settings need to be inside the current grant.
+// new required or group memberships need to be inside the current grant.
 // Required policies propagate to every selection, including no-folder and
 // being-created workspaces; removing a requirement retains each selection.
 func (s *Store) SavePolicySettings(ctx context.Context, next PolicySettings, allowed []string) (saved PolicySettings, err error) {
@@ -194,12 +194,34 @@ func (s *Store) SavePolicySettings(ctx context.Context, next PolicySettings, all
 				nextID++
 			}
 		}
+		added := []string{}
+		for _, p := range next.Required {
+			if !slices.Contains(old.Required, p) {
+				added = append(added, p)
+			}
+		}
+		for _, g := range next.Groups {
+			var previous []string
+			for _, before := range old.Groups {
+				if before.ID == g.ID {
+					previous = before.Policies
+					break
+				}
+			}
+			for _, p := range g.Policies {
+				if !slices.Contains(previous, p) {
+					added = append(added, p)
+				}
+			}
+		}
 		outside := []string{}
-		for _, p := range next.Names() {
-			if !slices.Contains(old.Names(), p) && !slices.Contains(allowed, p) {
+		for _, p := range added {
+			if !slices.Contains(allowed, p) {
 				outside = append(outside, p)
 			}
 		}
+		slices.Sort(outside)
+		outside = slices.Compact(outside)
 		if len(outside) > 0 {
 			return &PolicyError{"policy-outside-grant", "Policies outside the operator key's grant or missing in Wyrwood: " + strings.Join(outside, ", ")}
 		}

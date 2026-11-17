@@ -81,8 +81,8 @@ description: >-
   400 `invalid-request`; an older revision 409 `settings-changed`; no
   `provisioning.wyrwood` 409 `provisioning-unavailable`; and an unreadable
   grant or policy list 503 `wyrwood-unavailable`. The grant is read again for
-  each change. A policy newly added to settings outside the grant or absent
-  from Wyrwood answers 422 `policy-outside-grant`, naming every such policy,
+  each change. A policy newly added to required policies or to a group
+  outside the grant or absent from Wyrwood answers 422 `policy-outside-grant`, naming every such policy,
   before any job runs. A referenced policy that leaves the grant remains
   visible and can be removed from settings.
 
