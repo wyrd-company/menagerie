@@ -1507,9 +1507,7 @@ proposed-design:
     current version and its commit, null for an imported template until a
     version check records it, each workspace's template, and import 3; [21]
     the found versions, the last check, each workspace's applied version and
-    commit, and import 4; [24] the binding ID of each container name,
-    each workspace's values, Xolotl key identity, applied revision, apply
-    failure and selection still to be imported, and import 5.
+    commit, and import 4.
     Verification belongs to the task that builds what it checks. [19]: a
     delete after the definition stops parsing or declaring; a delete
     refused by a hidden binding; a create kept while its interview waits;
@@ -1518,44 +1516,10 @@ proposed-design:
     giving `version` included; refused and password addresses; template
     removal; the `templates` import. [21]: version checks on a schedule and
     on request, an outage answered 200, a moved tag, the descent exit, and
-    Apply branch's forward-only check. [24]: binding-convergence's
-    pending, stale, hidden and recreated bindings; an empty selection,
-    unbound and bound, and Wyrwood's refusal recorded as `binding-refused`;
-    the import before a selection change;
-    a running imported workspace and one whose definition does not parse,
-    changed with no rebuild; `MENAGERIE_XOLOTL_KEY`; and
-    `invalid-workspace-name`.
+    Apply branch's forward-only check.
   contract-provisioning-declaration: |-
     `provisioning-declaration.yml` and
     `assets/provisioning-declaration/menagerie-customization.schema.json`:
-    - [24] Schema: the root keeps `required: ["wyrwood"]` and
-      `additionalProperties: false` and has only `wyrwood`; `wyrwood` has
-      only `accessGroup`, required, with its rule (an integer from 0 to
-      4294967294), and `additionalProperties: false`. `wyrwood.policies`,
-      `wyrwood.values` and `xolotl` leave the schema. The schema states what
-      a template renders; Menagerie's reader also accepts the legacy members
-      below.
-    - [24] Prose: the block opts a workspace in to provisioning and declares
-      `wyrwood.accessGroup`; the example is
-      `"customizations": {"menagerie": {"wyrwood": {"accessGroup": 1000}}}`
-      with `"runArgs": ["--name", "devcontainer-sample"]`. The binding's
-      policies are the workspace's selection in Menagerie, never empty; every
-      value they read is the workspace's name; the Xolotl key is
-      `<provisioning.xolotl.key-policy>/<workspace name>`, recorded once for
-      the workspace; an imported workspace keeps the policies, values and
-      key it had; Menagerie sets `MENAGERIE_XOLOTL_KEY` in the container
-      (provisioning-identity). Menagerie's reader accepts `wyrwood.policies`,
-      `wyrwood.values` and `xolotl` with any value, ignores them, and the
-      job console names each; any other unknown key stays an error. The
-      container name rule, the Compose refusal and the refusal of a name
-      another workspace holds stay.
-    - [24] Validation criteria: the parser reads a block with and without
-      the legacy members, ignores them and reports each, and refuses each
-      invalid `accessGroup`, an unknown key, a Compose definition, a
-      definition with no `--name` and a name another workspace holds; the
-      test checks that the schema's keys equal the keys the parser reads and
-      that the keys it ignores are exactly `wyrwood.policies`,
-      `wyrwood.values` and `xolotl`.
   contract-configuration: |-
     `configuration.yml` and `assets/configuration/menagerie.schema.json`:
     - [20] `templates` keeps its schema entry, its item rules (a unique
@@ -1576,16 +1540,6 @@ proposed-design:
       field quotes its value. Validation criteria: the config tests parse
       it, apply the default and refuse an empty or malformed duration
       without quoting it.
-    - [24] New optional `provisioning.xolotl.key-policy`: a string of
-      pattern `^[a-z0-9][a-z0-9_-]*$`, at most 63 characters, the Xolotl key
-      policy of this host's workspaces' client keys. Without it, a job that
-      has to name a new key fails as `provisioning-unavailable`, and a start
-      with `provisioning.xolotl` logs a warning that names it. The `xolotl`
-      part is required for issuing workspaces' keys, in place of "for a
-      declaration with a Xolotl key".
-    - [24] `job-limits.operations` gains `apply-policies` in the schema and
-      in the prose's list of operations, and `alerts` gives
-      `apply-policies` the console address `/?job={id}`.
   contract-workspace-api: |-
     `workspace-api.yml` and `assets/workspace-api/openapi.yaml`:
     - [20] `GET /api/templates` lists the registered templates sorted by
@@ -1670,50 +1624,6 @@ proposed-design:
       nothing changed; a successful apply records the record's version and
       commit.
     - [21] New request kind: `template-version-moved` (409).
-    - [24] `JobRequest.operation` gains `apply-policies`, on an existing
-      workspace, in phase `bind`; the prose describes it as
-      policy-application and binding-convergence do.
-    - [24] `JobRequest` gains `policies`, create only: a list of unique
-      policy names, the group choices and ordinary policies, empty when
-      absent. A create without a valid choice in a group is refused 422
-      `policy-choice-required` naming the group, one that adds a policy
-      outside the grant 422 `policy-outside-grant`, one that names policies without `provisioning.wyrwood` 409
-      `provisioning-unavailable`, and one whose grant cannot be read 503
-      `wyrwood-unavailable`; on a host with `provisioning` a name that
-      cannot be a Xolotl key name and a Wyrwood value is refused 400
-      `invalid-workspace-name`, naming the rule.
-    - [24] `PUT /api/workspaces/{name}/policies` with `{"policies",
-      "revision"}` imports a selection still to be imported before it checks
-      the revision, so a revision read before the import is 409
-      `selection-changed`, and answers 503 `wyrwood-unavailable`, storing
-      nothing, while the import cannot read Wyrwood. It answers 200 with
-      `{selectionRevision, jobId}`, `jobId` the apply job, or null when it starts after the workspace's running job;
-      400 `invalid-request`; 404 `workspace-not-found`; 409
-      `selection-changed` for an older revision; 409
-      `provisioning-unavailable` without `provisioning.wyrwood`; 422
-      `policy-required`, naming a required
-      policy the change removes; 422 `policy-choice-required`, naming a
-      group the change leaves without a valid choice that it had; 422
-      `policy-outside-grant`; 503 `wyrwood-unavailable`.
-    - [24] `Workspace` gains required `selectionRevision` (integer),
-      `appliedRevision` (integer or null), `applyFailure` (null or
-      `{kind, message}`), `selectionImported` (boolean) and `xolotlKey`
-      (string or null); `needsChoice` is empty while the selection is still
-      to be imported.
-    - [24] The job kind `binding-outside-grant`, which task 19 adds for
-      delete and `retire`, also fails `bind` and `apply-policies` when
-      binding-convergence reads or binds a binding the grant does not cover.
-    - [24] New request kinds: `selection-changed` (409), `policy-required`
-      (422), `policy-choice-required` (422). New job kinds:
-      `policy-outside-grant`, `binding-changed`, `binding-pending`,
-      `binding-refused`.
-    - [24] The policy parts of the prose of create, upgrade and the
-      provisioning steps follow create-flow, upgrade-flow,
-      provisioning-declaration, provisioning-steps and binding-convergence:
-      the selection at create, policies unchanged by an upgrade, the binding
-      made or changed from the selection with its pending and stale
-      answers, an empty selection sent as any other with Wyrwood's refusal
-      failed as `binding-refused`, the legacy members ignored and reported.
   contract-template-service-api: |-
     `template-service-api.yml`:
     - [20] The service reads the configuration only for `workspace-root`,

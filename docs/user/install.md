@@ -202,7 +202,7 @@ removes it in the Wyrwood and Xolotl web interfaces.
    | Grant | Value |
    | --- | --- |
    | **Agents** | Only this host's agent |
-   | **Policies** | Only the policies your templates declare, such as `host-sample-workspace` |
+   | **Policies** | Only the policies managers may select, such as `host-sample-workspace` |
    | **Read** and **Bind** | On |
    | **Policy write** | Off |
 
@@ -215,6 +215,14 @@ that holds a policy outside the allowlist is outside the grant, so Menagerie
 cannot change it.
 Keep Menagerie's own policy out of the allowlist, so that Menagerie cannot change
 its own binding.
+
+Workspace policy changes require Wyrwood 0.7.1 or later, whose controller
+supports `binding-change`. Configure `provisioning.xolotl.key-policy` with the
+policy of this host's workspace client keys. Menagerie supplies the values and
+key identity; templates declare only the binding's access group. New or rebuilt
+containers get `MENAGERIE_XOLOTL_KEY` as `policy/name`; a start of an existing
+container keeps its environment until rebuild, and an explicit `containerEnv`
+value wins.
 
 ## The host
 
@@ -348,7 +356,7 @@ a Docker Hub access token as the password. See
 ## After a host restart
 
 Menagerie and its workspaces come back with no host unit and no step by hand.
-This needs Wyrwood 0.7.0 or later. See the
+This needs Wyrwood 0.7.1 or later. See the
 [configuration guide](configuration.md#upgrading-wyrwood) for the stopped
 rollout when upgrading from 0.6.1.
 

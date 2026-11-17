@@ -48,7 +48,7 @@ vars:
   OPENBAO_VERSION: 2.7.2
   # The Wyrwood release the acceptance run's controller and agent come from.
   # renovate: datasource=github-releases depName=wyrd-company/wyrwood
-  WYRWOOD_VERSION: 0.7.0
+  WYRWOOD_VERSION: 0.7.1
   # The Xolotl release the demo's provisioning uses.
   # renovate: datasource=docker depName=ghcr.io/wyrd-company/xolotl
   XOLOTL_VERSION: 0.6.1

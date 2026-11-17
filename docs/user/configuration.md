@@ -238,7 +238,7 @@ provisioning:
 ```
 
 `provisioning.wyrwood` lets Menagerie manage the bindings of workspaces. Menagerie
-needs Wyrwood 0.7.0 or later. [Prepare the host](install.md#provisioning) first.
+needs Wyrwood 0.7.1 or later. [Prepare the host](install.md#provisioning) first.
 
 - `controller` is the controller's `ssh://host[:port]`. The port defaults to 22.
 - `host-key` is the controller's SHA256 fingerprint, as
@@ -279,22 +279,33 @@ Wyrwood 0.7.0 migrates the controller database to schema 5 and sends binding
 directories that 0.6.1 agents reject; rolling back requires the pre-upgrade
 controller backup.
 
+Upgrading from 0.7.0 needs no database migration. Upgrade the controller to
+0.7.1 before Menagerie: workspace policy changes use `binding-change`, which
+requires a 0.7.1 or later controller. Follow Wyrwood's upgrade order for agents.
+
 ### Xolotl
 
 ```yaml
 provisioning:
   xolotl:
     url: http://xolotl:8317
+    key-policy: host-sample
     key-secret:
       kv-mount: kv
       path: menagerie/xolotl
 ```
 
 `provisioning.xolotl` lets Menagerie issue and revoke the client key a
-workspace's definition declares. Menagerie needs Xolotl 0.6.0 or later.
+provisioned workspace uses. Menagerie needs Xolotl 0.6.0 or later.
+The key is named `<key-policy>/<workspace name>` and its identity is recorded
+once. Existing workspaces keep their imported key.
 
 - `url` is an http or https URL with a host and no user information, query or
   fragment.
+- `key-policy` names the policy for new workspace client keys: 1 to 63 lower
+  case letters, digits, `_` or `-`, starting with a letter or digit. Without it,
+  Menagerie warns at startup and a job needing a new key fails as
+  `provisioning-unavailable`.
 - `key-secret` names the OpenBao secret whose string field `api_key` holds
   Menagerie's scoped key. `kv-mount` is a KV version 2 mount and `path` is the
   secret's path in the mount.
@@ -360,7 +371,8 @@ once the cancelled work has stopped.
 
 - `default` limits every operation.
 - `operations` gives `start`, `stop`, `rebuild`, `create`, `upgrade`,
-  `commit`, `apply-branch` or `delete` its own limit, which replaces `default`.
+  `commit`, `apply-branch`, `apply-policies` or `delete` its own limit, which
+  replaces `default`.
 - `phases` limits each stay in a phase, inside any operation:
   `read-definition`, `issue-key`, `bind`, `initialize-command`, `build`,
   `unbind`, `remove-container`, `revoke-key`, `remove-folder`,
@@ -434,7 +446,8 @@ send nothing.
 
 `event` is `job-failed` or `job-long-running`; a long-running alert has
 `"state": "running"` and `"error": null`. `console` opens the job's console
-at the origin of `oidc.redirect-url`. The body suits a generic webhook such
+at the origin of `oidc.redirect-url`. For `apply-policies` the console address
+is `/?job={id}`, and its phase is `bind`. The body suits a generic webhook such
 as ntfy, Slack through a relay, or Dagu.
 
 Menagerie makes one attempt per alert with a 10 second limit and does not

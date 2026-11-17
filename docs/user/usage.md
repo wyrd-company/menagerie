@@ -29,6 +29,9 @@ again.
 Each row lists its selected policies, or **No policies** for an empty selection.
 **Needs choice** names any policy group without a valid choice: exactly one
 policy for a single-select group, at least one for a multi-select group.
+**Policies applied**, **Policies pending**, **Policies failed** or
+**Policy import pending** shows whether the binding has the stored selection.
+A failed apply shows its message on the row.
 
 Each row has **Stop**, **Start**, **Rebuild**, **Apply branch**, **Upgrade**
 and [**T3 Code token**](#connect-t3-code-to-a-workspace). A commit,
@@ -68,10 +71,33 @@ save shows its error beside **Save** and keeps your edits. If the first read
 fails, **Retry** reads the settings again. Without `provisioning.wyrwood`, the
 settings controls are disabled.
 
+Choose **Policies** on a workspace's row to edit its selection. Required
+policies stay selected; choose exactly one policy in each single-select group
+and at least one in each multi-select group. **Save** stores the selection and
+applies it to Wyrwood immediately, without a rebuild or a file edit. While
+another job runs on that workspace, the selection waits and applies afterwards.
+A stale save keeps your edits; **Reload policies** reads the latest selection.
+
+A pending or failed apply keeps the selection stored. Open its job console for
+the answer, then choose **Apply again** to retry. A workspace with no current
+container name needs no binding request. For a bound workspace, an empty
+selection is sent to Wyrwood like any other. Wyrwood refuses it as
+`binding-refused`; the binding keeps its earlier policies and the selection
+stays unapplied. Add a policy and save to recover.
+
+An edit made directly in Wyrwood is replaced by the stored selection on the
+next apply, start or rebuild. A binding removed in Wyrwood is made again by the
+next apply or start once the workspace has a policy. With none, Wyrwood refuses
+it (`binding-refused`); adding a policy restores it. A binding outside the
+operator key's grant fails as `binding-outside-grant`; widen the grant before
+retrying.
+
 ## Create a workspace
 
 Choose **New workspace**, pick a template and enter the workspace's name,
-which becomes its folder. **Begin interview** asks the template's questions.
+which becomes its folder. Required policies are selected already. Choose a
+policy in each group, exactly one in a single-select group, and any other
+policies the workspace needs. **Begin interview** asks the template's questions.
 Answers that the template refuses come back marked on their questions, with
 your answers kept, so you can correct them and send again. Nothing is
 written until the interview is complete.
@@ -104,14 +130,24 @@ from a workspace that was deleted, the `backup` phase first copies it to
 When a create fails after `generate`, **Start** finishes it: the commit and
 backup that did not run, then the devcontainer. Until its first backup lands, any
 job's first push copies the earlier branch first. A second create of that name is
-refused while the folder exists.
+refused while the folder exists. On a provisioning host, a create with no
+policy reaches `bind` and fails as `binding-refused`; its files and key may
+already exist. Add a policy on its row and choose **Start** to finish it.
 
 ### A workspace with a provisioning declaration
 
 A template that renders a `customizations.menagerie` block in its definition
-gets a Wyrwood binding and, when it asks for one, a Xolotl client key, with no
+gets a Wyrwood binding and, with Xolotl configured on the host, a client key,
+with no
 step in a CLI or a web interface, once the [host is
-prepared](install.md#provisioning). The console shows these phases in a create:
+prepared](install.md#provisioning). The declaration supplies the access group.
+Menagerie supplies the workspace's selected policies, their values (the
+workspace name for each value) and its immutable Xolotl key identity. Legacy
+`policies`, `values` and `xolotl` template members are ignored and named in the
+console. Imported workspaces keep their earlier values and key. The container
+gets `MENAGERIE_XOLOTL_KEY` (`policy/name`); an explicit `containerEnv` value wins.
+A start of an existing container leaves its environment as it is until rebuild.
+The console shows these phases in a create:
 
 1. `read-definition`: the block is read and checked. The job fails as
    `provisioning-invalid` when the block is not valid, when the definition has
@@ -125,9 +161,12 @@ prepared](install.md#provisioning). The console shows these phases in a create:
    first. A key that exists stays as it is, and the console says when it is
    disabled or expires.
 4. `bind`: the Wyrwood binding, whose container name Menagerie records as the
-   workspace's first. A binding that differs from the definition is removed and
-   made again while the container is stopped, and the console names the
-   fields. A binding Menagerie made on another Wyrwood agent, before
+   workspace's first. An existing binding is changed at its read revision to
+   hold the selection and values with the declared access group; the console
+   names additions and removals. A pending answer is retried up to three times;
+   `binding-pending` asks for another apply. A concurrent change is read again
+   once, then fails as `binding-changed` if it happens again.
+   A binding Menagerie made on another Wyrwood agent, before
    `provisioning.wyrwood.agent` changed, is removed first, and Menagerie keeps
    its record until Wyrwood confirms it gone.
 5. `commit` and `backup`, `initialize-command` and `build`, as above.
@@ -187,7 +226,8 @@ only the questions the new version adds; earlier answers come from
 workspace and runs the template's hooks there, each in a throwaway
 container that sees only that checkout; then it merges the result into
 the files, keeping your edits, and Menagerie commits, backs up and
-rebuilds the devcontainer.
+rebuilds the devcontainer. The upgrade leaves the workspace's selected policies
+unchanged.
 
 An earlier answer that still fits the new version is not asked again, even
 when the new version adds options to its question. To change it, check
