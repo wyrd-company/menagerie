@@ -74,6 +74,7 @@
   display: flex;
   gap: 12px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .entry-policies,
 .entry-choice {
@@ -83,6 +84,11 @@
 }
 .entry-choice {
   color: var(--text-muted);
+}
+.policy-save-error {
+  color: var(--danger);
+  font-size: 14px;
+  margin: 0;
 }
 @media (max-width: 680px) {
   .policy-panel {

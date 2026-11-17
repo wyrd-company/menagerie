@@ -6,18 +6,25 @@ export function PoliciesScreen() {
   const [data, setData] = useState<Policies | null>(null);
   const [draft, setDraft] = useState<PolicySettings | null>(null);
   const [error, setError] = useState<ApiError | Error | null>(null);
+  const [saveError, setSaveError] = useState<ApiError | Error | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const errorRef = useRef<HTMLDivElement>(null);
+  const [dirty, setDirty] = useState(false);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (saveError) errorRef.current?.focus();
+  }, [saveError]);
   async function load() {
     setError(null);
     try {
       const result = await listPolicies();
       setData(result);
       setDraft(result.settings);
-      setSaved(false);
+      setSaveError(null);
+      setDirty(false);
     } catch (e) {
-      setError(e instanceof Error ? e : new Error(String(e)));
+      const failure = e instanceof Error ? e : new Error(String(e));
+      if (data) setSaveError(failure);
+      else setError(failure);
     }
   }
   useEffect(() => {
@@ -39,21 +46,19 @@ export function PoliciesScreen() {
   }, []);
   const update = (next: PolicySettings) => {
     setDraft(next);
-    setSaved(false);
+    setDirty(true);
   };
   async function save() {
     if (!draft) return;
     setSaving(true);
-    setError(null);
-    setSaved(false);
+    setSaveError(null);
     try {
       const result = await savePolicySettings(draft);
       setDraft(result);
       setData((current) => (current ? { ...current, settings: result } : current));
-      setSaved(true);
+      setDirty(false);
     } catch (e) {
-      setError(e instanceof Error ? e : new Error(String(e)));
-      requestAnimationFrame(() => errorRef.current?.focus());
+      setSaveError(e instanceof Error ? e : new Error(String(e)));
     } finally {
       setSaving(false);
     }
@@ -67,12 +72,10 @@ export function PoliciesScreen() {
       </header>
       {!data && !error ? <p className="muted">Reading policies…</p> : null}
       {error ? (
-        <div className="notice notice-bad" role="alert" tabIndex={-1} ref={errorRef}>
+        <div className="notice notice-bad" role="alert">
           <p>{error.message}</p>
           <button type="button" onClick={() => void load()}>
-            {error instanceof ApiError && error.kind === "settings-changed"
-              ? "Reload settings"
-              : "Retry"}
+            Retry
           </button>
         </div>
       ) : null}
@@ -201,18 +204,32 @@ export function PoliciesScreen() {
                 onClick={() =>
                   update({
                     ...draft,
-                    groups: [...draft.groups, { name: "", mode: "single", policies: [] }],
+                    groups: [...draft.groups, { name: "", mode: "multi", policies: [] }],
                   })
                 }
               >
                 Add group
               </button>
             </div>
+            {saveError ? (
+              <p className="policy-save-error" role="alert" tabIndex={-1} ref={errorRef}>
+                {saveError.message}
+              </p>
+            ) : null}
             <div className="policy-actions">
               <button className="primary" type="submit">
                 {saving ? "Saving…" : "Save"}
               </button>
-              {saved ? <span role="status">Saved</span> : null}
+              {dirty ? (
+                <span className="muted" role="status">
+                  Unsaved changes
+                </span>
+              ) : null}
+              {saveError instanceof ApiError && saveError.kind === "settings-changed" ? (
+                <button type="button" onClick={() => void load()}>
+                  Reload settings
+                </button>
+              ) : null}
             </div>
           </fieldset>
         </form>

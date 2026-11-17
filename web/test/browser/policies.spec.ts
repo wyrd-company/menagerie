@@ -10,11 +10,13 @@ test("required policies and group settings reach every workspace selection", asy
   await page.getByRole("button", { name: "Add group" }).click();
   const group = page.getByRole("region", { name: "Group 1" });
   await group.getByRole("textbox", { name: "Group name" }).fill("Operator SSH");
-  await group.getByRole("combobox", { name: "Selection" }).selectOption("multi");
+  await expect(group.getByRole("combobox", { name: "Selection" })).toHaveValue("multi");
+  await expect(page.getByRole("status")).toHaveText("Unsaved changes");
   await group.getByRole("checkbox", { name: "bob-ssh", exact: true }).check();
   await group.getByRole("checkbox", { name: "ira-ssh", exact: true }).check();
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("Saved");
+  await expect(page.getByRole("status")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
   await page.getByRole("link", { name: "Workspaces", exact: true }).click();
   await expect(page.getByLabel("Policies for sample-alpha", { exact: true })).toHaveText(
     "workspace",
@@ -28,7 +30,8 @@ test("required policies and group settings reach every workspace selection", asy
   await page.getByRole("combobox", { name: "Selection" }).selectOption("single");
   await page.getByRole("checkbox", { name: "ira-ssh", exact: true }).uncheck();
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("Saved");
+  await expect(page.getByRole("status")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
   await page.reload();
   await expect(page.getByRole("textbox", { name: "Group name" })).toHaveValue("SSH keys");
   await expect(page.getByRole("combobox", { name: "Selection" })).toHaveValue("single");
@@ -36,7 +39,8 @@ test("required policies and group settings reach every workspace selection", asy
   await page.getByRole("button", { name: "Remove group" }).click();
   await page.getByRole("checkbox", { name: "workspace required", exact: true }).uncheck();
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("Saved");
+  await expect(page.getByRole("status")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
   await page.getByRole("link", { name: "Workspaces", exact: true }).click();
   await expect(page.getByLabel("Policies for sample-alpha", { exact: true })).toHaveText(
     "workspace",
