@@ -279,6 +279,17 @@ func TestAContainerNameAnotherContainerHoldsIsRefused(t *testing.T) {
 	if _, found, err := h.rt.ContainerHolder(h.ctx, name+"-absent"); err != nil || found {
 		t.Fatalf("absent: %t %v", found, err)
 	}
+	// The import reads the names of a workspace's containers, stopped ones
+	// included, when its definition cannot be read.
+	if err := h.rt.Stop(h.ctx, folder, &logProgress{t: t}); err != nil {
+		t.Fatal(err)
+	}
+	if names, err := h.rt.ContainerNames(h.ctx, folder); err != nil || !slices.Equal(names, []string{name}) {
+		t.Fatalf("names %v %v", names, err)
+	}
+	if names, err := h.rt.ContainerNames(h.ctx, other); err != nil || len(names) != 0 {
+		t.Fatalf("names of a workspace with no container %v %v", names, err)
+	}
 	// Menagerie's data holds nothing, so that only the container holds it.
 	agent := &reportingAgent{h: h, name: name}
 	steps := provisioning.New(provisioning.Options{

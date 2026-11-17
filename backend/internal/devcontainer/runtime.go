@@ -24,6 +24,7 @@ import (
 	"syscall"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/wyrd-company/devcontainer-builder/pkg/builder"
@@ -790,6 +791,31 @@ func shortID(id string) string {
 		return id[:12]
 	}
 	return id
+}
+
+// ContainerNames returns the names of the containers whose
+// devcontainer.local_folder label equals folder, stopped ones included, in name
+// order.
+func (r *Runtime) ContainerNames(ctx context.Context, folder string) ([]string, error) {
+	list, err := r.client.ContainerList(ctx, container.ListOptions{All: true, Filters: filters.NewArgs(filters.Arg("label", labelLocalFolder+"="+folder))})
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, c := range list {
+		if c.Labels[labelLocalFolder] != folder {
+			continue
+		}
+		for _, name := range c.Names {
+			// A legacy link adds a name with a second slash; the container's own
+			// name has only the leading one.
+			if own, ok := strings.CutPrefix(name, "/"); ok && !strings.Contains(own, "/") {
+				names = append(names, own)
+			}
+		}
+	}
+	slices.Sort(names)
+	return names, nil
 }
 
 // Mounting returns the short ids of the running containers, other than

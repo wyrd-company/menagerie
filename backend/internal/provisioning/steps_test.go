@@ -61,6 +61,10 @@ type host struct {
 	failAfterEmptied error
 	// onCheck runs in the host prerequisites check.
 	onCheck func()
+	// containerNames are the names of each folder's containers.
+	containerNames map[string][]string
+	// unreadable are the folders whose definition cannot be read.
+	unreadable map[string]bool
 }
 
 func newHost(t *testing.T) *host {
@@ -182,6 +186,9 @@ func (h *host) CheckHostPrerequisites(context.Context, string, devcontainer.Prog
 func (h *host) Definition(folder string) (devcontainer.Definition, error) {
 	h.Lock()
 	defer h.Unlock()
+	if h.unreadable[folder] {
+		return devcontainer.Definition{}, errUnreadable
+	}
 	return h.definitions[folder], h.definedErr
 }
 func (h *host) ContainerHolder(_ context.Context, name string) (string, bool, error) {
@@ -196,6 +203,11 @@ func (h *host) ContainerHolder(_ context.Context, name string) (string, bool, er
 		return folder, true, h.failOn["holder"]
 	}
 	return "", false, h.failOn["holder"]
+}
+func (h *host) ContainerNames(_ context.Context, folder string) ([]string, error) {
+	h.Lock()
+	defer h.Unlock()
+	return h.containerNames[folder], h.failOn["names"]
 }
 func (h *host) BeginStart(string, devcontainer.Progress) (BringUp, error) {
 	return &fakeBringUp{h: h}, h.note("begin-start")

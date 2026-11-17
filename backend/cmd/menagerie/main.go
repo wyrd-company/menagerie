@@ -140,6 +140,9 @@ func run(configPath string) error {
 	}
 	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
 	runtime := devcontainer.New(docker, opts)
+	if err := prepareData(ctx, cfg, root, data, runtime, provisioning.Records{Folder: provisioning.DefaultRecords}); err != nil {
+		return err
+	}
 	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, app)
 	if err != nil {
 		return err
@@ -182,6 +185,31 @@ func run(configPath string) error {
 		return err
 	}
 	return nil
+}
+
+// prepareData readies Menagerie's data before the workspace service serves.
+// No job runs yet, so the creates the last restart ended before they made
+// their folder lose their data, and the others their being-created mark. Then
+// the first-start imports run, each once, from the workspace folders, the
+// retirement records in records, the definitions and the containers.
+func prepareData(ctx context.Context, cfg *config.Config, root *workspace.Root, data *store.Store, runtime provisioning.ImportRuntime, records provisioning.Records) error {
+	removed, err := data.EndCreates(ctx, func(name string) bool {
+		_, err := root.Folder(name)
+		return err == nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, name := range removed {
+		log.Printf("menagerie: the create of %s ended with the restart before it made its folder; its data is removed", name)
+	}
+	var agent string
+	if p := cfg.Provisioning; p != nil && p.Wyrwood != nil {
+		agent = p.Wyrwood.Agent
+	}
+	return provisioning.Import(ctx, provisioning.ImportOptions{
+		Data: data, Runtime: runtime, Workspaces: root, Records: records, Agent: agent, Logf: log.Printf,
+	})
 }
 
 // workspaceSockets opens the socket folder, when one is configured, with
