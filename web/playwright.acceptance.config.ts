@@ -33,6 +33,10 @@ export default defineConfig({
   },
   projects: [
     { name: "story", testMatch: "integrated.spec.ts" },
-    { name: "acceptance", testMatch: "acceptance.spec.ts", dependencies: ["story"] },
+    {
+      name: "acceptance",
+      testMatch: ["acceptance.spec.ts", "policies.spec.ts"],
+      dependencies: ["story"],
+    },
   ],
 });

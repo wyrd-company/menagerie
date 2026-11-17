@@ -284,6 +284,9 @@ func (s *Steps) provision(ctx context.Context, folder string, d *Declaration, p 
 	if err := s.available(d); err != nil {
 		return err
 	}
+	if err := s.opts.Data.Update(ctx, func(tx *store.Tx) error { return tx.AddWorkspace(filepath.Base(folder)) }); err != nil {
+		return err
+	}
 	if err := s.EnsureImported(ctx, folder); err != nil {
 		return fail(KindUnavailable, err.Error())
 	}

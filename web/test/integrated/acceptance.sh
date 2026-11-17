@@ -76,7 +76,7 @@ case "$cmd" in
   suite)
     mapfile -t env < <(suite_env)
     "$isolated" run "$state" "${env[@]}" "$state/acceptance.test" \
-      -test.run '^TestImageWyrwood(GitHubApp)?$' -test.v -test.count=1 -test.timeout 20m 2>&1 | tee "$scratch/logs/suite.log"
+      -test.run '^TestImage(Wyrwood(GitHubApp)?|WorkspacePolicies)$' -test.v -test.count=1 -test.timeout 20m 2>&1 | tee "$scratch/logs/suite.log"
     ;;
   fixture)
     mapfile -t env < <(suite_env)

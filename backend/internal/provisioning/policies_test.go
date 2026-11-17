@@ -22,6 +22,9 @@ type policyHost struct {
 	changes, binds, pending, stale int
 	allowed                        []string
 	changeError                    error
+	vanishAfterChange              bool
+	revokeBeforeMutation           bool
+	policyReads                    int
 }
 
 func newPolicyHost(t *testing.T, selected []string) *policyHost {
@@ -39,8 +42,13 @@ func newPolicyHost(t *testing.T, selected []string) *policyHost {
 	return h
 }
 func (h *policyHost) Policies(context.Context) (operator.Grant, []operator.Policy, error) {
+	h.policyReads++
+	allowed := h.allowed
+	if h.revokeBeforeMutation && h.policyReads > 1 {
+		allowed = []string{"workspace"}
+	}
 	policies := []operator.Policy{}
-	for _, name := range h.allowed {
+	for _, name := range allowed {
 		p := operator.Policy{Name: name}
 		if name == "key" {
 			p.ValueNames = []string{"key_name"}
@@ -116,6 +124,9 @@ func (h *policyHost) Change(_ context.Context, b operator.Binding, s wyrwood.Sel
 		return operator.Binding{}, operator.ErrPending
 	}
 	h.bindings[b.ID] = b
+	if h.vanishAfterChange {
+		delete(h.bindings, b.ID)
+	}
 	return b, nil
 }
 func (h *policyHost) steps() *Steps {
@@ -342,5 +353,35 @@ func TestProvisioningIgnoresTemplateIdentityAndNeedsConfiguredKeyPolicy(t *testi
 	wantKind(t, steps.Start(context.Background(), folder, other), KindUnavailable)
 	if len(other.calls) != 0 {
 		t.Fatalf("key-policy failure performed operations %v", other.calls)
+	}
+}
+
+func TestSuccessfulChangeWithMissingConfirmingReadResolvesAgain(t *testing.T) {
+	h := newPolicyHost(t, []string{"workspace", "ssh"})
+	h.existing([]string{"workspace"})
+	h.vanishAfterChange = true
+	if err := h.steps().ApplyPolicies(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	if h.changes != 1 || h.binds != 1 || h.selection().AppliedRevision == nil {
+		t.Fatal("missing confirming read did not resolve and recreate")
+	}
+}
+func TestMissingEmptyBindingWithoutCurrentDeclarationSendsNothing(t *testing.T) {
+	h := newPolicyHost(t, nil)
+	h.hold("sample", "old-name", true)
+	wantKind(t, h.steps().ApplyPolicies(context.Background(), folder, h), KindInvalid)
+	if h.binds != 0 || h.selection().AppliedRevision != nil {
+		t.Fatal("empty selection bypassed accepted declaration")
+	}
+}
+
+func TestPolicyApplyRefreshesGrantBeforeMutation(t *testing.T) {
+	h := newPolicyHost(t, []string{"workspace", "ssh"})
+	h.existing([]string{"workspace"})
+	h.revokeBeforeMutation = true
+	wantKind(t, h.steps().ApplyPolicies(context.Background(), folder, h), KindPolicyOutsideGrant)
+	if h.changes != 0 || h.selection().AppliedRevision != nil {
+		t.Fatal("changed after grant narrowed")
 	}
 }

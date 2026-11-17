@@ -36,6 +36,14 @@ func testData(t *testing.T) *store.Store {
 	t.Cleanup(func() { _ = data.Close() })
 	return data
 }
+func testPolicyData(t *testing.T) *store.Store {
+	t.Helper()
+	data := testData(t)
+	if _, err := data.SavePolicySettings(context.Background(), store.PolicySettings{Required: []string{"sample-policy"}}, []string{"sample-policy"}); err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
 
 // reportingAgent answers as Wyrwood does for one name binding: before the
 // container exists it reports the directory, and then the container as the
@@ -45,20 +53,23 @@ type reportingAgent struct {
 	name string
 	mu   sync.Mutex
 	// states are the states of the container each read of its status saw.
-	states []string
-	bound  bool
-	binds  int
-	group  uint32
+	states  []string
+	bound   bool
+	binds   int
+	group   uint32
+	binding operator.Binding
 	// unbound lists each unbind as agent/name.
 	unbound []string
 }
 
-func (a *reportingAgent) Bind(_ context.Context, _ string, selection wyrwood.Selection) (operator.Binding, error) {
+func (a *reportingAgent) Bind(_ context.Context, name string, selection wyrwood.Selection) (operator.Binding, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.bound, a.group = true, selection.AccessGroup
 	a.binds++
-	return operator.Binding{}, nil
+	group := selection.AccessGroup
+	a.binding = operator.Binding{ID: "sample-binding", Agent: "sample-host", Key: operator.Key{Kind: operator.KeyName, Value: name}, Policies: selection.Policies, Settings: operator.Settings{AccessGroup: &group, Values: selection.Values}, Applied: true, Revision: 1}
+	return a.binding, nil
 }
 
 func (a *reportingAgent) Unbind(_ context.Context, agent, name string) (operator.UnbindResult, error) {
@@ -117,7 +128,23 @@ func (a *reportingAgent) Read(ctx context.Context, name string) (operator.Bindin
 		status.Containers = []operator.BindingContainer{{ID: info.ID, Name: name, State: state}}
 	}
 	status.Consumers = []operator.ConsumerStatus{consumer}
-	return operator.Binding{Status: status}, true, nil
+	b := a.binding
+	b.Status = status
+	return b, true, nil
+}
+
+func (a *reportingAgent) Policies(context.Context) (operator.Grant, []operator.Policy, error) {
+	return operator.Grant{}, []operator.Policy{{Name: "sample-policy"}}, nil
+}
+func (a *reportingAgent) Get(ctx context.Context, id string) (operator.Binding, error) {
+	b, found, err := a.Read(ctx, a.name)
+	if err == nil && (!found || b.ID != id) {
+		err = operator.ErrNotFound
+	}
+	return b, err
+}
+func (a *reportingAgent) Change(ctx context.Context, b operator.Binding, s wyrwood.Selection) (operator.Binding, error) {
+	return a.Bind(ctx, b.Key.Value, s)
 }
 
 func provisioned(name string) string {
@@ -139,7 +166,7 @@ func TestProvisionedStartCreatesThenWaitsThenStarts(t *testing.T) {
 	steps := provisioning.New(provisioning.Options{
 		Clients: provisioning.Clients{Bindings: agent, Agent: "sample-host", Wait: 30 * time.Second},
 		Runtime: provisioning.Adapt(h.rt),
-		Data:    testData(t),
+		Data:    testPolicyData(t),
 		Poll:    100 * time.Millisecond,
 	})
 
@@ -224,9 +251,9 @@ func TestADeleteAfterTheDefinitionStopsParsingRemovesTheBindingAndTheKey(t *test
 	folder := h.workspace("unparsed", map[string]string{".devcontainer/devcontainer.json": keyed})
 	agent := &reportingAgent{h: h, name: name}
 	keys := &keyRegister{live: map[string]bool{}}
-	data := testData(t)
+	data := testPolicyData(t)
 	steps := provisioning.New(provisioning.Options{
-		Clients: provisioning.Clients{Bindings: agent, Agent: "sample-host", Keys: keys, Wait: 30 * time.Second},
+		Clients: provisioning.Clients{Bindings: agent, Agent: "sample-host", Keys: keys, KeyPolicy: "host-sample", Wait: 30 * time.Second},
 		Runtime: provisioning.Adapt(h.rt),
 		Data:    data,
 		Poll:    100 * time.Millisecond,
@@ -294,7 +321,7 @@ func TestAContainerNameAnotherContainerHoldsIsRefused(t *testing.T) {
 	agent := &reportingAgent{h: h, name: name}
 	steps := provisioning.New(provisioning.Options{
 		Clients: provisioning.Clients{Bindings: agent, Agent: "sample-host", Wait: time.Second},
-		Runtime: provisioning.Adapt(h.rt), Data: testData(t),
+		Runtime: provisioning.Adapt(h.rt), Data: testPolicyData(t),
 	})
 	err = steps.Start(h.ctx, other, &logProgress{t: t})
 	var failure *jobs.Failure
@@ -320,7 +347,7 @@ func TestAStartReplacesAContainerWithAnOldName(t *testing.T) {
 	h.write(folder, map[string]string{".devcontainer/devcontainer.json": provisioned(name)})
 	steps := provisioning.New(provisioning.Options{
 		Clients: provisioning.Clients{Bindings: &reportingAgent{h: h, name: name}, Agent: "sample-host", Wait: 30 * time.Second},
-		Runtime: provisioning.Adapt(h.rt), Data: testData(t), Poll: 100 * time.Millisecond,
+		Runtime: provisioning.Adapt(h.rt), Data: testPolicyData(t), Poll: 100 * time.Millisecond,
 	})
 	if err := steps.Start(h.ctx, folder, &logProgress{t: t}); err != nil {
 		t.Fatal(err)
@@ -331,5 +358,54 @@ func TestAStartReplacesAContainerWithAnOldName(t *testing.T) {
 	}
 	if h.inspect(replaced.ContainerID).Name != "/"+name {
 		t.Fatalf("name %s", h.inspect(replaced.ContainerID).Name)
+	}
+}
+
+// The container's actual environment proves both the generated address and
+// the rule that an existing container attaches it only on rebuild.
+func TestXolotlKeyEnvironmentOnCreateStartAndRebuild(t *testing.T) {
+	h := newHarness(t)
+	folder := h.workspace("key-env", map[string]string{".devcontainer/devcontainer.json": `{"image":"` + baseImage + `"}`})
+	p := &logProgress{t: t}
+	run := func(rebuild bool, key string) {
+		t.Helper()
+		b, err := h.rt.BeginStart(folder, p)
+		if rebuild {
+			b, err = h.rt.BeginRebuild(folder, p)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.SetXolotlKey(key)
+		if err = b.Build(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = b.Create(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err = b.Up(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value := func() string {
+		return h.exec(h.status(folder).ContainerID, "sh", "-c", `printf '%s' "${MENAGERIE_XOLOTL_KEY-unset}"`)
+	}
+	run(false, "")
+	first := h.status(folder).ContainerID
+	if err := h.rt.Stop(h.ctx, folder, p); err != nil {
+		t.Fatal(err)
+	}
+	run(false, "host-sample/key-env")
+	if h.status(folder).ContainerID != first || value() != "unset" {
+		t.Fatal("start replaced the old container or changed its environment")
+	}
+	run(true, "host-sample/key-env")
+	if value() != "host-sample/key-env" {
+		t.Fatal("rebuild did not attach the stored identity")
+	}
+	h.write(folder, map[string]string{".devcontainer/devcontainer.json": `{"image":"` + baseImage + `","containerEnv":{"MENAGERIE_XOLOTL_KEY":"explicit/name"}}`})
+	run(true, "host-sample/key-env")
+	if value() != "explicit/name" {
+		t.Fatal("generated identity overrode containerEnv")
 	}
 }

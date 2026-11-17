@@ -444,12 +444,16 @@ func TestAnInvalidBlockFailsBeforeAnyStep(t *testing.T) {
 }
 
 func TestAMissingSectionFailsBeforeAnyWrite(t *testing.T) {
-	for name, clients := range map[string]Clients{
-		"wyrwood": {Keys: &host{}},
-		"xolotl":  {Bindings: &host{}},
-	} {
+	for _, name := range []string{"wyrwood", "xolotl"} {
 		t.Run(name, func(t *testing.T) {
 			h := newHost(t)
+			clients := Clients{Keys: h, KeyPolicy: "host-sample"}
+			if name == "xolotl" {
+				clients = Clients{Bindings: h}
+				if _, err := h.data.Identity(context.Background(), "sample", nil, &Key{Policy: "host-sample", Name: "sample"}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			err := h.with(clients).Start(context.Background(), folder, h)
 			wantKind(t, err, KindUnavailable)
 			if !strings.Contains(err.Error(), "provisioning."+name) {
@@ -575,6 +579,7 @@ func TestAJobRecordsWhatItProvisionsBeforeItsRequests(t *testing.T) {
 	if err := h.steps().Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
 	}
+	want[0].BindingID = "container-sample"
 	if held := h.held("sample"); !slices.Equal(held.Names, want) || len(held.Keys) != 1 {
 		t.Fatalf("held %+v", held)
 	}
@@ -846,14 +851,18 @@ func TestAReadThatIsUnreachableIsWaitedOutAndAnyOtherFails(t *testing.T) {
 	h := newHost(t)
 	s := h.steps()
 	h.bound["container-sample"] = wyrwood.Selection{Policies: []string{"workspace", "client-key"}, AccessGroup: 1000, Values: map[string]string{"key_name": "sample"}}
+	d, err := Parse(h.definitions[folder])
+	if err != nil {
+		t.Fatal(err)
+	}
 	h.readErr = fmt.Errorf("wrapped: %w", operator.ErrUnreachable)
-	err := s.Start(context.Background(), folder, h)
+	err = s.await(context.Background(), d, h, "its sockets", func(operator.Binding) (bool, string) { return false, "" })
 	wantKind(t, err, KindNotReady)
 	if !strings.Contains(err.Error(), "the controller cannot be reached") {
 		t.Errorf("message %v", err)
 	}
 	h.readErr = fmt.Errorf("wrapped: %w", operator.ErrOutsideGrant)
-	err = s.Start(context.Background(), folder, h)
+	err = s.await(context.Background(), d, h, "its sockets", func(operator.Binding) (bool, string) { return false, "" })
 	if !errors.Is(err, operator.ErrOutsideGrant) {
 		t.Fatalf("%v", err)
 	}
@@ -901,7 +910,7 @@ func TestAStartedJobRetiresWhatTheDefinitionNoLongerDeclaresLast(t *testing.T) {
 		t.Errorf("unbound %v", h.unbound)
 	}
 	held := h.held("sample")
-	if !slices.Equal(held.Names, []store.Name{{Name: "container-sample", Agent: sampleAgent, Current: true}}) || !slices.Equal(held.Keys, []Key{{Policy: "host-sample", Name: "sample"}}) {
+	if !slices.Equal(held.Names, []store.Name{{Name: "container-sample", Agent: sampleAgent, Current: true, BindingID: "container-sample"}}) || !slices.Equal(held.Keys, []Key{{Policy: "host-sample", Name: "sample"}}) {
 		t.Fatalf("held %+v", held)
 	}
 }
@@ -1133,7 +1142,7 @@ func TestAChangedAgentNeverLosesTheRecordedBinding(t *testing.T) {
 		if _, ok := h.bound["container-sample"]; !ok || len(h.elsewhere) != 0 {
 			t.Fatalf("bound %v, elsewhere %v", h.bound, h.elsewhere)
 		}
-		if held := h.held("sample"); !slices.Equal(held.Names, []store.Name{{Name: "container-sample", Agent: sampleAgent, Current: true}}) {
+		if held := h.held("sample"); !slices.Equal(held.Names, []store.Name{{Name: "container-sample", Agent: sampleAgent, Current: true, BindingID: "container-sample"}}) {
 			t.Fatalf("held %+v", held)
 		}
 	})

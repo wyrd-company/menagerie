@@ -231,6 +231,7 @@ tasks:
     env:
       WYRWOOD_VERSION: '{{.WYRWOOD_VERSION}}'
       OPENBAO_VERSION: '{{.OPENBAO_VERSION}}'
+      MENAGERIE_XOLOTL_IMAGE: 'ghcr.io/wyrd-company/xolotl:{{.XOLOTL_VERSION}}'
     cmds:
       - defer: web/test/integrated/acceptance.sh down '{{.STATE}}'
       - web/test/integrated/acceptance.sh up '{{.STATE}}'

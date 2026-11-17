@@ -244,7 +244,28 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 	done := make(chan struct{})
 	control := controlServer(t, controlFixture{p: p, rootDir: rootDir, bare: bare, docker: p.docker, done: done,
 		restart: restart, release: true})
-	csrv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", controlPort), Handler: control}
+	// Read-only evidence from the controller's actual web page, independent of
+	// Menagerie's appliedRevision, for the policy acceptance test.
+	controls := http.NewServeMux()
+	controls.Handle("/", control)
+	controls.HandleFunc("GET /binding", func(writer http.ResponseWriter, r *http.Request) {
+		var page struct {
+			Rows []struct {
+				KeyValue string
+				Policies []string
+				ID       string
+			}
+		}
+		pageData(t, fetch(t, w.operator, http.MethodGet, w.site+"/bindings", nil, nil), &page)
+		for _, row := range page.Rows {
+			if row.KeyValue == r.URL.Query().Get("name") {
+				writeJSON(writer, row)
+				return
+			}
+		}
+		http.Error(writer, "binding absent", 404)
+	})
+	csrv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", controlPort), Handler: controls}
 	go func() { _ = csrv.ListenAndServe() }()
 	t.Cleanup(func() { _ = csrv.Shutdown(context.Background()) })
 
