@@ -13,7 +13,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/openbao/openbao/api/v2 v2.7.1
 	github.com/wyrd-company/devcontainer-builder v0.3.0
-	github.com/wyrd-company/wyrwood v0.7.0
+	github.com/wyrd-company/wyrwood v0.7.1
 	golang.org/x/crypto v0.59.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0

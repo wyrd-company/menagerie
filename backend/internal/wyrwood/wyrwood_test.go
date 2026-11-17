@@ -1123,3 +1123,54 @@ func TestPoliciesReadWhoamiAndPolicyListOnEveryCall(t *testing.T) {
 		}
 	}
 }
+
+func TestChangePreservesSettingsAndSendsReadRevision(t *testing.T) {
+	f := newFixture(t)
+	group := uint32(42)
+	before := operator.Binding{ID: "binding-one", Revision: 7, Key: nameKey(sampleName), Settings: operator.Settings{TokenTTL: "1h", TokenMaxTTL: "2h", Enforcement: "report", AccessGroup: &group, Values: map[string]string{"old": "old"}}}
+	var sent operator.BindingChange
+	f.controller.set(func(c *fakeController) {
+		c.answer = func(request operator.Request) *operator.Response {
+			if request.Operation != operator.OperationBindingChange {
+				t.Errorf("operation %s", request.Operation)
+			}
+			if err := json.Unmarshal(request.Body, &sent); err != nil {
+				t.Error(err)
+			}
+			body, _ := json.Marshal(before)
+			return &operator.Response{Body: body}
+		}
+	})
+	selection := Selection{Policies: []string{}, AccessGroup: 0, Values: map[string]string{}}
+	if _, err := f.client.Change(testContext(t), before, selection); err != nil {
+		t.Fatal(err)
+	}
+	if sent.ID != before.ID || sent.Revision != 7 || sent.Settings.TokenTTL != "1h" || sent.Settings.TokenMaxTTL != "2h" || sent.Settings.Enforcement != "report" || sent.Settings.AccessGroup == nil || *sent.Settings.AccessGroup != 0 || len(sent.Policies) != 0 || len(sent.Settings.Values) != 0 {
+		t.Fatalf("change %+v", sent)
+	}
+}
+
+func TestGetKeepsMissingAndHiddenBindingsDistinct(t *testing.T) {
+	for _, code := range []operator.Code{operator.CodeNotFound, operator.CodeOutsideGrant} {
+		t.Run(string(code), func(t *testing.T) {
+			f := newFixture(t)
+			f.controller.set(func(c *fakeController) {
+				c.answer = func(request operator.Request) *operator.Response {
+					var id operator.BindingID
+					if request.Operation != operator.OperationBindingGet || json.Unmarshal(request.Body, &id) != nil || id.ID != "stale-id" {
+						t.Errorf("request %+v", request)
+					}
+					return &operator.Response{Error: &operator.Error{Code: code, Message: "sample answer"}}
+				}
+			})
+			_, err := f.client.Get(testContext(t), "stale-id")
+			want := operator.ErrNotFound
+			if code == operator.CodeOutsideGrant {
+				want = operator.ErrOutsideGrant
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("%v, want %v", err, want)
+			}
+		})
+	}
+}

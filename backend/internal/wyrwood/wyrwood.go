@@ -165,7 +165,7 @@ func New(config Config) (*Client, error) {
 	return &Client{config: config, label: label, timeout: requestTimeout}, nil
 }
 
-// Selection is what a binding holds, as a workspace's definition declares it.
+// Selection is what Menagerie's stored workspace selection gives a binding.
 type Selection struct {
 	// Policies are the Wyrwood policies of the binding.
 	Policies []string
@@ -189,6 +189,33 @@ func (c *Client) Bind(ctx context.Context, name string, selection Selection) (op
 			Key:      nameKey(name),
 			Policies: selection.Policies,
 			Settings: operator.Settings{AccessGroup: &group, Enforcement: enforcement, Values: selection.Values},
+		})
+		return err
+	})
+	return binding, err
+}
+
+// Get reads the recorded binding ID. ErrNotFound and ErrOutsideGrant remain
+// distinct; neither a missing ID nor a name omitted from Read proves removal.
+func (c *Client) Get(ctx context.Context, id string) (operator.Binding, error) {
+	var binding operator.Binding
+	err := c.do(ctx, "read", id, func(client *operator.Client) (err error) {
+		binding, err = client.GetBinding(ctx, id)
+		return err
+	})
+	return binding, err
+}
+
+// Change replaces the policies, values and access group at the revision read,
+// preserving all other settings. It can finish a saved pending assignment.
+func (c *Client) Change(ctx context.Context, before operator.Binding, selection Selection) (operator.Binding, error) {
+	settings := before.Settings
+	settings.AccessGroup = &selection.AccessGroup
+	settings.Values = selection.Values
+	var binding operator.Binding
+	err := c.do(ctx, "change", before.Key.Value, func(client *operator.Client) (err error) {
+		binding, err = client.ChangeBinding(ctx, operator.BindingChange{
+			ID: before.ID, Revision: before.Revision, Policies: selection.Policies, Settings: settings,
 		})
 		return err
 	})

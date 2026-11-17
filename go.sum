@@ -601,6 +601,8 @@ github.com/wyrd-company/devcontainer-builder v0.3.0 h1:NQZ2wGB2Kk2S+i9BsZD1KxFQ9
 github.com/wyrd-company/devcontainer-builder v0.3.0/go.mod h1:8Jtw6GHJrRxm+qe0TrI8PbhqaWLCSES89nS8dwamEw0=
 github.com/wyrd-company/wyrwood v0.7.0 h1:hK11A/kvg4KKhfuHhGRaeYsxllYJ4aMslFiAj0VVKQ0=
 github.com/wyrd-company/wyrwood v0.7.0/go.mod h1:FCwJyr0KceEPnB86KKBPKbMEIaEx1vZEYl5IsbwSff8=
+github.com/wyrd-company/wyrwood v0.7.1 h1:e2+6vixS//xYr3mFZVzja8/syvo4dGXfZ1TuJGEwvfA=
+github.com/wyrd-company/wyrwood v0.7.1/go.mod h1:GZw4suXllHh2YKsNCuVqerjZUjfFZm5tSkh8BmiWToo=
 github.com/xanzy/ssh-agent v0.3.3 h1:+/15pJfg/RsTxqYcX6fHqOXZwwMP+2VyYWJeWM2qQFM=
 github.com/xanzy/ssh-agent v0.3.3/go.mod h1:6dzNDKs0J9rVPHPhaGCukekBHKqfl+L3KghI1Bc68Uw=
 github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb h1:zGWFAtiMcyryUHoUjUJX0/lt1H2+i2Ka2n+D3DImSNo=
