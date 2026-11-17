@@ -70,8 +70,12 @@ func TestOnlyOneAnswerAtATimeAndTheSlotIsHeldThroughout(t *testing.T) {
 	job := w.startJob(t, "create", "alpha", "sample-v1")
 	waitWaiting(t, job, 0)
 
-	// The waiting job holds the workspace against every operation.
-	if status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"alpha","templateId":"sample-v1"}`); status != 409 || !strings.Contains(body, `"activeJobId":"`+job.ID()+`"`) {
+	// The waiting job holds the workspace's slot, and its data refuses a second
+	// create of the name before any job.
+	if active, ok := w.manager.Active("alpha"); !ok || active.ID() != job.ID() {
+		t.Fatalf("the slot is not held by %s", job.ID())
+	}
+	if status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"alpha","templateId":"sample-v1"}`); status != 409 || !strings.Contains(body, `"kind":"workspace-exists"`) {
 		t.Fatalf("second create %d %s", status, body)
 	}
 	other := w.startJob(t, "create", "beta", "sample-v1")
@@ -89,8 +93,9 @@ func TestOnlyOneAnswerAtATimeAndTheSlotIsHeldThroughout(t *testing.T) {
 	if status, body := w.answer(t, job, sessionAsking); status != 409 || !strings.Contains(body, `"kind":"job-not-waiting"`) {
 		t.Fatalf("concurrent answer %d %s", status, body)
 	}
-	if status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"alpha","templateId":"sample-v1"}`); status != 409 || !strings.Contains(body, "workspace-busy") {
-		t.Fatalf("operation during an answer %d %s", status, body)
+	if active, ok := w.manager.Active("alpha"); !ok || active.ID() != job.ID() {
+		close(hold)
+		t.Fatalf("the slot is not held during an answer")
 	}
 	close(hold)
 	if got := <-first; !strings.HasPrefix(got, "OK ") {

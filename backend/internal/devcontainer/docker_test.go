@@ -658,7 +658,7 @@ func TestWorkspaceListShowsOnlyRootFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := jobs.NewManager(h.ctx, jobs.Options{})
-	srv := httptest.NewServer(api.New(api.Options{Root: root, Status: h.rt, Jobs: manager, Operations: api.ContainerOperations(root, h.rt)}))
+	srv := httptest.NewServer(api.New(api.Options{Root: root, Data: testData(t), Status: h.rt, Jobs: manager, Operations: api.ContainerOperations(root, h.rt)}))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/api/workspaces")
 	if err != nil {

@@ -236,6 +236,41 @@ func TestACreateIsKeptUntilItsFolderOrItsEnd(t *testing.T) {
 	}
 }
 
+// A create takes the name of a workspace whose data holds nothing, as when its
+// folder went without a delete, and is refused one that holds a name or a key
+// or that another create is making.
+func TestACreateIsRefusedOnlyWhatTheDataClaims(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if err := s.Update(ctx, func(tx *Tx) error {
+		if err := tx.AddWorkspace("stale"); err != nil {
+			return err
+		}
+		return tx.SetRemoving("stale", "1:2")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := s.Claimed(ctx, "stale"); err != nil || claimed {
+		t.Fatalf("claimed %t %v", claimed, err)
+	}
+	if err := s.BeginCreate(ctx, "stale"); err != nil {
+		t.Fatal(err)
+	}
+	if removing, _ := s.Removing(ctx, "stale"); removing != "" {
+		t.Errorf("the new create kept removing %q", removing)
+	}
+	if err := s.HoldKey(ctx, "keyed", Key{Policy: "host-sample", Name: "keyed"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"stale", "keyed"} {
+		if claimed, _ := s.Claimed(ctx, name); !claimed {
+			t.Errorf("%s is not claimed", name)
+		}
+		if err := s.BeginCreate(ctx, name); !errors.Is(err, ErrExists) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 func TestAStartEndsTheCreatesARestartEnded(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	for _, name := range []string{"made", "unmade"} {

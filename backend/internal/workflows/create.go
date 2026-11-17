@@ -21,6 +21,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
@@ -34,6 +35,29 @@ type creation struct {
 }
 
 func (c *creation) run(ctx context.Context, run *jobs.Run) error {
+	// The workspace's data, marked as being created, keeps the name from
+	// another create and from discovery while the interview waits. A create
+	// that ends before it made the folder removes it, also when the job's
+	// context has ended.
+	if _, err := os.Lstat(c.folder); !errors.Is(err, os.ErrNotExist) {
+		return &jobs.Failure{Kind: KindWorkspaceExists, Err: fmt.Errorf("workspace %s was created before the job started; nothing was written", c.name)}
+	}
+	if err := c.w.opts.Data.BeginCreate(ctx, c.name); err != nil {
+		if errors.Is(err, store.ErrExists) {
+			return &jobs.Failure{Kind: KindWorkspaceExists, Err: fmt.Errorf("workspace %s already exists in Menagerie's data; nothing was written", c.name)}
+		}
+		return err
+	}
+	made := false
+	defer func() {
+		if made {
+			return
+		}
+		if err := c.w.opts.Data.AbandonCreate(context.WithoutCancel(ctx), c.name); err != nil {
+			fmt.Fprintf(run.Log(""), "removing the data of the create that ended failed: %v; the next start removes it\n", err)
+		}
+	}()
+
 	t := c.w.opts.Templates
 	sel := c.w.selector(c.name, c.folder, c.template)
 	reply, err := c.w.interview(ctx, run, interviewSteps{
@@ -52,6 +76,10 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 			return &jobs.Failure{Kind: KindWorkspaceExists, Err: fmt.Errorf("workspace %s was created while the interview ran; nothing was written", c.name)}
 		}
 		return fmt.Errorf("create workspace folder: %w", err)
+	}
+	made = true
+	if err := c.w.opts.Data.Created(ctx, c.name); err != nil {
+		return fmt.Errorf("%w; %s", err, c.recovery("holds nothing yet"))
 	}
 	if err := backup.Init(c.folder, c.name); err != nil {
 		return fmt.Errorf("%w; %s", err, c.recovery("holds what the repository initialization left"))

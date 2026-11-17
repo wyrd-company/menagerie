@@ -380,6 +380,7 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 	})
 	flows := workflows.New(workflows.Options{
 		Root:         root,
+		Data:         data,
 		Templates:    templates.New(cfg.TemplateService.Socket),
 		Approved:     ids,
 		Remote:       remote,
@@ -395,6 +396,7 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 	operations[api.OperationCommit] = commits.New(commits.Options{Root: root, Remote: remote, Jobs: manager}).Operation()
 	return api.New(api.Options{
 		Root:       root,
+		Data:       data,
 		Status:     runtime,
 		Jobs:       manager,
 		Operations: operations,

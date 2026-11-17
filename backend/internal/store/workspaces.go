@@ -280,19 +280,43 @@ func (s *Store) RemoveWorkspace(ctx context.Context, name string) error {
 	return s.Update(ctx, func(t *Tx) error { return t.RemoveWorkspace(name) })
 }
 
+// Claimed says that the data holds a workspace of that name that a create
+// must not take: one being created, or one that holds a container name or a
+// Xolotl key. The data of a workspace whose folder is gone and that holds
+// neither is what discovery removes, so it claims nothing.
+func (t *Tx) Claimed(name string) (bool, error) {
+	var n int
+	err := t.tx.QueryRowContext(t.ctx, `SELECT count(*) FROM workspaces WHERE name = ? AND (creating = 1
+		OR EXISTS (SELECT 1 FROM container_names WHERE workspace = workspaces.name)
+		OR EXISTS (SELECT 1 FROM xolotl_keys WHERE workspace = workspaces.name))`, name).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("Menagerie's data: %w", err)
+	}
+	return n > 0, nil
+}
+
+// Claimed says that the data holds a workspace of that name that a create
+// must not take; see Tx.Claimed.
+func (s *Store) Claimed(ctx context.Context, name string) (claimed bool, err error) {
+	err = s.Update(ctx, func(t *Tx) error { claimed, err = t.Claimed(name); return err })
+	return claimed, err
+}
+
 // BeginCreate gives a workspace its data marked as being created, so that
 // discovery keeps it while its create has no folder. A workspace the data
-// already holds is ErrExists.
+// claims, being created or holding a name or a key, is ErrExists; the caller
+// has found no folder, so any other data of that name is replaced.
 func (s *Store) BeginCreate(ctx context.Context, name string) error {
 	return s.Update(ctx, func(t *Tx) error {
-		exists, err := t.Exists(name)
+		claimed, err := t.Claimed(name)
 		if err != nil {
 			return err
 		}
-		if exists {
+		if claimed {
 			return fmt.Errorf("%w: %s", ErrExists, name)
 		}
-		_, err = t.exec(`INSERT INTO workspaces (name, creating) VALUES (?, 1)`, name)
+		_, err = t.exec(`INSERT INTO workspaces (name, creating) VALUES (?, 1)
+			ON CONFLICT (name) DO UPDATE SET creating = 1, removing = NULL`, name)
 		return err
 	})
 }

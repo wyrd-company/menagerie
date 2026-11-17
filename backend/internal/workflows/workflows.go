@@ -31,6 +31,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
@@ -65,7 +66,10 @@ type Runtime interface {
 
 // Options compose the workflows.
 type Options struct {
-	Root      *workspace.Root
+	Root *workspace.Root
+	// Data is Menagerie's data, which holds a workspace from the start of its
+	// create.
+	Data      *store.Store
 	Templates Templates
 	// Approved holds the approved template ids.
 	Approved map[string]bool
@@ -138,6 +142,8 @@ func (w *Workflows) request(req api.JobRequest) (string, error) {
 	return w.opts.Root.FolderPath(req.Workspace)
 }
 
+// create refuses a workspace whose folder exists, and one Menagerie's data
+// holds: being created, or listed with no folder.
 func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 	folder, err := w.request(req)
 	if err != nil {
@@ -145,6 +151,13 @@ func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 	}
 	if _, err := os.Lstat(folder); !errors.Is(err, os.ErrNotExist) {
 		return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindWorkspaceExists, Message: fmt.Sprintf("workspace %s already exists", req.Workspace)}
+	}
+	claimed, err := w.opts.Data.Claimed(context.Background(), req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	if claimed {
+		return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindWorkspaceExists, Message: fmt.Sprintf("workspace %s already exists in Menagerie's data: it is being created, or its folder is gone and it still holds a binding or a key, which its delete removes", req.Workspace)}
 	}
 	return (&creation{w: w, name: req.Workspace, folder: folder, template: req.TemplateID}).run, nil
 }

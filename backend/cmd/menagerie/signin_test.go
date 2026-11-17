@@ -99,6 +99,7 @@ func newMenagerie(t *testing.T) *menagerie {
 	m.jobs = jobs.NewManager(ctx, jobs.Options{})
 	m.server = api.New(api.Options{
 		Root:       root,
+		Data:       testData(t),
 		Status:     m.runtime,
 		Jobs:       m.jobs,
 		Operations: api.ContainerOperations(root, m.runtime),

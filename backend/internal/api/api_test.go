@@ -19,6 +19,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -82,6 +83,7 @@ type fixture struct {
 	server  *Server
 	http    *httptest.Server
 	tokens  *fakeMinter
+	data    *store.Store
 }
 
 func newFixture(t *testing.T, ui fsFS) *fixture {
@@ -104,8 +106,14 @@ func newFixture(t *testing.T, ui fsFS) *fixture {
 	}}
 	manager := jobs.NewManager(context.Background(), jobs.Options{})
 	tokens := &fakeMinter{}
+	data, err := store.Open(filepath.Join(t.TempDir(), "menagerie.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = data.Close() })
 	opts := Options{
 		Root:          root,
+		Data:          data,
 		Status:        rt,
 		Jobs:          manager,
 		Operations:    ContainerOperations(root, rt),
@@ -118,7 +126,7 @@ func newFixture(t *testing.T, ui fsFS) *fixture {
 	server := New(opts)
 	hs := httptest.NewServer(server)
 	t.Cleanup(hs.Close)
-	return &fixture{root: dir, rt: rt, manager: manager, server: server, http: hs, tokens: tokens}
+	return &fixture{root: dir, rt: rt, manager: manager, server: server, http: hs, tokens: tokens, data: data}
 }
 
 type fsFS = fstest.MapFS
@@ -179,6 +187,47 @@ func TestListWorkspacesJoinsFoldersOnly(t *testing.T) {
 	}
 	if got := strings.Join(f.rt.asked, ","); got != f.root+"/alpha,"+f.root+"/beta,"+f.root+"/gamma" {
 		t.Fatalf("asked %s", got)
+	}
+}
+
+// A workspace in Menagerie's data whose folder is gone and that still holds a
+// container name or a Xolotl key is listed as no-folder, with no container, in
+// name order; one that holds neither leaves the data, and a folder listed for
+// the first time joins it.
+func TestListWorkspacesShowsAWorkspaceWithNoFolderThatHoldsSomething(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx := context.Background()
+	if err := f.data.HoldName(ctx, "bound", "container-bound", "sample-host", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.data.HoldKey(ctx, "keyed", store.Key{Policy: "host-sample", Name: "keyed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.data.Update(ctx, func(tx *store.Tx) error { return tx.AddWorkspace("empty") }); err != nil {
+		t.Fatal(err)
+	}
+	resp, data := f.do(t, "GET", "/api/workspaces", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	want := `{"workspaces":[` +
+		`{"name":"alpha","state":"running","containerId":"c-alpha","activeJob":null},` +
+		`{"name":"beta","state":"stopped","containerId":"c-beta","activeJob":null},` +
+		`{"name":"bound","state":"no-folder","containerId":null,"activeJob":null},` +
+		`{"name":"gamma","state":"no-container","containerId":null,"activeJob":null},` +
+		`{"name":"keyed","state":"no-folder","containerId":null,"activeJob":null}]}`
+	if strings.TrimSpace(string(data)) != want {
+		t.Fatalf("got %s", data)
+	}
+	for name, want := range map[string]bool{"alpha": true, "gamma": true, "empty": false} {
+		if exists, _ := f.data.Exists(ctx, name); exists != want {
+			t.Errorf("%s in the data: %t", name, exists)
+		}
+	}
+	// Only a delete runs on it.
+	resp, data = f.do(t, "POST", "/api/jobs", `{"operation":"start","workspace":"bound"}`)
+	if body := decode[errorBody](t, data); resp.StatusCode != 404 || body.Error.Kind != KindWorkspaceNotFound {
+		t.Fatalf("%d %s", resp.StatusCode, data)
 	}
 }
 

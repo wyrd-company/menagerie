@@ -268,8 +268,10 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.manager = jobs.NewManager(ctx, jobs.Options{Limits: opts.limits})
+	data := testData(t)
 	flows := New(Options{
 		Root:      root,
+		Data:      data,
 		Templates: templates.New(socket),
 		Approved:  approved,
 		Remote:    &backup.Remote{URL: a.host.URL("backups.git"), Auth: backup.AgentAuth(a.host.AgentPath)},
@@ -280,7 +282,7 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 		},
 	})
 	a.flows = flows
-	a.http = httptest.NewServer(api.New(api.Options{Root: root, Jobs: a.manager, Operations: flows.Operations(), Interviews: flows}))
+	a.http = httptest.NewServer(api.New(api.Options{Root: root, Data: data, Jobs: a.manager, Operations: flows.Operations(), Interviews: flows}))
 	t.Cleanup(a.http.Close)
 	t.Cleanup(a.manager.Wait)
 	t.Cleanup(cancel)

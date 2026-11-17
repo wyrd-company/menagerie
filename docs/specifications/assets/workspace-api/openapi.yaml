@@ -6,7 +6,8 @@ info:
     Browser API of the Menagerie workspace service. Jobs and their events are
     held in this process's memory only: a restart of Menagerie drops every job
     and its history, an unknown job id answers 404, and the workspace list is
-    rebuilt from the workspace folders and Docker. Every route except
+    rebuilt from the workspace folders, Docker and Menagerie's data, which a
+    restart keeps. Every route except
     /healthz requires a manager session cookie from the OIDC sign-in routes
     under /auth/ (see the authentication specification); without one the
     API answers 401 `unauthenticated`, and a cross-origin request that
@@ -30,7 +31,9 @@ paths:
   /api/workspaces:
     get:
       operationId: listWorkspaces
-      summary: Every folder directly under the workspace root whose name does not start with a dot, with its container state.
+      summary: >-
+        Every folder directly under the workspace root whose name does not start with a dot, with its container
+        state, and every workspace whose folder is gone that still holds a container name or a Xolotl key.
       responses:
         "200":
           description: Workspaces sorted by name.
@@ -260,9 +263,13 @@ components:
           type: string
         state:
           type: string
-          enum: [running, stopped, no-container]
+          description: >-
+            The container's state, or no-folder for a workspace whose folder is gone and that still holds a
+            container name or a Xolotl key in Menagerie's data; only delete runs on it.
+          enum: [running, stopped, no-container, no-folder]
         containerId:
           type: [string, "null"]
+          description: The container's id; null with no container and with no folder.
         activeJob:
           oneOf:
             - type: "null"

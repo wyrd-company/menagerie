@@ -15,11 +15,18 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
+
+// StateNoFolder is the state of a workspace whose folder is gone and that
+// still holds a container name or a Xolotl key in Menagerie's data.
+const StateNoFolder = "no-folder"
 
 // StatusSource reports a workspace folder's container state.
 type StatusSource interface {
@@ -34,7 +41,9 @@ type Template struct {
 
 // Options compose a Server.
 type Options struct {
-	Root       *workspace.Root
+	Root *workspace.Root
+	// Data is Menagerie's data, which the workspace list joins to the folders.
+	Data       *store.Store
 	Status     StatusSource
 	Jobs       *jobs.Manager
 	Operations Operations
@@ -163,13 +172,21 @@ type workspaceRow struct {
 	ActiveJob   *activeJob `json:"activeJob"`
 }
 
+// listWorkspaces lists the workspace folders, each joined to its container and
+// to its workspace in Menagerie's data, and the workspaces whose folder is gone
+// that still hold a name or a key, as no-folder.
 func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 	names, err := s.opts.Root.Names()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, apiError{Kind: "workspace-root-unreadable", Message: err.Error()})
 		return
 	}
-	rows := make([]workspaceRow, 0, len(names))
+	noFolder, err := s.opts.Data.Discover(r.Context(), names)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, apiError{Kind: "internal-error", Message: err.Error()})
+		return
+	}
+	rows := make([]workspaceRow, 0, len(names)+len(noFolder))
 	for _, name := range names {
 		folder, err := s.opts.Root.FolderPath(name)
 		if err != nil {
@@ -185,13 +202,22 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 			id := status.ContainerID
 			row.ContainerID = &id
 		}
-		if job, ok := s.opts.Jobs.Active(name); ok {
-			snap := job.Snapshot()
-			row.ActiveJob = &activeJob{JobID: snap.JobID, Operation: snap.Operation, State: snap.State}
-		}
-		rows = append(rows, row)
+		rows = append(rows, s.withJob(row))
 	}
+	for _, name := range noFolder {
+		rows = append(rows, s.withJob(workspaceRow{Name: name, State: StateNoFolder}))
+	}
+	slices.SortFunc(rows, func(a, b workspaceRow) int { return strings.Compare(a.Name, b.Name) })
 	writeJSON(w, http.StatusOK, map[string][]workspaceRow{"workspaces": rows})
+}
+
+// withJob names the workspace's unfinished job on its row.
+func (s *Server) withJob(row workspaceRow) workspaceRow {
+	if job, ok := s.opts.Jobs.Active(row.Name); ok {
+		snap := job.Snapshot()
+		row.ActiveJob = &activeJob{JobID: snap.JobID, Operation: snap.Operation, State: snap.State}
+	}
+	return row
 }
 
 func (s *Server) listJobs(w http.ResponseWriter, _ *http.Request) {

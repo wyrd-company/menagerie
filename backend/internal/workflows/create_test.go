@@ -1,7 +1,9 @@
 package workflows
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -205,6 +207,11 @@ func TestATemplateRefusalAtTheStartFailsTheJob(t *testing.T) {
 	if snap.State != jobs.Failed || snap.Error.Kind != KindTemplateRefused || !strings.Contains(snap.Error.Message, "(template-not-found): no such template") {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
+	// A create that ended before it made the folder leaves no data, so the
+	// name is free again.
+	if exists, err := w.data.Exists(context.Background(), "alpha"); err != nil || exists {
+		t.Fatalf("the data of a create that ended stays: %t %v", exists, err)
+	}
 	w.tmpl.startInterview = func(templates.Selector) (*templates.Reply, error) {
 		return nil, &templates.UnavailableError{Err: errors.New("connection refused")}
 	}
@@ -230,6 +237,68 @@ func TestAFolderCreatedDuringTheInterviewIsNotTouched(t *testing.T) {
 	}
 	if got := w.tmpl.seen(); got[len(got)-1] == "generate" {
 		t.Fatal("generated into a folder Menagerie did not create")
+	}
+}
+
+// A create's workspace is in Menagerie's data from the job's start: while its
+// interview waits, the list keeps it and a second create of the name is
+// refused; once the job made the folder, the list shows it.
+func TestACreateWhoseInterviewWaitsStaysInMenageriesData(t *testing.T) {
+	w := newWorld(t)
+	job := w.startJob(t, "create", "alpha", "sample-v1")
+	waitWaiting(t, job, 0)
+	for range 2 {
+		status, body := w.do(t, http.MethodGet, "/api/workspaces", "")
+		if status != http.StatusOK || strings.Contains(body, `"alpha"`) {
+			t.Fatalf("list: %d %s", status, body)
+		}
+	}
+	if exists, err := w.data.Exists(context.Background(), "alpha"); err != nil || !exists {
+		t.Fatalf("the list removed a waiting create's data: %t %v", exists, err)
+	}
+	status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"alpha","templateId":"sample-v1"}`)
+	if status != http.StatusConflict || !strings.Contains(body, `"kind":"`+KindWorkspaceExists+`"`) || !strings.Contains(body, "Menagerie's data") {
+		t.Fatalf("a second create: %d %s", status, body)
+	}
+	w.answer(t, job, sessionAsking)
+	if snap := waitEnded(t, job); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	status, body = w.do(t, http.MethodGet, "/api/workspaces", "")
+	if status != http.StatusOK || !strings.Contains(body, `{"name":"alpha","state":"running"`) {
+		t.Fatalf("list: %d %s", status, body)
+	}
+}
+
+// A workspace whose folder is gone and that still holds a name or a key is
+// listed as no-folder: a create of its name is refused and a delete runs.
+func TestAWorkspaceWithNoFolderIsRefusedACreateAndTakesADelete(t *testing.T) {
+	w := newWorld(t)
+	if err := w.data.HoldName(context.Background(), "gone", "container-gone", "sample-host", true); err != nil {
+		t.Fatal(err)
+	}
+	status, body := w.do(t, http.MethodGet, "/api/workspaces", "")
+	if status != http.StatusOK || !strings.Contains(body, `{"name":"gone","state":"no-folder","containerId":null,"activeJob":null}`) {
+		t.Fatalf("list: %d %s", status, body)
+	}
+	status, body = w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"gone","templateId":"sample-v1"}`)
+	if status != http.StatusConflict || !strings.Contains(body, `"kind":"`+KindWorkspaceExists+`"`) {
+		t.Fatalf("create: %d %s", status, body)
+	}
+	for _, op := range []string{"start", "upgrade"} {
+		status, body = w.do(t, http.MethodPost, "/api/jobs", fmt.Sprintf(`{"operation":%q,"workspace":"gone","templateId":"sample-v1"}`, op))
+		if status != http.StatusNotFound {
+			t.Fatalf("%s: %d %s", op, status, body)
+		}
+	}
+	job := w.startJob(t, "delete", "gone", "")
+	if snap := waitEnded(t, job); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	// A workspace that holds nothing and has no folder is not there to delete.
+	status, body = w.do(t, http.MethodPost, "/api/jobs", `{"operation":"delete","workspace":"absent"}`)
+	if status != http.StatusNotFound || !strings.Contains(body, "workspace-not-found") {
+		t.Fatalf("delete absent: %d %s", status, body)
 	}
 }
 

@@ -89,7 +89,7 @@ func TestOpenAPIEnumsAgreeWithCode(t *testing.T) {
 	if !slices.Contains(schemas["JobError"].Properties["kind"].Examples, jobs.KindTimedOut) {
 		t.Errorf("error kind %s undocumented", jobs.KindTimedOut)
 	}
-	containers := []string{devcontainer.StateRunning, devcontainer.StateStopped, devcontainer.StateNoContainer}
+	containers := []string{devcontainer.StateRunning, devcontainer.StateStopped, devcontainer.StateNoContainer, StateNoFolder}
 	if a, b := joinSorted(schemas["Workspace"].Properties["state"].Enum), joinSorted(containers); a != b {
 		t.Errorf("workspace states documented %q code %q", a, b)
 	}

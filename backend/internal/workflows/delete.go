@@ -19,9 +19,21 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
 )
 
-// delete validates a delete request. It changes nothing.
+// delete validates a delete request. It changes nothing. A workspace whose
+// folder is gone and that still holds a name or a key in Menagerie's data,
+// listed as no-folder, is deleted too.
 func (w *Workflows) delete(req api.JobRequest) (jobsRunner, error) {
 	folder, err := api.ExistingFolder(w.opts.Root, req.Workspace)
+	var missing *api.RequestError
+	if errors.As(err, &missing) && missing.Kind == api.KindWorkspaceNotFound {
+		held, heldErr := w.opts.Data.Held(context.Background(), req.Workspace)
+		if heldErr != nil {
+			return nil, heldErr
+		}
+		if !held.Empty() {
+			folder, err = w.opts.Root.FolderPath(req.Workspace)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

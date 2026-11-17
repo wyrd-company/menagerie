@@ -200,6 +200,8 @@ type fakeRuntime struct {
 	// context to end, or for released to close.
 	startWaits, rebuildWaits bool
 	released                 chan struct{}
+	// data is Menagerie's data, whose workspace a delete removes last.
+	data *store.Store
 }
 
 func (r *fakeRuntime) Status(context.Context, string) (devcontainer.Status, error) {
@@ -299,7 +301,29 @@ func (r *fakeRuntime) Delete(ctx context.Context, folder string, p devcontainer.
 	if err := r.do("remove-folder", folder, p); err != nil {
 		return err
 	}
-	return os.RemoveAll(folder)
+	if err := os.RemoveAll(folder); err != nil {
+		return err
+	}
+	if r.data == nil {
+		return nil
+	}
+	held, err := r.data.Held(ctx, filepath.Base(folder))
+	if err != nil {
+		return err
+	}
+	return r.data.Update(ctx, func(tx *store.Tx) error {
+		for _, name := range held.Names {
+			if err := tx.ForgetName(filepath.Base(folder), name.Name); err != nil {
+				return err
+			}
+		}
+		for _, key := range held.Keys {
+			if err := tx.ForgetKey(filepath.Base(folder), key); err != nil {
+				return err
+			}
+		}
+		return tx.RemoveWorkspace(filepath.Base(folder))
+	})
 }
 
 func (r *fakeRuntime) seen() []string {
@@ -317,6 +341,7 @@ type world struct {
 	rt      *fakeRuntime
 	manager *jobs.Manager
 	flows   *Workflows
+	data    *store.Store
 	http    *httptest.Server
 	// cancel ends the context of every job, as Menagerie's shutdown does.
 	cancel context.CancelFunc
@@ -338,14 +363,17 @@ func newWorldWith(t *testing.T, opts jobs.Options) *world {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
 	w.manager = jobs.NewManager(ctx, opts)
+	w.data = testData(t)
+	w.rt.data = w.data
 	w.flows = New(Options{
 		Root:      root,
+		Data:      w.data,
 		Templates: w.tmpl,
 		Approved:  map[string]bool{"sample-v1": true, "sample-v2": true},
 		Remote:    &backup.Remote{URL: w.remote},
 		Runtime:   w.rt,
 	})
-	server := api.New(api.Options{Root: root, Jobs: w.manager, Operations: w.flows.Operations(), Interviews: w.flows})
+	server := api.New(api.Options{Root: root, Data: w.data, Status: w.rt, Jobs: w.manager, Operations: w.flows.Operations(), Interviews: w.flows})
 	w.http = httptest.NewServer(server)
 	t.Cleanup(w.http.Close)
 	// Cleanups run last first: cancel ends jobs still waiting for answers,

@@ -100,6 +100,9 @@ func ContainerOperations(root *workspace.Root, rt ContainerRuntime) Operations {
 	}
 }
 
+// KindWorkspaceNotFound refuses a request for a workspace that has no folder.
+const KindWorkspaceNotFound = "workspace-not-found"
+
 // ExistingFolder resolves a workspace's folder, or a RequestError that names
 // why the request cannot have it.
 func ExistingFolder(root *workspace.Root, name string) (string, error) {
@@ -108,7 +111,7 @@ func ExistingFolder(root *workspace.Root, name string) (string, error) {
 	case errors.Is(err, workspace.ErrInvalidName):
 		return "", &RequestError{Status: http.StatusBadRequest, Kind: "invalid-workspace-name", Message: err.Error()}
 	case errors.Is(err, workspace.ErrNotFound):
-		return "", &RequestError{Status: http.StatusNotFound, Kind: "workspace-not-found", Message: err.Error()}
+		return "", &RequestError{Status: http.StatusNotFound, Kind: KindWorkspaceNotFound, Message: err.Error()}
 	}
 	return folder, err
 }
