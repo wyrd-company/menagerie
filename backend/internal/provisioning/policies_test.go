@@ -1,0 +1,286 @@
+package provisioning
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wyrd-company/menagerie/backend/internal/store"
+	"github.com/wyrd-company/menagerie/backend/internal/wyrwood"
+	"github.com/wyrd-company/wyrwood/operator"
+)
+
+type policyHost struct {
+	*host
+	bindings                       map[string]operator.Binding
+	hidden                         bool
+	changes, binds, pending, stale int
+	allowed                        []string
+	changeError                    error
+}
+
+func newPolicyHost(t *testing.T, selected []string) *policyHost {
+	h := &policyHost{host: newHost(t), bindings: map[string]operator.Binding{}, allowed: []string{"workspace", "ssh", "key"}}
+	ctx := context.Background()
+	if err := h.data.BeginCreate(ctx, "sample"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.data.SetCreateSelection(ctx, "sample", selected, h.allowed); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+func (h *policyHost) Policies(context.Context) (operator.Grant, []operator.Policy, error) {
+	policies := []operator.Policy{}
+	for _, name := range h.allowed {
+		p := operator.Policy{Name: name}
+		if name == "key" {
+			p.ValueNames = []string{"key_name"}
+		}
+		policies = append(policies, p)
+	}
+	return operator.Grant{Agents: []string{sampleAgent}, Policies: h.allowed, Actions: []operator.Action{operator.ActionRead, operator.ActionBind}}, policies, nil
+}
+func (h *policyHost) Read(_ context.Context, name string) (operator.Binding, bool, error) {
+	if h.hidden {
+		return operator.Binding{}, false, nil
+	}
+	for _, b := range h.bindings {
+		if b.Key.Value == name {
+			return b, true, nil
+		}
+	}
+	return operator.Binding{}, false, nil
+}
+func (h *policyHost) Get(_ context.Context, id string) (operator.Binding, error) {
+	b, ok := h.bindings[id]
+	if !ok {
+		return b, operator.ErrNotFound
+	}
+	if h.hidden {
+		return operator.Binding{}, operator.ErrOutsideGrant
+	}
+	return b, nil
+}
+func (h *policyHost) Bind(_ context.Context, name string, s wyrwood.Selection) (operator.Binding, error) {
+	h.binds++
+	if h.hidden {
+		return operator.Binding{}, operator.ErrOutsideGrant
+	}
+	if len(s.Policies) == 0 {
+		return operator.Binding{}, &operator.Error{Code: operator.CodeInvalid, Message: "a binding needs at least one policy\nchoose a policy"}
+	}
+	group := s.AccessGroup
+	b := operator.Binding{ID: fmt.Sprintf("binding-%d", h.binds), Agent: sampleAgent, Key: operator.Key{Kind: operator.KeyName, Value: name}, Policies: slices.Clone(s.Policies), Revision: 1, Applied: true, Settings: operator.Settings{AccessGroup: &group, Values: maps.Clone(s.Values)}}
+	h.bindings[b.ID] = b
+	if h.pending > 0 {
+		h.pending--
+		b.Applied = false
+		h.bindings[b.ID] = b
+		return operator.Binding{}, operator.ErrPending
+	}
+	return b, nil
+}
+func (h *policyHost) Change(_ context.Context, b operator.Binding, s wyrwood.Selection) (operator.Binding, error) {
+	h.changes++
+	if h.changeError != nil {
+		return operator.Binding{}, h.changeError
+	}
+	if h.stale > 0 {
+		h.stale--
+		b.Revision++
+		h.bindings[b.ID] = b
+		return operator.Binding{}, operator.ErrRevisionDiffers
+	}
+	if len(s.Policies) == 0 {
+		return operator.Binding{}, &operator.Error{Code: operator.CodeInvalid, Message: "a binding needs at least one policy\nchoose a policy"}
+	}
+	b.Policies = slices.Clone(s.Policies)
+	b.Settings.Values = maps.Clone(s.Values)
+	group := s.AccessGroup
+	b.Settings.AccessGroup = &group
+	b.Revision++
+	b.Applied = true
+	if h.pending > 0 {
+		h.pending--
+		b.Applied = false
+		h.bindings[b.ID] = b
+		return operator.Binding{}, operator.ErrPending
+	}
+	h.bindings[b.ID] = b
+	return b, nil
+}
+func (h *policyHost) steps() *Steps {
+	return New(Options{Clients: Clients{Bindings: h, Agent: sampleAgent, Wait: time.Second}, Runtime: h.host, Data: h.data, Poll: time.Millisecond})
+}
+func (h *policyHost) existing(policies []string) {
+	h.hold("sample", "container-sample", true)
+	group := uint32(4321)
+	h.bindings["existing"] = operator.Binding{ID: "existing", Agent: sampleAgent, Key: operator.Key{Kind: operator.KeyName, Value: "container-sample"}, Policies: policies, Revision: 4, Applied: true, Settings: operator.Settings{AccessGroup: &group, Values: map[string]string{}}}
+	if err := h.data.BindingID(context.Background(), "sample", "container-sample", "existing"); err != nil {
+		h.t.Fatal(err)
+	}
+}
+func (h *policyHost) selection() store.Selection {
+	current, err := h.data.Selection(context.Background(), "sample")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return current
+}
+
+func TestPolicyApplyChangesRunningBindingWithoutReadingDefinition(t *testing.T) {
+	h := newPolicyHost(t, []string{"workspace", "ssh", "key"})
+	h.existing([]string{"workspace"})
+	h.definedErr = errors.New("invalid definition")
+	if err := h.steps().ApplyPolicies(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	b := h.bindings["existing"]
+	current := h.selection()
+	if h.changes != 1 || h.binds != 0 || *b.Settings.AccessGroup != 4321 || !slices.Equal(b.Policies, []string{"key", "ssh", "workspace"}) || b.Settings.Values["key_name"] != "sample" || current.AppliedRevision == nil || *current.AppliedRevision != current.Revision || len(h.calls) != 0 {
+		t.Fatalf("binding %+v selection %+v calls %v", b, current, h.calls)
+	}
+	if err := h.steps().ApplyPolicies(context.Background(), folder, h); err != nil || h.changes != 1 {
+		t.Fatalf("equal binding rewritten: %v changes %d", err, h.changes)
+	}
+}
+func TestPolicyApplyFinishesPendingAndBoundsRetries(t *testing.T) {
+	for _, pending := range []int{1, 4} {
+		t.Run(fmt.Sprint(pending), func(t *testing.T) {
+			h := newPolicyHost(t, []string{"workspace", "ssh"})
+			h.existing([]string{"workspace"})
+			h.pending = pending
+			err := h.steps().ApplyPolicies(context.Background(), folder, h)
+			if pending == 4 {
+				wantKind(t, err, KindBindingPending)
+				if h.selection().AppliedRevision != nil {
+					t.Fatal("pending recorded applied")
+				}
+			} else if err != nil || h.changes != 2 {
+				t.Fatalf("%v changes %d", err, h.changes)
+			}
+		})
+	}
+}
+func TestPolicyApplyDecidesStaleChangeAgainOnce(t *testing.T) {
+	for _, stale := range []int{1, 2} {
+		t.Run(fmt.Sprint(stale), func(t *testing.T) {
+			h := newPolicyHost(t, []string{"workspace", "ssh"})
+			h.existing([]string{"workspace"})
+			h.stale = stale
+			err := h.steps().ApplyPolicies(context.Background(), folder, h)
+			if stale == 2 {
+				wantKind(t, err, KindBindingChanged)
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if h.changes != 2 {
+				t.Fatalf("changes %d", h.changes)
+			}
+		})
+	}
+}
+func TestPolicyApplyFindsReplacementByName(t *testing.T) {
+	h := newPolicyHost(t, []string{"workspace", "ssh"})
+	h.existing([]string{"workspace"})
+	b := h.bindings["existing"]
+	delete(h.bindings, "existing")
+	b.ID = "replacement"
+	h.bindings[b.ID] = b
+	if err := h.steps().ApplyPolicies(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	held := h.held("sample")
+	if h.changes != 1 || held.Names[0].BindingID != "replacement" {
+		t.Fatalf("changes %d held %+v", h.changes, held)
+	}
+}
+func TestPolicyApplyRefusesHiddenAndOutsidePoliciesBeforeMutation(t *testing.T) {
+	for _, hidden := range []bool{true, false} {
+		t.Run(fmt.Sprint(hidden), func(t *testing.T) {
+			h := newPolicyHost(t, []string{"workspace", "ssh"})
+			h.existing([]string{"workspace"})
+			kind := KindPolicyOutsideGrant
+			if hidden {
+				h.hidden = true
+				kind = KindBindingOutsideGrant
+			} else {
+				h.allowed = []string{"workspace"}
+			}
+			wantKind(t, h.steps().ApplyPolicies(context.Background(), folder, h), kind)
+			if h.binds != 0 || h.changes != 0 || h.selection().AppliedRevision != nil {
+				t.Fatal("changed or recorded applied")
+			}
+		})
+	}
+}
+func TestEmptySelectionIsAppliedWithoutACurrentName(t *testing.T) {
+	h := newPolicyHost(t, nil)
+	if err := h.steps().ApplyPolicies(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	if h.selection().AppliedRevision == nil || h.binds != 0 || h.changes != 0 {
+		t.Fatal("empty selection not recorded without binding requests")
+	}
+}
+func TestEmptySelectionRefusalKeepsBindingAndOneLineFailure(t *testing.T) {
+	h := newPolicyHost(t, nil)
+	h.existing([]string{"workspace"})
+	wantKind(t, h.steps().ApplyPolicies(context.Background(), folder, h), KindBindingRefused)
+	current := h.selection()
+	if h.changes != 1 || current.AppliedRevision != nil || current.ApplyFailure == nil || current.ApplyFailure.Kind != KindBindingRefused || strings.Contains(current.ApplyFailure.Message, "\n") || !strings.Contains(current.ApplyFailure.Message, "choose a policy") || !slices.Equal(h.bindings["existing"].Policies, []string{"workspace"}) {
+		t.Fatalf("%+v", current)
+	}
+}
+func TestMissingBindingRequiresAcceptedCurrentDeclaration(t *testing.T) {
+	h := newPolicyHost(t, []string{"workspace"})
+	h.hold("sample", "old-name", true)
+	wantKind(t, h.steps().ApplyPolicies(context.Background(), folder, h), KindInvalid)
+	if h.binds != 0 || h.changes != 0 || h.selection().AppliedRevision != nil {
+		t.Fatal("changed missing binding with another declared name")
+	}
+}
+
+func TestMissingBindingEmptySelectionUsesDeclarationThenWyrwoodRefusal(t *testing.T) {
+	h := newPolicyHost(t, nil)
+	h.hold("sample", "container-sample", true)
+	wantKind(t, h.steps().ApplyPolicies(context.Background(), folder, h), KindBindingRefused)
+	if h.binds != 1 || h.selection().AppliedRevision != nil || h.selection().ApplyFailure == nil {
+		t.Fatal("empty missing binding recorded applied")
+	}
+}
+func TestHiddenReplacementRefusesBothEmptyAndNonemptySelections(t *testing.T) {
+	for _, selection := range [][]string{nil, {"workspace"}} {
+		t.Run(fmt.Sprint(selection), func(t *testing.T) {
+			h := newPolicyHost(t, selection)
+			h.existing([]string{"workspace"})
+			delete(h.bindings, "existing")
+			h.hidden = true
+			wantKind(t, h.steps().ApplyPolicies(context.Background(), folder, h), KindBindingOutsideGrant)
+			if h.binds != 1 || h.changes != 0 || h.selection().AppliedRevision != nil {
+				t.Fatal("hidden replacement changed or recorded applied")
+			}
+		})
+	}
+}
+func TestPendingBindIsFinishedByChangeAndNextApply(t *testing.T) {
+	h := newPolicyHost(t, []string{"workspace"})
+	h.hold("sample", "container-sample", true)
+	h.pending = 4
+	wantKind(t, h.steps().ApplyPolicies(context.Background(), folder, h), KindBindingPending)
+	if h.selection().AppliedRevision != nil {
+		t.Fatal("pending bind recorded applied")
+	}
+	if err := h.steps().ApplyPolicies(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	if h.selection().AppliedRevision == nil || h.binds != 1 {
+		t.Fatal("next apply did not finish saved bind")
+	}
+}

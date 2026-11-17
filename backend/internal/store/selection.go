@@ -242,3 +242,18 @@ func (s *Store) BindingID(ctx context.Context, workspace, name, id string) error
 		return err
 	})
 }
+
+// PrepareSelectionImport runs with import 5's global mark. A declared current
+// name waits for a binding read; identities are taken over even during outages.
+func (t *Tx) PrepareSelectionImport(name string, key *Key, pending bool) error {
+	var identity any
+	if key != nil {
+		raw, err := json.Marshal(key)
+		if err != nil {
+			return err
+		}
+		identity = string(raw)
+	}
+	_, err := t.exec(`UPDATE workspaces SET selection_imported = ?, xolotl_identity = ?, selection_revision = selection_revision + 1 WHERE name = ?`, !pending, identity, name)
+	return err
+}
