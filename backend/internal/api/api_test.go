@@ -179,9 +179,9 @@ func TestListWorkspacesJoinsFoldersOnly(t *testing.T) {
 		t.Fatalf("%d %s", resp.StatusCode, data)
 	}
 	want := `{"workspaces":[` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"alpha","state":"running","containerId":"c-alpha","activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"beta","state":"stopped","containerId":"c-beta","activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"gamma","state":"no-container","containerId":null,"activeJob":null}]}`
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"alpha","state":"running","containerId":"c-alpha","activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"beta","state":"stopped","containerId":"c-beta","activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"gamma","state":"no-container","containerId":null,"activeJob":null}]}`
 	if strings.TrimSpace(string(data)) != want {
 		t.Fatalf("got %s", data)
 	}
@@ -211,10 +211,10 @@ func TestListWorkspacesShowsAWorkspaceWithNoFolderThatHoldsSomething(t *testing.
 		t.Fatalf("%d %s", resp.StatusCode, data)
 	}
 	want := `{"workspaces":[` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"alpha","state":"running","containerId":"c-alpha","activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"beta","state":"stopped","containerId":"c-beta","activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"alpha","state":"running","containerId":"c-alpha","activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"beta","state":"stopped","containerId":"c-beta","activeJob":null},` +
 		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"bound","state":"no-folder","containerId":null,"activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"gamma","state":"no-container","containerId":null,"activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"gamma","state":"no-container","containerId":null,"activeJob":null},` +
 		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"keyed","state":"no-folder","containerId":null,"activeJob":null}]}`
 	if strings.TrimSpace(string(data)) != want {
 		t.Fatalf("got %s", data)

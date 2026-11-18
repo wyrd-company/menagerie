@@ -225,7 +225,7 @@ func (s *Steps) run(ctx context.Context, folder string, p devcontainer.Progress,
 	if err := s.retire(ctx, folder, declaration, p); err != nil {
 		return &AfterStartError{Step: "retiring what the definition no longer declares", Err: err}
 	}
-	return nil
+	return s.opts.Data.AppliedWithoutName(ctx, filepath.Base(folder))
 }
 
 // AfterStartError says that a job started the devcontainer and a later step

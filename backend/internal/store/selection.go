@@ -226,6 +226,20 @@ func (s *Store) Applied(ctx context.Context, name string, revision int64) error 
 	})
 }
 
+// AppliedWithoutName records the current imported selection when there is no
+// current container name. The check and observation share a transaction with
+// name changes, so discovery cannot cover a binding that still needs applying.
+func (s *Store) AppliedWithoutName(ctx context.Context, name string) error {
+	return s.Update(ctx, func(t *Tx) error { return t.appliedWithoutName(name) })
+}
+
+func (t *Tx) appliedWithoutName(name string) error {
+	_, err := t.exec(`UPDATE workspaces SET applied_revision = selection_revision, apply_failure = NULL
+  WHERE name = ? AND selection_imported = 1
+  AND NOT EXISTS (SELECT 1 FROM container_names WHERE workspace = ? AND current = 1)`, name, name)
+	return err
+}
+
 // Applying clears an observation at this revision before a binding mutation.
 // A crash before the confirming read must leave the selection retryable. An
 // older attempt cannot clear a newer successful revision.

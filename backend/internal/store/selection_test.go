@@ -221,3 +221,28 @@ func TestApplyingClearsOnlyItsOwnAppliedRevision(t *testing.T) {
 		t.Fatalf("%+v %v", after, err)
 	}
 }
+
+func TestDiscoveryAppliesOnlyImportedNamelessSelections(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	for _, name := range []string{"pending", "bound", "retired"} {
+		if err := s.HoldName(ctx, name, "container-"+name, "host", name != "retired"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Import(ctx, 99, func(tx *Tx) error { return tx.PrepareSelectionImport("pending", nil) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Discover(ctx, []string{"discovered", "pending", "bound", "retired"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"discovered", "pending", "bound", "retired"} {
+		got, err := s.Selection(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantApplied := name == "discovered" || name == "retired"
+		if wantApplied != (got.AppliedRevision != nil && *got.AppliedRevision == got.Revision) {
+			t.Fatalf("%s: %+v", name, got)
+		}
+	}
+}

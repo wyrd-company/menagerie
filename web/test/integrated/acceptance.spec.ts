@@ -253,6 +253,28 @@ test.describe("as a manager", () => {
     };
     expect(priorJobs.length).toBeGreaterThan(0);
     const priorIDs = new Set(priorJobs.map((job) => job.jobId));
+    // Successful plain jobs and newly discovered folders already have their
+    // nameless selection applied; a restart must not be what repairs them.
+    const { workspaces } = (await (
+      await page.request.get(info.site + "/api/workspaces")
+    ).json()) as {
+      workspaces: {
+        name: string;
+        selectionImported: boolean;
+        selectionRevision: number;
+        appliedRevision: number | null;
+      }[];
+    };
+    for (const name of ["sample-space", "sample-folder", "kept-space", "held-space"]) {
+      const workspace = workspaces.find((w) => w.name === name)!;
+      expect(workspace.selectionImported, name).toBe(true);
+      expect(workspace.appliedRevision, name).toBe(workspace.selectionRevision);
+    }
+    const pending = new Set(
+      workspaces
+        .filter((w) => !w.selectionImported || w.appliedRevision !== w.selectionRevision)
+        .map((w) => w.name),
+    );
     await control(page.request, "POST", "/restart");
     // Sessions live in memory: the restart signed everyone out.
     expect((await page.request.get(info.site + "/api/workspaces")).status()).toBe(401);
@@ -264,11 +286,14 @@ test.describe("as a manager", () => {
     const { jobs } = (await (await page.request.get(info.site + "/api/jobs")).json()) as {
       jobs: Snapshot[];
     };
-    // History is in memory. Startup may create fresh policy-application jobs
-    // for imported selections; none of the previous jobs may survive.
+    // History is in memory. Only selections already pending before the
+    // restart may create fresh policy jobs; prior jobs cannot survive.
     for (const job of jobs) {
       expect(priorIDs.has(job.jobId), `prior job ${job.jobId} survived restart`).toBe(false);
       expect(job.operation).toBe("apply-policies");
+      expect(pending.has(job.workspace), `unexpected startup apply for ${job.workspace}`).toBe(
+        true,
+      );
     }
     await shot(page, "13-after-restart");
 

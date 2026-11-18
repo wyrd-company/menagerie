@@ -403,6 +403,9 @@ func (s *Store) Discover(ctx context.Context, folders []string) (noFolder []stri
 			if err := t.AddWorkspace(name); err != nil {
 				return err
 			}
+			if err := t.appliedWithoutName(name); err != nil {
+				return err
+			}
 		}
 		known, err := t.names(`SELECT name FROM workspaces ORDER BY name`)
 		if err != nil {

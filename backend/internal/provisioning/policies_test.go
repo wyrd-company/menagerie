@@ -569,3 +569,37 @@ func TestInterruptedPolicyWriteIsUnappliedBeforeMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestPlainJobsRecordNamelessSelectionImmediately(t *testing.T) {
+	for _, operation := range []string{"create", "start", "rebuild"} {
+		t.Run(operation, func(t *testing.T) {
+			h := newPolicyHost(t, []string{"workspace"})
+			plain := h.definitions[folder]
+			plain.Block = nil
+			plain.ContainerName = ""
+			h.definitions[folder] = plain
+			steps := h.steps()
+			// A nameless workspace needs no controller, even when it has policies.
+			steps.opts.Bindings = nil
+			var err error
+			switch operation {
+			case "create":
+				err = steps.Create(context.Background(), folder, h, func(context.Context) error { return nil })
+			case "start":
+				err = steps.Start(context.Background(), folder, h)
+			case "rebuild":
+				err = steps.Rebuild(context.Background(), folder, h)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := h.selection()
+			if got.AppliedRevision == nil || *got.AppliedRevision != got.Revision || got.ApplyFailure != nil || h.held("sample").Current() != "" {
+				t.Fatalf("successful plain job left policies pending: %+v", got)
+			}
+			if h.policyReads != 0 || h.binds != 0 || h.changes != 0 {
+				t.Fatal("nameless job contacted Wyrwood")
+			}
+		})
+	}
+}
