@@ -7,7 +7,7 @@
 .template-panel {
   max-width: 880px;
   display: grid;
-  gap: 1rem;
+  gap: 1.5rem;
   margin-bottom: 1.5rem;
   padding: 1.5rem;
   border: 1px solid var(--border);
@@ -20,7 +20,7 @@
   margin: 0;
 }
 
-/* Labels in regular weight, inputs no wider than the mockup's. */
+/* Labels in regular weight, inputs no wider than the mockup's 640px. */
 .template-panel .field-label,
 .template-panel .field-title,
 .template-edit .field-label,
@@ -35,7 +35,7 @@
 
 .template-panel input,
 .template-edit input {
-  max-width: 500px;
+  max-width: 640px;
 }
 
 .form-error,
