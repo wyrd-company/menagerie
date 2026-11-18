@@ -134,7 +134,7 @@ def run(package, test):
     else:
         command = ["nice", "-n", "15", "go", "test", "-p", "2", "-count=1", package,
                    "-run", "^" + test + "$", "-v"]
-    env = dict(os.environ, GOFLAGS=os.environ.get("GOFLAGS", "-p=2"))
+    env = dict(os.environ, GOFLAGS=os.environ.get("GOFLAGS", "-p=2"), NO_COLOR="1", FORCE_COLOR="0")
     try:
         result = subprocess.run(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -146,6 +146,7 @@ def run(package, test):
 
 def outcome(package, test, output):
     """The marker of the one test's own pass and fail, not a build's."""
+    output = re.sub(r"\x1b\[[0-9;]*m", "", output)
     if package.startswith("web/"):
         return (re.search(r"Tests +1 passed", output) is not None,
                 re.search(r"Tests +1 failed", output) is not None)
