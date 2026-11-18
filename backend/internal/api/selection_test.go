@@ -135,7 +135,7 @@ func TestCreatePolicyRefusalsHappenBeforeAJob(t *testing.T) {
 		}
 	}
 	source.fail = errors.New("unavailable")
-	if response := policyCall(f.server, "POST", "/api/jobs", `{"operation":"create","workspace":"new","policies":["one"]}`); response.Code != 503 {
+	if response := policyCall(f.server, "POST", "/api/jobs", `{"operation":"create","workspace":"new","policies":["one"]}`); response.Code != 503 || !strings.Contains(response.Body.String(), "wyrwood-unavailable") {
 		t.Fatal(response.Body.String())
 	}
 	source.fail = nil
@@ -144,7 +144,7 @@ func TestCreatePolicyRefusalsHappenBeforeAJob(t *testing.T) {
 		t.Fatal(response.Body.String())
 	}
 	f.server.opts.Policies = nil
-	if response := policyCall(f.server, "POST", "/api/jobs", `{"operation":"create","workspace":"new","policies":["one"]}`); response.Code != 409 {
+	if response := policyCall(f.server, "POST", "/api/jobs", `{"operation":"create","workspace":"new","policies":["one"]}`); response.Code != 409 || !strings.Contains(response.Body.String(), "provisioning-unavailable") {
 		t.Fatal(response.Body.String())
 	}
 	if len(f.manager.List()) != 0 {
@@ -153,6 +153,7 @@ func TestCreatePolicyRefusalsHappenBeforeAJob(t *testing.T) {
 }
 func TestCreateWithNoPoliciesIsAccepted(t *testing.T) {
 	f := newFixture(t, nil)
+	f.server.opts.Policies = &policyFixture{policies: []operator.Policy{{Name: "one"}}}
 	f.server.opts.Operations[OperationCreate] = func(JobRequest) (jobs.Runner, error) {
 		return func(context.Context, *jobs.Run) error { return nil }, nil
 	}

@@ -113,6 +113,9 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
+	if e.Name == "" {
+		return fmt.Sprintf("Wyrwood %s failed: %s", e.Operation, e.Reason)
+	}
 	return fmt.Sprintf("Wyrwood %s of %s failed: %s", e.Operation, e.Name, e.Reason)
 }
 

@@ -1200,3 +1200,12 @@ func TestChangePreservesAnAbsentAccessGroup(t *testing.T) {
 		t.Fatalf("invented access group: %+v", sent.Settings)
 	}
 }
+
+func TestPolicyReadFailureHasNoEmptyBindingName(t *testing.T) {
+	f := newFixture(t)
+	f.client.config.OperatorKey = "not-offered"
+	_, _, err := f.client.Policies(testContext(t))
+	if err == nil || !strings.HasPrefix(err.Error(), "Wyrwood policies failed: ") || !strings.Contains(err.Error(), "operator-key") {
+		t.Fatalf("nameless request: %v", err)
+	}
+}
