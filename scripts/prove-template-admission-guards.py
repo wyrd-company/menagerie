@@ -116,8 +116,11 @@ def main():
     save()
     with tempfile.TemporaryDirectory(prefix="menagerie-template-admission-") as scratch:
         copy = Path(scratch) / "template-service"
+        # Copies get the current time, so cargo rebuilds the baseline even
+        # when the target folder holds a mutant an earlier run built later
+        # than the sources were last changed.
         shutil.copytree(ROOT / "template-service", copy,
-                        ignore=shutil.ignore_patterns("target"))
+                        ignore=shutil.ignore_patterns("target"), copy_function=shutil.copy)
         # The contract test reads the specification beside the copy.
         shutil.copytree(ROOT / "docs", Path(scratch) / "docs")
         manifest = copy / "Cargo.toml"
