@@ -169,8 +169,9 @@ func New(config Config) (*Client, error) {
 type Selection struct {
 	// Policies are the Wyrwood policies of the binding.
 	Policies []string
-	// AccessGroup is the numeric group of the consumer directory.
-	AccessGroup uint32
+	// AccessGroup is the numeric group of the consumer directory, or nil
+	// when an existing binding has no group.
+	AccessGroup *uint32
 	// Values are the policies' per-binding values.
 	Values map[string]string
 }
@@ -181,14 +182,13 @@ type Selection struct {
 // selection changes nothing and fails with operator.ErrBindingDiffers: unbind
 // it while its container is stopped, then bind.
 func (c *Client) Bind(ctx context.Context, name string, selection Selection) (operator.Binding, error) {
-	group := selection.AccessGroup
 	var binding operator.Binding
 	err := c.do(ctx, "bind", name, func(client *operator.Client) (err error) {
 		binding, err = client.Bind(ctx, operator.BindRequest{
 			Agent:    c.config.Agent,
 			Key:      nameKey(name),
 			Policies: selection.Policies,
-			Settings: operator.Settings{AccessGroup: &group, Enforcement: enforcement, Values: selection.Values},
+			Settings: operator.Settings{AccessGroup: selection.AccessGroup, Enforcement: enforcement, Values: selection.Values},
 		})
 		return err
 	})
@@ -210,7 +210,7 @@ func (c *Client) Get(ctx context.Context, id string) (operator.Binding, error) {
 // preserving all other settings. It can finish a saved pending assignment.
 func (c *Client) Change(ctx context.Context, before operator.Binding, selection Selection) (operator.Binding, error) {
 	settings := before.Settings
-	settings.AccessGroup = &selection.AccessGroup
+	settings.AccessGroup = selection.AccessGroup
 	settings.Values = selection.Values
 	var binding operator.Binding
 	err := c.do(ctx, "change", before.Key.Value, func(client *operator.Client) (err error) {

@@ -87,8 +87,7 @@ func (h *policyHost) Bind(_ context.Context, name string, s wyrwood.Selection) (
 	if len(s.Policies) == 0 {
 		return operator.Binding{}, &operator.Error{Code: operator.CodeInvalid, Message: "a binding needs at least one policy\nchoose a policy"}
 	}
-	group := s.AccessGroup
-	b := operator.Binding{ID: fmt.Sprintf("binding-%d", h.binds), Agent: sampleAgent, Key: operator.Key{Kind: operator.KeyName, Value: name}, Policies: slices.Clone(s.Policies), Revision: 1, Applied: true, Settings: operator.Settings{AccessGroup: &group, Values: maps.Clone(s.Values)}}
+	b := operator.Binding{ID: fmt.Sprintf("binding-%d", h.binds), Agent: sampleAgent, Key: operator.Key{Kind: operator.KeyName, Value: name}, Policies: slices.Clone(s.Policies), Revision: 1, Applied: true, Settings: operator.Settings{AccessGroup: s.AccessGroup, Values: maps.Clone(s.Values)}}
 	h.bindings[b.ID] = b
 	if h.pending > 0 {
 		h.pending--
@@ -114,8 +113,7 @@ func (h *policyHost) Change(_ context.Context, b operator.Binding, s wyrwood.Sel
 	}
 	b.Policies = slices.Clone(s.Policies)
 	b.Settings.Values = maps.Clone(s.Values)
-	group := s.AccessGroup
-	b.Settings.AccessGroup = &group
+	b.Settings.AccessGroup = s.AccessGroup
 	b.Revision++
 	b.Applied = true
 	if h.pending > 0 {
@@ -466,5 +464,37 @@ func TestProvisioningRefusalInvalidatesPreviouslyAppliedSelection(t *testing.T) 
 				}
 			})
 		}
+	}
+}
+
+func TestInitialStaleIDDoesNotConsumeTheChangeRetry(t *testing.T) {
+	h := newPolicyHost(t, []string{"workspace", "ssh"})
+	h.existing([]string{"workspace"})
+	binding := h.bindings["existing"]
+	delete(h.bindings, binding.ID)
+	binding.ID = "replacement"
+	h.bindings[binding.ID] = binding
+	h.stale = 1
+	if err := h.steps().ApplyPolicies(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	if h.changes != 2 || h.binds != 0 || h.selection().AppliedRevision == nil {
+		t.Fatalf("changes %d binds %d selection %+v", h.changes, h.binds, h.selection())
+	}
+}
+
+func TestPolicyApplyKeepsAnAbsentAccessGroupWithoutReadingDefinition(t *testing.T) {
+	h := newPolicyHost(t, []string{"workspace", "ssh"})
+	h.existing([]string{"workspace"})
+	binding := h.bindings["existing"]
+	binding.Settings.AccessGroup = nil
+	h.bindings[binding.ID] = binding
+	h.definedErr = errors.New("definition cannot be parsed")
+	if err := h.steps().ApplyPolicies(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	binding = h.bindings["existing"]
+	if h.changes != 1 || binding.Settings.AccessGroup != nil || !slices.Equal(binding.Policies, []string{"ssh", "workspace"}) || h.selection().AppliedRevision == nil {
+		t.Fatalf("binding %+v selection %+v", binding, h.selection())
 	}
 }

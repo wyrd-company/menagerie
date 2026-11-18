@@ -137,9 +137,15 @@ func (s *Steps) applySelection(ctx context.Context, folder, name string, group *
 	waitCtx, cancel := context.WithTimeout(ctx, s.opts.Wait)
 	defer cancel()
 	changed, pending := 0, 0
+	wrote := false
 	for {
 		binding, found, e := s.resolve(waitCtx, client, workspace, name)
 		if errors.Is(e, operator.ErrNotFound) {
+			// A stale ID before any mutation only changes how we resolve the
+			// name. The once-only retry bounds races after a write attempt.
+			if !wrote {
+				continue
+			}
 			if changed >= 1 {
 				return fail(KindBindingChanged, "The binding of "+name+" disappeared again while Menagerie was applying its selection. Retry the job.")
 			}
@@ -150,9 +156,9 @@ func (s *Steps) applySelection(ctx context.Context, folder, name string, group *
 			return bindingFailure(name, e)
 		}
 		if group != nil {
-			wanted.AccessGroup = *group
-		} else if found && binding.Settings.AccessGroup != nil {
-			wanted.AccessGroup = *binding.Settings.AccessGroup
+			wanted.AccessGroup = group
+		} else if found {
+			wanted.AccessGroup = binding.Settings.AccessGroup
 		} else {
 			definition, e := s.opts.Runtime.Definition(folder)
 			if e != nil {
@@ -165,7 +171,7 @@ func (s *Steps) applySelection(ctx context.Context, folder, name string, group *
 			if declaration == nil || declaration.ContainerName != name {
 				return fail(KindInvalid, "The missing binding of "+name+" needs an accepted declaration naming that container.")
 			}
-			wanted.AccessGroup = declaration.Wyrwood.AccessGroup
+			wanted.AccessGroup = &declaration.Wyrwood.AccessGroup
 		}
 		if found && matches(binding, wanted) && binding.Applied {
 			return s.opts.Data.Applied(ctx, workspace, current.Revision)
@@ -182,6 +188,7 @@ func (s *Steps) applySelection(ctx context.Context, folder, name string, group *
 		if e = store.CheckAllowed(wanted.Policies, allowed); e != nil {
 			return &jobs.Failure{Kind: KindPolicyOutsideGrant, Err: e}
 		}
+		wrote = true
 		if found {
 			reportChanges(binding, wanted, p)
 			binding, e = client.Change(waitCtx, binding, wanted)
@@ -267,7 +274,11 @@ func matches(binding operator.Binding, wanted wyrwood.Selection) bool {
 	desired := slices.Clone(wanted.Policies)
 	slices.Sort(actual)
 	slices.Sort(desired)
-	return slices.Equal(actual, desired) && maps.Equal(binding.Settings.Values, wanted.Values) && binding.Settings.AccessGroup != nil && *binding.Settings.AccessGroup == wanted.AccessGroup
+	return slices.Equal(actual, desired) && maps.Equal(binding.Settings.Values, wanted.Values) && sameAccessGroup(binding.Settings.AccessGroup, wanted.AccessGroup)
+}
+
+func sameAccessGroup(a, b *uint32) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 func bindingFailure(name string, err error) error {
@@ -304,8 +315,12 @@ func reportChanges(before operator.Binding, wanted wyrwood.Selection, p devconta
 			fmt.Fprintln(out, "removing value", name)
 		}
 	}
-	if before.Settings.AccessGroup == nil || *before.Settings.AccessGroup != wanted.AccessGroup {
-		fmt.Fprintln(out, "setting access group to", wanted.AccessGroup)
+	if !sameAccessGroup(before.Settings.AccessGroup, wanted.AccessGroup) {
+		if wanted.AccessGroup == nil {
+			fmt.Fprintln(out, "clearing access group")
+		} else {
+			fmt.Fprintln(out, "setting access group to", *wanted.AccessGroup)
+		}
 	}
 	if !before.Applied {
 		fmt.Fprintln(out, "finishing Wyrwood's pending assignment")

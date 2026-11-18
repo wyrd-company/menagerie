@@ -299,13 +299,12 @@ func (h *host) Read(_ context.Context, name string) (operator.Binding, bool, err
 	if !found {
 		return operator.Binding{}, false, nil
 	}
-	group := selection.AccessGroup
-	binding := operator.Binding{ID: name, Agent: sampleAgent, Key: operator.Key{Kind: operator.KeyName, Value: name}, Revision: 1, Applied: true, Policies: selection.Policies, Settings: operator.Settings{AccessGroup: &group, Values: selection.Values}}
+	binding := operator.Binding{ID: name, Agent: sampleAgent, Key: operator.Key{Kind: operator.KeyName, Value: name}, Revision: 1, Applied: true, Policies: selection.Policies, Settings: operator.Settings{AccessGroup: selection.AccessGroup, Values: selection.Values}}
 	if h.status != nil {
 		binding.Status = h.status(name)
 		return binding, true, nil
 	}
-	binding.Status = h.readyStatus(group)
+	binding.Status = h.readyStatus(*selection.AccessGroup)
 	return binding, true, nil
 }
 
@@ -382,7 +381,7 @@ func TestACreateRunsEveryStepInOrder(t *testing.T) {
 	if got := h.phases; !slices.Equal(got, want) {
 		t.Fatalf("phases %v, want %v", got, want)
 	}
-	if selection := h.bound["container-sample"]; selection.AccessGroup != 1000 || !slices.Equal(selection.Policies, []string{"client-key", "workspace"}) || selection.Values["key_name"] != "sample" {
+	if selection := h.bound["container-sample"]; (selection.AccessGroup == nil || *selection.AccessGroup != 1000) || !slices.Equal(selection.Policies, []string{"client-key", "workspace"}) || selection.Values["key_name"] != "sample" {
 		t.Fatalf("selection %+v", selection)
 	}
 }
@@ -679,7 +678,7 @@ func (k issuedKeys) Revoke(context.Context, string, string) (xolotl.Revocation, 
 func TestABindingThatDiffersChangesWithoutStoppingTheContainer(t *testing.T) {
 	h := newHost(t)
 	h.state, h.container = devcontainer.StateRunning, "old-id"
-	h.bound["container-sample"] = wyrwood.Selection{Policies: []string{"old"}, AccessGroup: 7, Values: map[string]string{"key_name": "sample"}}
+	h.bound["container-sample"] = wyrwood.Selection{Policies: []string{"old"}, AccessGroup: new(uint32(7)), Values: map[string]string{"key_name": "sample"}}
 	if err := h.steps().Start(context.Background(), folder, h); err != nil {
 		t.Fatal(err)
 	}
@@ -855,7 +854,7 @@ func TestVerifyFailsAContainerThatDoesNotRun(t *testing.T) {
 func TestAReadThatIsUnreachableIsWaitedOutAndAnyOtherFails(t *testing.T) {
 	h := newHost(t)
 	s := h.steps()
-	h.bound["container-sample"] = wyrwood.Selection{Policies: []string{"workspace", "client-key"}, AccessGroup: 1000, Values: map[string]string{"key_name": "sample"}}
+	h.bound["container-sample"] = wyrwood.Selection{Policies: []string{"workspace", "client-key"}, AccessGroup: new(uint32(1000)), Values: map[string]string{"key_name": "sample"}}
 	d, err := Parse(h.definitions[folder])
 	if err != nil {
 		t.Fatal(err)
@@ -1270,7 +1269,7 @@ func (h *host) Change(_ context.Context, b operator.Binding, selection wyrwood.S
 	h.Unlock()
 	b.Policies = selection.Policies
 	b.Settings.Values = selection.Values
-	b.Settings.AccessGroup = &selection.AccessGroup
+	b.Settings.AccessGroup = selection.AccessGroup
 	b.Revision++
 	b.Applied = true
 	return b, nil

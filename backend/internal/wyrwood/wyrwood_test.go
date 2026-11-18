@@ -372,7 +372,7 @@ func testContext(t *testing.T) context.Context {
 }
 
 func sampleSelection() Selection {
-	return Selection{Policies: []string{bindPolicy}, AccessGroup: 1000, Values: map[string]string{"key": "sample-key"}}
+	return Selection{Policies: []string{bindPolicy}, AccessGroup: new(uint32(1000)), Values: map[string]string{"key": "sample-key"}}
 }
 
 func TestBindUnbindAndReadLifecycle(t *testing.T) {
@@ -443,7 +443,7 @@ func TestBindSendsADeclaredReportBinding(t *testing.T) {
 func TestAGroupOfZeroIsSent(t *testing.T) {
 	f := newFixture(t)
 	selection := sampleSelection()
-	selection.AccessGroup = 0
+	selection.AccessGroup = new(uint32(0))
 	binding, err := f.client.Bind(testContext(t), sampleName, selection)
 	if err != nil {
 		t.Fatal(err)
@@ -668,7 +668,7 @@ func TestACallOutsideTheGrantIsAClearJobError(t *testing.T) {
 func TestADifferentSelectionFailsAndChangesNothing(t *testing.T) {
 	changes := map[string]func(*Selection){
 		"policies": func(s *Selection) { s.Policies = []string{bindPolicy, bindPolicy} },
-		"group":    func(s *Selection) { s.AccessGroup = 2000 },
+		"group":    func(s *Selection) { s.AccessGroup = new(uint32(2000)) },
 		"values":   func(s *Selection) { s.Values = map[string]string{"key": "sample-other"} },
 	}
 	for name, change := range changes {
@@ -1141,7 +1141,7 @@ func TestChangePreservesSettingsAndSendsReadRevision(t *testing.T) {
 			return &operator.Response{Body: body}
 		}
 	})
-	selection := Selection{Policies: []string{}, AccessGroup: 0, Values: map[string]string{}}
+	selection := Selection{Policies: []string{}, AccessGroup: new(uint32(0)), Values: map[string]string{}}
 	if _, err := f.client.Change(testContext(t), before, selection); err != nil {
 		t.Fatal(err)
 	}
@@ -1172,5 +1172,31 @@ func TestGetKeepsMissingAndHiddenBindingsDistinct(t *testing.T) {
 				t.Fatalf("%v, want %v", err, want)
 			}
 		})
+	}
+}
+
+func TestChangePreservesAnAbsentAccessGroup(t *testing.T) {
+	f := newFixture(t)
+	before := operator.Binding{ID: "binding-one", Revision: 7, Key: nameKey(sampleName)}
+	var sent operator.BindingChange
+	f.controller.set(func(c *fakeController) {
+		c.answer = func(request operator.Request) *operator.Response {
+			if request.Operation != operator.OperationBindingChange {
+				t.Errorf("operation %s", request.Operation)
+			}
+			if err := json.Unmarshal(request.Body, &sent); err != nil {
+				t.Error(err)
+			}
+			body, _ := json.Marshal(before)
+			return &operator.Response{Body: body}
+		}
+	})
+	selection := sampleSelection()
+	selection.AccessGroup = nil
+	if _, err := f.client.Change(testContext(t), before, selection); err != nil {
+		t.Fatal(err)
+	}
+	if sent.Settings.AccessGroup != nil {
+		t.Fatalf("invented access group: %+v", sent.Settings)
 	}
 }
