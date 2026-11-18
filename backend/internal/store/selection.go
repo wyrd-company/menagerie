@@ -142,39 +142,42 @@ func (s *Store) SetCreateSelection(ctx context.Context, name string, policies, a
 // ImportSelection takes over the binding (or legacy declaration) once. The
 // revision changes even for an empty import, invalidating a pre-import edit.
 func (s *Store) ImportSelection(ctx context.Context, name string, policies []string, values map[string]string, key *Key) error {
-	return s.Update(ctx, func(t *Tx) error {
-		old, err := t.Selection(name)
-		if err != nil || old.Imported {
-			return err
-		}
-		settings, err := t.PolicySettings()
-		if err != nil {
-			return err
-		}
-		next := slices.Concat(policies, settings.Required)
-		slices.Sort(next)
-		next = slices.Compact(next)
-		if err = t.replacePolicies(name, next); err != nil {
-			return err
-		}
-		if values == nil {
-			values = map[string]string{}
-		}
-		raw, err := json.Marshal(values)
-		if err != nil {
-			return err
-		}
-		var identity any
-		if key != nil {
-			b, e := json.Marshal(key)
-			if e != nil {
-				return e
-			}
-			identity = string(b)
-		}
-		_, err = t.exec(`UPDATE workspaces SET selection_revision = selection_revision + 1, selection_imported = 1, policy_values = ?, xolotl_identity = ? WHERE name = ?`, string(raw), identity, name)
+	return s.Update(ctx, func(t *Tx) error { return t.ImportSelection(name, policies, values, key) })
+}
+
+// ImportSelection takes over a selection within the first-start transaction.
+func (t *Tx) ImportSelection(name string, policies []string, values map[string]string, key *Key) error {
+	old, err := t.Selection(name)
+	if err != nil || old.Imported {
 		return err
-	})
+	}
+	settings, err := t.PolicySettings()
+	if err != nil {
+		return err
+	}
+	next := slices.Concat(policies, settings.Required)
+	slices.Sort(next)
+	next = slices.Compact(next)
+	if err = t.replacePolicies(name, next); err != nil {
+		return err
+	}
+	if values == nil {
+		values = map[string]string{}
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	var identity any
+	if key != nil {
+		b, e := json.Marshal(key)
+		if e != nil {
+			return e
+		}
+		identity = string(b)
+	}
+	_, err = t.exec(`UPDATE workspaces SET selection_revision = selection_revision + 1, selection_imported = 1, policy_values = ?, xolotl_identity = ? WHERE name = ?`, string(raw), identity, name)
+	return err
 }
 
 // Identity remembers new value names and a key exactly once. Existing values
@@ -246,7 +249,7 @@ func (s *Store) BindingID(ctx context.Context, workspace, name, id string) error
 
 // PrepareSelectionImport runs with import 5's global mark. A declared current
 // name waits for a binding read; identities are taken over even during outages.
-func (t *Tx) PrepareSelectionImport(name string, key *Key, pending bool) error {
+func (t *Tx) PrepareSelectionImport(name string, key *Key) error {
 	var identity any
 	if key != nil {
 		raw, err := json.Marshal(key)
@@ -255,6 +258,6 @@ func (t *Tx) PrepareSelectionImport(name string, key *Key, pending bool) error {
 		}
 		identity = string(raw)
 	}
-	_, err := t.exec(`UPDATE workspaces SET selection_imported = ?, xolotl_identity = ?, selection_revision = selection_revision + 1 WHERE name = ?`, !pending, identity, name)
+	_, err := t.exec(`UPDATE workspaces SET selection_imported = 0, xolotl_identity = ?, selection_revision = selection_revision + 1 WHERE name = ?`, identity, name)
 	return err
 }

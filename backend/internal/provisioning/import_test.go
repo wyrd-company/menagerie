@@ -418,3 +418,62 @@ func (p *previous) failDefinition(folder string) {
 }
 
 var errUnreadable = errors.New("devcontainer.json: invalid character")
+
+func TestSelectionImportWithoutCurrentDeclaredNameUsesLegacyMembers(t *testing.T) {
+	for _, current := range []string{"", "different-name"} {
+		t.Run("current="+current, func(t *testing.T) {
+			p := newPrevious(t, "sample")
+			ctx := context.Background()
+			if current != "" {
+				p.hold("sample", current, true)
+			}
+			p.definitions[p.folder("sample")] = definition(`{"wyrwood":{"accessGroup":1000,"policies":["a"],"values":{"account":"legacy-account"}},"xolotl":{"keyPolicy":"legacy-policy","keyName":"legacy-name"}}`)
+			p.readErr = errors.New("no binding read is allowed")
+			steps := p.steps()
+			if err := steps.ImportSelections(ctx, p.root, func(format string, args ...any) { p.log = append(p.log, fmt.Sprintf(format, args...)) }); err != nil {
+				t.Fatal(err)
+			}
+			got, err := p.data.Selection(ctx, "sample")
+			if err != nil || !got.Imported || !slices.Equal(got.Policies, []string{"a", "client-key", "workspace"}) || got.Values["account"] != "legacy-account" || got.Key == nil || got.Key.String() != "legacy-policy/legacy-name" {
+				t.Fatalf("legacy selection lost: %+v %v", got, err)
+			}
+			p.logged(t, "account=legacy-account", "sample")
+			// Import 5's mark and the selection commit together; another startup
+			// cannot re-import a later template's legacy identity or policies.
+			p.definitions[p.folder("sample")] = definition(sampleBlock)
+			if err := steps.ImportSelections(ctx, p.root, t.Logf); err != nil {
+				t.Fatal(err)
+			}
+			again, err := p.data.Selection(ctx, "sample")
+			if err != nil || again.Revision != got.Revision || !slices.Equal(again.Policies, got.Policies) || again.Key.String() != got.Key.String() {
+				t.Fatalf("reimported: %+v %v", again, err)
+			}
+		})
+	}
+}
+
+func TestDelayedSelectionImportKeepsOriginallyAbsentKey(t *testing.T) {
+	p := newPrevious(t, "sample")
+	ctx := context.Background()
+	p.hold("sample", "container-sample", true)
+	p.definitions[p.folder("sample")] = definition(`{"wyrwood":{"accessGroup":1000,"policies":["workspace"]}}`)
+	p.readErr = errors.New("controller unavailable")
+	steps := p.steps()
+	if err := steps.ImportSelections(ctx, p.root, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := p.data.Selection(ctx, "sample")
+	if err != nil || pending.Imported || pending.Key != nil {
+		t.Fatalf("%+v %v", pending, err)
+	}
+	// An upgrade changed the legacy member while the read was delayed.
+	p.definitions[p.folder("sample")] = definition(sampleBlock)
+	p.readErr = nil
+	if err = steps.EnsureImported(ctx, p.folder("sample")); err != nil {
+		t.Fatal(err)
+	}
+	imported, err := p.data.Selection(ctx, "sample")
+	if err != nil || !imported.Imported || imported.Key != nil {
+		t.Fatalf("template chose a key: %+v %v", imported, err)
+	}
+}

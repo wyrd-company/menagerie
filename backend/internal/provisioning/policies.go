@@ -361,7 +361,7 @@ func (s *Steps) EnsureImported(ctx context.Context, folder string) error {
 	}
 	name := held.Current()
 	def, _ := s.opts.Runtime.Definition(folder)
-	policies, values, key := legacySelection(def)
+	policies, values, _ := legacySelection(def)
 	if name != "" {
 		client, e := s.policyClient()
 		if e != nil {
@@ -378,10 +378,8 @@ func (s *Steps) EnsureImported(ctx context.Context, folder string) error {
 			}
 		}
 	}
-	if current.Key != nil {
-		key = current.Key
-	}
-	return s.opts.Data.ImportSelection(ctx, workspace, policies, values, key)
+	// Import 5 froze even the absence of a key with its global mark.
+	return s.opts.Data.ImportSelection(ctx, workspace, policies, values, current.Key)
 }
 
 // ImportSelections records import 5 and attempts every pending selection on
@@ -391,21 +389,28 @@ func (s *Steps) ImportSelections(ctx context.Context, root Workspaces, logf func
 	if err != nil {
 		return err
 	}
-	_, err = s.opts.Data.Import(ctx, 5, func(tx *store.Tx) error {
+	ran, err := s.opts.Data.Import(ctx, 5, func(tx *store.Tx) error {
 		for _, name := range slices.Sorted(maps.Keys(selections)) {
 			folder, e := root.FolderPath(name)
 			if e != nil {
 				return e
 			}
 			def, _ := s.opts.Runtime.Definition(folder)
-			_, _, key := legacySelection(def)
+			policies, values, key := legacySelection(def)
 			held, e := tx.Held(name)
 			if e != nil {
 				return e
 			}
 			pending := def.Block != nil && def.ContainerName != "" && held.Current() == def.ContainerName
-			if e = tx.PrepareSelectionImport(name, key, pending); e != nil {
+			if e = tx.PrepareSelectionImport(name, key); e != nil {
 				return e
+			}
+			if !pending {
+				// This declaration's name is not current; no binding can supply
+				// its selection. Freeze the legacy members with import 5's mark.
+				if e = tx.ImportSelection(name, policies, values, key); e != nil {
+					return e
+				}
 			}
 		}
 		return nil
@@ -418,16 +423,18 @@ func (s *Steps) ImportSelections(ctx context.Context, root Workspaces, logf func
 		return err
 	}
 	for _, name := range slices.Sorted(maps.Keys(selections)) {
-		if selections[name].Imported {
+		if selections[name].Imported && !ran {
 			continue
 		}
 		folder, e := root.FolderPath(name)
 		if e != nil {
 			return e
 		}
-		if e = s.EnsureImported(ctx, folder); e != nil {
-			logf("menagerie: policy selection of %s still needs importing: %s", name, wyrwood.OneLine(e.Error()))
-			continue
+		if !selections[name].Imported {
+			if e = s.EnsureImported(ctx, folder); e != nil {
+				logf("menagerie: policy selection of %s still needs importing: %s", name, wyrwood.OneLine(e.Error()))
+				continue
+			}
 		}
 		imported, e := s.opts.Data.Selection(ctx, name)
 		if e != nil {
