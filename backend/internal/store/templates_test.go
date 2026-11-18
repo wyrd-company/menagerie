@@ -16,10 +16,12 @@ func registered(t *testing.T, s *Store, names ...string) {
 	}
 }
 
-// The list is by name without regard to case, then by name and id.
+// The list is by name without regard to case, then by name and id: beta
+// takes the id beta and Beta, registered later, beta-2, yet Beta lists
+// first.
 func TestTemplatesListByNameWithoutRegardToCase(t *testing.T) {
 	s := open(t)
-	registered(t, s, "Zeta", "alpha", "Beta", "beta")
+	registered(t, s, "Zeta", "alpha", "beta", "Beta")
 	list, err := s.Templates(context.Background())
 	if err != nil {
 		t.Fatal(err)

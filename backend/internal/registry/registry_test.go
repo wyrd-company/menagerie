@@ -482,3 +482,26 @@ func TestARegisteredSourceIsRefusedBeforeAnyFetch(t *testing.T) {
 		t.Fatalf("a registered source was fetched: %v", f.calls[calls:])
 	}
 }
+
+// A template upgrade refuses a version that is not newer, or that the
+// repository does not list, before it checks or fetches it.
+func TestAnUpgradeRefusesAnOlderVersionBeforeAnyCheck(t *testing.T) {
+	r, f, _ := world(t)
+	ctx := context.Background()
+	if _, err := r.Register(ctx, "Kit", kit+"@v1.1.0", "", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, checkOnly := range []bool{false, true} {
+		for _, version := range []string{"1.0.0", "1.1.0", "9.9.9"} {
+			calls := len(f.calls)
+			if _, err := r.Upgrade(ctx, "kit", version, checkOnly); !errors.Is(err, ErrNotNewer) {
+				t.Fatalf("%s: %v", version, err)
+			}
+			for _, call := range f.calls[calls:] {
+				if strings.HasPrefix(call, "check ") {
+					t.Fatalf("%s: the upgrade checked a version it refuses: %v", version, f.calls[calls:])
+				}
+			}
+		}
+	}
+}
