@@ -192,7 +192,7 @@ paths:
           $ref: "#/components/responses/Error"
     post:
       operationId: registerTemplate
-      summary: Register a template from its address, once it passes the minimum checks.
+      summary: Register a template from its address, once it passes the minimum checks; with check, run the checks alone.
       requestBody:
         required: true
         content:
@@ -200,6 +200,12 @@ paths:
             schema:
               $ref: "#/components/schemas/TemplateRegistration"
       responses:
+        "200":
+          description: With check, the checks passed; nothing was stored. The template a registration would store.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
         "201":
           description: The registered template.
           headers:
@@ -284,9 +290,13 @@ paths:
                 version:
                   type: string
                   description: A version of the repository newer than the current one, such as 1.1.0.
+                check:
+                  type: boolean
+                  default: false
+                  description: Run the checks alone and store nothing.
       responses:
         "200":
-          description: The template at its new current version.
+          description: The template at its new current version; with check, the template that version would give, nothing stored.
           content:
             application/json:
               schema:
@@ -672,6 +682,10 @@ components:
         runnerImage:
           type: string
           description: A Docker image reference.
+        check:
+          type: boolean
+          default: false
+          description: Run the checks alone, as a registration would, and store nothing.
     TemplateEdit:
       type: object
       additionalProperties: false

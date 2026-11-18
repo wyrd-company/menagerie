@@ -178,8 +178,8 @@ description: >-
   as the template service lists them.
 
 
-  `POST /api/templates` takes `{"name","address","runnerImage"}`,
-  `runnerImage` optional, and no other member. `name` is one line of 1 to
+  `POST /api/templates` takes `{"name","address","runnerImage","check"}`,
+  `runnerImage` and `check` optional, and no other member. `name` is one line of 1 to
   100 characters, `runnerImage` a Docker image reference, else 400
   `invalid-request`; a body that is not that one object is 400
   `invalid-request` too, and no refusal quotes a value. The address takes
@@ -211,7 +211,20 @@ description: >-
   whose applied record names its source.
 
 
-  `POST /api/templates/{id}/upgrades` takes `{"version"}`. The template
+  `check`, a boolean, false when absent, asks for the checks alone. With
+  `check` true the route runs the same checks in the same order, the
+  `template-exists` refusal included, and refuses with the same answers;
+  it stores nothing, joins no workspace, logs no address, and answers 200
+  with the template a registration would store, its `id` the one it would
+  take now, and no `Location`. The same member on
+  `POST /api/templates/{id}/upgrades` checks a version the same way: the
+  same refusals, nothing stored, 200 with the template at that version. A
+  request without `check` runs every check again and trusts no earlier one.
+  A server that predates the member refuses it as 400 `invalid-request`.
+
+
+  `POST /api/templates/{id}/upgrades` takes `{"version","check"}`, `check`
+  optional (see below). The template
   service lists the repository's versions, and the version must be one of
   them newer than the current one, else 409 `version-not-newer`; it then
   passes the `fetch`, `read` and `definition` checks, else 422

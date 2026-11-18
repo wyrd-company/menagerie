@@ -148,7 +148,11 @@ proposed-design:
     versions and the time and outcome of the last version check, registers a
     template from its address, checks a template for new versions, upgrades
     a template to a newer version and removes a template that no workspace
-    uses. The policies screen lists the policies inside the operator key's
+    uses. Registering a template and upgrading one each validate, then
+    save: Validate runs the checks without storing, Save stays disabled
+    until a Validate of the form's current values passes, which the form
+    shows as `Checks passed` with the version, and any edit disables Save
+    again and clears that result and any refusal; Save checks again. The policies screen lists the policies inside the operator key's
     grant and those the settings name outside it, marks policies required,
     and creates, edits and removes policy groups.
   workspace-discovery: >-
@@ -243,7 +247,7 @@ proposed-design:
     registered template's address with the tag and commit of one of its
     found versions, which the job or the request holds server-side; and, on
     the address, versions and check routes, the address a manager submitted
-    to register a template, for that request alone; and, on the address
+    to register or check a template, for that request alone; and, on the address
     route alone, each address of the `templates` configuration that
     first-start-import reads, which the operator wrote. Registration is a
     manager's request through the API, behind a session and the same-origin
@@ -321,7 +325,11 @@ proposed-design:
     change. A template that a workspace uses cannot be removed, and the
     refusal names those workspaces. Registering a template, taking a new
     version and removing a template need no configuration change and no
-    restart.
+    restart. A registration and a template's upgrade can each be asked to
+    check without storing: the same checks run in the same order, the
+    `template-exists` refusal included, refuse the same way and log no
+    address, nothing is stored, and the answer is the template a save would
+    store. A save never trusts an earlier check: it runs every check again.
   template-versions: >-
     A version of a template is a tag of its repository named
     `MAJOR.MINOR.PATCH`, with an optional leading `v`, whose numbers have no
