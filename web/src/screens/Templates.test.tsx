@@ -52,6 +52,29 @@ function stubApi(answers: Record<string, (body: Body) => Response>): Call[] {
   return calls;
 }
 
+/**
+ * Stubs the API with the templates list, and holds each other call's reply
+ * until the test releases it, the oldest first, recording each body.
+ */
+function holdReplies() {
+  const releases: ((response: Response) => void)[] = [];
+  const bodies: unknown[] = [];
+  const release = (response: Response) => {
+    const next = releases.shift();
+    if (!next) throw new Error("no call waits for a reply");
+    next(response);
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_path: string, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET") return Response.json({ templates: [kit] });
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Promise<Response>((resolve) => releases.push(resolve));
+    }),
+  );
+  return { release, bodies };
+}
+
 const refused = (check: string, message: string) =>
   Response.json({ error: { kind: "template-check-failed", check, message } }, { status: 422 });
 
@@ -152,6 +175,69 @@ describe("the templates screen", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Save" }));
     expect(await screen.findByText(/^fetch: /)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("enables Save only for the values a Validate passed, even when an edit overtakes it", async () => {
+    const { release, bodies } = holdReplies();
+    const tools = { ...kit, id: "tools", name: "Tools" };
+    render(<TemplatesScreen />);
+    await userEvent.click(await screen.findByRole("button", { name: "Register template" }));
+    await userEvent.type(screen.getByLabelText("Display name"), "Tools");
+    await userEvent.type(screen.getByLabelText("Address"), "gh:example-org/tools");
+    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    // While the check of gh:example-org/tools runs, the address changes.
+    await userEvent.type(screen.getByLabelText("Address"), "-other");
+    release(Response.json(tools));
+    expect(await screen.findByRole("button", { name: "Validate" })).toBeEnabled();
+    expect(screen.queryByText("Checks passed · 1.0.0")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    // A Validate of the values the form holds counts.
+    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    release(Response.json(tools));
+    expect(await screen.findByText("Checks passed · 1.0.0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(bodies).toEqual([
+      { name: "Tools", address: "gh:example-org/tools", check: true },
+      { name: "Tools", address: "gh:example-org/tools-other", check: true },
+    ]);
+  });
+
+  it("counts an upgrade's Validate reply, a pass or a refusal, only for the version it sent", async () => {
+    const { release, bodies } = holdReplies();
+    render(<TemplatesScreen />);
+    const entry = (await screen.findByRole("heading", { name: "Sample kit" })).closest("li")!;
+    await userEvent.click(within(entry).getByRole("button", { name: "Upgrade template" }));
+    const version = within(entry).getByLabelText("Current version");
+    const validate = async (answer: Response) => {
+      await userEvent.click(within(entry).getByRole("button", { name: "Validate" }));
+      return () => release(answer);
+    };
+    await userEvent.type(version, "1.1.0");
+    // A pass for 1.1.0 arrives once the version reads 1.2.0.
+    let reply = await validate(Response.json({ ...kit, currentVersion: "1.1.0" }));
+    await userEvent.clear(version);
+    await userEvent.type(version, "1.2.0");
+    reply();
+    expect(await within(entry).findByRole("button", { name: "Validate" })).toBeEnabled();
+    expect(within(entry).queryByText(/^Checks passed/)).toBeNull();
+    expect(within(entry).getByRole("button", { name: "Save" })).toBeDisabled();
+    // A refusal of 1.2.0 arrives once the version reads 1.3.0.
+    reply = await validate(refused("version", "1.2.0 is not a version of the repository"));
+    await userEvent.clear(version);
+    await userEvent.type(version, "1.3.0");
+    reply();
+    expect(await within(entry).findByRole("button", { name: "Validate" })).toBeEnabled();
+    expect(within(entry).queryByText(/^version: /)).toBeNull();
+    // A pass of 1.3.0, the version the form holds, counts.
+    reply = await validate(Response.json({ ...kit, currentVersion: "1.3.0" }));
+    reply();
+    expect(await within(entry).findByText("Checks passed · 1.3.0")).toBeInTheDocument();
+    expect(within(entry).getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(bodies).toEqual([
+      { version: "1.1.0", check: true },
+      { version: "1.2.0", check: true },
+      { version: "1.3.0", check: true },
+    ]);
   });
 
   it("validates a template's upgrade, then saves it, and edits it", async () => {

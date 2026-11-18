@@ -16,7 +16,9 @@ and answers 200 with no Location. A template service fault is no failed
 check; a registered source is refused before any fetch; an import prefers
 a version's plain tag; the list orders names without regard to case; the
 foreign key and the store's own transaction keep a template in use and its
-version moving forward. Each mutation changes one guard in place,
+version moving forward. The templates screen counts a Validate's reply,
+on the registration or the upgrade form, only while the form still holds
+the values the request sent. Each mutation changes one guard in place,
 and its tests must fail; the source is restored even on interruption. The
 report starts failed and passes only after every baseline test passes and
 every mutant compiles and fails each of its tests.
@@ -25,11 +27,13 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Each test: a name, then the package and the one test it runs.
+# Each test: a name, then the package and the one test it runs; a package
+# under web/ is a Vitest file, run from web/.
 TESTS = {
     "import-fault": ("./backend/internal/registry", "TestATemplateServiceFaultFailsTheStartAndImportsLater"),
     "import-once": ("./backend/internal/registry", "TestTheTemplatesKeyIsImportedOnceAsOneTemplatePerSource"),
@@ -46,12 +50,17 @@ TESTS = {
     "upgrade-refuses-first": ("./backend/internal/registry", "TestAnUpgradeRefusesAnOlderVersionBeforeAnyCheck"),
     "foreign-key": ("./backend/internal/store", "TestTheForeignKeyKeepsATemplateAWorkspaceUses"),
     "advance-in-tx": ("./backend/internal/store", "TestAdvanceTemplateMovesOnlyForwardInItsTransaction"),
+    "screen-register-overtaken": ("web/src/screens/Templates.test.tsx",
+                                  "enables Save only for the values a Validate passed, even when an edit overtakes it"),
+    "screen-upgrade-overtaken": ("web/src/screens/Templates.test.tsx",
+                                 "counts an upgrade's Validate reply, a pass or a refusal, only for the version it sent"),
 }
 
 IMPORT = "backend/internal/registry/import.go"
 REGISTRY = "backend/internal/registry/registry.go"
 API = "backend/internal/api/templates.go"
 STORE = "backend/internal/store/store.go"
+SCREEN = "web/src/screens/Templates.tsx"
 TEMPLATES = "backend/internal/store/templates.go"
 
 # Each mutant: a name, the source file, the text it replaces (exactly once),
@@ -110,20 +119,37 @@ MUTANTS = [
     ("advance-newer-in-tx", TEMPLATES,
      "\tif !newer(version, current.CurrentVersion) {\n",
      "\tif !newer(version, current.CurrentVersion) && false {\n", ["advance-in-tx"]),
+    ("reply-for-the-values-sent", SCREEN,
+     "  const current = reply?.values === values ? reply : null;\n",
+     "  const current = reply;\n", ["screen-register-overtaken", "screen-upgrade-overtaken"]),
 ]
 
 
 def run(package, test):
-    command = ["nice", "-n", "15", "go", "test", "-p", "2", "-count=1", package,
-               "-run", "^" + test + "$", "-v"]
+    cwd = ROOT
+    if package.startswith("web/"):
+        cwd = ROOT / "web"
+        command = ["nice", "-n", "15", "pnpm", "exec", "vitest", "run",
+                   package.removeprefix("web/"), "-t", re.escape(test)]
+    else:
+        command = ["nice", "-n", "15", "go", "test", "-p", "2", "-count=1", package,
+                   "-run", "^" + test + "$", "-v"]
     env = dict(os.environ, GOFLAGS=os.environ.get("GOFLAGS", "-p=2"))
     try:
-        result = subprocess.run(command, cwd=ROOT, env=env, text=True,
+        result = subprocess.run(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=900, check=False)
         return {"exitCode": result.returncode, "output": result.stdout[-20000:]}
     except subprocess.TimeoutExpired:
         return {"exitCode": None, "output": "test process timed out"}
+
+
+def outcome(package, test, output):
+    """The marker of the one test's own pass and fail, not a build's."""
+    if package.startswith("web/"):
+        return (re.search(r"Tests +1 passed", output) is not None,
+                re.search(r"Tests +1 failed", output) is not None)
+    return f"--- PASS: {test}" in output, f"--- FAIL: {test}" in output
 
 
 def main():
@@ -140,7 +166,7 @@ def main():
         result = run(package, test)
         report["baseline"].append({"test": name, **result})
         save()
-        if result["exitCode"] != 0 or f"--- PASS: {test}" not in result["output"]:
+        if result["exitCode"] != 0 or not outcome(package, test, result["output"])[0]:
             raise SystemExit(f"Baseline {name} failed: {result['output']}")
     for name, path, before, after, tests in MUTANTS:
         source = ROOT / path
@@ -153,7 +179,7 @@ def main():
                 package, function = TESTS[test]
                 result = run(package, function)
                 killed = (result["exitCode"] is not None and result["exitCode"] != 0
-                          and f"--- FAIL: {function}" in result["output"])
+                          and outcome(package, function, result["output"])[1])
                 report["mutants"].append({"name": name, "test": test,
                                           "killed": killed, **result})
                 save()
