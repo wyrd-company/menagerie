@@ -65,10 +65,9 @@ type reportingAgent struct {
 func (a *reportingAgent) Bind(_ context.Context, name string, selection wyrwood.Selection) (operator.Binding, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.bound, a.group = true, selection.AccessGroup
+	a.bound, a.group = true, *selection.AccessGroup
 	a.binds++
-	group := selection.AccessGroup
-	a.binding = operator.Binding{ID: "sample-binding", Agent: "sample-host", Key: operator.Key{Kind: operator.KeyName, Value: name}, Policies: selection.Policies, Settings: operator.Settings{AccessGroup: &group, Values: selection.Values}, Applied: true, Revision: 1}
+	a.binding = operator.Binding{ID: "sample-binding", Agent: "sample-host", Key: operator.Key{Kind: operator.KeyName, Value: name}, Policies: selection.Policies, Settings: operator.Settings{AccessGroup: selection.AccessGroup, Values: selection.Values}, Applied: true, Revision: 1}
 	return a.binding, nil
 }
 
