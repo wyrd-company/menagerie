@@ -97,6 +97,10 @@ pub trait ValueFree {
 }
 
 impl ServiceError {
+    pub fn stopped() -> Self {
+        Self::conflict("request-ended", "the caller ended the operation")
+    }
+
     fn with_message(mut self, message: String) -> Self {
         self.message = message;
         self
@@ -107,6 +111,7 @@ impl ValueFree for toha::resolve::ResolveError {
     fn value_free(self) -> ServiceError {
         use toha::resolve::ResolveError as E;
         match self {
+            E::Stopped => ServiceError::stopped(),
             E::NotFound(_) => {
                 ServiceError::refused("template-not-found", "the template was not found")
             }
@@ -121,6 +126,16 @@ impl ValueFree for toha::resolve::ResolveError {
                 "template-resolve-failed",
                 "the template could not be resolved",
             ),
+        }
+    }
+}
+
+impl From<toha::LoadError> for ServiceError {
+    fn from(error: toha::LoadError) -> Self {
+        if error.stopped {
+            Self::stopped()
+        } else {
+            Self::refused("template-invalid", error.to_string())
         }
     }
 }
@@ -147,7 +162,7 @@ impl From<toha::ApplyError> for ServiceError {
     fn from(error: toha::ApplyError) -> Self {
         use toha::ApplyError as E;
         match error {
-            E::Stopped => Self::conflict("request-ended", "the caller ended the operation"),
+            E::Stopped => Self::stopped(),
             // Conflicts and drift are found from the plan before any hook
             // runs, so their paths carry no captured output.
             E::Conflicts(paths) => Self::conflict(
@@ -198,6 +213,7 @@ impl From<toha::ApplyError> for ServiceError {
                 "a user section in a generated file could not be kept",
             ),
             E::Json(_) => Self::refused("apply-failed", "a JSON edit could not be resolved"),
+            E::Git(toha::git_target::GitTargetError::Stopped) => Self::stopped(),
             E::Git(_) => Self::refused(
                 "apply-failed",
                 "the workspace's repository could not be set up",
@@ -256,6 +272,7 @@ impl ValueFree for toha::operations::OperationError {
             E::Resolve(e) => e.value_free(),
             E::Apply(e) => (*e).into(),
             E::Staging(e) => e.value_free(),
+            E::Load(e) if e.stopped => ServiceError::stopped(),
             E::Load(_) => ServiceError::refused("template-invalid", "the template is invalid"),
             E::Requirements(_) => ServiceError::refused(
                 "missing-requirements",
@@ -298,6 +315,7 @@ impl From<toha::operations::OperationError> for ServiceError {
         use toha::operations::OperationError as E;
         match error {
             E::Resolve(e) => e.into(),
+            E::Load(e) => e.into(),
             E::Apply(e) => (*e).into(),
             E::Staging(e) => e.into(),
             other => {
@@ -337,6 +355,7 @@ impl ValueFree for toha::updates::UpdateError {
     fn value_free(self) -> ServiceError {
         use toha::updates::UpdateError as E;
         match self {
+            E::Stopped => ServiceError::stopped(),
             // The warnings are Toha's text, so they stay out as well.
             E::WithWarnings { source, .. } => source.value_free(),
             E::Admission(e) => e.value_free(),
@@ -388,6 +407,7 @@ impl ValueFree for toha::applied::MergeError {
     fn value_free(self) -> ServiceError {
         use toha::applied::MergeError as E;
         match self {
+            E::Stopped => ServiceError::stopped(),
             E::WrongTarget => ServiceError::conflict(
                 "session-mismatch",
                 "the upgrade was prepared for another workspace",
@@ -597,6 +617,34 @@ mod tests {
 
     fn leaks(error: &ServiceError) -> bool {
         String::from_utf8(error.body()).unwrap().contains(SECRET)
+    }
+
+    #[test]
+    fn stopped_errors_keep_the_request_ended_kind_through_wrappers() {
+        let load = || toha::LoadError {
+            stopped: true,
+            problems: vec![],
+        };
+        for error in [
+            A::Stopped.into(),
+            A::Git(toha::git_target::GitTargetError::Stopped).into(),
+            toha::resolve::ResolveError::Stopped.into(),
+            load().into(),
+            OperationError::Load(load()).into(),
+            OperationError::Load(load()).value_free(),
+            OperationError::Apply(Box::new(A::Stopped)).into(),
+            UpdateError::Stopped.into(),
+            MergeError::Stopped.into(),
+            SessionError::Update(UpdateError::Stopped).into(),
+            SessionError::Merge(MergeError::Stopped).into(),
+        ] {
+            assert_eq!((error.status, error.kind), (409, "request-ended"));
+        }
+        let invalid = ServiceError::from(toha::LoadError {
+            stopped: false,
+            problems: vec![],
+        });
+        assert_eq!((invalid.status, invalid.kind), (422, "template-invalid"));
     }
 
     #[test]

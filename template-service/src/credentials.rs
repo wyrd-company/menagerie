@@ -197,22 +197,41 @@ pub fn written_forms(username: &str, password: &str) -> Vec<String> {
 /// Fires when the operation's caller went away. `lifetime` makes one with
 /// the `Alive` handle whose drop fires it.
 #[derive(Clone, Debug)]
-pub struct Ended(tokio::sync::watch::Receiver<()>);
+pub struct Ended(tokio::sync::watch::Receiver<()>, toha::stop::StopSignal);
 
 /// Held for as long as the operation's caller waits for it.
 #[derive(Debug)]
-pub struct Alive(#[allow(dead_code)] tokio::sync::watch::Sender<()>);
+pub struct Alive {
+    _alive: tokio::sync::watch::Sender<()>,
+    stop: toha::stop::StopSignal,
+}
+
+impl Drop for Alive {
+    fn drop(&mut self) {
+        self.stop.stop();
+    }
+}
 
 /// An operation's caller handle and its ended signal.
 pub fn lifetime() -> (Alive, Ended) {
     let (alive, ended) = tokio::sync::watch::channel(());
-    (Alive(alive), Ended(ended))
+    let stop = toha::stop::StopSignal::new();
+    (
+        Alive {
+            _alive: alive,
+            stop: stop.clone(),
+        },
+        Ended(ended, stop),
+    )
 }
 
 impl Ended {
-    /// Refuse when the caller went away. Toha cannot stop a fetch or a file
-    /// loop, so a fetch that returns after the caller left must not go on to
-    /// write to a folder another job may be working in.
+    /// Run all Toha work on this worker inside the caller's stop scope.
+    pub(crate) fn scope<T>(&self, operation: impl FnOnce() -> T) -> T {
+        toha::stop::with_stop_signal(self.1.clone(), operation)
+    }
+
+    /// Refuse when the caller went away before the first write.
     pub fn check(&self) -> Result<(), ServiceError> {
         if self.0.has_changed().is_err() {
             return Err(ServiceError::conflict(

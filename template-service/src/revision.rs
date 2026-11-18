@@ -215,8 +215,9 @@ pub fn refresh(
     if listed.layer != Layer::User || !is_git(&listed.entry.source) {
         return Ok(false);
     }
-    let failed = |e: toha::catalog::CatalogError| {
-        ServiceError::refused("template-refresh-failed", e.to_string())
+    let failed = |e: toha::catalog::CatalogError| match e {
+        toha::catalog::CatalogError::Stopped => ServiceError::stopped(),
+        other => ServiceError::refused("template-refresh-failed", other.to_string()),
     };
     let catalog = toha::catalog::Catalog::load(host.paths.clone(), &host.cwd).map_err(failed)?;
     toha::catalog::update(&catalog, Some(formal)).map_err(failed)?;

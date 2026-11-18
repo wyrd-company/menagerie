@@ -1,6 +1,6 @@
 //! JSON over HTTP/1.1 on a Unix socket. Each request runs its Toha work on a
-//! blocking worker, inside its own credential resolver scope, and returns
-//! owned JSON.
+//! blocking worker, inside its own stop signal and credential resolver
+//! scopes, and returns owned JSON.
 use crate::Service;
 use crate::credentials::Ended;
 use crate::error::ServiceError;
@@ -81,7 +81,7 @@ pub fn router(service: Arc<Service>) -> Router {
 }
 
 /// One route's work. It gets its caller's `Ended` signal, which the routes
-/// that write to a folder check before they start to write.
+/// that write to a folder also check before they start to write.
 type Operation<Req, Rep> = fn(&Service, Req, &Ended) -> Result<Rep, ServiceError>;
 
 async fn call<Req, Rep>(
@@ -139,14 +139,18 @@ where
     // Every Toha fetch the operation makes, on this worker, asks the
     // workspace service's credential route when an HTTPS remote challenges.
     // `_alive` lives as long as this future: when the caller goes away the
-    // future is dropped, which ends the resolver's credential requests and
-    // tells the operation not to start writing.
+    // future is dropped, which fires Toha's stop signal synchronously and
+    // ends the resolver's credential requests.
     let (_alive, ended) = crate::credentials::lifetime();
     let kept = handed.clone();
     let result = tokio::task::spawn_blocking(move || {
         let resolver =
             crate::credentials::resolver(&service.settings.hook_runner_socket, kept, ended.clone());
-        toha::source::with_credential_resolver(resolver, || operation(&service, request, &ended))
+        ended.scope(|| {
+            toha::source::with_credential_resolver(resolver, || {
+                operation(&service, request, &ended)
+            })
+        })
     })
     .await;
     let reply = match result {
@@ -225,4 +229,113 @@ pub async fn serve(
     axum::serve(listener, router(service))
         .with_graceful_shutdown(shutdown)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    // Use the real request worker and Toha file loop, pausing only in the
+    // reporting callback after the first file. Dropping the request must
+    // stop the next file even though no hook or network call intervenes.
+    fn files(service: &Service, root: PathBuf, ended: &Ended) -> Result<(), ServiceError> {
+        let template = toha::Template::load(&root.join("source"))?;
+        let (config, _, _) = service.host.context()?;
+        let interview = toha::interview::configured_defaults(
+            "sample",
+            &template,
+            &config.presets,
+            &config.template_defaults,
+        )
+        .unwrap()
+        .start(&template, crate::host::now())
+        .unwrap();
+        let toha::Interview::Complete(done) = interview else {
+            panic!("empty interview")
+        };
+        let target = toha::staging::canonical_target(&root.join("target")).unwrap();
+        let plan = toha::Plan::build(&template, &done, &target).unwrap();
+        let result = plan
+            .apply_reporting(
+                &target,
+                toha::ApplyOptions::default(),
+                &toha::hook::RecordingRunner::default(),
+                &mut |_| {
+                    std::fs::write(root.join("first-written"), "").unwrap();
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while ended.check().is_ok() {
+                        assert!(Instant::now() < deadline, "request never ended");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                },
+            )
+            .map_err(ServiceError::from);
+        std::fs::write(
+            root.join("result"),
+            match &result {
+                Ok(_) => "written",
+                Err(e) => e.kind,
+            },
+        )
+        .unwrap();
+        result.map(|_| ())
+    }
+
+    #[test]
+    fn dropping_a_request_between_files_stops_the_loop_and_returns_its_worker() {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let temp = tempfile::tempdir().unwrap();
+                let root = temp.path().canonicalize().unwrap();
+                std::fs::create_dir_all(root.join("source/template")).unwrap();
+                std::fs::create_dir(root.join("target")).unwrap();
+                std::fs::write(
+                    root.join("source/template.yml"),
+                    "name: sample\ninterview: []\n",
+                )
+                .unwrap();
+                for name in ["a.txt", "b.txt", "c.txt"] {
+                    std::fs::write(root.join("source/template").join(name), name).unwrap();
+                }
+                let settings = crate::config::Settings::parse(
+                    &format!("workspace-root: {}", root.join("target").display()),
+                    &root.join("data"),
+                )
+                .unwrap();
+                let key = crate::seal::SessionKey::load_or_create(&settings.data).unwrap();
+                let service = Arc::new(Service::new(settings, key));
+                service.host.prepare().unwrap();
+                let body = serde_json::to_vec(&root).unwrap();
+                let caller = tokio::spawn(run(service, body.into(), files, Default::default()));
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !root.join("first-written").exists() {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                })
+                .await
+                .expect("first write never arrived");
+                caller.abort();
+                assert!(caller.await.unwrap_err().is_cancelled());
+                tokio::time::timeout(Duration::from_secs(2), tokio::task::spawn_blocking(|| ()))
+                    .await
+                    .expect("request worker stayed blocked")
+                    .unwrap();
+                assert_eq!(
+                    std::fs::read_to_string(root.join("result")).unwrap(),
+                    "request-ended"
+                );
+                assert_eq!(
+                    std::fs::read_dir(root.join("target")).unwrap().count(),
+                    1,
+                    "the request wrote another file after it ended"
+                );
+            });
+    }
 }

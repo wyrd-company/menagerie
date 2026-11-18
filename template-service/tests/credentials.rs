@@ -56,8 +56,14 @@ fn authority() -> &'static Authority {
 
 /// Run `test` on a runtime started after the authority is trusted.
 fn run(test: impl std::future::Future<Output = ()>) {
+    run_with_workers(test, 512);
+}
+
+fn run_with_workers(test: impl std::future::Future<Output = ()>, workers: usize) {
     authority();
     tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(workers)
         .enable_all()
         .build()
         .unwrap()
@@ -90,6 +96,10 @@ struct HostState {
     stall_after: Option<usize>,
     /// How many requests waited.
     stalls: usize,
+    schema: Option<Value>,
+    hold_schema: bool,
+    schema_stalls: usize,
+    schema_closed: usize,
 }
 
 /// A smart HTTP Git host over TLS on loopback.
@@ -147,6 +157,16 @@ impl GitHost {
             rendezvous,
             _dir: dir,
         }
+    }
+
+    fn schema(&self) -> String {
+        let url = format!("{}/schema.json", self.origin);
+        self.state.0.lock().unwrap().schema = Some(json!({"$id": url, "type": "object"}));
+        url
+    }
+
+    fn hold_schema(&self, hold: bool) {
+        self.state.0.lock().unwrap().hold_schema = hold;
     }
 
     /// Serve a bare clone of `source` at `/<name>`.
@@ -271,6 +291,42 @@ fn serve(
         path: path.to_owned(),
         user: user.clone(),
     });
+    if path == "/schema.json" {
+        if host.hold_schema {
+            host.schema_stalls += 1;
+            drop(host);
+            // A stopped schema fetch must close its TLS connection even
+            // though this host has never sent a response header or body.
+            reader
+                .get_mut()
+                .sock
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut byte = [0];
+            use std::io::Read;
+            let closed = match reader.read(&mut byte) {
+                Ok(0) => true,
+                Err(e) => !matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ),
+                Ok(_) => false,
+            };
+            if closed {
+                state.0.lock().unwrap().schema_closed += 1;
+            }
+        } else {
+            let body = host.schema.as_ref().unwrap().to_string();
+            drop(host);
+            respond(
+                reader.get_mut(),
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                body.as_bytes(),
+            );
+        }
+        return;
+    }
     let out = reader.get_mut();
     // Credentials the host did not issue are challenged, as GitHub does; a
     // token issued for another repository is refused.
@@ -860,9 +916,8 @@ fn a_caller_going_away_ends_its_credential_request_and_worker() {
 }
 
 /// Call `path` with `body` while the host stalls its last pack request, after
-/// `others` others, go away, and let the fetch finish. Toha cannot stop the
-/// fetch, so it runs on when the host answers, and it asks for no credential
-/// after that, which would end it.
+/// `others` others, go away, and prove the request worker returned while
+/// the host still holds the connection. Then let the abandoned fetch finish.
 async fn lose_the_caller_during_a_fetch(
     host: &GitHost,
     world: &World,
@@ -872,7 +927,10 @@ async fn lose_the_caller_during_a_fetch(
     others: usize,
 ) {
     // With no admission cached, the operation asks the remote again.
-    std::fs::remove_dir_all(world.data.join("cache/sources")).unwrap();
+    let cache = world.data.join("cache/sources");
+    if cache.exists() {
+        std::fs::remove_dir_all(cache).unwrap();
+    }
     host.stall(others);
     let socket = service.socket.clone();
     let bytes = body_of(path, body);
@@ -882,11 +940,14 @@ async fn lose_the_caller_during_a_fetch(
         "the operation never reached its last pack request"
     );
     caller.abort();
-    // Test-only: the server sees the closed connection and drops the request
-    // before this ends. Released earlier, the guard would let the write
-    // through and this test would fail, not pass by chance.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(caller.await.unwrap_err().is_cancelled());
+    let returned =
+        tokio::time::timeout(Duration::from_secs(2), tokio::task::spawn_blocking(|| ())).await;
+    // Always release the host before asserting, including in mutation runs.
     host.resume();
+    returned
+        .expect("request worker did not return while Git was stalled")
+        .unwrap();
     // Test-only: long enough for the writes an unguarded operation makes,
     // which removing each guard shows.
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -908,81 +969,258 @@ fn tree(folder: &Path) -> Vec<(String, String)> {
 /// when the fetch returns.
 #[test]
 fn a_fetch_that_returns_after_its_generate_lost_its_caller_writes_nothing() {
-    run(async {
-        let host = GitHost::start();
-        let world = world(&host);
-        host.admit(TOKEN_A, "example-org/kit-a.git");
-        world
-            .hooks
-            .answer_credentials(grants(vec![(host.url("example-org/kit-a.git"), TOKEN_A)]));
-        let service = Running::start(&world).await;
-        let selector = world.select("alpha", "private-a");
-        let start = service.post("/v1/interviews", &selector).await;
-        let done = service
-            .post(
-                "/v1/interviews/answers",
-                &with(
-                    selector.clone(),
-                    json!({"session": start.json["session"],
+    run_with_workers(
+        async {
+            let host = GitHost::start();
+            let world = world(&host);
+            host.admit(TOKEN_A, "example-org/kit-a.git");
+            world
+                .hooks
+                .answer_credentials(grants(vec![(host.url("example-org/kit-a.git"), TOKEN_A)]));
+            let service = Running::start(&world).await;
+            let selector = world.select("alpha", "private-a");
+            let start = service.post("/v1/interviews", &selector).await;
+            let done = service
+                .post(
+                    "/v1/interviews/answers",
+                    &with(
+                        selector.clone(),
+                        json!({"session": start.json["session"],
                     "submission": submission(&start, json!({"label": "one",
                         "catalog": {"title": "Sample"}}))}),
-                ),
+                    ),
+                )
+                .await;
+            assert_eq!(done.json["state"], "completed", "{}", done.json);
+            let folder = world.initialize("alpha");
+            let before = entries(&folder);
+            let body = with(selector, json!({"session": done.json["session"]}));
+            lose_the_caller_during_a_fetch(
+                &host,
+                &world,
+                &service,
+                "/v1/workspaces/generate",
+                &body,
+                1,
             )
             .await;
-        assert_eq!(done.json["state"], "completed", "{}", done.json);
-        let folder = world.initialize("alpha");
-        let before = entries(&folder);
-        let body = with(selector, json!({"session": done.json["session"]}));
-        lose_the_caller_during_a_fetch(
-            &host,
-            &world,
-            &service,
-            "/v1/workspaces/generate",
-            &body,
-            1,
-        )
-        .await;
-        assert_eq!(entries(&folder), before, "the generate wrote to the folder");
-        service.stop().await;
-    });
+            assert_eq!(entries(&folder), before, "the generate wrote to the folder");
+            service.stop().await;
+        },
+        1,
+    );
 }
 
 /// The same for an upgrade's apply.
 #[test]
 fn a_fetch_that_returns_after_its_apply_lost_its_caller_writes_nothing() {
-    run(async {
-        let host = GitHost::start();
-        let world = world(&host);
-        host.admit(TOKEN_A, "example-org/kit-c");
-        world
-            .hooks
-            .answer_credentials(grants(vec![(host.url("example-org/kit-c"), TOKEN_A)]));
-        let service = Running::start(&world).await;
-        let folder = create(&world, &service, "alpha", "private-c").await;
-        let selector = world.select("alpha", "private-c-next");
-        let start = service.post("/v1/upgrades", &selector).await;
-        assert_eq!(start.status, 200, "{}", start.json);
-        let done = service
-            .post(
-                "/v1/upgrades/answers",
-                &with(
-                    selector.clone(),
-                    json!({"session": start.json["session"],
+    run_with_workers(
+        async {
+            let host = GitHost::start();
+            let world = world(&host);
+            host.admit(TOKEN_A, "example-org/kit-c");
+            world
+                .hooks
+                .answer_credentials(grants(vec![(host.url("example-org/kit-c"), TOKEN_A)]));
+            let service = Running::start(&world).await;
+            let folder = create(&world, &service, "alpha", "private-c").await;
+            let selector = world.select("alpha", "private-c-next");
+            let start = service.post("/v1/upgrades", &selector).await;
+            assert_eq!(start.status, 200, "{}", start.json);
+            let done = service
+                .post(
+                    "/v1/upgrades/answers",
+                    &with(
+                        selector.clone(),
+                        json!({"session": start.json["session"],
                     "submission": submission(&start, json!({"extra": "added"}))}),
-                ),
+                    ),
+                )
+                .await;
+            assert_eq!(done.json["state"], "completed", "{}", done.json);
+            let before = tree(&folder);
+            // The merge base is fetched by its commit, as GitHub allows.
+            git(
+                &host.root.join("example-org/kit-c"),
+                &["config", "uploadpack.allowAnySHA1InWant", "true"],
+            );
+            let body = with(selector, json!({"session": done.json["session"]}));
+            lose_the_caller_during_a_fetch(&host, &world, &service, "/v1/upgrades/apply", &body, 3)
+                .await;
+            assert_eq!(tree(&folder), before, "the apply wrote to the folder");
+            service.stop().await;
+        },
+        1,
+    );
+}
+
+#[test]
+fn a_stalled_interview_fetch_returns_its_worker_when_the_caller_leaves() {
+    run_with_workers(
+        async {
+            let host = GitHost::start();
+            let world = world(&host);
+            host.admit(TOKEN_A, "example-org/kit-a.git");
+            world
+                .hooks
+                .answer_credentials(grants(vec![(host.url("example-org/kit-a.git"), TOKEN_A)]));
+            let service = Running::start(&world).await;
+            lose_the_caller_during_a_fetch(
+                &host,
+                &world,
+                &service,
+                "/v1/interviews",
+                &world.select("alpha", "private-a"),
+                0,
             )
             .await;
-        assert_eq!(done.json["state"], "completed", "{}", done.json);
-        let before = tree(&folder);
-        // The merge base is fetched by its commit, as GitHub allows.
-        git(
-            &host.root.join("example-org/kit-c"),
-            &["config", "uploadpack.allowAnySHA1InWant", "true"],
+            assert!(!world.folder("alpha").exists());
+            service.stop().await;
+        },
+        1,
+    );
+}
+
+#[test]
+fn a_template_address_with_a_password_is_refused_without_contacting_the_host() {
+    run(async {
+        let host = GitHost::start();
+        let address = host.url("example-org/kit-a.git").replacen(
+            "https://",
+            "https://sample-user:sample-password@",
+            1,
         );
-        let body = with(selector, json!({"session": done.json["session"]}));
-        lose_the_caller_during_a_fetch(&host, &world, &service, "/v1/upgrades/apply", &body, 3)
+        let world = World::with_templates(&[("password", &address)]);
+        let service = Running::start(&world).await;
+        let reply = service
+            .post("/v1/interviews", &world.select("alpha", "password"))
             .await;
-        assert_eq!(tree(&folder), before, "the apply wrote to the folder");
+        assert_eq!(reply.status, 422, "{}", reply.json);
+        assert!(!String::from_utf8_lossy(&reply.body).contains("sample-password"));
+        assert!(host.seen().is_empty());
+        assert!(world.hooks.credential_urls().is_empty());
         service.stop().await;
     });
+}
+
+#[test]
+fn every_route_returns_its_worker_and_closes_a_stalled_schema_fetch() {
+    run_with_workers(
+        async {
+            let host = GitHost::start();
+            let schema = host.schema();
+            let source = tempfile::tempdir().unwrap();
+            write(
+                source.path(),
+                "template.yml",
+                format!(
+                    "name: schema\ninterview:\n  - {{id: catalog, type: document, prompt: Catalog, schema: '{schema}', input: catalog.json}}\n"
+                ),
+            );
+            write(source.path(), "template/out.txt", "sample\n");
+            git(source.path(), &["init", "-q", "-b", "main"]);
+            let v1 = commit_all(source.path(), "v1");
+            git(source.path(), &["tag", "v1"]);
+            write(source.path(), "template/out.txt", "updated\n");
+            let v2_template = read(source.path(), "template.yml")
+                + "  - {id: extra, type: text, prompt: Extra, required: true}\n";
+            write(source.path(), "template.yml", v2_template);
+            commit_all(source.path(), "v2");
+            git(source.path(), &["tag", "v2"]);
+            let world = World::with_templates(&[
+                (
+                    "schema-v1",
+                    &format!("file://{}@v1", source.path().display()),
+                ),
+                (
+                    "schema-v2",
+                    &format!("file://{}@v2", source.path().display()),
+                ),
+            ]);
+            let service = Running::start(&world).await;
+            let selector = world.select("alpha", "schema-v1");
+            let start = service.post("/v1/interviews", &selector).await;
+            assert_eq!(start.status, 200, "{}", start.json);
+            assert_eq!(start.json["document"]["context"]["commit"], v1);
+            let answering = with(
+                selector.clone(),
+                json!({"session": start.json["session"],
+            "submission": submission(&start, json!({"catalog": {}}))}),
+            );
+            let done = service.post("/v1/interviews/answers", &answering).await;
+            assert_eq!(done.json["state"], "completed", "{}", done.json);
+            let generate = with(selector.clone(), json!({"session": done.json["session"]}));
+
+            async fn cancel_schema(
+                host: &GitHost,
+                world: &World,
+                service: &Running,
+                route: &'static str,
+                request: Value,
+            ) {
+                host.hold_schema(true);
+                let before = host.state.0.lock().unwrap().schema_stalls;
+                let socket = service.socket.clone();
+                let bytes = body_of(route, &request);
+                let caller = tokio::spawn(async move { post_bytes(&socket, route, bytes).await });
+                assert!(
+                    eventually(|| host.state.0.lock().unwrap().schema_stalls > before).await,
+                    "{route} did not reach the schema endpoint"
+                );
+                caller.abort();
+                assert!(caller.await.unwrap_err().is_cancelled());
+                // The sole blocking worker must return and the schema
+                // connection must close within the same two-second bound.
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    tokio::task::spawn_blocking(|| ()).await.unwrap();
+                    while host.state.0.lock().unwrap().schema_closed <= before {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap_or_else(|_| panic!("{route} kept its worker or schema connection"));
+                host.hold_schema(false);
+                // Another request still works on the same single-worker pool.
+                let reply = service
+                    .post("/v1/interviews", &world.select("healthy", "schema-v1"))
+                    .await;
+                assert_eq!(reply.status, 200, "{}", reply.json);
+            }
+            cancel_schema(&host, &world, &service, "/v1/interviews", selector.clone()).await;
+            cancel_schema(&host, &world, &service, "/v1/interviews/answers", answering).await;
+            let folder = world.initialize("alpha");
+            cancel_schema(
+                &host,
+                &world,
+                &service,
+                "/v1/workspaces/generate",
+                generate.clone(),
+            )
+            .await;
+            assert_eq!(entries(&folder), vec![".git"]);
+            let applied = service.post("/v1/workspaces/generate", &generate).await;
+            assert_eq!(applied.json["outcome"], "written", "{}", applied.json);
+            commit_all(&folder, "generated");
+            write(&folder, "catalog.json", "{}");
+            commit_all(&folder, "document input");
+            let selector = world.select("alpha", "schema-v2");
+            let start = service.post("/v1/upgrades", &selector).await;
+            assert_eq!(start.json["state"], "questions", "{}", start.json);
+            let answering = with(
+                selector.clone(),
+                json!({"session": start.json["session"],
+            "submission": submission(&start, json!({"extra": "added"}))}),
+            );
+            let done = service.post("/v1/upgrades/answers", &answering).await;
+            assert_eq!(done.json["state"], "completed", "{}", done.json);
+            let apply = with(selector.clone(), json!({"session": done.json["session"]}));
+            let before = tree(&folder);
+            cancel_schema(&host, &world, &service, "/v1/upgrades", selector).await;
+            cancel_schema(&host, &world, &service, "/v1/upgrades/answers", answering).await;
+            cancel_schema(&host, &world, &service, "/v1/upgrades/apply", apply).await;
+            assert_eq!(tree(&folder), before);
+            service.stop().await;
+        },
+        1,
+    );
 }

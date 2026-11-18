@@ -9,7 +9,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -81,6 +83,14 @@ func TestAJobLimitEndsTheTemplateServicesCredentialRequest(t *testing.T) {
 // a self-signed CA certificate as a server's, which httptest's own is.
 func challengingHost(t *testing.T) (origin, authority string) {
 	t.Helper()
+	return templateTLSHost(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="sample"`)
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+	}))
+}
+
+func templateTLSHost(t *testing.T, handler http.Handler) (origin, authority string) {
+	t.Helper()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -112,10 +122,7 @@ func challengingHost(t *testing.T) (origin, authority string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="sample"`)
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-	}))
+	host := httptest.NewUnstartedServer(handler)
 	host.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{leaf}, PrivateKey: key}}}
 	host.StartTLS()
 	t.Cleanup(host.Close)
@@ -124,4 +131,75 @@ func challengingHost(t *testing.T) (origin, authority string) {
 		t.Fatal(err)
 	}
 	return host.URL, authority
+}
+
+// A real job reaches its interview limit during Template::load, before
+// Toha can return a session. The endpoint sends nothing until cancellation
+// closes the connection. A second job on the same workspace is admitted.
+func TestAJobLimitStopsAStalledTemplateSchemaLoad(t *testing.T) {
+	held, closed := make(chan struct{}, 2), make(chan struct{}, 2)
+	release := make(chan struct{})
+	host, authority := templateTLSHost(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		held <- struct{}{}
+		select {
+		case <-r.Context().Done():
+			closed <- struct{}{}
+		case <-release:
+		}
+	}))
+	t.Cleanup(func() { close(release) })
+	source := t.TempDir()
+	writeFile(t, source, "template.yml", fmt.Sprintf("name: schema\ninterview:\n  - {id: catalog, type: document, prompt: Catalog, schema: '%s/schema.json', input: catalog.json}\n", host))
+	writeFile(t, source, "template/out.txt", "sample\n")
+	gitCLI(t, source, "init", "-q", "-b", "main")
+	gitCLI(t, source, "add", "-A")
+	gitCLI(t, source, "commit", "-q", "-m", "schema")
+	a := newAcceptWith(t, &fakeRuntime{}, acceptOptions{
+		containers: localContainers{}, image: "runner:local",
+		limits:    jobs.Limits{Phases: map[string]time.Duration{"interview": 2 * time.Second}},
+		templates: map[string]string{"schema": "file://" + source},
+		env:       []string{"GIT_SSL_CAINFO=" + authority},
+	})
+	for range 2 {
+		status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"alpha","templateId":"schema"}`)
+		if status != http.StatusAccepted {
+			t.Fatalf("start: %d %s", status, body)
+		}
+		var snapshot jobs.Snapshot
+		if err := json.Unmarshal([]byte(body), &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		job, _ := a.manager.Get(snapshot.JobID)
+		select {
+		case <-held:
+		case <-time.After(5 * time.Second):
+			t.Fatal("job did not reach the schema host")
+		}
+		deadline := time.NewTimer(4 * time.Second)
+		for {
+			_, ended, changed := job.EventsAfter(0)
+			if ended {
+				break
+			}
+			select {
+			case <-changed:
+			case <-deadline.C:
+				t.Fatal("schema load kept its job after the time limit")
+			}
+		}
+		deadline.Stop()
+		snapshot = job.Snapshot()
+		if snapshot.State != jobs.Failed || snapshot.Error == nil || snapshot.Error.Kind != jobs.KindTimedOut {
+			t.Fatalf("%+v %+v", snapshot, snapshot.Error)
+		}
+		select {
+		case <-closed:
+		case <-time.After(2 * time.Second):
+			t.Fatal("schema connection outlived the job")
+		}
+		if _, err := os.Stat(filepath.Join(a.root, "alpha")); !os.IsNotExist(err) {
+			t.Fatalf("timed-out interview created a workspace: %v", err)
+		}
+	}
 }

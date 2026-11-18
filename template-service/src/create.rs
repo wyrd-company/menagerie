@@ -37,8 +37,7 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
         &service.host.paths,
         &service.host.cwd,
     )?;
-    let template = Template::load(&resolved.folder)
-        .map_err(|e| ServiceError::refused("template-invalid", e.to_string()))?;
+    let template = Template::load(&resolved.folder)?;
     let preparation = Preparation::new(
         template,
         resolved,
