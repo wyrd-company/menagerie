@@ -60,7 +60,7 @@ impl Admitted {
 const NOT_REMOTE: &str = "the address is not a remote Git address: it must be gh:owner/repository, git@host:path, ssh:// or https://";
 const COLON_BEFORE_AT: &str = "after its scheme the address holds a : before an @, as a password or a port before a ref does: give it without a password, and with a port give it without a ref, which takes the newest version; let the GitHub App or the SSH agent supply the credential";
 const DASHED: &str = "the address's host or user starts with -";
-const UNWRITTEN: &str = "the address does not read one way: give it without a password, with a host in lower-case letters, digits, . and -, and a user name, path, ref and folder of letters, digits and . _ ~ - with no % escapes";
+const UNWRITTEN: &str = "the address does not read one way: give it without a password, with a host in lower-case letters, digits, . and -, a user name and path of letters, digits and . _ ~ - (a path also /), a ref of letters, digits and . _ -, and a folder of those and /, with no % escapes";
 const REF_NOT_VERSION: &str = "the @ before the ref could also end a user name or password that holds a /: a ref that holds a ., or follows git@host:path, must be a version's tag";
 
 fn refused(message: &'static str) -> ServiceError {
@@ -499,6 +499,10 @@ mod tests {
             ("https://git.example.invalid/o/r@feature/sample", UNWRITTEN),
             // a folder that holds an `@`:
             ("https://git.example.invalid/o/r#kit/sam@ple", UNWRITTEN),
+            // a ref or a folder that holds a `~`, which a user name and a
+            // path may:
+            ("gh:owner/repo@rel~1", UNWRITTEN),
+            ("gh:owner/repo#kits/te~mp", UNWRITTEN),
             // a user name gix decodes, so the writer does not write it back:
             (
                 "https://sample-user%3Asample-password@git.example.invalid/o/r",
