@@ -101,6 +101,9 @@ func jsonProblem(err error) string {
 }
 
 func (s *Server) registerTemplate(w http.ResponseWriter, r *http.Request) {
+	if !s.registering(w) {
+		return
+	}
 	var req struct {
 		Name        *string `json:"name"`
 		Address     *string `json:"address"`
@@ -127,6 +130,9 @@ func (s *Server) registerTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) upgradeTemplate(w http.ResponseWriter, r *http.Request) {
+	if !s.registering(w) {
+		return
+	}
 	var req struct {
 		Version *string `json:"version"`
 	}
@@ -146,6 +152,9 @@ func (s *Server) upgradeTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) editTemplate(w http.ResponseWriter, r *http.Request) {
+	if !s.registering(w) {
+		return
+	}
 	var req struct {
 		Name        *string         `json:"name"`
 		RunnerImage json.RawMessage `json:"runnerImage"`
@@ -181,6 +190,16 @@ func (s *Server) removeTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// registering refuses a change when the server was composed with no
+// registry to change templates with.
+func (s *Server) registering(w http.ResponseWriter) bool {
+	if s.opts.Registry == nil {
+		writeError(w, http.StatusInternalServerError, apiError{Kind: "internal-error", Message: "templates cannot be changed: the workspace service has no template registry"})
+		return false
+	}
+	return true
 }
 
 // KindUnknownTemplate refuses a request that names no registered template.
