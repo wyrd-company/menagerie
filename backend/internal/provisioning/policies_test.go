@@ -329,6 +329,20 @@ func TestImportKeepsRunningBindingSelectionAndLegacyKey(t *testing.T) {
 	if h.bindings["existing"].Settings.Values["key_name"] != "legacy-name" || h.selection().AppliedRevision == nil || *h.selection().AppliedRevision != next.Revision || len(h.calls) != 0 {
 		t.Fatal("imported running workspace was not changed without a rebuild")
 	}
+	h.state, h.container = "running", "same-container"
+	h.definedErr = errors.New("definition does not parse")
+	removed, err := h.data.SaveSelection(context.Background(), "sample", []string{"workspace", "key"}, next.Revision, h.allowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.steps().ApplyPolicies(context.Background(), folder, h); err != nil {
+		t.Fatal(err)
+	}
+	binding := h.bindings["existing"]
+	current := h.selection()
+	if !slices.Equal(binding.Policies, []string{"key", "workspace"}) || binding.Settings.AccessGroup == nil || *binding.Settings.AccessGroup != 4321 || binding.Settings.Values["key_name"] != "legacy-name" || current.AppliedRevision == nil || *current.AppliedRevision != removed.Revision || h.state != "running" || h.container != "same-container" || len(h.calls) != 0 {
+		t.Fatalf("removal lost running binding: %+v selection %+v calls %v", binding, current, h.calls)
+	}
 }
 
 func TestProvisioningIgnoresTemplateIdentityAndNeedsConfiguredKeyPolicy(t *testing.T) {

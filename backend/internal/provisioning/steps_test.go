@@ -55,9 +55,10 @@ type host struct {
 	// unbound lists each unbind as agent/name.
 	unbound []string
 	// data is Menagerie's data of the host.
-	data   *store.Store
-	logged strings.Builder
-	phases []string
+	data       *store.Store
+	logged     strings.Builder
+	phases     []string
+	xolotlKeys []string
 	// mounting and mountingOutside are what the two mount checks report.
 	mounting, mountingOutside []string
 	// failAfterEmptied fails a removal after it has emptied the folder.
@@ -229,6 +230,10 @@ func (h *host) BeginRebuild(string, devcontainer.Progress) (BringUp, error) {
 type fakeBringUp struct {
 	h       *host
 	rebuild bool
+}
+
+func (b *fakeBringUp) SetXolotlKey(key string) {
+	b.h.xolotlKeys = append(b.h.xolotlKeys, key)
 }
 
 func (b *fakeBringUp) Build(context.Context) error { return b.h.note("build") }
@@ -1269,4 +1274,43 @@ func (h *host) Change(_ context.Context, b operator.Binding, selection wyrwood.S
 	b.Revision++
 	b.Applied = true
 	return b, nil
+}
+
+func TestProvisioningPassesStoredXolotlKeyToBringUp(t *testing.T) {
+	for _, operation := range []string{"create", "start", "rebuild"} {
+		for _, configured := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/xolotl=%t", operation, configured), func(t *testing.T) {
+				h := newHost(t)
+				clients := Clients{Bindings: h, Agent: sampleAgent}
+				if configured {
+					clients.Keys, clients.KeyPolicy = h, "configured-key"
+				}
+				steps := h.with(clients)
+				ctx := context.Background()
+				var err error
+				switch operation {
+				case "create":
+					err = steps.Create(ctx, folder, h, func(context.Context) error { return nil })
+				case "start":
+					err = steps.Start(ctx, folder, h)
+				case "rebuild":
+					err = steps.Rebuild(ctx, folder, h)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				selection, err := h.data.Selection(ctx, "sample")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if configured {
+					if selection.Key == nil || selection.Key.String() != "configured-key/sample" || !slices.Equal(h.xolotlKeys, []string{selection.Key.String()}) {
+						t.Fatalf("stored %+v; BringUp received %v", selection.Key, h.xolotlKeys)
+					}
+				} else if selection.Key != nil || len(h.xolotlKeys) != 0 {
+					t.Fatalf("unconfigured key: %+v; BringUp %v", selection.Key, h.xolotlKeys)
+				}
+			})
+		}
+	}
 }

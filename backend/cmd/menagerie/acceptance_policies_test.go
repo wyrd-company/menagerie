@@ -148,6 +148,18 @@ func TestImageWorkspacePolicies(t *testing.T) {
 				if !found || !slices.Equal(binding.Policies, []string{"ssh-choice", "workspace"}) || binding.Settings.AccessGroup == nil || *binding.Settings.AccessGroup != 1000 {
 					t.Fatalf("edit lost settings: %+v", binding)
 				}
+				// Removing a policy also preserves the binding group while the
+				// definition cannot be parsed.
+				changed, err = data.SaveSelection(ctx, label, []string{"workspace"}, changed.Revision, []string{"workspace", "ssh-choice"})
+				must(err)
+				must(steps.ApplyPolicies(ctx, "/workspaces/"+label, progress))
+				binding, found, err = client.Read(ctx, name)
+				must(err)
+				removed, err := data.Selection(ctx, label)
+				must(err)
+				if !found || !slices.Equal(binding.Policies, []string{"workspace"}) || binding.Settings.AccessGroup == nil || *binding.Settings.AccessGroup != 1000 || removed.AppliedRevision == nil || *removed.AppliedRevision != changed.Revision {
+					t.Fatalf("removal lost settings: %+v selection %+v", binding, removed)
+				}
 				runtime.invalid = false
 				// Remove through the web operator, never an Unbind probe.
 				w.post("/bindings/"+url.PathEscape(binding.ID)+"/unbind", url.Values{})
