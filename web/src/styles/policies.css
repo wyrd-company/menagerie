@@ -168,6 +168,10 @@
 .create-policies > legend {
   font-weight: 600;
 }
+.create-policies > legend {
+  font-size: 18px;
+  margin-bottom: 16px;
+}
 .policy-columns legend .muted {
   font-weight: 400;
   display: block;
