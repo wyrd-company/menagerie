@@ -17,6 +17,8 @@ mutations = [
     ("once-only-stale-retry", "if changed >= 1 {", "if changed >= 0 {", "TestSuccessfulChangeWithMissingConfirmingReadResolvesAgain"),
     ("matching-values", " && maps.Equal(binding.Settings.Values, wanted.Values)", "", "TestProvisioningConvergesMatchingPoliciesWithChangedSettings"),
     ("matching-access-group", " && sameAccessGroup(binding.Settings.AccessGroup, wanted.AccessGroup)", "", "TestProvisioningConvergesMatchingPoliciesWithChangedSettings"),
+    ("unshown-binding-legacy-policies", "binding, found, e := client.Read(ctx, name)", "binding, found, e := client.Read(ctx, name)\n\t\tif !found { policies = nil }", "TestSelectionImportUsesLegacyMembersWhenCurrentBindingIsNotShown"),
+    ("unshown-binding-legacy-values", "binding, found, e := client.Read(ctx, name)", "binding, found, e := client.Read(ctx, name)\n\t\tif !found { values = nil }", "TestSelectionImportUsesLegacyMembersWhenCurrentBindingIsNotShown"),
 ]
 mutations = [
     (name, "backend/internal/provisioning/policies.go", before, after, "provisioning", test)

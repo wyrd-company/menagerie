@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 	"github.com/wyrd-company/menagerie/backend/internal/wyrwood"
+	"github.com/wyrd-company/wyrwood/operator"
 )
 
 // previous is a host of the previous release: a workspace root with real
@@ -448,6 +450,48 @@ func TestSelectionImportWithoutCurrentDeclaredNameUsesLegacyMembers(t *testing.T
 			again, err := p.data.Selection(ctx, "sample")
 			if err != nil || again.Revision != got.Revision || !slices.Equal(again.Policies, got.Policies) || again.Key.String() != got.Key.String() {
 				t.Fatalf("reimported: %+v %v", again, err)
+			}
+		})
+	}
+}
+
+type selectionImportBindings struct {
+	*host
+	hidden bool
+	reads  []string
+}
+
+func (b *selectionImportBindings) Read(ctx context.Context, name string) (operator.Binding, bool, error) {
+	b.reads = append(b.reads, name)
+	if b.hidden {
+		return operator.Binding{}, false, nil
+	}
+	return b.host.Read(ctx, name)
+}
+
+func TestSelectionImportUsesLegacyMembersWhenCurrentBindingIsNotShown(t *testing.T) {
+	for _, hidden := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hidden=%t", hidden), func(t *testing.T) {
+			p := newPrevious(t, "sample")
+			ctx := context.Background()
+			p.hold("sample", "container-sample", true)
+			p.definitions[p.folder("sample")] = definition(`{"wyrwood":{"accessGroup":1000,"policies":["a"],"values":{"account":"legacy-account"}},"xolotl":{"keyPolicy":"legacy-policy","keyName":"legacy-name"}}`)
+			if hidden {
+				group := uint32(4321)
+				p.bound["container-sample"] = wyrwood.Selection{Policies: []string{"outside"}, Values: map[string]string{"account": "hidden-value"}, AccessGroup: &group}
+			}
+			bindings := &selectionImportBindings{host: p.host, hidden: hidden}
+			steps := p.steps()
+			steps.opts.Bindings = bindings
+			if err := steps.ImportSelections(ctx, p.root, t.Logf); err != nil {
+				t.Fatal(err)
+			}
+			got, err := p.data.Selection(ctx, "sample")
+			if err != nil || !got.Imported || !slices.Equal(got.Policies, []string{"a", "client-key", "workspace"}) || !maps.Equal(got.Values, map[string]string{"account": "legacy-account"}) || got.Key == nil || got.Key.String() != "legacy-policy/legacy-name" {
+				t.Fatalf("unshown current binding lost the legacy selection: %+v %v", got, err)
+			}
+			if !slices.Equal(bindings.reads, []string{"container-sample"}) || got.AppliedRevision != nil || p.held("sample").Current() != "container-sample" || len(p.calls) != 0 {
+				t.Fatalf("import skipped the current-name read or changed provisioning: reads %v, selection %+v, calls %v", bindings.reads, got, p.calls)
 			}
 		})
 	}
