@@ -163,6 +163,98 @@ func TestPolicyApplyChangesRunningBindingWithoutReadingDefinition(t *testing.T) 
 		t.Fatalf("equal binding rewritten: %v changes %d", err, h.changes)
 	}
 }
+
+type observedBindingChange struct {
+	*host
+	atChange      func(operator.Binding, wyrwood.Selection)
+	beforeConfirm func()
+	changed       bool
+}
+
+func (b *observedBindingChange) Change(ctx context.Context, binding operator.Binding, wanted wyrwood.Selection) (operator.Binding, error) {
+	b.atChange(binding, wanted)
+	result, err := b.host.Change(ctx, binding, wanted)
+	b.changed = err == nil
+	return result, err
+}
+
+func (b *observedBindingChange) Get(ctx context.Context, id string) (operator.Binding, error) {
+	if b.changed {
+		b.beforeConfirm()
+	}
+	return b.host.Get(ctx, id)
+}
+
+func TestProvisioningConvergesMatchingPoliciesWithChangedSettings(t *testing.T) {
+	for _, field := range []string{"values", "access-group"} {
+		t.Run(field, func(t *testing.T) {
+			ctx := context.Background()
+			h := newHost(t)
+			policies := []string{"client-key", "workspace"}
+			if err := h.data.SetCreateSelection(ctx, "sample", policies, policies); err != nil {
+				t.Fatal(err)
+			}
+			h.hold("sample", "container-sample", true)
+			if err := h.data.BindingID(ctx, "sample", "container-sample", "container-sample"); err != nil {
+				t.Fatal(err)
+			}
+			before, err := h.data.Selection(ctx, "sample")
+			if err != nil {
+				t.Fatal(err)
+			}
+			group := uint32(1000)
+			h.bound["container-sample"] = wyrwood.Selection{Policies: policies, Values: map[string]string{"key_name": "sample"}, AccessGroup: &group}
+			if err := h.data.Applied(ctx, "sample", before.Revision); err != nil {
+				t.Fatal(err)
+			}
+			// Change only one field in Wyrwood; matching policies cannot hide it.
+			binding := h.bound["container-sample"]
+			message := "setting value key_name to sample"
+			if field == "values" {
+				binding.Values = map[string]string{"key_name": "operator-edit"}
+			} else {
+				other := uint32(4321)
+				binding.AccessGroup = &other
+				message = "setting access group to 1000"
+			}
+			h.bound["container-sample"] = binding
+			writes, confirmingReads := 0, 0
+			assertUnapplied := func() {
+				t.Helper()
+				selection, err := h.data.Selection(ctx, "sample")
+				if err != nil || selection.AppliedRevision != nil {
+					t.Fatalf("unconfirmed settings recorded applied: %+v %v", selection, err)
+				}
+			}
+			client := &observedBindingChange{host: h}
+			client.atChange = func(actual operator.Binding, wanted wyrwood.Selection) {
+				writes++
+				assertUnapplied()
+				if !slices.Equal(actual.Policies, policies) || !slices.Equal(wanted.Policies, policies) || !maps.Equal(wanted.Values, map[string]string{"key_name": "sample"}) || wanted.AccessGroup == nil || *wanted.AccessGroup != 1000 {
+					t.Fatalf("wrong settings change: actual %+v, wanted %+v", actual, wanted)
+				}
+			}
+			client.beforeConfirm = func() {
+				confirmingReads++
+				assertUnapplied() // A successful write response is not confirmation.
+			}
+			if err := h.with(Clients{Bindings: client, Agent: sampleAgent, Keys: h}).Start(ctx, folder, h); err != nil {
+				t.Fatal(err)
+			}
+			after, err := h.data.Selection(ctx, "sample")
+			if err != nil || writes != 1 || confirmingReads != 1 || after.AppliedRevision == nil || *after.AppliedRevision != before.Revision || after.ApplyFailure != nil {
+				t.Fatalf("change/confirmation not recorded: writes %d, reads %d, selection %+v %v", writes, confirmingReads, after, err)
+			}
+			if !strings.Contains(h.logged.String(), message+"\n") {
+				t.Fatalf("console did not name the changed field: %q", h.logged.String())
+			}
+			actual := h.bound["container-sample"]
+			if !slices.Equal(actual.Policies, policies) || !maps.Equal(actual.Values, map[string]string{"key_name": "sample"}) || actual.AccessGroup == nil || *actual.AccessGroup != 1000 {
+				t.Fatalf("binding did not converge: %+v", actual)
+			}
+		})
+	}
+}
 func TestPolicyApplyFinishesPendingAndBoundsRetries(t *testing.T) {
 	for _, pending := range []int{1, 4} {
 		t.Run(fmt.Sprint(pending), func(t *testing.T) {

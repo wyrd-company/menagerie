@@ -15,6 +15,8 @@ mutations = [
     ("confirmed-selection-and-applied", "if found && matches(binding, wanted) && binding.Applied {", "if found {", "TestPolicyApplyFinishesPendingAndBoundsRetries"),
     ("missing-declaration-empty", "if declaration == nil || declaration.ContainerName != name {", "if len(wanted.Policies) != 0 && (declaration == nil || declaration.ContainerName != name) {", "TestMissingEmptyBindingWithoutCurrentDeclarationSendsNothing"),
     ("once-only-stale-retry", "if changed >= 1 {", "if changed >= 0 {", "TestSuccessfulChangeWithMissingConfirmingReadResolvesAgain"),
+    ("matching-values", " && maps.Equal(binding.Settings.Values, wanted.Values)", "", "TestProvisioningConvergesMatchingPoliciesWithChangedSettings"),
+    ("matching-access-group", " && sameAccessGroup(binding.Settings.AccessGroup, wanted.AccessGroup)", "", "TestProvisioningConvergesMatchingPoliciesWithChangedSettings"),
 ]
 mutations = [
     (name, "backend/internal/provisioning/policies.go", before, after, "provisioning", test)
