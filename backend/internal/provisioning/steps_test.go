@@ -65,6 +65,8 @@ type host struct {
 	failAfterEmptied error
 	// onCheck runs in the host prerequisites check.
 	onCheck func()
+	// onWait runs after the first readiness-wait message.
+	onWait func()
 	// containerNames are the names of each folder's containers.
 	containerNames map[string][]string
 	// unreadable are the folders whose definition cannot be read.
@@ -140,6 +142,10 @@ func (h *host) Log(string) io.Writer { return writerFunc(h.write) }
 func (h *host) write(b []byte) (int, error) {
 	h.Lock()
 	defer h.Unlock()
+	if h.onWait != nil && strings.HasPrefix(string(b), "waiting for ") {
+		h.onWait()
+		h.onWait = nil
+	}
 	return h.logged.Write(b)
 }
 
@@ -890,9 +896,12 @@ func TestAJobThatEndsWhileItWaitsEndsAtOnce(t *testing.T) {
 	h.status = func(string) operator.BindingStatus {
 		return operator.BindingStatus{Readiness: operator.ReadinessWaiting}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.Start(ctx, folder, h); !errors.Is(err, context.DeadlineExceeded) {
+	// End the job only once it is waiting, rather than racing the database
+	// setup against a short wall-clock deadline under the race detector.
+	h.onWait = cancel
+	if err := s.Start(ctx, folder, h); !errors.Is(err, context.Canceled) {
 		t.Fatalf("%v", err)
 	}
 }
