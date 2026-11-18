@@ -189,7 +189,9 @@ description: >-
   422 `template-check-failed`, with `check` naming it and a message that
   names what failed and never quotes the address: `address`, the template
   service reads and admits the address, so a folder, `file://`, a registry
-  name, `git://`, `http://` or a password is refused before any fetch;
+  name, `git://`, `http://`, a password or user information that reads
+  more than one way, as a password holding `/` does, is refused before any
+  fetch;
   `fetch`, the repository's versions can be listed; `version`, the list
   holds at least one version and an address's ref is a version's tag;
   `fetch` again, the current version can be fetched; `read`, Toha loads

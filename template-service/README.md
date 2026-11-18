@@ -61,7 +61,9 @@ Private templates are fetched in one of two ways:
   also passes one boundary in `src/server.rs` that removes each written
   form of the handed-out tokens. When the workspace service's request ends
   early, the resolver's credential request ends with it. Toha refuses a Git
-  URL that holds a password; use the credential route or SSH agent instead.
+  URL that holds a password, and admission (`src/address.rs`) also refuses
+  user information that reads more than one way, such as a password that
+  holds a `/`; use the credential route or SSH agent instead.
 
 The image builds curl with rustls. Toha's transport then trusts only the
 certificates in `SSL_CERT_FILE` or `SSL_CERT_DIR` when either is set, and

@@ -80,14 +80,14 @@ Menagerie checks the template first and refuses it at the first check that
 fails, naming that check beside **Save**. The message never repeats the
 address:
 
-| Check        | Refused when                                                                                                   |
-| ------------ | -------------------------------------------------------------------------------------------------------------- |
-| `address`    | The address is not one of those forms: a folder, `file://`, a template name, `git://`, `http://`, or a password |
-| `fetch`      | The repository's versions cannot be listed: it does not exist, or the Git host refuses the credentials        |
-| `version`    | The repository has no version, or the address's ref is not a version's tag                                    |
-| `fetch`      | The current version cannot be fetched                                                                          |
-| `read`       | Toha cannot load the template, or its folder or a link in it leads outside its repository                     |
-| `definition` | The template's files have no `.devcontainer/devcontainer.json`                                                 |
+| Check        | Refused when                                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `address`    | The address is not one of those forms: a folder, `file://`, a template name, `git://`, `http://`, or a password, even one holding `/` |
+| `fetch`      | The repository's versions cannot be listed: it does not exist, or the Git host refuses the credentials                                |
+| `version`    | The repository has no version, or the address's ref is not a version's tag                                                            |
+| `fetch`      | The current version cannot be fetched                                                                                                 |
+| `read`       | Toha cannot load the template, or its folder or a link in it leads outside its repository                                             |
+| `definition` | The template's files have no `.devcontainer/devcontainer.json`                                                                        |
 
 A template whose repository and folder are registered already is refused,
 naming that registration. Registering a template joins the workspaces whose

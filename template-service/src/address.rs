@@ -5,7 +5,12 @@
 //! forms the user documentation lists, and nothing that would make it read a
 //! local folder, a Toha registry entry or a `file://` repository as a
 //! template. No refusal quotes the address, so a password given by mistake
-//! is shown nowhere.
+//! is shown nowhere. A password can hide from Toha's check, which, as Git and
+//! gix do, ends a URL's authority at its first `/`: in
+//! `https://user:12/secret@host/repo` the fetcher reads host `user`, port 12
+//! and a path that holds the secret. So the address must also read one way to
+//! a person who takes everything before an `@` for user information, and the
+//! user name the fetcher would send must be the one typed.
 use crate::error::ServiceError;
 use crate::host::TohaHost;
 use toha::source::{self, Address};
@@ -44,6 +49,7 @@ impl Admitted {
 const NOT_REMOTE: &str = "the address is not a remote Git address: it must be gh:owner/repository, git@host:path, ssh:// or https://";
 const PASSWORD: &str = "the address holds a password; give it without one, and let the GitHub App or the SSH agent supply the credential";
 const DASHED: &str = "the address's host or user starts with -";
+const UNCLEAR: &str = "the address's user information can be read more than one way, as when a password holds a /: give it without a password, with no @ after its host but a version's, and no % in its user name";
 
 fn refused(message: &'static str) -> ServiceError {
     ServiceError::bad_request("invalid-address", message)
@@ -69,6 +75,17 @@ pub fn admit(
     }
     if source::has_password(address) {
         return Err(refused(PASSWORD));
+    }
+    let (typed_user, after_host) = typed_parts(address);
+    // After the host, an `@` may only start the ref: a second one, or a
+    // ref with a `/` or a `:`, can as well end a password that holds a `/`.
+    if after_host.matches('@').count() > 1 {
+        return Err(refused(UNCLEAR));
+    }
+    if let Some((_, reference)) = after_host.rsplit_once('@')
+        && reference.contains(['/', ':'])
+    {
+        return Err(refused(UNCLEAR));
     }
     let parsed = source::parse(address, &config.hosts, &host.cwd, &host.paths.home)
         .map_err(|_| refused(NOT_REMOTE))?;
@@ -97,24 +114,23 @@ pub fn admit(
     if host_name.starts_with('-') || url.user().is_some_and(|user| user.starts_with('-')) {
         return Err(refused(DASHED));
     }
+    // The fetcher sends the user name as gix reads it, with `%` escapes
+    // decoded, which can hide a `:` and a password: it must be the one typed.
+    if !shorthand && url.user() != typed_user {
+        return Err(refused(UNCLEAR));
+    }
     let (written, written_reference) = without_ref(address);
     // The ref this reading finds is the one Toha's grammar found, so the
     // base names exactly the repository and folder Toha fetches.
     if written_reference.as_deref() != reference.as_deref() {
         return Err(refused(NOT_REMOTE));
     }
-    let base = if address.starts_with("https://") {
-        let (repository, folder) = written
-            .split_once('#')
-            .map_or((written.as_str(), None), |(r, f)| (r, Some(f)));
-        let mut base = source::without_userinfo(repository);
-        if let Some(folder) = folder {
-            base.push('#');
-            base.push_str(folder);
+    // An `https` base loses the user name the fetcher reads, the one typed.
+    let base = match url.user() {
+        Some(user) if https && !shorthand => {
+            written.replacen(&format!("https://{user}@"), "https://", 1)
         }
-        base
-    } else {
-        written
+        _ => written,
     };
     let source = Address::Git {
         repo: repo.clone(),
@@ -176,6 +192,25 @@ pub fn without_folder(address: &str) -> &str {
     address
         .split_once('#')
         .map_or(address, |(repository, _)| repository)
+}
+
+/// The user name typed in `address`, and what follows its host: the path,
+/// ref and nothing of the `#` folder of a URL, whose authority ends at the
+/// first `/`; the path and ref after `git@host:`; all of a `gh:` address.
+fn typed_parts(address: &str) -> (Option<&str>, &str) {
+    let address = without_folder(address);
+    if let Some(rest) = address.strip_prefix("gh:") {
+        return (None, rest);
+    }
+    if let Some(rest) = address.strip_prefix("git@") {
+        return (
+            Some("git"),
+            rest.split_once(':').map_or("", |(_, path)| path),
+        );
+    }
+    let rest = address.split_once("://").map_or(address, |(_, rest)| rest);
+    let (authority, after_host) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    (authority.rsplit_once('@').map(|(user, _)| user), after_host)
 }
 
 /// The address with its ref removed, and that ref, read as Toha's grammar
@@ -306,6 +341,73 @@ mod tests {
                 "ssh://git:sample-password@git.example.invalid/o/r",
                 PASSWORD,
             ),
+            // An empty password is still a password.
+            ("https://sample-user:@git.example.invalid/o/r", PASSWORD),
+            ("ssh://sample-user:@git.example.invalid/o/r", PASSWORD),
+            (
+                "https://sample-user:sample%2Fpassword@git.example.invalid/o/r",
+                PASSWORD,
+            ),
+            (
+                "https://sample-user:sample@password@git.example.invalid/o/r",
+                PASSWORD,
+            ),
+            ("git:/sample-password@git.example.invalid:o/r", NOT_REMOTE),
+            // A password that starts with `/`, or with digits and a `/`, ends
+            // the authority there for Git, gix and Toha.
+            (
+                "https://sample-user:/sample-password@git.example.invalid/o/r@1.0.0",
+                UNCLEAR,
+            ),
+            (
+                "https://sample-user:/sample-password@git.example.invalid/o/r",
+                UNCLEAR,
+            ),
+            (
+                "https://sample-user:12/sample-password@git.example.invalid/o/r@1.0.0",
+                UNCLEAR,
+            ),
+            (
+                "https://sample-user:12/sample-password@git.example.invalid/o/r#kit",
+                UNCLEAR,
+            ),
+            (
+                "https://x-access-token:1234/sample-password@github.com/o/r@1.0.0",
+                UNCLEAR,
+            ),
+            (
+                "https://sample-user:/sample@password@git.example.invalid/o/r",
+                UNCLEAR,
+            ),
+            (
+                "ssh://sample-user:/sample-password@git.example.invalid/o/r@1.0.0",
+                UNCLEAR,
+            ),
+            (
+                "ssh://sample-user:12/sample-password@git.example.invalid/o/r",
+                UNCLEAR,
+            ),
+            (
+                "git@sample-user:/sample-password@git.example.invalid:o/r@1.0.0",
+                UNCLEAR,
+            ),
+            (
+                "git@sample-user:12/sample-password@git.example.invalid:o/r",
+                UNCLEAR,
+            ),
+            ("gh:sample-user:/sample-password@o/r@1.0.0", UNCLEAR),
+            ("gh:sample-user:12/sample-password@o/r", UNCLEAR),
+            ("gh:o/r@feature/sample-password", UNCLEAR),
+            // gix decodes a user name's `%` escapes, which can hide a `:`.
+            (
+                "https://sample-user%3Asample-password@git.example.invalid/o/r",
+                UNCLEAR,
+            ),
+            (
+                "ssh://sample-user%3Asample-password@git.example.invalid/o/r@1.0.0",
+                UNCLEAR,
+            ),
+            ("https://sample%2Fpassword@git.example.invalid/o/r", UNCLEAR),
         ] {
             let error = admit(address, &host, &config).unwrap_err();
             assert_eq!(
@@ -315,6 +417,7 @@ mod tests {
             );
             let body = String::from_utf8(error.body()).unwrap();
             assert!(!body.contains("sample-password"), "{body}");
+            assert!(!body.contains("sample-user"), "{body}");
             assert!(!body.contains("example.invalid"), "{body}");
             assert!(!body.contains("/srv/"), "{body}");
         }

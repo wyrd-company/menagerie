@@ -497,6 +497,9 @@ async fn every_route_refuses_an_address_it_must_never_read() {
         "git://git.example.invalid/example-org/kit".to_owned(),
         "http://git.example.invalid/example-org/kit".to_owned(),
         password.to_owned(),
+        "https://sample-user:/sample-password@git.example.invalid/example-org/kit".to_owned(),
+        "ssh://sample-user:12/sample-password@git.example.invalid/example-org/kit".to_owned(),
+        "https://sample-user%3Asample-password@git.example.invalid/example-org/kit".to_owned(),
     ] {
         for route in [
             "/v1/interviews",
@@ -529,7 +532,12 @@ async fn every_route_refuses_an_address_it_must_never_read() {
                 reply.json
             );
             let text = String::from_utf8_lossy(&reply.body);
-            for quoted in ["sample-password", "example.invalid", "sample-kit"] {
+            for quoted in [
+                "sample-password",
+                "sample-user",
+                "example.invalid",
+                "sample-kit",
+            ] {
                 assert!(!text.contains(quoted), "{route} {address}: {text}");
             }
             assert!(!text.contains(folder.to_str().unwrap()), "{route}: {text}");

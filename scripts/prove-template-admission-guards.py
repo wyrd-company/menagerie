@@ -6,8 +6,10 @@ Run from any directory:
   python3 scripts/prove-template-admission-guards.py --report report.json
 
 The guards: an address is a remote Git address of a documented form, holds
-no password and no dashed host or user, names no ref where a route names
-the version beside it; a template folder and its links stay in the
+no password and no dashed host or user, reads one way for its user
+information (one `@` after the host, starting a ref with no `/` or `:`, and
+a user name the fetcher reads as typed), loses its user name in an `https`
+base, names no ref where a route names the version beside it; a template folder and its links stay in the
 checkout, checked before a start, a generate or an apply reads the
 template; a ref that resolves to another commit than the recorded one is
 stale; a session's signature covers its address and ref. The source stays
@@ -29,6 +31,7 @@ TESTS = {
     "forms": ("--test", "templates", "every_route_refuses_an_address_it_must_never_read_without_quoting_it"),
     "routes": ("--test", "requests", "every_route_refuses_an_address_it_must_never_read"),
     "unit-forms": ("--lib", "address::tests::refuses_every_other_address_without_quoting_it"),
+    "unit-admits": ("--lib", "address::tests::admits_each_documented_form"),
     "shorthand": ("--lib", "address::tests::a_shorthand_must_stay_https_once_expanded"),
     "versions": ("--test", "templates", "versions_are_the_release_tags_in_ascending_order"),
     "refs": ("--lib", "address::tests::a_version_is_named_by_its_ref_beside_an_address_without_one"),
@@ -49,6 +52,16 @@ MUTANTS = [
     ("dashed", "src/address.rs",
      "    if host_name.starts_with('-') || url.user().is_some_and(|user| user.starts_with('-')) {\n",
      "    if false {\n", ["unit-forms"]),
+    ("user-info-one-at", "src/address.rs", "    if after_host.matches('@').count() > 1 {\n",
+     "    if false {\n", ["unit-forms", "forms"]),
+    ("user-info-ref", "src/address.rs", "        && reference.contains(['/', ':'])\n",
+     "        && false\n", ["unit-forms", "forms", "routes"]),
+    ("user-info-typed-user", "src/address.rs",
+     "    if !shorthand && url.user() != typed_user {\n", "    if false {\n",
+     ["unit-forms", "forms", "routes"]),
+    ("base-without-user", "src/address.rs",
+     "        Some(user) if https && !shorthand => {\n            written.replacen(&format!(\"https://{user}@\"), \"https://\", 1)\n        }\n",
+     "        Some(_) if https && !shorthand => written.clone(),\n", ["unit-admits"]),
     ("shorthand-https", "src/address.rs", "    if !(https || ssh) || (shorthand && !https) {\n",
      "    if !(https || ssh) {\n", ["shorthand"]),
     ("versions-ref", "src/templates.rs", "    if admitted.reference.is_some() {\n",

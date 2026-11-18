@@ -102,6 +102,13 @@ async fn every_route_refuses_an_address_it_must_never_read_without_quoting_it() 
         "ssh://-oProxyCommand=sample/example-org/kit".to_owned(),
         password.to_owned(),
         format!("{password}@1.0.0"),
+        // Passwords that Git and Toha read as a host, a port and a path.
+        "https://sample-user:/sample-password@git.example.invalid/example-org/kit@1.0.0".to_owned(),
+        "https://sample-user:12/sample-password@git.example.invalid/example-org/kit".to_owned(),
+        "ssh://sample-user:/sample-password@git.example.invalid/example-org/kit".to_owned(),
+        "git@sample-user:12/sample-password@git.example.invalid:example-org/kit".to_owned(),
+        // A user name whose escapes hide a password.
+        "https://sample-user%3Asample-password@git.example.invalid/example-org/kit".to_owned(),
     ];
     for route in ["/v1/templates/addresses", "/v1/templates/versions"] {
         for address in &refused {
@@ -115,6 +122,7 @@ async fn every_route_refuses_an_address_it_must_never_read_without_quoting_it() 
             let body = String::from_utf8_lossy(&reply.body);
             for quoted in [
                 "sample-password",
+                "sample-user",
                 "example.invalid",
                 "sample-kit",
                 folder.to_str().unwrap(),
