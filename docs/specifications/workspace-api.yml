@@ -199,8 +199,9 @@ description: >-
   checkout; `definition`, the template's content folder holds
   `.devcontainer/devcontainer.json`, which the message names. A template
   whose source is registered is refused 409 `template-exists`, naming that
-  registration, before any fetch. An unreachable template service answers
-  503 `template-service-unavailable`. The current version is the address's
+  registration, before any fetch. An unreachable template service, or one
+  that answers a fault, a 5xx reply, during a check, answers 503
+  `template-service-unavailable`, as does a template's upgrade then. The current version is the address's
   tag, else the newest version, with the commit its check fetched.
   Menagerie stores the address without its ref, and an `https` address
   without user information. It answers 201 with the template and `Location:

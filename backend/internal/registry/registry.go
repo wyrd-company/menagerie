@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -260,7 +261,8 @@ func (r *Registry) Edit(ctx context.Context, id string, name, runnerImage *strin
 // leaves its checkout, fails read; anything else the template service
 // refuses fails check. Its message is chosen here for the refusal's kind,
 // so it never quotes the address. An unreachable template service is its
-// *templates.UnavailableError, unchanged.
+// *templates.UnavailableError, unchanged, and a fault, a 5xx reply, is no
+// failed check but one too, naming the status and kind alone.
 func refusal(check string, err error) error {
 	var unavailable *templates.UnavailableError
 	if errors.As(err, &unavailable) {
@@ -269,6 +271,9 @@ func refusal(check string, err error) error {
 	var refused *templates.Error
 	if !errors.As(err, &refused) {
 		return err
+	}
+	if refused.Status >= http.StatusInternalServerError {
+		return &templates.UnavailableError{Err: fmt.Errorf("the template service failed the request (%d %s)", refused.Status, refused.Kind)}
 	}
 	switch refused.Kind {
 	case templates.KindInvalidAddress:

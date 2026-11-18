@@ -235,7 +235,7 @@ func writeRegistryError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrNoTemplate):
 		writeError(w, http.StatusNotFound, apiError{Kind: KindUnknownTemplate, Message: "no registered template has this id"})
 	case errors.As(err, &unavailable):
-		writeError(w, http.StatusServiceUnavailable, apiError{Kind: "template-service-unavailable", Message: "the template service could not be reached; try again"})
+		writeError(w, http.StatusServiceUnavailable, apiError{Kind: "template-service-unavailable", Message: "the template service could not be reached or failed the request; try again"})
 	default:
 		writeError(w, http.StatusInternalServerError, apiError{Kind: "internal-error", Message: err.Error()})
 	}

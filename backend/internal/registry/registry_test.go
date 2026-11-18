@@ -436,3 +436,30 @@ func TestACheckOfAnUpgradeStoresNothingAndTheUpgradeChecksAgain(t *testing.T) {
 		t.Fatalf("%+v", tpl)
 	}
 }
+
+// A fault of the template service, a 5xx reply, is no failed check: the
+// registration, its check alone and a template's upgrade answer it as an
+// unreachable service, naming the status and kind, not the reply's message.
+func TestATemplateServiceFaultIsNoFailedCheck(t *testing.T) {
+	ctx := context.Background()
+	for _, checkOnly := range []bool{false, true} {
+		for _, route := range []string{"versions " + kit, "check " + kit + "@1.2.0"} {
+			r, f, _ := world(t)
+			f.refuse[route] = &templates.Error{Status: 500, Kind: "io-failed", Message: "reading https://sample-user:sample-password@git.example.invalid failed"}
+			var unavailable *templates.UnavailableError
+			_, err := r.Register(ctx, "Sample kit", kit, "", checkOnly)
+			if !errors.As(err, &unavailable) || !strings.Contains(err.Error(), "500 io-failed") || strings.Contains(err.Error(), "sample-password") {
+				t.Fatalf("%s check=%t: %v", route, checkOnly, err)
+			}
+		}
+		r, f, _ := world(t)
+		if _, err := r.Register(ctx, "Kit", kit+"@v1.1.0", "", false); err != nil {
+			t.Fatal(err)
+		}
+		f.refuse["check "+kit+"@1.2.0"] = &templates.Error{Status: 500, Kind: "internal-error"}
+		var unavailable *templates.UnavailableError
+		if _, err := r.Upgrade(ctx, "kit", "1.2.0", checkOnly); !errors.As(err, &unavailable) {
+			t.Fatalf("upgrade check=%t: %v", checkOnly, err)
+		}
+	}
+}
