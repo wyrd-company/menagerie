@@ -170,7 +170,8 @@ description: >-
 
   Templates. Only registered templates can be used, and registering,
   upgrading, editing or removing one needs no configuration change and no
-  restart. `GET /api/templates` lists them sorted by name, then by `id`,
+  restart. `GET /api/templates` lists them sorted by name, as letters
+  without regard to case, then by name and `id`,
   each with `id`, `name`, `address`, the address without a ref,
   `currentVersion`, `runnerImage`, null for the default, and `workspaces`,
   the names of the workspaces that use it. A version is a release tag of the

@@ -176,7 +176,7 @@ paths:
       summary: The registered templates.
       responses:
         "200":
-          description: Registered templates, sorted by name, then by id.
+          description: Registered templates, sorted by name without regard to case, then by name and id.
           content:
             application/json:
               schema:

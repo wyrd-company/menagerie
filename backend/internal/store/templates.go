@@ -75,10 +75,10 @@ func scanTemplate(row interface{ Scan(...any) error }) (Template, error) {
 	return t, err
 }
 
-// Templates lists the registered templates by name, then by id, each with
-// the workspaces that use it.
+// Templates lists the registered templates by name without regard to case,
+// then by name and id, each with the workspaces that use it.
 func (t *Tx) Templates() ([]Template, error) {
-	rows, err := t.tx.QueryContext(t.ctx, `SELECT `+templateColumns+` FROM templates ORDER BY name, id`)
+	rows, err := t.tx.QueryContext(t.ctx, `SELECT `+templateColumns+` FROM templates ORDER BY name COLLATE NOCASE, name, id`)
 	if err != nil {
 		return nil, fmt.Errorf("Menagerie's data: %w", err)
 	}
