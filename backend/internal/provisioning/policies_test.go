@@ -533,6 +533,11 @@ func TestInterruptedPolicyWriteIsUnappliedBeforeMutation(t *testing.T) {
 			} else {
 				h.hold("sample", "container-sample", true)
 			}
+			// Model a previously confirmed binding which Wyrwood later removed
+			// or edited. HoldName itself now invalidates a new current name.
+			if err := h.data.Applied(ctx, "sample", revision); err != nil {
+				t.Fatal(err)
+			}
 			h.pending = 1
 			var atWrite store.Selection
 			steps := h.steps()
@@ -599,6 +604,72 @@ func TestPlainJobsRecordNamelessSelectionImmediately(t *testing.T) {
 			}
 			if h.policyReads != 0 || h.binds != 0 || h.changes != 0 {
 				t.Fatal("nameless job contacted Wyrwood")
+			}
+		})
+	}
+}
+
+// interruptedNameChange stops on the first network call after HoldName, before
+// applySelection can reach Applying or any binding write.
+type interruptedNameChange struct{ *policyHost }
+
+func (h interruptedNameChange) Policies(context.Context) (operator.Grant, []operator.Policy, error) {
+	panic("stopped after holding current name")
+}
+
+func TestInterruptedCurrentNameChangeIsUnappliedBeforeNetwork(t *testing.T) {
+	ctx := context.Background()
+	for _, previous := range []string{"nameless", "bound"} {
+		t.Run(previous, func(t *testing.T) {
+			h := newPolicyHost(t, []string{"workspace"})
+			if previous == "bound" {
+				h.existing([]string{"workspace"})
+			}
+			if err := h.steps().ApplyPolicies(ctx, folder, h); err != nil {
+				t.Fatal(err)
+			}
+			revision := h.selection().Revision
+			if h.selection().AppliedRevision == nil {
+				t.Fatal("setup not applied")
+			}
+			def := h.definitions[folder]
+			def.ContainerName = "container-b"
+			h.definitions[folder] = def
+			steps := h.steps()
+			steps.opts.Bindings = interruptedNameChange{h}
+			func() {
+				defer func() {
+					if got := recover(); got != "stopped after holding current name" {
+						t.Fatalf("interruption: %v", got)
+					}
+				}()
+				_ = steps.Rebuild(ctx, folder, h)
+				t.Fatal("name change was not interrupted")
+			}()
+			// Read through a fresh database handle, as the next process would.
+			reopened, err := store.Open(h.data.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			after, err := reopened.Selection(ctx, "sample")
+			if err != nil {
+				t.Fatal(err)
+			}
+			held, err := reopened.Held(ctx, "sample")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if held.Current() != "container-b" || after.AppliedRevision != nil || after.ApplyFailure != nil || after.Revision != revision || h.binds != 0 || h.changes != 0 {
+				t.Fatalf("interruption left old observation: %+v held %+v writes %d/%d", after, held, h.binds, h.changes)
+			}
+			if err := h.steps().ApplyPolicies(ctx, folder, h); err != nil {
+				t.Fatal(err)
+			}
+			repaired := h.selection()
+			binding, found, err := h.Read(ctx, "container-b")
+			if err != nil || !found || !binding.Applied || repaired.AppliedRevision == nil || *repaired.AppliedRevision != revision {
+				t.Fatalf("retry: %+v binding %+v, %v", repaired, binding, err)
 			}
 		})
 	}

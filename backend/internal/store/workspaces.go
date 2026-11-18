@@ -155,6 +155,12 @@ func (t *Tx) HoldName(workspace, name, agent string, current bool) error {
 		return err
 	}
 	if current {
+		// An applied observation belongs to the old current name and agent.
+		// Invalidate atomically before publishing a different binding identity.
+		if _, err := t.exec(`UPDATE workspaces SET applied_revision = NULL WHERE name = ?
+   AND NOT EXISTS (SELECT 1 FROM container_names WHERE workspace = ? AND name = ? AND coalesce(agent, '') = ? AND current = 1)`, workspace, workspace, name, agent); err != nil {
+			return err
+		}
 		if _, err := t.exec(`UPDATE container_names SET current = 0 WHERE workspace = ? AND name != ?`, workspace, name); err != nil {
 			return err
 		}

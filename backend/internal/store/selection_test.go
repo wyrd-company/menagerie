@@ -246,3 +246,33 @@ func TestDiscoveryAppliesOnlyImportedNamelessSelections(t *testing.T) {
 		}
 	}
 }
+
+func TestHoldNameInvalidatesOnlyChangedCurrentBinding(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if err := s.HoldName(ctx, "alpha", "container-a", "host", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Applied(ctx, "alpha", 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range []bool{false, true} {
+		name := "container-retired"
+		if current {
+			name = "container-a"
+		}
+		if err := s.HoldName(ctx, "alpha", name, "host", current); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Selection(ctx, "alpha")
+		if err != nil || got.AppliedRevision == nil {
+			t.Fatalf("unchanged current invalidated: %+v %v", got, err)
+		}
+	}
+	if err := s.HoldName(ctx, "alpha", "container-b", "host", true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Selection(ctx, "alpha")
+	if err != nil || got.AppliedRevision != nil {
+		t.Fatalf("new name kept old observation: %+v %v", got, err)
+	}
+}
