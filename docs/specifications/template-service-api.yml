@@ -299,7 +299,7 @@ description: >-
   `http.lowSpeedLimit` and `http.lowSpeedTime` end the transfer. Over SSH
   and `file://` it keeps its Toha thread and the `ssh` or `git-upload-pack`
   process until that process answers or exits. The transfer then ends: it
-  writes nothing more and removes its folder
+  writes nothing more and removes its temporary folder
   ([Toha #78](https://github.com/wyrd-company/toha/issues/78)).
 
   A document schema fetch's stop aborts it and closes its connection within
