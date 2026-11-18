@@ -1095,8 +1095,15 @@ func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
 		"gh-nopath":    "gh:sample-user:12/" + marker + "@" + host,
 		"hash-x":       "https://sample-user:12#x/" + marker + "@" + host + "/REPO",
 		"hash-folder":  "https://sample-user:12/REPO@1.0.0#/" + marker + "@" + host,
-		// A user name before the host's port, then a path that holds the
-		// rest; and a password before a host that reads as a version's tag.
+		// A user name that holds an `@`, which Git, gix and Toha read as a
+		// user name, the Git host on its port, a path that holds the
+		// password and a ref; a password before a host that reads as a
+		// version's tag, or as a short IPv4 address; and the same shapes
+		// with a path that holds an `@`.
+		"user-port-ref":        "https://sample-user@127.0.0.1:" + port + "/" + marker + "@gitserver",
+		"ssh-user-port-ref":    "ssh://sample-user@127.0.0.1:" + port + "/" + marker + "@gitserver",
+		"port-version-host":    "https://sample-user:12/" + marker + "@1.2.3",
+		"port-ipv4-host":       "https://sample-user:12/" + marker + "@127.0.1",
 		"user-port-path":       "https://sample-user@127.0.0.1:" + port + "/" + marker + "@git.example.invalid/REPO@1.0.0",
 		"user-port-path-noref": "https://sample-user@127.0.0.1:" + port + "/" + marker + "@git.example.invalid/REPO",
 		"version-host":         "https://sample-user:" + marker + "@1.0.0",
