@@ -866,6 +866,28 @@ async fn eventually(ok: impl Fn() -> bool) -> bool {
 /// thread.
 #[test]
 fn a_caller_going_away_ends_its_credential_request_and_worker() {
+    // This assertion counts every OS thread in the process. Run just this
+    // test in a child so parallel TLS fixtures and their separate runtimes
+    // cannot change its baseline while the requests repeat.
+    const ISOLATED: &str = "MENAGERIE_CREDENTIAL_THREADS_ISOLATED";
+    if std::env::var_os(ISOLATED).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "a_caller_going_away_ends_its_credential_request_and_worker",
+                "--nocapture",
+            ])
+            .env(ISOLATED, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     run(async {
         let host = GitHost::start();
         let world = world(&host);
