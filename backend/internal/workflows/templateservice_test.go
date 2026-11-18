@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/cgi"
@@ -26,6 +27,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -127,12 +129,18 @@ var leakKinds = map[string]string{
 type accept struct {
 	root, repo, remote string
 	templates, origin  string
-	data               *store.Store
-	host               *backuptest.Host
-	manager            *jobs.Manager
-	http               *httptest.Server
-	runtime            Runtime
-	flows              *Workflows
+	// socket is the template service's; dataPath is Menagerie's data and
+	// serviceData the template service's data folder.
+	socket, dataPath, serviceData string
+	// requests records each request the Git host receives, serviceLog the
+	// template service's output.
+	requests, serviceLog *lockedText
+	data                 *store.Store
+	host                 *backuptest.Host
+	manager              *jobs.Manager
+	http                 *httptest.Server
+	runtime              Runtime
+	flows                *Workflows
 }
 
 // localContainers stands in for throwaway containers without Docker: it
@@ -177,10 +185,29 @@ type acceptOptions struct {
 	env         []string
 }
 
+// lockedText collects text from several goroutines.
+type lockedText struct {
+	mu   sync.Mutex
+	text strings.Builder
+}
+
+func (l *lockedText) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.text.Write(p)
+}
+
+func (l *lockedText) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.text.String()
+}
+
 // servedTemplates serves the repositories under dir, anonymously, as a Git
 // host over HTTPS on loopback, and returns its origin and a certificate
-// bundle of its authority and the extra authorities.
-func servedTemplates(t *testing.T, dir string, extra []string) (origin, bundle string) {
+// bundle of its authority and the extra authorities. Each request's
+// method, host, target and headers go to seen.
+func servedTemplates(t *testing.T, dir string, extra []string, seen io.Writer) (origin, bundle string) {
 	t.Helper()
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
@@ -189,7 +216,10 @@ func servedTemplates(t *testing.T, dir string, extra []string) (origin, bundle s
 	backend := &cgi.Handler{Path: gitPath, Args: []string{"http-backend"}, Stderr: io.Discard, Env: []string{
 		"GIT_PROJECT_ROOT=" + dir, "GIT_HTTP_EXPORT_ALL=1", "GIT_CONFIG_NOSYSTEM=1", "HOME=" + t.TempDir(),
 	}}
-	origin, authority := templateTLSHost(t, backend)
+	origin, authority := templateTLSHost(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(seen, "%s %s%s %v\n", r.Method, r.Host, r.RequestURI, r.Header)
+		backend.ServeHTTP(w, r)
+	}))
 	pems, err := os.ReadFile(authority)
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +308,8 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 		t.Fatal("MENAGERIE_TEMPLATE_SERVICE must name the template service binary")
 	}
 	base := t.TempDir()
-	a := &accept{root: filepath.Join(base, "workspaces"), templates: filepath.Join(base, "templates"), repo: filepath.Join(base, "templates", "sample"), runtime: runtime}
+	a := &accept{root: filepath.Join(base, "workspaces"), templates: filepath.Join(base, "templates"), repo: filepath.Join(base, "templates", "sample"), runtime: runtime,
+		requests: &lockedText{}, serviceLog: &lockedText{}}
 	for _, d := range []string{a.root, a.repo} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
@@ -320,7 +351,7 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 		fixtures[id] = ""
 	}
 	var bundle string
-	a.origin, bundle = servedTemplates(t, a.templates, opts.authorities)
+	a.origin, bundle = servedTemplates(t, a.templates, opts.authorities, a.requests)
 
 	a.host = backuptest.New(t)
 	if _, err := git.PlainInit(filepath.Join(a.host.Dir, "backups.git"), true); err != nil {
@@ -336,6 +367,7 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	socket := filepath.Join(sockDir, "template.sock")
+	a.socket, a.serviceData = socket, filepath.Join(base, "data")
 	hookSocket := filepath.Join(sockDir, "hook-runner.sock")
 	candidates := filepath.Join(base, "candidates")
 	hooks := throwaway.NewHookRunner(opts.containers, candidates)
@@ -361,7 +393,7 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s, hook-runner-socket: %s, candidate-folder: %s}\ntemplates:\n  - {id: sample, name: Sample, address: 'file:///absent'}\n",
 		a.root, a.host.URL("backups.git"), socket, hookSocket, candidates)
 	writeFile(t, base, "config.yml", config)
-	startService(t, bin, filepath.Join(base, "config.yml"), filepath.Join(base, "data"), socket, append([]string{"GIT_SSL_CAINFO=" + bundle}, opts.env...)...)
+	startService(t, bin, filepath.Join(base, "config.yml"), a.serviceData, socket, a.serviceLog, append([]string{"GIT_SSL_CAINFO=" + bundle}, opts.env...)...)
 
 	root, err := workspace.NewRoot(a.root)
 	if err != nil {
@@ -369,7 +401,12 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.manager = jobs.NewManager(ctx, jobs.Options{Limits: opts.limits})
-	data := testData(t)
+	a.dataPath = filepath.Join(base, "state", "menagerie.db")
+	data, err := store.Open(a.dataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = data.Close() })
 	a.data = data
 	a.register(t, "sample", a.origin+"/sample", "1.0.0", "1.0.0")
 	for name := range fixtures {
@@ -418,21 +455,23 @@ func noCapturedValue(t *testing.T, job *jobs.Job, kind string) {
 	}
 }
 
-// startService runs the template service binary until the test ends.
-func startService(t *testing.T, bin, config, data, socket string, env ...string) {
+// startService runs the template service binary until the test ends, its
+// output going to the test's log and to out.
+func startService(t *testing.T, bin, config, data, socket string, out io.Writer, env ...string) {
 	t.Helper()
 	cmd := exec.Command(bin, "-config", config, "-data", data)
 	cmd.Env = append(os.Environ(), env...)
-	out, _ := cmd.StdoutPipe()
+	pipe, _ := cmd.StdoutPipe()
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	exited := make(chan struct{})
 	go func() {
-		s := bufio.NewScanner(out)
+		s := bufio.NewScanner(pipe)
 		for s.Scan() {
 			t.Logf("template service: %s", s.Text())
+			_, _ = fmt.Fprintln(out, s.Text())
 		}
 		_ = cmd.Wait()
 		close(exited)
@@ -972,4 +1011,112 @@ func TestRegistrationChecksAgainstTheTemplateService(t *testing.T) {
 	if status, body := a.post(t, "/api/templates", `{"name":"Again","address":"`+tagged+`"}`); status != http.StatusConflict || !strings.Contains(body, "template-exists") {
 		t.Fatalf("%d %s", status, body)
 	}
+}
+
+// A password that Git, gix and Toha read as a host, a port and a path, or
+// that a user name's escapes hide, is refused at registration and skipped
+// at the first-start import, named by its id, and reaches no channel: no
+// reply, which is all the interface shows, nor the data of either service,
+// the logs of either, or a request to the Git host.
+func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
+	a := newAccept(t, &fakeRuntime{})
+	kept := a.kitRepository(t, "kept", "1.0.0", false)
+	listed := a.kitRepository(t, "listed", "1.0.0", false)
+	const marker = "sample-marker-secret"
+	host := strings.TrimPrefix(a.origin, "https://")
+	port := host[strings.LastIndex(host, ":")+1:]
+	var standard lockedText
+	log.SetOutput(&standard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	hidden := map[string]string{
+		// Git, gix and Toha read the Git host on its port, and a path that
+		// holds the rest of the password.
+		"port-path":       "https://127.0.0.1:" + port + "/" + marker + "@git.example.invalid/kept@1.0.0",
+		"port-path-noref": "https://127.0.0.1:" + port + "/" + marker + "@git.example.invalid/kept",
+		"slash":           "https://sample-user:/" + marker + "@" + host + "/kept@1.0.0",
+		"slash-noref":     "https://sample-user:/" + marker + "@" + host + "/kept",
+		"slash-at":        "https://sample-user:/" + marker + "@x@" + host + "/kept@1.0.0",
+		"escaped":         "https://sample-user%3A" + marker + "@" + host + "/kept@1.0.0",
+		"empty":           "https://" + marker + ":@" + host + "/kept@1.0.0",
+		"ssh":             "ssh://sample-user:12/" + marker + "@" + host + "/kept@1.0.0",
+		"scp":             "git@sample-user:/" + marker + "@" + host + ":kept@1.0.0",
+		"gh":              "gh:sample-user:/" + marker + "@example-org/kept@1.0.0",
+	}
+	var replies []string
+	entries := []registry.Entry{{ID: "kept", Name: "Kept", Address: kept + "@1.0.0"}}
+	for id, address := range hidden {
+		body, err := json.Marshal(map[string]string{"name": "Hidden", "address": address})
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, reply := a.post(t, "/api/templates", string(body))
+		if status != http.StatusUnprocessableEntity || !strings.Contains(reply, `"check":"address"`) {
+			t.Errorf("%s: %d %s", id, status, reply)
+		}
+		replies = append(replies, reply)
+		entries = append(entries, registry.Entry{ID: id, Name: "Hidden", Address: address})
+	}
+	// A registration that fetches, so the Git host's record is not empty.
+	if status, reply := a.post(t, "/api/templates", `{"name":"Listed","address":"`+listed+`"}`); status != http.StatusCreated {
+		t.Fatalf("%d %s", status, reply)
+	}
+	root, err := workspace.NewRoot(a.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged lockedText
+	if err := registry.Import(context.Background(), registry.ImportOptions{
+		Data: a.data, Templates: templates.New(a.socket), Root: root, Entries: entries,
+		Logf: func(format string, args ...any) { _, _ = fmt.Fprintf(&logged, format+"\n", args...) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for id := range hidden {
+		if !strings.Contains(logged.String(), "entry "+id+" is not imported: the template service refuses its address (invalid-address)") {
+			t.Errorf("the import does not name %s as refused:\n%s", id, logged.String())
+		}
+	}
+	status, list := a.send(t, http.MethodGet, "/api/templates", "")
+	if status != http.StatusOK || !strings.Contains(list, `"id":"kept"`) {
+		t.Fatalf("%d %s", status, list)
+	}
+	channels := map[string]string{
+		"registration replies":        strings.Join(replies, "\n"),
+		"the template list":           list,
+		"the import's log":            logged.String(),
+		"the workspace service's log": standard.String(),
+		"the template service's log":  a.serviceLog.String(),
+		"the Git host's requests":     a.requests.String(),
+		"Menagerie's data":            filesText(t, filepath.Dir(a.dataPath)),
+		"the template service's data": filesText(t, a.serviceData),
+	}
+	for channel, text := range channels {
+		if strings.Contains(text, marker) || strings.Contains(text, "sample-marker") {
+			t.Errorf("%s holds the password:\n%s", channel, text)
+		}
+	}
+	if !strings.Contains(a.requests.String(), "/listed/") {
+		t.Errorf("the Git host saw no request, so its record proves nothing:\n%s", a.requests.String())
+	}
+}
+
+// filesText is the bytes of every file under dir, as text.
+func filesText(t *testing.T, dir string) string {
+	t.Helper()
+	var text strings.Builder
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text.Write(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text.String()
 }

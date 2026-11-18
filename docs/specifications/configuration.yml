@@ -278,7 +278,11 @@ validation-criteria: >-
   reply's message, and imports at the next one, and marks a host with no
   key without asking the template service;
   `scripts/prove-template-import-guards.py` breaks each of those import
-  guards in turn and requires its test to fail.
+  guards in turn and requires its test to fail. The `templateservice`
+  tagged `TestAHiddenPasswordReachesNoChannel` registers and imports
+  addresses whose password Git reads as part of a path, or a user name's
+  escapes hide, against the real template service, and finds the password
+  in no reply, data, log or Git request.
   `go test ./backend/cmd/menagerie/` checks that `local-env` reaches the
   devcontainer runtime, that `job-limits` and `alerts` reach the jobs
   manager, and that `github-app` gives backups on its server a write token
