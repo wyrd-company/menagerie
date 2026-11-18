@@ -1,5 +1,6 @@
 /* The templates screen follows the approved mockup. Its list spans the
-   content width; the registration form keeps the forms' width. */
+   content width; the registration form keeps the forms' width. Spacing is
+   the mockup's, in its pixels: the root font is 15px, so rem would not be. */
 .screen.templates {
   max-width: none;
 }
@@ -7,9 +8,9 @@
 .template-panel {
   max-width: 880px;
   display: grid;
-  gap: 1.5rem;
-  margin-bottom: 1.5rem;
-  padding: 1.5rem;
+  gap: 24px;
+  margin-bottom: 24px;
+  padding: 24px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -60,15 +61,15 @@
 .form-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 8px;
   align-items: center;
 }
 
 .template-entry {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto;
-  gap: 1.25rem;
-  padding: 1.25rem;
+  gap: 20px;
+  padding: 20px;
   border-bottom: 1px solid var(--border);
   align-items: start;
 }
@@ -88,7 +89,7 @@
 }
 
 .template-address {
-  margin: 0.375rem 0 0;
+  margin: 6px 0 0;
   font-size: 0.85rem;
   overflow-wrap: anywhere;
 }
@@ -96,12 +97,12 @@
 .template-versions {
   font-size: 0.9rem;
   display: grid;
-  gap: 0.375rem;
+  gap: 6px;
 }
 
 .template-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: 8px;
   flex-wrap: wrap;
   max-width: 18rem;
 }
@@ -109,9 +110,9 @@
 .template-edit {
   grid-column: 1 / -1;
   display: grid;
-  gap: 1rem;
+  gap: 16px;
   border-top: 1px solid var(--border);
-  padding-top: 1rem;
+  padding-top: 16px;
 }
 
 .templates .empty {
@@ -141,7 +142,7 @@
 
 @media (max-width: 720px) {
   .template-panel {
-    padding: 1rem;
+    padding: 16px;
   }
 
   .template-entry {
