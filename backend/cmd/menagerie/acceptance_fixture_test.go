@@ -16,11 +16,14 @@ package main
 //   - a disposable Pocket ID with a manager and a non-manager
 //   - the sample template tagged 1.0.0, which the story registers in the
 //     interface and whose next version the control server releases
+//   - templates the manager registers at 1.0.0 once Menagerie is ready: a
+//     kept kit, whose 2.0.0 is then released, and a template whose hook
+//     waits for a release file, so a job can be held at a real boundary
 //   - a configuration whose templates key, as an earlier release's, the
-//     first start imports: a kept kit at 1.0.0 whose repository also has
-//     2.0.0, a template whose hook waits for a release file, so a job can be
-//     held at a real boundary, an entry pinned to a branch and one whose
-//     address holds a password, which the import skips by id
+//     first start imports: an entry the import takes, at an example address
+//     no test fetches, and the entries it skips by id, one on a host with a
+//     port and a ref, one pinned to a branch and one whose address holds a
+//     password
 //   - with MENAGERIE_XOLOTL_IMAGE, the host preparation for provisioning and
 //     a template that declares it (acceptance_provisioning_test.go)
 //
@@ -106,28 +109,41 @@ func TestAcceptanceFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Each template is a repository of its own on the SSH host, published
-	// from a working copy that the control server can release from.
-	publish := func(name string, versions ...func(dir string)) string {
-		work := filepath.Join(base, "template-work", name)
+	// at its first version from a working copy that the control server can
+	// release from. release publishes its later versions: a host with a
+	// port takes no ref, so a registration takes the newest version, and
+	// the fixture releases them once the manager has registered the
+	// template at its first.
+	publish := func(name string, versions ...func(dir string)) (work string, release func()) {
+		work = filepath.Join(base, "template-work", name)
 		if err := os.MkdirAll(work, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		repository := filepath.Join(host.Dir, name+".git")
 		gitRun(t, work, "init", "-q", "-b", "main")
-		for i, write := range versions {
-			write(work)
+		commit := func(i int) string {
+			versions[i](work)
 			gitRun(t, work, "add", "-A")
 			gitRun(t, work, "commit", "-q", "-m", fmt.Sprintf("v%d", i+1))
-			gitRun(t, work, "tag", fmt.Sprintf("%d.0.0", i+1))
+			tag := fmt.Sprintf("%d.0.0", i+1)
+			gitRun(t, work, "tag", tag)
+			return tag
 		}
-		gitRun(t, host.Dir, "clone", "-q", "--bare", work, filepath.Join(host.Dir, name+".git"))
-		return work
+		commit(0)
+		gitRun(t, host.Dir, "clone", "-q", "--bare", work, repository)
+		return work, func() {
+			for i := 1; i < len(versions); i++ {
+				gitRun(t, work, "push", "-q", repository, "main", commit(i))
+			}
+		}
 	}
 	version := func(v int) func(string) { return func(dir string) { browserTemplate(t, dir, v) } }
-	sampleWork := publish("sample-kit", version(1))
-	publish("kept-kit", version(1), version(2))
+	sampleWork, _ := publish("sample-kit", version(1))
+	_, releaseKept := publish("kept-kit", version(1), version(2))
 	publish("held-kit", func(dir string) { heldTemplate(t, dir) })
+	releaseWorkspace := func() {}
 	if provisioned != nil {
-		publish("workspace-kit", func(dir string) { browserTemplate(t, dir, 1); provisionedTemplate(t, dir, 1) },
+		_, releaseWorkspace = publish("workspace-kit", func(dir string) { browserTemplate(t, dir, 1); provisionedTemplate(t, dir, 1) },
 			func(dir string) { browserTemplate(t, dir, 2); provisionedTemplate(t, dir, 2) })
 	}
 	newVersion := func(name, tag string) error {
@@ -158,9 +174,8 @@ func TestAcceptanceFixture(t *testing.T) {
 	p.user("sample-manager", "Sample", "Manager", group["id"].(string))
 	p.user("sample-other", "Sample", "Other", other["id"].(string))
 	client := p.admin(http.MethodPost, "/api/oidc/clients", map[string]any{"name": "Menagerie sample", "callbackURLs": []string{site + auth.CallbackPath}, "isPublic": true, "pkceEnabled": true})
-	provisionedTemplates, provisioning, menagerieKeys, menageriePolicy := "", "", []string{"sample-git"}, ""
+	provisioning, menagerieKeys, menageriePolicy := "", []string{"sample-git"}, ""
 	if provisioned != nil {
-		provisionedTemplates = fmt.Sprintf("  - {id: workspace-kit, name: \"Workspace kit\", address: '%s@1.0.0'}\n", host.URL("workspace-kit.git"))
 		provisioning = provisioned.config
 		menagerieKeys = append(menagerieKeys, provisioned.transitKeys...)
 		menageriePolicy = provisioned.policy
@@ -174,11 +189,11 @@ oidc:
   client-id: %s
   redirect-url: %s
 templates:
-  - {id: kept-kit, name: "Kept kit", address: '%s@1.0.0'}
-  - {id: sample-kit-held, name: "Sample kit, held hook", address: '%s@1.0.0'}
-  - {id: legacy-branch, name: "Legacy branch", address: '%s@main'}
+  - {id: imported-kit, name: "Imported kit", address: 'https://git.example.invalid/example-org/imported-kit@1.0.0'}
+  - {id: legacy-port, name: "Legacy port", address: '%s@1.0.0'}
+  - {id: legacy-branch, name: "Legacy branch", address: 'https://git.example.invalid/example-org/legacy-kit@main'}
   - {id: legacy-password, name: "Legacy password", address: 'https://sample-user:sample-password@git.example.invalid/example-org/kit@1.0.0'}
-%s%s`, port, rootDir, host.URL("backups.git"), p.url, client["id"], site+auth.CallbackPath, host.URL("kept-kit.git"), host.URL("held-kit.git"), host.URL("legacy-kit.git"), provisionedTemplates, provisioning))
+%s`, port, rootDir, host.URL("backups.git"), p.url, client["id"], site+auth.CallbackPath, host.URL("kept-kit.git"), provisioning))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -231,6 +246,17 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 	if t.Failed() {
 		return
 	}
+	manager := signInBrowser()
+	if s, _ := p.signIn(t, manager, "sample-manager", site+"/"); s.status != http.StatusOK {
+		t.Fatalf("the manager's sign-in answered %d", s.status)
+	}
+	registerTemplate(t, manager, site, "Kept kit", host.URL("kept-kit.git"))
+	registerTemplate(t, manager, site, "Sample kit, held hook", host.URL("held-kit.git"))
+	if provisioned != nil {
+		registerTemplate(t, manager, site, "Workspace kit", host.URL("workspace-kit.git"))
+	}
+	releaseKept()
+	releaseWorkspace()
 
 	healthy := func() bool {
 		resp, err := http.Get(site + "/healthz")
@@ -297,13 +323,25 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 	// it cannot take by their ids alone, and warns that the key is no
 	// longer read.
 	started := c.logs(time.Time{})
-	for _, want := range []string{"legacy-branch", "legacy-password", "imported template kept-kit", "templates key is no longer read"} {
+	for _, want := range []string{
+		"the templates entry legacy-port is not imported: the template service refuses its address (invalid-address)",
+		"the templates entry legacy-password is not imported: the template service refuses its address (invalid-address)",
+		"the templates entries legacy-branch are not imported",
+		"imported template imported-kit at version 1.0.0",
+		"templates key is no longer read",
+	} {
 		if !strings.Contains(started, want) {
 			t.Errorf("the start's log does not name %q:\n%s", want, started)
 		}
 	}
 	if strings.Contains(started, "sample-password") {
 		t.Errorf("the start's log quotes an address with a password:\n%s", started)
+	}
+	// A skipped entry is named by its id alone, never by its address.
+	for _, line := range strings.Split(started, "\n") {
+		if strings.Contains(line, "templates entr") && (strings.Contains(line, host.URL("kept-kit.git")) || strings.Contains(line, "example.invalid")) {
+			t.Errorf("the import names a skipped entry by its address: %s", line)
+		}
 	}
 	<-done
 	t.Logf("Menagerie logs:\n%s", c.logs(time.Time{}))

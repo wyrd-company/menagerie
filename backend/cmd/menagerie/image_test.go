@@ -198,7 +198,7 @@ func TestImage(t *testing.T) {
 		}
 	}
 	// The template on an HTTPS Git host the image trusts through
-	// SSL_CERT_FILE; the first start imports it from the templates key.
+	// SSL_CERT_FILE, which the manager registers.
 	templates := newTemplateHost(t, filepath.Join(base, "templates"))
 	templates.kitRepository(t, "sample-kit", false)
 
@@ -219,9 +219,7 @@ oidc:
   issuer: %s
   client-id: %s
   redirect-url: %s
-templates:
-  - {id: sample-kit, name: Sample kit, address: '%s@1.0.0'}
-`, port, rootDir, wyrwood, p.url, client["id"], site+auth.CallbackPath, templates.Address("sample-kit")))
+`, port, rootDir, wyrwood, p.url, client["id"], site+auth.CallbackPath))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -320,6 +318,7 @@ done`
 		if s := fetch(t, b, http.MethodGet, site+"/api/workspaces", nil, nil); s.status != http.StatusOK || !strings.Contains(s.body, `"name":"alpha"`) {
 			t.Fatalf("workspaces answered %d %s", s.status, s.body)
 		}
+		registerTemplate(t, b, site, "Sample kit", templates.Address("sample-kit"))
 		startInterview(t, b, site, "beta")
 	})
 

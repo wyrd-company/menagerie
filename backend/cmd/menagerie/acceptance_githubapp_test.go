@@ -442,13 +442,11 @@ oidc:
   issuer: %s
   client-id: %s
   redirect-url: %s
-templates:
-  - {id: sample-kit, name: "Sample kit", address: '%s@1.0.0'}
 github-app:
   app-id: %d
   transit-key: %s
   server: %s
-`, port, rootDir, backupURL, p.url, client["id"], site+auth.CallbackPath, templateURL, sampleAppID, sampleAppTransitKey, gh.URL))
+`, port, rootDir, backupURL, p.url, client["id"], site+auth.CallbackPath, sampleAppID, sampleAppTransitKey, gh.URL))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -499,6 +497,7 @@ github-app:
 	if s, _ := p.signIn(t, b, "sample-manager", site+"/"); s.status != http.StatusOK {
 		t.Fatalf("sign-in answered %d", s.status)
 	}
+	registerTemplate(t, b, site, "Sample kit", templateURL)
 
 	t.Run("Menagerie has no SSH identity", func(t *testing.T) {
 		c.t = t

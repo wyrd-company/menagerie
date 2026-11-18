@@ -208,11 +208,16 @@ func TestImageWyrwood(t *testing.T) {
 	gitRun(t, work, "add", "-A")
 	gitRun(t, work, "commit", "-q", "-m", "v1")
 	gitRun(t, work, "tag", "1.0.0")
-	wyrwoodTemplate(t, work, 2, v2Image)
-	gitRun(t, work, "add", "-A")
-	gitRun(t, work, "commit", "-q", "-m", "v2")
-	gitRun(t, work, "tag", "2.0.0")
 	gitRun(t, host.Dir, "clone", "-q", "--bare", work, filepath.Join(host.Dir, "sample-kit.git"))
+	// Version 2 is released once the manager has registered the template
+	// at 1.0.0 and created a workspace from it.
+	release := func() {
+		wyrwoodTemplate(t, work, 2, v2Image)
+		gitRun(t, work, "add", "-A")
+		gitRun(t, work, "commit", "-q", "-m", "v2")
+		gitRun(t, work, "tag", "2.0.0")
+		gitRun(t, work, "push", "-q", filepath.Join(host.Dir, "sample-kit.git"), "main", "2.0.0")
+	}
 	// This template, a repository of its own, reaches provisioning before
 	// any workspace container starts.
 	check := filepath.Join(base, "key-check-work")
@@ -263,9 +268,6 @@ oidc:
   issuer: %s
   client-id: %s
   redirect-url: %s
-templates:
-  - {id: sample-kit, name: "Sample kit", address: '%s@1.0.0'}
-  - {id: operator-key-check, name: "Operator key check", address: '%s@1.0.0'}
 provisioning:
   wyrwood:
     controller: ssh://%s
@@ -277,7 +279,7 @@ registry-credentials:
   registries:
     - {registry: '%s', path: sample/registry}
 `, port, rootDir, host.URL("backups.git"), p.url, client["id"], site+auth.CallbackPath,
-		host.URL("sample-kit.git"), host.URL("key-check.git"), w.sshAddr, operatorKeys.HostKey, w.agentName, operatorKeyName, reg.addr))
+		w.sshAddr, operatorKeys.HostKey, w.agentName, operatorKeyName, reg.addr))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -335,6 +337,8 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 	if s, _ := p.signIn(t, b, "sample-manager", site+"/"); s.status != http.StatusOK {
 		t.Fatalf("sign-in answered %d", s.status)
 	}
+	registerTemplate(t, b, site, "Sample kit", host.URL("sample-kit.git"))
+	registerTemplate(t, b, site, "Operator key check", host.URL("key-check.git"))
 	alpha := filepath.Join(rootDir, "alpha")
 
 	vault := func(path string) (string, int) {
@@ -487,6 +491,7 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 			t.Fatalf("lookup-self after %s: %d %q", time.Since(started).Round(time.Second), code, out)
 		}
 		// The upgrade pulls version 2's private image with the renewed token.
+		release()
 		upgradeTemplate(t, b, site, "sample-kit", "2.0.0")
 		snap := runInterviewJob(t, b, site, "upgrade", "alpha", "", map[string]any{"region": "north"})
 		if snap.State != jobs.Succeeded {

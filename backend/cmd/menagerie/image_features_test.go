@@ -137,9 +137,7 @@ oidc:
   issuer: %s
   client-id: %s
   redirect-url: %s
-templates:
-  - {id: sample-kit-go, name: "Sample kit with Go", address: '%s@1.0.0'}
-`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, templates.Address("sample-kit")))
+`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -180,11 +178,12 @@ templates:
 	if s, _ := p.signIn(t, b, "sample-manager", site+"/"); s.status != http.StatusOK {
 		t.Fatalf("sign-in answered %d", s.status)
 	}
+	registerTemplate(t, b, site, "Sample kit with Go", templates.Address("sample-kit"))
 
 	var first string
 	t.Run("create installs the feature and the workspace runs with its tool", func(t *testing.T) {
 		c.t = t
-		snap := runInterviewJob(t, b, site, "create", "alpha", "sample-kit-go",
+		snap := runInterviewJob(t, b, site, "create", "alpha", "sample-kit-with-go",
 			map[string]any{"label": "Sample label", "size": "small", "verbose": false, "tags": []string{"alpha"}})
 		if snap.State != jobs.Succeeded {
 			t.Fatalf("create ended %s: %+v\n%s", snap.State, snap.Error, c.logs(time.Time{}))

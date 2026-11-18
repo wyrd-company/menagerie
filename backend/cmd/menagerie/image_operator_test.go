@@ -165,6 +165,18 @@ func firstInterview(t *testing.T, c *http.Client, site, jobID string) interviewR
 	return interviewReply{}
 }
 
+// registerTemplate registers the template at address, which names no ref,
+// as a manager's registration does, at its repository's newest version: an
+// address whose host has a port takes no ref.
+func registerTemplate(t *testing.T, c *http.Client, site, name, address string) {
+	t.Helper()
+	header := http.Header{"Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"}}
+	s := fetch(t, c, http.MethodPost, site+"/api/templates", strings.NewReader(fmt.Sprintf(`{"name":%q,"address":%q}`, name, address)), header)
+	if s.status != http.StatusCreated {
+		t.Fatalf("the registration of %s answered %d %s", name, s.status, s.body)
+	}
+}
+
 // upgradeTemplate makes version the current version of the registered
 // template id, as a manager's upgrade of the template does.
 func upgradeTemplate(t *testing.T, c *http.Client, site, id, version string) {
@@ -274,12 +286,16 @@ func TestImageOperatorWorkspace(t *testing.T) {
 	gitRun(t, repo, "add", "-A")
 	gitRun(t, repo, "commit", "-q", "-m", "v1")
 	gitRun(t, repo, "tag", "1.0.0")
-	operatorTemplate(t, repo, 2)
-	gitRun(t, repo, "add", "-A")
-	gitRun(t, repo, "commit", "-q", "-m", "v2")
-	gitRun(t, repo, "tag", "2.0.0")
+	// Version 2 is released once the manager has registered the template
+	// at 1.0.0 and created a workspace from it.
+	release := func() {
+		operatorTemplate(t, repo, 2)
+		gitRun(t, repo, "add", "-A")
+		gitRun(t, repo, "commit", "-q", "-m", "v2")
+		gitRun(t, repo, "tag", "2.0.0")
+	}
 	// The template on an HTTPS Git host the image trusts through
-	// SSL_CERT_FILE; the first start imports it at 1.0.0.
+	// SSL_CERT_FILE, which the manager registers.
 	templates := newTemplateHost(t, filepath.Dir(repo))
 	// The workspace socket folder, mounted at its own path with tmp.
 	socketDir := filepath.Join(base, "sockets")
@@ -324,11 +340,9 @@ oidc:
   issuer: %s
   client-id: %s
   redirect-url: %s
-templates:
-  - {id: sample-kit, name: "Sample kit", address: '%s@1.0.0'}
 workspace-socket:
   folder: %s
-`, port, rootDir, host.URL("backups.git"), agentDir, p.url, client["id"], site+auth.CallbackPath, templates.Address("sample-kit"), socketDir))
+`, port, rootDir, host.URL("backups.git"), agentDir, p.url, client["id"], site+auth.CallbackPath, socketDir))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -377,6 +391,7 @@ workspace-socket:
 	if s, _ := p.signIn(t, b, "sample-manager", site+"/"); s.status != http.StatusOK {
 		t.Fatalf("sign-in answered %d", s.status)
 	}
+	registerTemplate(t, b, site, "Sample kit", templates.Address("sample-kit"))
 
 	t.Run("services run as the workspace root's owner", func(t *testing.T) {
 		c.t = t
@@ -444,6 +459,7 @@ workspace-socket:
 
 	t.Run("upgrade and rebuild keep the edit, the new file and the ownership", func(t *testing.T) {
 		c.t = t
+		release()
 		upgradeTemplate(t, b, site, "sample-kit", "2.0.0")
 		snap := runInterviewJob(t, b, site, "upgrade", "alpha", "", map[string]any{"region": "north"})
 		if snap.State != jobs.Succeeded {
