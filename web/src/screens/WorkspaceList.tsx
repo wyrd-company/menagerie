@@ -8,7 +8,7 @@ import {
 } from "../api/client.ts";
 import type { Job, Operation, T3CodePairingToken, Workspace } from "../api/types.ts";
 import { JobPanel } from "../jobs/JobPanel.tsx";
-import { WorkspacePolicies, policyStatus } from "./WorkspacePolicies.tsx";
+import { WorkspacePolicies, policyStatus, policyStatusClass } from "./WorkspacePolicies.tsx";
 import { own } from "../own.ts";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
@@ -200,9 +200,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                   </div>
                   <div className="entry-state">
                     <StatusBadge state={ws.state} />
-                    <span className={ws.applyFailure ? "field-errors" : "muted"}>
-                      {policyStatus(ws)}
-                    </span>
+                    <span className={policyStatusClass(ws)}>{policyStatus(ws)}</span>
                     {ws.needsChoice.length ? (
                       <p className="entry-choice">Needs a choice: {ws.needsChoice.join(", ")}</p>
                     ) : null}

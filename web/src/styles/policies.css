@@ -164,7 +164,12 @@
 .policy-columns legend {
   margin-bottom: 12px;
 }
+.policy-columns legend,
+.create-policies > legend {
+  font-weight: 600;
+}
 .policy-columns legend .muted {
+  font-weight: 400;
   display: block;
   font-size: 14px;
 }
@@ -178,4 +183,19 @@
 .muted {
   color: var(--text-muted);
   font-size: 14px;
+}
+
+.workspace-policy-panel > .policy-actions:first-child {
+  justify-content: space-between;
+}
+.policy-status {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.policy-status.pending,
+.policy-status.import-pending {
+  color: var(--warn);
+}
+.policy-status.failed {
+  color: var(--danger);
 }

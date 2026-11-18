@@ -4,10 +4,23 @@ import type { Policies, Workspace } from "../api/types.ts";
 import { navigate, paths } from "../router.ts";
 import { PolicyChoices, choiceProblems } from "../ui/PolicyChoices.tsx";
 
+function policyState(ws: Workspace): "import-pending" | "failed" | "applied" | "pending" {
+  if (!ws.selectionImported) return "import-pending";
+  if (ws.applyFailure) return "failed";
+  return ws.appliedRevision === ws.selectionRevision ? "applied" : "pending";
+}
+
 export function policyStatus(ws: Workspace): string {
-  if (!ws.selectionImported) return "Policy import pending";
-  if (ws.applyFailure) return "Policies failed";
-  return ws.appliedRevision === ws.selectionRevision ? "Policies applied" : "Policies pending";
+  return {
+    "import-pending": "Policy import pending",
+    failed: "Policies failed",
+    applied: "Policies applied",
+    pending: "Policies pending",
+  }[policyState(ws)];
+}
+
+export function policyStatusClass(ws: Workspace): string {
+  return `policy-status ${policyState(ws)}`;
 }
 
 export function WorkspacePolicies({
@@ -107,7 +120,7 @@ export function WorkspacePolicies({
     >
       <div className="policy-actions">
         <h3>{workspace.name} policies</h3>
-        <span>{policyStatus(workspace)}</span>
+        <span className={policyStatusClass(workspace)}>{policyStatus(workspace)}</span>
       </div>
       {catalog ? (
         <PolicyChoices
