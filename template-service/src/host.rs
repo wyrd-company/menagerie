@@ -85,8 +85,8 @@ pub fn host_facts() -> HostFacts {
     HostFacts::capture()
 }
 
-pub fn now() -> jiff::Zoned {
-    jiff::Zoned::now()
+pub fn now() -> jiff::ZonedDateTime {
+    jiff::ZonedDateTime::now()
 }
 
 /// A person answers Menagerie interviews through the web UI.

@@ -35,7 +35,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 # The template service. curl-sys finds no system libcurl here, so it builds
 # curl with rustls into the binary; the binary needs only the C runtime.
-FROM --platform=$BUILDPLATFORM rust:1.97.1-slim-trixie@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c AS template-service
+FROM --platform=$BUILDPLATFORM rust:1.100.0-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS template-service
 ARG TARGETARCH
 ARG BUILDARCH
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \

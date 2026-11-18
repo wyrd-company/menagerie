@@ -147,6 +147,7 @@ impl From<toha::ApplyError> for ServiceError {
     fn from(error: toha::ApplyError) -> Self {
         use toha::ApplyError as E;
         match error {
+            E::Stopped => Self::conflict("request-ended", "the caller ended the operation"),
             // Conflicts and drift are found from the plan before any hook
             // runs, so their paths carry no captured output.
             E::Conflicts(paths) => Self::conflict(

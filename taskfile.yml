@@ -346,7 +346,7 @@ tasks:
       - go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - '[ -z "${GITHUB_PATH:-}" ] || go env GOPATH | sed "s|$|/bin|" >> "$GITHUB_PATH"'
       # renovate: datasource=crate depName=ryl
-      - cargo install --locked ryl --version 0.21.0
+      - cargo install --locked ryl --version 0.29.0
       # renovate: datasource=crate depName=rumdl
       - cargo install --locked rumdl --version 0.3.0
 
