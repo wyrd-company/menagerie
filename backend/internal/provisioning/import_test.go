@@ -15,6 +15,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
+	"github.com/wyrd-company/menagerie/backend/internal/wyrwood"
 )
 
 // previous is a host of the previous release: a workspace root with real
@@ -475,5 +476,47 @@ func TestDelayedSelectionImportKeepsOriginallyAbsentKey(t *testing.T) {
 	imported, err := p.data.Selection(ctx, "sample")
 	if err != nil || !imported.Imported || imported.Key != nil {
 		t.Fatalf("template chose a key: %+v %v", imported, err)
+	}
+}
+
+func TestPendingImportPrecedesRetirementWithoutDeclaration(t *testing.T) {
+	p := newPrevious(t, "sample")
+	ctx := context.Background()
+	group := uint32(1000)
+	p.hold("sample", "container-sample", true)
+	p.bound["container-sample"] = wyrwood.Selection{Policies: []string{"a", "workspace"}, Values: map[string]string{"account": "kept"}, AccessGroup: &group}
+	p.readErr = errors.New("controller unavailable")
+	steps := p.steps()
+	if err := steps.ImportSelections(ctx, p.root, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := p.data.Selection(ctx, "sample")
+	if err != nil || pending.Imported {
+		t.Fatalf("import did not stay pending: %+v %v", pending, err)
+	}
+	// An upgrade/branch edit removes the whole provisioning declaration.
+	p.definitions[p.folder("sample")] = devcontainer.Definition{}
+	wantKind(t, steps.Rebuild(ctx, p.folder("sample"), p), KindUnavailable)
+	if len(p.unbound) != 0 || len(p.calls) != 0 || p.held("sample").Current() != "container-sample" {
+		t.Fatalf("unavailable import performed operations: %v, unbound %v", p.calls, p.unbound)
+	}
+	p.readErr = nil
+	if err := steps.Rebuild(ctx, p.folder("sample"), p); err != nil {
+		t.Fatal(err)
+	}
+	imported, err := p.data.Selection(ctx, "sample")
+	if err != nil || !imported.Imported || !slices.Equal(imported.Policies, []string{"a", "client-key", "workspace"}) || imported.Values["account"] != "kept" {
+		t.Fatalf("retirement lost binding selection: %+v %v", imported, err)
+	}
+	if !slices.Equal(p.unbound, []string{sampleAgent + "/container-sample"}) || p.held("sample").Current() != "" {
+		t.Fatalf("old binding not retired after import: %v held %+v", p.unbound, p.held("sample"))
+	}
+	// A later retry/import cannot replace the snapshot with the empty definition.
+	if err := steps.EnsureImported(ctx, p.folder("sample")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := p.data.Selection(ctx, "sample")
+	if err != nil || after.Revision != imported.Revision || !slices.Equal(after.Policies, imported.Policies) || after.Values["account"] != "kept" {
+		t.Fatalf("later import lost selection: %+v %v", after, err)
 	}
 }

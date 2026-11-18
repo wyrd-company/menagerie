@@ -209,6 +209,11 @@ func (s *Steps) run(ctx context.Context, folder string, p devcontainer.Progress,
 	if err != nil {
 		return err
 	}
+	// A job without a declaration can retire the current binding too. Import
+	// its selection before either path can write or unbind anything.
+	if err := s.EnsureImported(ctx, folder); err != nil {
+		return fail(KindUnavailable, err.Error())
+	}
 	if declaration != nil {
 		err = s.provision(ctx, folder, declaration, p, kind)
 	} else {
@@ -283,9 +288,6 @@ func (s *Steps) plain(ctx context.Context, folder string, p devcontainer.Progres
 func (s *Steps) provision(ctx context.Context, folder string, d *Declaration, p devcontainer.Progress, kind bringKind) error {
 	if err := s.available(d); err != nil {
 		return err
-	}
-	if err := s.EnsureImported(ctx, folder); err != nil {
-		return fail(KindUnavailable, err.Error())
 	}
 	current, err := s.opts.Data.Selection(ctx, filepath.Base(folder))
 	if err != nil {
