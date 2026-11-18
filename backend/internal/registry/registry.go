@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -64,15 +66,24 @@ type InvalidError struct{ Message string }
 
 func (e *InvalidError) Error() string { return e.Message }
 
-// ErrNotNewer means the version is not one of the repository's versions
-// newer than the template's current one.
-var ErrNotNewer = errors.New("the version is not a version of the template's repository newer than its current version")
+// ErrNotNewer means the version is not a found version of the template
+// newer than its current one, nor its current version while that version's
+// tag has moved.
+var ErrNotNewer = errors.New("the version is not a found version of the template newer than its current one, nor its current version while that version's tag has moved; check the template's versions to find new ones")
 
-// Registry registers and changes templates in Menagerie's data.
+// Registry registers and changes templates in Menagerie's data, and checks
+// them for new versions.
 type Registry struct {
 	Data      *store.Store
 	Templates TemplateService
 	Root      *workspace.Root
+	// Now is the clock of the version checks; nil is time.Now.
+	Now func() time.Time
+	// CheckWait bounds one version check; zero is DefaultCheckWait.
+	CheckWait time.Duration
+
+	mu      sync.Mutex
+	running map[string]*checkRun
 }
 
 // ValidName checks a template's display name: one line of 1 to 100
@@ -108,7 +119,8 @@ func ValidRunnerImage(image string) error {
 // fetched; read, Toha loads the template and its folder holds no link
 // outside its checkout; definition, the content folder holds the
 // definition. The current version is the address's tag, else the newest
-// version. A template whose source is registered is a
+// version, and the versions listed are its found versions, as of a version
+// check. A template whose source is registered is a
 // *store.TemplateExistsError. It joins each workspace that has no template
 // and whose applied record names the template's source. With check, it runs
 // the same checks and refuses the same way, and answers the template it
@@ -167,7 +179,24 @@ func (r *Registry) Register(ctx context.Context, name, address, runnerImage stri
 	return record(ctx, store.Template{
 		Name: name, Address: read.Base, Source: read.Source, RunnerImage: runnerImage,
 		CurrentVersion: current.Version, CurrentTag: current.Tag, CurrentCommit: checked.Commit,
+		Versions: found(versions.Versions), CheckedAt: r.now(),
 	}, joins)
+}
+
+// found is the template service's versions as Menagerie's data keeps them.
+func found(versions []templates.Version) []store.Version {
+	out := make([]store.Version, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, store.Version{Version: v.Version, Tag: v.Tag, Commit: v.Commit})
+	}
+	return out
+}
+
+func (r *Registry) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 // checkVersion runs the fetch, read and definition checks of a version.
@@ -182,50 +211,44 @@ func (r *Registry) checkVersion(ctx context.Context, address string, v templates
 	return checked, nil
 }
 
-// joins lists the workspaces with no template whose applied record names
-// source.
-func (r *Registry) joins(ctx context.Context, source string) ([]string, error) {
+// joins maps the workspaces with no template whose applied record names
+// source to the applied version their record gives them.
+func (r *Registry) joins(ctx context.Context, source string) (map[string]store.AppliedVersion, error) {
 	names, err := r.Data.Untemplated(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	out := map[string]store.AppliedVersion{}
 	for _, name := range names {
 		folder, err := r.Root.Folder(name)
 		if err != nil {
 			continue
 		}
-		if Source(folder) == source {
-			out = append(out, name)
+		if named, applied := Record(folder); named == source {
+			out[name] = applied
 		}
 	}
 	return out, nil
 }
 
-// Upgrade makes version, one of the repository's versions newer than the
-// template's current one, its current version, once it passes the fetch,
-// read and definition checks. Any other version is ErrNotNewer. With check,
-// it runs the same checks and refuses the same way, and answers the
-// template at version, storing nothing.
+// Upgrade makes version, a found version of the template newer than its
+// current one, its current version, once it passes the fetch, read and
+// definition checks; and it takes the current version again, with the
+// commit those checks fetch, while that version's tag has moved. Any other
+// version is ErrNotNewer, before any check. With check, it runs the same
+// checks and refuses the same way, and answers the template at version,
+// storing nothing.
 func (r *Registry) Upgrade(ctx context.Context, id, version string, check bool) (store.Template, error) {
 	tpl, err := r.Data.Template(ctx, id)
 	if err != nil {
 		return store.Template{}, err
 	}
-	versions, err := r.Templates.ListVersions(ctx, tpl.Address)
-	if err != nil {
-		return store.Template{}, refusal(CheckFetch, err)
-	}
-	var target *templates.Version
-	for i, v := range versions.Versions {
-		if v.Version == version {
-			target = &versions.Versions[i]
-		}
-	}
-	if target == nil || !Newer(target.Version, tpl.CurrentVersion) {
+	target, ok := tpl.Found(version)
+	again := version == tpl.CurrentVersion && tpl.CurrentMoved()
+	if !ok || !again && !Newer(target.Version, tpl.CurrentVersion) {
 		return store.Template{}, ErrNotNewer
 	}
-	checked, err := r.checkVersion(ctx, tpl.Address, *target)
+	checked, err := r.checkVersion(ctx, tpl.Address, templates.Version{Version: target.Version, Tag: target.Tag, Commit: target.Commit})
 	if err != nil {
 		return store.Template{}, err
 	}

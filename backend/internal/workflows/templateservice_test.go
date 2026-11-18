@@ -437,7 +437,7 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	})
 	a.flows = flows
 	a.http = httptest.NewServer(api.New(api.Options{Root: root, Data: data, Status: runtime, Jobs: a.manager, Operations: flows.Operations(), Interviews: flows,
-		Registry: &registry.Registry{Data: data, Templates: service, Root: root}, AppliedSource: registry.Source}))
+		Registry: &registry.Registry{Data: data, Templates: service, Root: root}, AppliedRecord: registry.Record}))
 	t.Cleanup(a.http.Close)
 	t.Cleanup(a.manager.Wait)
 	t.Cleanup(cancel)

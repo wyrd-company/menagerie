@@ -43,7 +43,7 @@ func (s *templateService) ReadAddress(_ context.Context, address string) (*templ
 
 func (s *templateService) ListVersions(context.Context, string) (*templates.Versions, error) {
 	return &templates.Versions{Source: kitAddress, Versions: []templates.Version{
-		{Version: "1.0.0", Tag: "1.0.0", Commit: "c1"}, {Version: "1.1.0", Tag: "1.1.0", Commit: "c11"},
+		{Version: "1.0.0", Tag: "1.0.0", Commit: "c1.0.0"}, {Version: "1.1.0", Tag: "1.1.0", Commit: "c1.1.0"},
 	}}, nil
 }
 
@@ -56,7 +56,7 @@ func templateFixture(t *testing.T) (*fixture, *templateService) {
 	f := newFixture(t, nil)
 	service := &templateService{definition: map[string]bool{"1.0.0": true, "1.1.0": true}}
 	f.server.opts.Registry = &registry.Registry{Data: f.data, Templates: service, Root: f.server.opts.Root}
-	f.server.opts.AppliedSource = registry.Source
+	f.server.opts.AppliedRecord = registry.Record
 	return f, service
 }
 

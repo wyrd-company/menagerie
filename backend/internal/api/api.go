@@ -50,10 +50,11 @@ type Options struct {
 	Provisioned       bool
 	// Registry registers and changes templates.
 	Registry Registry
-	// AppliedSource is the source a workspace folder's applied record
-	// names, or ""; a folder listed for the first time joins the
-	// registered template of that source. Nil joins none.
-	AppliedSource func(folder string) string
+	// AppliedRecord is the source a workspace folder's applied record
+	// names, or "", and the applied version it gives; a folder listed for
+	// the first time joins the registered template of that source with
+	// that applied version. Nil joins none.
+	AppliedRecord func(folder string) (string, store.AppliedVersion)
 	// UI holds the built web UI (index.html and assets/). Nil serves no UI.
 	UI fs.FS
 }
@@ -207,13 +208,13 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 	}
 	// A folder listed for the first time joins the registered template
 	// its applied record's source names.
-	if s.opts.AppliedSource != nil && len(unknown) > 0 {
-		_, err := s.opts.Data.JoinTemplates(r.Context(), unknown, func(name string) string {
+	if s.opts.AppliedRecord != nil && len(unknown) > 0 {
+		_, err := s.opts.Data.JoinTemplates(r.Context(), unknown, func(name string) (string, store.AppliedVersion) {
 			folder, err := s.opts.Root.Folder(name)
 			if err != nil {
-				return ""
+				return "", store.AppliedVersion{}
 			}
-			return s.opts.AppliedSource(folder)
+			return s.opts.AppliedRecord(folder)
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, apiError{Kind: "internal-error", Message: err.Error()})

@@ -7,13 +7,15 @@
 // Package store keeps Menagerie's own data in one SQLite database that only
 // the workspace service opens: the registered templates, the workspaces and
 // their templates, each container name Menagerie bound and each Xolotl key it
-// issued, the policy settings and selections, and the marks of the
-// first-start imports. Every change is one transaction and foreign keys are
-// enforced, so a constraint, not a scan of files, keeps a container name or a
-// key with one workspace at a time, one registration per template source, and
-// a template that a workspace uses in place. The schema's version is the database's user_version: an
-// open upgrades an older schema in one transaction and refuses a newer one. The
-// database holds no secret.
+// issued, the policy settings and selections, each template's found
+// versions and last version check, each workspace's applied version, and the
+// marks of the first-start imports. Every change is one transaction and
+// foreign keys are enforced, so a constraint, not a scan of files, keeps a
+// container name or a key with one workspace at a time, one registration per
+// template source, and a template that a workspace uses in place. The
+// schema's version is the database's user_version: an open upgrades an older
+// schema in one transaction and refuses a newer one. The database holds no
+// secret.
 package store
 
 import (
@@ -107,6 +109,23 @@ var migrations = []string{
 	);
 	ALTER TABLE workspaces ADD COLUMN template TEXT REFERENCES templates(id);
 	CREATE INDEX workspaces_template ON workspaces(template);`,
+	// 5: each template's found versions, in ascending order, and the time
+	// and failure of its last version check; and each workspace's applied
+	// version, null while unknown, and its applied commit.
+	`CREATE TABLE template_versions (
+		template TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+		position INTEGER NOT NULL,
+		version TEXT NOT NULL CHECK (version != ''),
+		tag TEXT NOT NULL CHECK (tag != ''),
+		commit_id TEXT NOT NULL CHECK (commit_id != ''),
+		PRIMARY KEY (template, version),
+		UNIQUE (template, position)
+	);
+	ALTER TABLE templates ADD COLUMN checked_at TEXT CHECK (checked_at != '');
+	ALTER TABLE templates ADD COLUMN check_failure TEXT CHECK (check_failure IN
+		('template-not-found', 'template-resolve-failed', 'invalid-address', 'template-service-unavailable'));
+	ALTER TABLE workspaces ADD COLUMN applied_version TEXT CHECK (applied_version != '');
+	ALTER TABLE workspaces ADD COLUMN applied_commit TEXT CHECK (applied_commit != '');`,
 }
 
 // SchemaVersion is the version of the schema this Menagerie reads and writes.

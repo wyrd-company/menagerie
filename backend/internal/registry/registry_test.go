@@ -9,7 +9,9 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
@@ -19,6 +21,7 @@ import (
 // fakeService plays the template service: each address's reading, its
 // repository's versions and each version's check, or a refusal.
 type fakeService struct {
+	mu       sync.Mutex
 	read     map[string]templates.Address
 	versions map[string][]templates.Version
 	checked  map[string]templates.Checked
@@ -27,6 +30,8 @@ type fakeService struct {
 }
 
 func (f *fakeService) fail(route string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, route)
 	return f.refuse[route]
 }
@@ -46,13 +51,17 @@ func (f *fakeService) ListVersions(_ context.Context, address string) (*template
 	if err := f.fail("versions " + address); err != nil {
 		return nil, err
 	}
-	return &templates.Versions{Source: f.read[address].Source, Versions: f.versions[address]}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &templates.Versions{Source: f.read[address].Source, Versions: slices.Clone(f.versions[address])}, nil
 }
 
 func (f *fakeService) Check(_ context.Context, address, ref string) (*templates.Checked, error) {
 	if err := f.fail("check " + address + "@" + ref); err != nil {
 		return nil, err
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	checked, ok := f.checked[address+"@"+ref]
 	if !ok {
 		return nil, &templates.Error{Status: 422, Kind: "template-resolve-failed", Message: "no such ref"}
@@ -61,6 +70,16 @@ func (f *fakeService) Check(_ context.Context, address, ref string) (*templates.
 }
 
 const kit = "https://git.example.invalid/example-org/kit"
+
+// testNow is the clock of the registry's version checks in tests.
+var testNow = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+
+// kitVersions are the kit repository's versions, as a check finds them.
+var kitVersions = []store.Version{
+	{Version: "1.0.0", Tag: "1.0.0", Commit: "c100"},
+	{Version: "1.1.0", Tag: "v1.1.0", Commit: "c110"},
+	{Version: "1.2.0", Tag: "1.2.0", Commit: "c120"},
+}
 
 func ref(s string) *string { return &s }
 
@@ -98,7 +117,7 @@ func world(t *testing.T) (*Registry, *fakeService, string) {
 		},
 		refuse: map[string]error{},
 	}
-	return &Registry{Data: data, Templates: f, Root: root}, f, rootDir
+	return &Registry{Data: data, Templates: f, Root: root, Now: func() time.Time { return testNow }}, f, rootDir
 }
 
 func checkOf(t *testing.T, err error) *CheckError {
@@ -121,7 +140,8 @@ func TestRegistrationTakesTheNewestVersionOrTheAddressTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := store.Template{ID: "sample-kit", Name: "Sample kit", Address: kit, Source: kit,
-		CurrentVersion: "1.2.0", CurrentTag: "1.2.0", CurrentCommit: "c120", Workspaces: []string{}}
+		CurrentVersion: "1.2.0", CurrentTag: "1.2.0", CurrentCommit: "c120", Workspaces: []string{},
+		Versions: kitVersions, CheckedAt: testNow}
 	if !reflect.DeepEqual(newest, want) {
 		t.Fatalf("%+v", newest)
 	}
@@ -214,7 +234,8 @@ func TestACheckAloneStoresNothingAndARegistrationChecksAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := store.Template{ID: "sample-kit", Name: "Sample kit", Address: kit, Source: kit, RunnerImage: "alpine:3.22",
-		CurrentVersion: "1.2.0", CurrentTag: "1.2.0", CurrentCommit: "c120", Workspaces: []string{"alpha"}}
+		CurrentVersion: "1.2.0", CurrentTag: "1.2.0", CurrentCommit: "c120", Workspaces: []string{"alpha"},
+		Versions: kitVersions, CheckedAt: testNow}
 	if !reflect.DeepEqual(checked, want) {
 		t.Fatalf("%+v", checked)
 	}

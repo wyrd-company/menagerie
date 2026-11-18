@@ -63,7 +63,7 @@ func TestTheTemplatesKeyIsImportedOnceAsOneTemplatePerSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []store.Template{{ID: "kit-v2", Name: "Kit, version 2", Address: kit, Source: kit, RunnerImage: "alpine:3.22",
-		CurrentVersion: "1.1.0", CurrentTag: "1.1.0", Workspaces: []string{"alpha"}}}
+		CurrentVersion: "1.1.0", CurrentTag: "1.1.0", Workspaces: []string{"alpha"}, Versions: []store.Version{}}}
 	if !reflect.DeepEqual(list, want) {
 		t.Fatalf("%+v", list)
 	}

@@ -137,18 +137,23 @@ func Import(ctx context.Context, opts ImportOptions) error {
 	if err != nil {
 		return err
 	}
-	sources := map[string]string{}
+	type record struct {
+		source  string
+		applied store.AppliedVersion
+	}
+	records := map[string]record{}
 	for _, name := range names {
 		if folder, err := opts.Root.Folder(name); err == nil {
-			sources[name] = Source(folder)
+			source, applied := Record(folder)
+			records[name] = record{source, applied}
 		}
 	}
 	_, err = opts.Data.Import(ctx, ImportID, func(tx *store.Tx) error {
 		for _, tpl := range imported {
-			var joins []string
+			joins := map[string]store.AppliedVersion{}
 			for _, name := range names {
-				if sources[name] == tpl.Source {
-					joins = append(joins, name)
+				if r := records[name]; r.source == tpl.Source {
+					joins[name] = r.applied
 				}
 			}
 			recorded, err := tx.RegisterTemplate(tpl, joins)

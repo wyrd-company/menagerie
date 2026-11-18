@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 )
 
 // RecordName is Toha's applied record in a workspace folder.
@@ -106,4 +108,25 @@ func Source(folder string) string {
 		return ""
 	}
 	return applied.Source
+}
+
+// Version is what the applied record gives Menagerie of the version last
+// applied: its ref when that is a version, else unknown, which a version
+// check of the workspace's template completes from the commit.
+func (a Applied) Version() store.AppliedVersion {
+	out := store.AppliedVersion{Commit: a.Commit}
+	if v, ok := ParseVersion(a.Ref); ok {
+		out.Version = v.String()
+	}
+	return out
+}
+
+// Record is the source and the applied version a workspace folder's applied
+// record names, or "" for a folder with no readable record.
+func Record(folder string) (string, store.AppliedVersion) {
+	applied, err := ReadApplied(folder)
+	if err != nil {
+		return "", store.AppliedVersion{}
+	}
+	return applied.Source, applied.Version()
 }

@@ -461,7 +461,7 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 		// Feature's service user.
 		PairingTokens: t3code.NewMinter(runtime.Docker()),
 		Registry:      &registry.Registry{Data: data, Templates: service, Root: root},
-		AppliedSource: registry.Source,
+		AppliedRecord: registry.Record,
 		UI:            web.FS,
 	})
 	return server
