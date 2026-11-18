@@ -167,6 +167,13 @@ description: >-
   scheduled.
 
 
+  Optional `template-versions` schedules the version checks of every
+  registered template: `every`, a duration and required in the section, is
+  the time between two checks, the first at start-up. Absent, `every` is
+  `1h`. Each check lists the template's repository's versions, as the
+  workspace API describes. No error of the field quotes its value.
+
+
   Optional `workspace-socket` gives each workspace's devcontainer a socket
   that commits and backs up its own workspace, as the workspace API
   describes. `folder`, required in the section, is an absolute clean
@@ -268,7 +275,9 @@ validation-criteria: >-
   makes it a key, and that an empty duration given through an alias or a merge
   key is refused. They parse `auto-commit`, `workspace-socket` and the
   `commit` limit, and check that no error of those fields quotes the
-  value given. They parse `github-app` with its default server and check
+  value given. They parse `template-versions`, apply its default when it
+  is absent, and refuse an empty, missing, malformed or zero `every` and
+  an unknown member without quoting the value given. They parse `github-app` with its default server and check
   that no error of the section quotes the value given.
   `go test ./backend/internal/registry/` imports the `templates` key once
   as one template per source at its newest version, skips and names by

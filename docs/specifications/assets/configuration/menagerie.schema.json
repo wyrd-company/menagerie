@@ -297,6 +297,20 @@
         }
       }
     },
+    "template-versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Schedules the checks of every registered template for new versions, the semver tags of its repository: one at start-up, then one every interval. A manager also checks one template on request. Absent, every hour.",
+      "required": [
+        "every"
+      ],
+      "properties": {
+        "every": {
+          "$ref": "#/$defs/duration",
+          "description": "Time between two version checks of every registered template."
+        }
+      }
+    },
     "workspace-socket": {
       "type": "object",
       "additionalProperties": false,

@@ -108,6 +108,23 @@ as `1.2.0`. Use the GitHub App or the SSH agent for private templates;
 see [Git hosts](install.md#git-hosts). It also refuses a local
 folder, a `file://`, `git://` or `http://` address and a Toha template name.
 
+### Version checks
+
+Menagerie checks every registered template for new versions when it starts,
+then once every `every`; without `template-versions`, every hour:
+
+```yaml
+template-versions:
+  every: 30m
+```
+
+A check lists the tags of the template's repository with the credentials a
+fetch of its address uses, and a version is a tag `MAJOR.MINOR.PATCH`, with
+an optional leading `v`. A manager can also check one template at any time;
+see [Check for new versions](usage.md#check-for-new-versions). `every` is a
+duration such as `45m`, `2h` or `1h30m`, and is required when
+`template-versions` is given.
+
 ### The templates key
 
 Earlier releases approved templates in a `templates` list, one entry per

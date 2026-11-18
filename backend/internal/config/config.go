@@ -89,6 +89,9 @@ type Config struct {
 	// AutoCommit commits and backs up every idle workspace that has
 	// changes, on a schedule. Absent, no commit is scheduled.
 	AutoCommit *AutoCommit `yaml:"auto-commit"`
+	// TemplateVersions schedules the checks of every registered template
+	// for new versions. Absent, DefaultTemplateVersionsEvery.
+	TemplateVersions *TemplateVersions `yaml:"template-versions"`
 	// WorkspaceSocket gives each workspace's devcontainer a socket that
 	// commits and backs up its own workspace. Absent, no socket.
 	WorkspaceSocket *WorkspaceSocket `yaml:"workspace-socket"`
@@ -168,6 +171,26 @@ type AutoCommit struct {
 	// Every is the time between two sweeps of the workspace root; the
 	// first is one interval after start-up.
 	Every Duration `yaml:"every"`
+}
+
+// TemplateVersions is the schedule of the template version checks.
+type TemplateVersions struct {
+	// Every is the time between two version checks of every registered
+	// template; the first runs at start-up.
+	Every Duration `yaml:"every"`
+}
+
+// DefaultTemplateVersionsEvery is the time between two version checks when
+// template-versions is absent.
+const DefaultTemplateVersionsEvery = time.Hour
+
+// TemplateVersionsEvery is the time between two version checks of every
+// registered template, with its default.
+func (c *Config) TemplateVersionsEvery() time.Duration {
+	if c.TemplateVersions == nil {
+		return DefaultTemplateVersionsEvery
+	}
+	return c.TemplateVersions.Every.Value()
 }
 
 // DefaultMinInterval is the workspace socket's minimum interval when none
@@ -400,6 +423,9 @@ type durationNodes struct {
 	AutoCommit *struct {
 		Every yaml.Node `yaml:"every"`
 	} `yaml:"auto-commit"`
+	TemplateVersions *struct {
+		Every yaml.Node `yaml:"every"`
+	} `yaml:"template-versions"`
 	WorkspaceSocket *struct {
 		MinInterval yaml.Node `yaml:"min-interval"`
 	} `yaml:"workspace-socket"`
@@ -441,6 +467,9 @@ func givenEmpty(data []byte) []error {
 	}
 	if a := doc.AutoCommit; a != nil {
 		check("auto-commit.every", &a.Every)
+	}
+	if v := doc.TemplateVersions; v != nil {
+		check("template-versions.every", &v.Every)
 	}
 	if w := doc.WorkspaceSocket; w != nil {
 		check("workspace-socket.min-interval", &w.MinInterval)
@@ -567,6 +596,13 @@ func (c *Config) validate() error {
 		if c.AutoCommit.Every == "" {
 			errs = append(errs, errors.New("auto-commit.every is required"))
 		} else if err := c.AutoCommit.Every.validate("auto-commit.every"); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.TemplateVersions != nil {
+		if c.TemplateVersions.Every == "" {
+			errs = append(errs, errors.New("template-versions.every is required"))
+		} else if err := c.TemplateVersions.Every.validate("template-versions.every"); err != nil {
 			errs = append(errs, err)
 		}
 	}

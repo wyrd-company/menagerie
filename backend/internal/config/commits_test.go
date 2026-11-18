@@ -33,6 +33,21 @@ func TestParseAutoCommitAndWorkspaceSocket(t *testing.T) {
 	}
 }
 
+// TestParseTemplateVersions reads the version check schedule: absent, an
+// hour; given, its every.
+func TestParseTemplateVersions(t *testing.T) {
+	cfg, err := Parse([]byte(valid))
+	if err != nil || cfg.TemplateVersions != nil || cfg.TemplateVersionsEvery() != time.Hour {
+		t.Fatalf("absent: %+v %v %v", cfg.TemplateVersions, cfg.TemplateVersionsEvery(), err)
+	}
+	for doc, want := range map[string]time.Duration{"15m": 15 * time.Minute, "2h": 2 * time.Hour, "1h30m": 90 * time.Minute, "45s": 45 * time.Second} {
+		cfg, err := Parse([]byte(valid + "template-versions:\n  every: " + doc + "\n"))
+		if err != nil || cfg.TemplateVersionsEvery() != want {
+			t.Errorf("every %s: %v %v", doc, cfg, err)
+		}
+	}
+}
+
 // TestCommitConfigurationErrorsNameNoValue checks each error of the new
 // fields: it names the field and quotes nothing of what was given.
 func TestCommitConfigurationErrorsNameNoValue(t *testing.T) {
@@ -45,6 +60,15 @@ func TestCommitConfigurationErrorsNameNoValue(t *testing.T) {
 		{"every zero", valid + "auto-commit:\n  every: 0s\n", "auto-commit.every must be a positive duration"},
 		{"every list", valid + "auto-commit:\n  every: [" + marker + "]\n", "auto-commit.every must be a duration such as 45m"},
 		{"unknown field", valid + "auto-commit:\n  every: 1h\n  message: x\n", "auto-commit has no field message"},
+		{"versions every missing", valid + "template-versions: {}\n", "template-versions.every is required"},
+		{"versions every empty", valid + "template-versions:\n  every:\n", "template-versions.every must be a duration"},
+		{"versions every null", valid + "template-versions:\n  every: null\n", "template-versions.every must be a duration"},
+		{"versions every units", valid + "template-versions:\n  every: 1" + marker + "\n", "template-versions.every must be whole hours"},
+		{"versions every zero", valid + "template-versions:\n  every: 0s\n", "template-versions.every must be a positive duration"},
+		{"versions every number", valid + "template-versions:\n  every: 3600\n", "template-versions.every must be whole hours"},
+		{"versions every list", valid + "template-versions:\n  every: [" + marker + "]\n", "template-versions.every must be a duration such as 45m"},
+		{"versions unknown field", valid + "template-versions:\n  every: 1h\n  " + "jitter: 1m\n", "template-versions has no field jitter"},
+		{"versions anchor", valid + "template-versions:\n  every: *" + marker + "\n", "an alias names no anchor"},
 		{"folder missing", socket("  min-interval: 1m\n"), "workspace-socket.folder is required"},
 		{"folder relative", socket("  folder: " + marker + "\n"), "workspace-socket.folder must be an absolute clean folder"},
 		{"folder unclean", socket("  folder: /srv/" + marker + "/\n"), "workspace-socket.folder must be an absolute clean folder"},
