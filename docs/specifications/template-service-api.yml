@@ -228,15 +228,17 @@ description: >-
 
 
   Every request runs its Toha work on one worker thread inside one Toha
-  credential resolver scope and stop signal scope, so every fetch of that request, and only that
-  request, can ask the route. This service asks only when an `https`
+  credential resolver scope and stop signal scope, so every fetch of that
+  request, and only that request, can ask the route. This service asks only when an `https`
   remote asks for credentials, once for each challenge, with the URL
   `https://host[:port]/path`. The default port 443 is left out, and the path
   is percent-encoded outside the unreserved characters and `/`. The URL
   never carries user information, so a template address with a user name
   is asked for as the same repository without it: a user name does not opt
   out of the App, and the fetch sends the route's credential instead of
-  it. The route's own rule, which refuses a URL with user information,
+  it. Toha refuses a Git URL that holds a password before contacting the
+  host or asking the credential route. The route's own rule, which refuses
+  a URL with user information,
   applies to its direct callers. A 200 is the
   fetch's credential. A 404 leaves the challenge to Toha's default
   behaviour. A 502 fails the fetch with the prefix

@@ -99,6 +99,8 @@ dashes), a display `name`, and a Toha `address`:
   [GitHub App](#github-app) token for private templates on its server.
 
 `#<path>` names the template's folder in the repository and is optional.
+Toha refuses a Git URL that holds a password. Use the GitHub App or the
+SSH agent for private templates; see [Git hosts](install.md#git-hosts).
 
 An entry's optional `runner-image` is the image its hooks run in; see
 [Runner images](#runner-images).
