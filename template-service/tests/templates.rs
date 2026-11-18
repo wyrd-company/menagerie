@@ -93,6 +93,8 @@ async fn every_route_refuses_an_address_it_must_never_read_without_quoting_it() 
         folder.display().to_string(),
         "./kit".to_owned(),
         "sample-kit".to_owned(),
+        // Toha knows other host shorthands; only gh: is one of the forms.
+        "gl:example-org/kit".to_owned(),
         file.clone(),
         format!("{file}@v1"),
         "git://git.example.invalid/example-org/kit".to_owned(),

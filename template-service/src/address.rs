@@ -355,7 +355,7 @@ mod tests {
         std::fs::create_dir_all(temp.path().join("config")).unwrap();
         std::fs::write(
             temp.path().join("config/config.yml"),
-            "hosts:\n  gh: file:///srv/elsewhere\n",
+            "hosts:\n  gh: ssh://git.example.invalid\n",
         )
         .unwrap();
         let (config, _, _) = host.context().unwrap();

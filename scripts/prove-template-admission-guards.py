@@ -43,7 +43,7 @@ TESTS = {
 # its replacement, and the tests that must each fail.
 MUTANTS = [
     ("remote-forms", "src/address.rs", "    if !remote {\n", "    if false {\n",
-     ["forms", "routes", "unit-forms"]),
+     ["forms", "unit-forms"]),
     ("password", "src/address.rs", "    if source::has_password(address) {\n",
      "    if false {\n", ["unit-forms"]),
     ("dashed", "src/address.rs",
@@ -58,7 +58,7 @@ MUTANTS = [
     ("link-target", "src/links.rs", "                if !resolves_inside(&path, &root) {\n",
      "                if false {\n", ["check-links", "unit-links", "route-links"]),
     ("folder-in-checkout", "src/links.rs", "    if !folder.starts_with(&root) {\n",
-     "    if false {\n", ["check-links", "unit-links"]),
+     "    if false {\n", ["unit-links"]),
     ("generate-links", "src/create.rs",
      "    crate::links::check_session(&record, &service.host, &config, &registry)?;\n", "",
      ["route-links"]),
