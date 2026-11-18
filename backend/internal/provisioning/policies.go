@@ -402,9 +402,9 @@ func (s *Steps) EnsureImported(ctx context.Context, folder string) error {
 	return s.opts.Data.ImportSelection(ctx, workspace, policies, values, current.Key)
 }
 
-// ImportSelections records import 5 and attempts every pending selection on
-// start-up. A controller outage leaves the pending marks for the next request.
-func (s *Steps) ImportSelections(ctx context.Context, root Workspaces, logf func(string, ...any)) error {
+// PrepareSelectionImports freezes import 5's local snapshot before requests or
+// jobs can change definitions or keys. It makes no Wyrwood requests.
+func (s *Steps) PrepareSelectionImports(ctx context.Context, root Workspaces, logf func(string, ...any)) error {
 	_, selections, err := s.opts.Data.Policies(ctx)
 	if err != nil {
 		return err
@@ -438,33 +438,58 @@ func (s *Steps) ImportSelections(ctx context.Context, root Workspaces, logf func
 	if err != nil {
 		return err
 	}
-	_, selections, err = s.opts.Data.Policies(ctx)
+	if ran {
+		_, selections, err = s.opts.Data.Policies(ctx)
+		if err != nil {
+			return err
+		}
+		for _, name := range slices.Sorted(maps.Keys(selections)) {
+			if selections[name].Imported {
+				reportImportedValues(name, selections[name], logf)
+			}
+		}
+	}
+	return nil
+}
+
+// ImportSelections attempts pending selections after the service starts
+// listening. An outage leaves their pending marks for the next request.
+func (s *Steps) ImportSelections(ctx context.Context, root Workspaces, logf func(string, ...any)) error {
+	if err := s.PrepareSelectionImports(ctx, root, logf); err != nil {
+		return err
+	}
+	_, selections, err := s.opts.Data.Policies(ctx)
 	if err != nil {
 		return err
 	}
 	for _, name := range slices.Sorted(maps.Keys(selections)) {
-		if selections[name].Imported && !ran {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if selections[name].Imported {
 			continue
 		}
 		folder, e := root.FolderPath(name)
 		if e != nil {
 			return e
 		}
-		if !selections[name].Imported {
-			if e = s.EnsureImported(ctx, folder); e != nil {
-				logf("menagerie: policy selection of %s still needs importing: %s", name, wyrwood.OneLine(e.Error()))
-				continue
-			}
+		if e = s.EnsureImported(ctx, folder); e != nil {
+			logf("menagerie: policy selection of %s still needs importing: %s", name, wyrwood.OneLine(e.Error()))
+			continue
 		}
 		imported, e := s.opts.Data.Selection(ctx, name)
 		if e != nil {
 			return e
 		}
-		for _, value := range slices.Sorted(maps.Keys(imported.Values)) {
-			if imported.Values[value] != name {
-				logf("menagerie: imported value %s=%s of workspace %s differs from its name", value, imported.Values[value], name)
-			}
-		}
+		reportImportedValues(name, imported, logf)
 	}
 	return nil
+}
+
+func reportImportedValues(name string, imported store.Selection, logf func(string, ...any)) {
+	for _, value := range slices.Sorted(maps.Keys(imported.Values)) {
+		if imported.Values[value] != name {
+			logf("menagerie: imported value %s=%s of workspace %s differs from its name", value, imported.Values[value], name)
+		}
+	}
 }

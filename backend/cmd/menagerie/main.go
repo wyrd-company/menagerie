@@ -159,13 +159,10 @@ func run(configPath string) error {
 		return err
 	}
 	policySteps := provisioning.New(provisioning.Options{Clients: clients, Runtime: provisioning.Adapt(runtime), Data: data})
-	if err := policySteps.ImportSelections(ctx, root, log.Printf); err != nil {
+	if err := policySteps.PrepareSelectionImports(ctx, root, log.Printf); err != nil {
 		return err
 	}
 	policyServer := api.New(api.Options{Root: root, Data: data, Jobs: manager, Policies: func() api.PolicySource { source, _ := clients.Bindings.(api.PolicySource); return source }(), PolicyApplication: policySteps})
-	if err := policyServer.ApplyPending(ctx); err != nil {
-		return err
-	}
 	handler, err := newHandler(cfg, root, data, remote, runtime, clients, manager, parts.hooks, parts.images)
 	if err != nil {
 		return err
@@ -176,9 +173,34 @@ func run(configPath string) error {
 		Handler:     handler,
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
+	return serveWorkspace(ctx, httpServer, hookErrors, func(ctx context.Context) error {
+		if err := policySteps.ImportSelections(ctx, root, log.Printf); err != nil {
+			return err
+		}
+		return policyServer.ApplyPending(ctx)
+	})
+}
+
+// serveWorkspace owns the HTTP listener and the startup policy recovery pass.
+func serveWorkspace(ctx context.Context, httpServer *http.Server, hookErrors <-chan error, recoverPolicies func(context.Context) error) error {
+	listener, err := net.Listen("tcp", httpServer.Addr)
+	if err != nil {
+		return err
+	}
 	errc := make(chan error, 1)
-	go func() { errc <- httpServer.ListenAndServe() }()
-	log.Printf("menagerie: listening on %s, workspace root %s", cfg.Listen, root.Path())
+	go func() { errc <- httpServer.Serve(listener) }()
+	log.Printf("menagerie: listening on %s", listener.Addr())
+	defer httpServer.Close()
+	recoveryCtx, cancelRecovery := context.WithCancel(ctx)
+	recovered := make(chan struct{})
+	go func() {
+		defer close(recovered)
+		if err := recoverPolicies(recoveryCtx); err != nil && recoveryCtx.Err() == nil {
+			log.Printf("menagerie: startup policy recovery: %s", err)
+		}
+	}()
+	// Don't let recovery outlive the store and clients which run owns.
+	defer func() { cancelRecovery(); <-recovered }()
 	select {
 	case err := <-errc:
 		return err
