@@ -43,8 +43,9 @@ its actions wait: a workspace runs one job at a time. Other workspaces stay
 usable.
 
 **Jobs since Menagerie started** lists every job and its outcome. Open one to
-see its console. Jobs live in memory, so the list starts empty after a
-restart.
+see its console. Jobs live in memory, so earlier jobs are gone after a
+restart. The list can start with **apply-policies** jobs: at startup, Menagerie
+tries each workspace whose binding does not have its stored policy selection.
 
 ![The workspace list with one stopped and two running workspaces](assets/list.png)
 
