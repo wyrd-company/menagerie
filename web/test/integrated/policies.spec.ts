@@ -42,6 +42,12 @@ test("choose at create, edit immediately, and retain choices across an upgrade",
   await expect(console_(page).locator(".outcome")).toContainText("Completed.");
   const before = await containerFor(page.request, "policy-space");
   expect(before?.state).toBe("running");
+  const createdBinding = (await control(
+    page.request,
+    "GET",
+    "/binding?name=devcontainer-policy-space",
+  )) as { Policies: string[] };
+  expect(createdBinding.Policies.sort()).toEqual(["bob-ssh", "workspace", "xolotl-client-key"]);
   await page.goto(info.site + "/");
   await entry(page, "policy-space").getByRole("button", { name: "Policies", exact: true }).click();
   const panel = page.getByRole("form", { name: "Policies for policy-space" });

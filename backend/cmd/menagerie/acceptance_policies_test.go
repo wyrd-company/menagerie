@@ -162,7 +162,11 @@ func TestImageWorkspacePolicies(t *testing.T) {
 				}
 				runtime.invalid = false
 				// Remove through the web operator, never an Unbind probe.
-				w.post("/bindings/"+url.PathEscape(binding.ID)+"/unbind", url.Values{})
+				removedID := binding.ID
+				w.post("/bindings/"+url.PathEscape(removedID)+"/unbind", url.Values{})
+				if _, e := client.Get(ctx, removedID); !errors.Is(e, operator.ErrNotFound) {
+					t.Fatalf("web unbind did not remove %s: %v", removedID, e)
+				}
 				if hidden {
 					w.post("/bindings", url.Values{"typed": {"yes"}, "agent": {w.agentName}, "key": {"name:" + name}, "policies": {"hidden"}, "enforcement": {"report"}, "access-group": {"1000"}})
 				}
@@ -184,6 +188,12 @@ func TestImageWorkspacePolicies(t *testing.T) {
 					if !errors.As(err, &failure) || failure.Kind != kind {
 						t.Fatalf("apply: %v, want %s", err, kind)
 					}
+					if !slices.Equal(after.Policies, desired) {
+						t.Fatalf("refusal changed stored selection: %+v, want %v", after, desired)
+					}
+					if visible, found, e := client.Read(ctx, name); e != nil || found {
+						t.Fatalf("refusal made a visible binding: %+v, found %t, error %v", visible, found, e)
+					}
 					if after.AppliedRevision == nil || *after.AppliedRevision != changed.Revision || after.ApplyFailure == nil || after.ApplyFailure.Kind != kind {
 						t.Fatalf("refusal recorded applied: %+v", after)
 					}
@@ -191,7 +201,7 @@ func TestImageWorkspacePolicies(t *testing.T) {
 					must(err)
 					binding, found, e = client.Read(ctx, name)
 					must(e)
-					if !found || !binding.Applied || !slices.Equal(binding.Policies, desired) || after.AppliedRevision == nil || *after.AppliedRevision != saved.Revision {
+					if !found || binding.ID == removedID || !binding.Applied || !slices.Equal(binding.Policies, desired) || after.AppliedRevision == nil || *after.AppliedRevision != saved.Revision {
 						t.Fatalf("recreated binding: %+v selection: %+v", binding, after)
 					}
 				}
