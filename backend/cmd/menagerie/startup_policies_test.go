@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -99,12 +100,18 @@ func TestServiceListensWhilePolicyImportCannotReachWyrwood(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("import did not reach unavailable controller")
 	}
-	client := &http.Client{Timeout: time.Second}
+	// Own the test's connections. The default transport may leave a spare
+	// connection in StateNew, which Shutdown gives five seconds to send a
+	// request. That is independent of the startup-availability assertion.
+	transport := &http.Transport{DisableKeepAlives: true}
+	client := &http.Client{Timeout: time.Second, Transport: transport}
+	defer client.CloseIdleConnections()
 	for _, path := range []string{"/healthz", "/api/jobs"} {
 		response, err := client.Get("http://" + address + path)
 		if err != nil {
 			t.Fatalf("service unavailable while first import is blocked: %v", err)
 		}
+		_, _ = io.Copy(io.Discard, response.Body)
 		_ = response.Body.Close()
 		if response.StatusCode != http.StatusOK {
 			t.Fatalf("%s: %d", path, response.StatusCode)
