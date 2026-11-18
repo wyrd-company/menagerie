@@ -196,6 +196,13 @@ func (s *Store) RegisterTemplate(ctx context.Context, tpl Template, joins []stri
 	return recorded, err
 }
 
+// TryRegisterTemplate answers what RegisterTemplate would record, its id
+// and joined workspaces included, and its refusals, and stores nothing.
+func (s *Store) TryRegisterTemplate(ctx context.Context, tpl Template, joins []string) (recorded Template, err error) {
+	err = s.Dry(ctx, func(t *Tx) error { recorded, err = t.RegisterTemplate(tpl, joins); return err })
+	return recorded, err
+}
+
 // Templates lists the registered templates; see Tx.Templates.
 func (s *Store) Templates(ctx context.Context) (templates []Template, err error) {
 	err = s.Update(ctx, func(t *Tx) error { templates, err = t.Templates(); return err })
@@ -237,21 +244,29 @@ func (s *Store) EditTemplate(ctx context.Context, id string, name, runnerImage *
 // read in this transaction, is ErrNotNewer, so the current version moves
 // only forward.
 func (s *Store) AdvanceTemplate(ctx context.Context, id, version, tag, commit string, newer func(a, b string) bool) (tpl Template, err error) {
-	err = s.Update(ctx, func(t *Tx) error {
-		current, err := t.Template(id)
-		if err != nil {
-			return err
-		}
-		if !newer(version, current.CurrentVersion) {
-			return ErrNotNewer
-		}
-		if _, err := t.exec(`UPDATE templates SET current_version = ?, current_tag = ?, current_commit = ? WHERE id = ?`, version, tag, commit, id); err != nil {
-			return err
-		}
-		tpl, err = t.Template(id)
-		return err
-	})
+	err = s.Update(ctx, func(t *Tx) error { tpl, err = t.advanceTemplate(id, version, tag, commit, newer); return err })
 	return tpl, err
+}
+
+// TryAdvanceTemplate answers what AdvanceTemplate would record, and its
+// refusals, and stores nothing.
+func (s *Store) TryAdvanceTemplate(ctx context.Context, id, version, tag, commit string, newer func(a, b string) bool) (tpl Template, err error) {
+	err = s.Dry(ctx, func(t *Tx) error { tpl, err = t.advanceTemplate(id, version, tag, commit, newer); return err })
+	return tpl, err
+}
+
+func (t *Tx) advanceTemplate(id, version, tag, commit string, newer func(a, b string) bool) (Template, error) {
+	current, err := t.Template(id)
+	if err != nil {
+		return Template{}, err
+	}
+	if !newer(version, current.CurrentVersion) {
+		return Template{}, ErrNotNewer
+	}
+	if _, err := t.exec(`UPDATE templates SET current_version = ?, current_tag = ?, current_commit = ? WHERE id = ?`, version, tag, commit, id); err != nil {
+		return Template{}, err
+	}
+	return t.Template(id)
 }
 
 // RemoveTemplate removes a template no workspace uses; one that workspaces

@@ -810,12 +810,15 @@ validation-criteria: >-
   and error contract with a held runtime, the template routes with a held
   template service: registration, its refusals by check without quoting
   the address, the order of the list, editing, upgrading only to a newer
-  version, removal and its refusal while a workspace uses the template, and
-  a folder listed for the first time joining its template. `go test
-  ./backend/internal/registry/` runs each registration check, template ids,
-  forward-only upgrades, the version rules case for case with the template
-  service's, the applied record's source and ref, and the `templates`
-  import. `go test ./backend/internal/jobs/`
+  version, removal and its refusal while a workspace uses the template, a
+  check alone of a registration and of an upgrade, answering 200 with no
+  `Location` and storing nothing, and a folder listed for the first time
+  joining its template. `go test ./backend/internal/registry/` runs each
+  registration check, with and without `check`, which refuses alike,
+  stores nothing and is checked again by a save, template ids,
+  forward-only upgrades and their checks alone, the version rules case for
+  case with the template service's, the applied record's source and ref,
+  and the `templates` import. `go test ./backend/internal/jobs/`
   drives time limits with a manual clock: job, operation and phase limits,
   the pause while waiting, the slot held until cancelled work returns,
   timers that run late against a phase change, a wait or the job's end,

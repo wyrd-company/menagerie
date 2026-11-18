@@ -3,9 +3,11 @@ package registry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -114,7 +116,7 @@ func checkOf(t *testing.T, err error) *CheckError {
 func TestRegistrationTakesTheNewestVersionOrTheAddressTag(t *testing.T) {
 	r, _, _ := world(t)
 	ctx := context.Background()
-	newest, err := r.Register(ctx, "Sample kit", kit, "")
+	newest, err := r.Register(ctx, "Sample kit", kit, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,13 +127,13 @@ func TestRegistrationTakesTheNewestVersionOrTheAddressTag(t *testing.T) {
 	}
 	// The same source is one registration.
 	var exists *store.TemplateExistsError
-	if _, err := r.Register(ctx, "Again", kit+"@v1.1.0", ""); !errors.As(err, &exists) || exists.ID != "sample-kit" {
+	if _, err := r.Register(ctx, "Again", kit+"@v1.1.0", "", false); !errors.As(err, &exists) || exists.ID != "sample-kit" {
 		t.Fatalf("%v", err)
 	}
 	if err := r.Data.RemoveTemplate(ctx, "sample-kit"); err != nil {
 		t.Fatal(err)
 	}
-	tagged, err := r.Register(ctx, "Sample kit", kit+"@v1.1.0", "alpine:3.22")
+	tagged, err := r.Register(ctx, "Sample kit", kit+"@v1.1.0", "alpine:3.22", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,20 +171,88 @@ func TestEachCheckRefusesInOrderAndNamesItself(t *testing.T) {
 			f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120"}
 		}, CheckDefinition, ".devcontainer/devcontainer.json"},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			r, f, _ := world(t)
-			if c.setup != nil {
-				c.setup(f)
-			}
-			_, err := r.Register(ctx, "Sample kit", c.address, "")
-			check := checkOf(t, err)
-			if check.Check != c.check || !strings.Contains(check.Message, c.message) {
-				t.Fatalf("%s: %q", check.Check, check.Message)
-			}
-			if templates, _ := r.Data.Templates(ctx); len(templates) != 0 {
-				t.Fatalf("a refused template was recorded: %+v", templates)
-			}
-		})
+		// A check alone refuses exactly as a registration does.
+		for _, checkOnly := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/check=%t", c.name, checkOnly), func(t *testing.T) {
+				r, f, _ := world(t)
+				if c.setup != nil {
+					c.setup(f)
+				}
+				_, err := r.Register(ctx, "Sample kit", c.address, "", checkOnly)
+				check := checkOf(t, err)
+				if check.Check != c.check || !strings.Contains(check.Message, c.message) {
+					t.Fatalf("%s: %q", check.Check, check.Message)
+				}
+				if templates, _ := r.Data.Templates(ctx); len(templates) != 0 {
+					t.Fatalf("a refused template was recorded: %+v", templates)
+				}
+			})
+		}
+	}
+}
+
+// A check alone runs the registration's checks and answers the template a
+// registration would record, its id and joined workspaces included, and
+// stores nothing; it refuses a registered source as a registration does.
+// A registration after a passing check runs every check again.
+func TestACheckAloneStoresNothingAndARegistrationChecksAgain(t *testing.T) {
+	r, f, rootDir := world(t)
+	ctx := context.Background()
+	folder := filepath.Join(rootDir, "alpha")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"applications":[{"target":".","template":"` + kit + `@1.0.0","source":"` + kit + `","commit":null}]}`
+	if err := os.WriteFile(filepath.Join(folder, RecordName), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Data.Discover(ctx, []string{"alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	checked, err := r.Register(ctx, "Sample kit", kit, "alpine:3.22", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := store.Template{ID: "sample-kit", Name: "Sample kit", Address: kit, Source: kit, RunnerImage: "alpine:3.22",
+		CurrentVersion: "1.2.0", CurrentTag: "1.2.0", CurrentCommit: "c120", Workspaces: []string{"alpha"}}
+	if !reflect.DeepEqual(checked, want) {
+		t.Fatalf("%+v", checked)
+	}
+	if list, _ := r.Data.Templates(ctx); len(list) != 0 {
+		t.Fatalf("a check stored %+v", list)
+	}
+	if names, _ := r.Data.Untemplated(ctx); !reflect.DeepEqual(names, []string{"alpha"}) {
+		t.Fatalf("a check joined a workspace: %v", names)
+	}
+	// A registration trusts no earlier check: the definition is gone now.
+	calls := len(f.calls)
+	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120"}
+	if check := checkOf(t, errOf(r.Register(ctx, "Sample kit", kit, "alpine:3.22", false))); check.Check != CheckDefinition {
+		t.Fatalf("%+v", check)
+	}
+	for _, route := range []string{"address " + kit, "versions " + kit, "check " + kit + "@1.2.0"} {
+		if !slices.Contains(f.calls[calls:], route) {
+			t.Errorf("the registration did not ask %s again: %v", route, f.calls[calls:])
+		}
+	}
+	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120", Definition: true}
+	if _, err := r.Register(ctx, "Sample kit", kit, "alpine:3.22", false); err != nil {
+		t.Fatal(err)
+	}
+	var exists *store.TemplateExistsError
+	if _, err := r.Register(ctx, "Again", kit, "", true); !errors.As(err, &exists) || exists.ID != "sample-kit" {
+		t.Fatalf("%v", err)
+	}
+	// A check names the id a registration would take now.
+	other := "https://git.example.invalid/example-org/other"
+	f.read[other] = templates.Address{Source: other, Base: other}
+	f.versions[other] = f.versions[kit]
+	f.checked[other+"@1.2.0"] = templates.Checked{Source: other, Commit: "c120", Definition: true}
+	if second, err := r.Register(ctx, "Sample kit", other, "", true); err != nil || second.ID != "sample-kit-2" || len(second.Workspaces) != 0 {
+		t.Fatalf("%+v %v", second, err)
+	}
+	if list, _ := r.Data.Templates(ctx); len(list) != 1 {
+		t.Fatalf("%+v", list)
 	}
 }
 
@@ -190,7 +260,7 @@ func TestAnUnreachableTemplateServiceIsNoCheck(t *testing.T) {
 	r, f, _ := world(t)
 	f.refuse["address "+kit] = &templates.UnavailableError{Err: errors.New("no socket")}
 	var unavailable *templates.UnavailableError
-	if _, err := r.Register(context.Background(), "Sample kit", kit, ""); !errors.As(err, &unavailable) {
+	if _, err := r.Register(context.Background(), "Sample kit", kit, "", false); !errors.As(err, &unavailable) {
 		t.Fatalf("%v", err)
 	}
 }
@@ -200,18 +270,18 @@ func TestNamesAndRunnerImagesAreChecked(t *testing.T) {
 	ctx := context.Background()
 	for _, name := range []string{"", "  ", "two\nlines", "tab\there", strings.Repeat("n", 101), "line\u2028separator"} {
 		var invalid *InvalidError
-		if _, err := r.Register(ctx, name, kit, ""); !errors.As(err, &invalid) {
+		if _, err := r.Register(ctx, name, kit, "", false); !errors.As(err, &invalid) {
 			t.Errorf("%q: %v", name, err)
 		}
 	}
 	var invalid *InvalidError
-	if _, err := r.Register(ctx, "Sample kit", kit, "Not An Image!"); !errors.As(err, &invalid) {
+	if _, err := r.Register(ctx, "Sample kit", kit, "Not An Image!", false); !errors.As(err, &invalid) {
 		t.Errorf("image: %v", err)
 	}
 	if len(f.calls) != 0 {
 		t.Fatalf("an invalid request reached the template service: %v", f.calls)
 	}
-	if _, err := r.Register(ctx, strings.Repeat("é", 100), kit, ""); err != nil {
+	if _, err := r.Register(ctx, strings.Repeat("é", 100), kit, "", false); err != nil {
 		t.Fatalf("100 characters: %v", err)
 	}
 }
@@ -235,11 +305,11 @@ func TestIDsComeFromTheNameAndStayPermanent(t *testing.T) {
 	for _, v := range []string{"1.0.0", "v1.1.0", "1.2.0"} {
 		f.checked[other+"@"+v] = f.checked[kit+"@"+v]
 	}
-	first, err := r.Register(ctx, "Kit", kit, "")
+	first, err := r.Register(ctx, "Kit", kit, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := r.Register(ctx, "Kit", other, "")
+	second, err := r.Register(ctx, "Kit", other, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +352,7 @@ func TestRegistrationJoinsTheWorkspacesOfItsSource(t *testing.T) {
 	if _, err := r.Data.Discover(ctx, []string{"alpha", "beta"}); err != nil {
 		t.Fatal(err)
 	}
-	tpl, err := r.Register(ctx, "Kit", kit, "")
+	tpl, err := r.Register(ctx, "Kit", kit, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,29 +371,68 @@ func TestRegistrationJoinsTheWorkspacesOfItsSource(t *testing.T) {
 func TestATemplateMovesOnlyForwardToACheckedVersion(t *testing.T) {
 	r, f, _ := world(t)
 	ctx := context.Background()
-	if _, err := r.Register(ctx, "Kit", kit+"@v1.1.0", ""); err != nil {
+	if _, err := r.Register(ctx, "Kit", kit+"@v1.1.0", "", false); err != nil {
 		t.Fatal(err)
 	}
 	for _, version := range []string{"1.1.0", "1.0.0", "1.3.0", "v1.2.0", "main"} {
-		if _, err := r.Upgrade(ctx, "kit", version); !errors.Is(err, ErrNotNewer) {
+		if _, err := r.Upgrade(ctx, "kit", version, false); !errors.Is(err, ErrNotNewer) {
 			t.Errorf("%s: %v", version, err)
 		}
 	}
 	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120"}
-	if check := checkOf(t, errOf(r.Upgrade(ctx, "kit", "1.2.0"))); check.Check != CheckDefinition {
+	if check := checkOf(t, errOf(r.Upgrade(ctx, "kit", "1.2.0", false))); check.Check != CheckDefinition {
 		t.Fatalf("%+v", check)
 	}
 	if tpl, _ := r.Data.Template(ctx, "kit"); tpl.CurrentVersion != "1.1.0" {
 		t.Fatalf("a refused upgrade moved the template: %+v", tpl)
 	}
 	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120", Definition: true}
-	upgraded, err := r.Upgrade(ctx, "kit", "1.2.0")
+	upgraded, err := r.Upgrade(ctx, "kit", "1.2.0", false)
 	if err != nil || upgraded.CurrentVersion != "1.2.0" || upgraded.CurrentTag != "1.2.0" || upgraded.CurrentCommit != "c120" {
 		t.Fatalf("%+v %v", upgraded, err)
 	}
-	if _, err := r.Upgrade(ctx, "nothing", "1.2.0"); !errors.Is(err, store.ErrNoTemplate) {
+	if _, err := r.Upgrade(ctx, "nothing", "1.2.0", false); !errors.Is(err, store.ErrNoTemplate) {
 		t.Fatalf("%v", err)
 	}
 }
 
 func errOf(_ store.Template, err error) error { return err }
+
+// A check of a template's upgrade refuses as the upgrade does and answers
+// the template at that version, storing nothing; the upgrade after it runs
+// its checks again.
+func TestACheckOfAnUpgradeStoresNothingAndTheUpgradeChecksAgain(t *testing.T) {
+	r, f, _ := world(t)
+	ctx := context.Background()
+	if _, err := r.Register(ctx, "Kit", kit+"@v1.1.0", "", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"1.0.0", "1.1.0", "9.9.9"} {
+		if _, err := r.Upgrade(ctx, "kit", version, true); !errors.Is(err, ErrNotNewer) {
+			t.Fatalf("%s: %v", version, err)
+		}
+	}
+	if _, err := r.Upgrade(ctx, "nothing", "1.2.0", true); !errors.Is(err, store.ErrNoTemplate) {
+		t.Fatalf("%v", err)
+	}
+	checked, err := r.Upgrade(ctx, "kit", "1.2.0", true)
+	if err != nil || checked.CurrentVersion != "1.2.0" || checked.CurrentTag != "1.2.0" || checked.CurrentCommit != "c120" {
+		t.Fatalf("%+v %v", checked, err)
+	}
+	if tpl, _ := r.Data.Template(ctx, "kit"); tpl.CurrentVersion != "1.1.0" || tpl.CurrentCommit != "c110" {
+		t.Fatalf("a check stored %+v", tpl)
+	}
+	calls := len(f.calls)
+	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120"}
+	for _, checkOnly := range []bool{true, false} {
+		if check := checkOf(t, errOf(r.Upgrade(ctx, "kit", "1.2.0", checkOnly))); check.Check != CheckDefinition {
+			t.Fatalf("check=%t: %+v", checkOnly, check)
+		}
+	}
+	if n := len(slices.DeleteFunc(slices.Clone(f.calls[calls:]), func(c string) bool { return c != "check "+kit+"@1.2.0" })); n != 2 {
+		t.Fatalf("the version was checked %d times: %v", n, f.calls[calls:])
+	}
+	if tpl, _ := r.Data.Template(ctx, "kit"); tpl.CurrentVersion != "1.1.0" {
+		t.Fatalf("%+v", tpl)
+	}
+}

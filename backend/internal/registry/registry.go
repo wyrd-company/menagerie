@@ -109,8 +109,10 @@ func ValidRunnerImage(image string) error {
 // definition. The current version is the address's tag, else the newest
 // version. A template whose source is registered is a
 // *store.TemplateExistsError. It joins each workspace that has no template
-// and whose applied record names the template's source.
-func (r *Registry) Register(ctx context.Context, name, address, runnerImage string) (store.Template, error) {
+// and whose applied record names the template's source. With check, it runs
+// the same checks and refuses the same way, and answers the template it
+// would record, storing nothing; without, it trusts no earlier check.
+func (r *Registry) Register(ctx context.Context, name, address, runnerImage string, check bool) (store.Template, error) {
 	if err := ValidName(name); err != nil {
 		return store.Template{}, err
 	}
@@ -157,7 +159,11 @@ func (r *Registry) Register(ctx context.Context, name, address, runnerImage stri
 	if err != nil {
 		return store.Template{}, err
 	}
-	return r.Data.RegisterTemplate(ctx, store.Template{
+	record := r.Data.RegisterTemplate
+	if check {
+		record = r.Data.TryRegisterTemplate
+	}
+	return record(ctx, store.Template{
 		Name: name, Address: read.Base, Source: read.Source, RunnerImage: runnerImage,
 		CurrentVersion: current.Version, CurrentTag: current.Tag, CurrentCommit: checked.Commit,
 	}, joins)
@@ -197,8 +203,10 @@ func (r *Registry) joins(ctx context.Context, source string) ([]string, error) {
 
 // Upgrade makes version, one of the repository's versions newer than the
 // template's current one, its current version, once it passes the fetch,
-// read and definition checks. Any other version is ErrNotNewer.
-func (r *Registry) Upgrade(ctx context.Context, id, version string) (store.Template, error) {
+// read and definition checks. Any other version is ErrNotNewer. With check,
+// it runs the same checks and refuses the same way, and answers the
+// template at version, storing nothing.
+func (r *Registry) Upgrade(ctx context.Context, id, version string, check bool) (store.Template, error) {
 	tpl, err := r.Data.Template(ctx, id)
 	if err != nil {
 		return store.Template{}, err
@@ -220,7 +228,11 @@ func (r *Registry) Upgrade(ctx context.Context, id, version string) (store.Templ
 	if err != nil {
 		return store.Template{}, err
 	}
-	tpl, err = r.Data.AdvanceTemplate(ctx, id, target.Version, target.Tag, checked.Commit, Newer)
+	advance := r.Data.AdvanceTemplate
+	if check {
+		advance = r.Data.TryAdvanceTemplate
+	}
+	tpl, err = advance(ctx, id, target.Version, target.Tag, checked.Commit, Newer)
 	if errors.Is(err, store.ErrNotNewer) {
 		return store.Template{}, ErrNotNewer
 	}

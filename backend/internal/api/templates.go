@@ -20,8 +20,9 @@ import (
 
 // Registry registers and changes templates. *registry.Registry satisfies it.
 type Registry interface {
-	Register(ctx context.Context, name, address, runnerImage string) (store.Template, error)
-	Upgrade(ctx context.Context, id, version string) (store.Template, error)
+	// With check, each runs its checks alone and stores nothing.
+	Register(ctx context.Context, name, address, runnerImage string, check bool) (store.Template, error)
+	Upgrade(ctx context.Context, id, version string, check bool) (store.Template, error)
 	Edit(ctx context.Context, id string, name, runnerImage *string) (store.Template, error)
 }
 
@@ -108,6 +109,7 @@ func (s *Server) registerTemplate(w http.ResponseWriter, r *http.Request) {
 		Name        *string `json:"name"`
 		Address     *string `json:"address"`
 		RunnerImage *string `json:"runnerImage"`
+		Check       bool    `json:"check"`
 	}
 	if !decodeOne(w, r, &req) {
 		return
@@ -120,9 +122,14 @@ func (s *Server) registerTemplate(w http.ResponseWriter, r *http.Request) {
 	if req.RunnerImage != nil {
 		image = *req.RunnerImage
 	}
-	tpl, err := s.opts.Registry.Register(r.Context(), *req.Name, *req.Address, image)
+	tpl, err := s.opts.Registry.Register(r.Context(), *req.Name, *req.Address, image, req.Check)
 	if err != nil {
 		writeRegistryError(w, err)
+		return
+	}
+	if req.Check {
+		// The checks passed; nothing was stored.
+		writeJSON(w, http.StatusOK, templateOf(tpl))
 		return
 	}
 	w.Header().Set("Location", "/api/templates/"+tpl.ID)
@@ -135,6 +142,7 @@ func (s *Server) upgradeTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Version *string `json:"version"`
+		Check   bool    `json:"check"`
 	}
 	if !decodeOne(w, r, &req) {
 		return
@@ -143,7 +151,7 @@ func (s *Server) upgradeTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apiError{Kind: "invalid-request", Message: "version is required"})
 		return
 	}
-	tpl, err := s.opts.Registry.Upgrade(r.Context(), r.PathValue("id"), *req.Version)
+	tpl, err := s.opts.Registry.Upgrade(r.Context(), r.PathValue("id"), *req.Version, req.Check)
 	if err != nil {
 		writeRegistryError(w, err)
 		return

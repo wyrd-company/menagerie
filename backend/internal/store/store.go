@@ -257,6 +257,17 @@ func (s *Store) Update(ctx context.Context, fn func(*Tx) error) error {
 	return nil
 }
 
+// Dry runs fn in a transaction it always rolls back: what fn writes, fn
+// alone sees, and nothing is stored.
+func (s *Store) Dry(ctx context.Context, fn func(*Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("Menagerie's data: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	return fn(&Tx{ctx: ctx, tx: tx})
+}
+
 func (t *Tx) exec(query string, args ...any) (sql.Result, error) {
 	result, err := t.tx.ExecContext(t.ctx, query, args...)
 	if err != nil {

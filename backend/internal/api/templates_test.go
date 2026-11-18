@@ -231,3 +231,57 @@ func TestAWorkspaceListedForTheFirstTimeJoinsItsTemplateWhichItsUseKeeps(t *test
 		t.Fatalf("%s", data)
 	}
 }
+
+// With check, registration and a template's upgrade run their checks and
+// refuse as they do, answer 200 with the template they would store, with
+// no Location, and store nothing; check must be a boolean.
+func TestACheckRegistersAndUpgradesNothing(t *testing.T) {
+	f, service := templateFixture(t)
+	ctx := context.Background()
+	resp, data := f.do(t, "POST", "/api/templates", `{"name":"Kit","address":"`+kitAddress+`@1.0.0","check":true}`)
+	if checked := decode[templateBody](t, data); resp.StatusCode != 200 || checked.ID != "kit" || checked.CurrentVersion != "1.0.0" || checked.Address != kitAddress {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	if location := resp.Header.Get("Location"); location != "" {
+		t.Fatalf("a check answered Location %s", location)
+	}
+	if list, _ := f.data.Templates(ctx); len(list) != 0 {
+		t.Fatalf("a check stored %+v", list)
+	}
+	service.definition["1.0.0"] = false
+	resp, data = f.do(t, "POST", "/api/templates", `{"name":"Kit","address":"`+kitAddress+`@1.0.0","check":true}`)
+	if body := decode[checkBody](t, data); resp.StatusCode != 422 || body.Error.Check != "definition" {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	service.definition["1.0.0"] = true
+	if resp, data := f.do(t, "POST", "/api/templates", `{"name":"Kit","address":"`+kitAddress+`@1.0.0","check":false}`); resp.StatusCode != 201 || resp.Header.Get("Location") != "/api/templates/kit" {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	resp, data = f.do(t, "POST", "/api/templates", `{"name":"Again","address":"`+kitAddress+`","check":true}`)
+	if body := decode[checkBody](t, data); resp.StatusCode != 409 || body.Error.Kind != "template-exists" {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	resp, data = f.do(t, "POST", "/api/templates/kit/upgrades", `{"version":"1.1.0","check":true}`)
+	if checked := decode[templateBody](t, data); resp.StatusCode != 200 || checked.CurrentVersion != "1.1.0" {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	if tpl, _ := f.data.Template(ctx, "kit"); tpl.CurrentVersion != "1.0.0" {
+		t.Fatalf("a check stored %+v", tpl)
+	}
+	resp, data = f.do(t, "POST", "/api/templates/kit/upgrades", `{"version":"1.0.0","check":true}`)
+	if body := decode[checkBody](t, data); resp.StatusCode != 409 || body.Error.Kind != "version-not-newer" {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	for _, body := range []string{
+		`{"name":"Kit","address":"` + kitAddress + `","check":"yes"}`,
+		`{"name":"Kit","address":"` + kitAddress + `","check":null,"other":1}`,
+	} {
+		resp, data := f.do(t, "POST", "/api/templates", body)
+		if decoded := decode[checkBody](t, data); resp.StatusCode != 400 || decoded.Error.Kind != "invalid-request" {
+			t.Fatalf("%s: %d %s", body, resp.StatusCode, data)
+		}
+	}
+	if resp, data := f.do(t, "POST", "/api/templates/kit/upgrades", `{"version":"1.1.0","check":1}`); resp.StatusCode != 400 {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+}
