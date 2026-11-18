@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -298,5 +299,68 @@ func TestAnImportPrefersThePlainTagOfAVersion(t *testing.T) {
 	list, err := r.Data.Templates(ctx)
 	if err != nil || len(list) != 1 || list[0].ID != "plain" || list[0].CurrentTag != "1.2.0" {
 		t.Fatalf("%+v %v", list, err)
+	}
+}
+
+// Every ordering of entries at 0.0.0, v0.0.0, 1.0.0 and v1.0.0, with one
+// that names no version, imports the newest version at its plain tag, and
+// none fails: 0.0.0 is a version like any other, not a zero to compare
+// with before any entry was taken.
+func TestAnImportTakesTheNewestVersionAtItsPlainTagInAnyOrder(t *testing.T) {
+	refs := []string{"0.0.0", "v0.0.0", "1.0.0", "v1.0.0", "main"}
+	var orderings func(prefix, rest []string)
+	var all [][]string
+	orderings = func(prefix, rest []string) {
+		if len(rest) == 0 {
+			all = append(all, prefix)
+			return
+		}
+		for i := range rest {
+			next := append(slices.Clone(rest[:i]), rest[i+1:]...)
+			orderings(append(slices.Clone(prefix), rest[i]), next)
+		}
+	}
+	// Every subset that holds a version, in every order.
+	for mask := 1; mask < 1<<len(refs); mask++ {
+		var chosen []string
+		for i, ref := range refs {
+			if mask&(1<<i) != 0 {
+				chosen = append(chosen, ref)
+			}
+		}
+		orderings(nil, chosen)
+	}
+	ctx := context.Background()
+	for _, order := range all {
+		r, f, _ := world(t)
+		var entries []Entry
+		for _, tag := range order {
+			address := kit + "@" + tag
+			f.read[address] = templates.Address{Source: kit, Reference: ref(tag), Base: kit}
+			entries = append(entries, Entry{ID: "kit-" + strings.ReplaceAll(tag, ".", "-"), Name: "Kit", Address: address})
+		}
+		if err := Import(ctx, ImportOptions{Data: r.Data, Templates: f, Root: r.Root, Entries: entries}); err != nil {
+			t.Fatalf("%v: %v", order, err)
+		}
+		list, err := r.Data.Templates(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ""
+		for _, tag := range []string{"1.0.0", "v1.0.0", "0.0.0", "v0.0.0"} {
+			if slices.Contains(order, tag) {
+				want = tag
+				break
+			}
+		}
+		if want == "" {
+			if len(list) != 0 {
+				t.Fatalf("%v imported %+v", order, list)
+			}
+			continue
+		}
+		if len(list) != 1 || list[0].CurrentTag != want {
+			t.Fatalf("%v: imported %+v, want tag %s", order, list, want)
+		}
 	}
 }
