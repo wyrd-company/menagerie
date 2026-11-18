@@ -308,6 +308,80 @@ async fn a_check_reads_a_version_and_its_definition_without_running_it() {
     service.stop().await;
 }
 
+/// With `since`, a check answers whether the version's commit is that
+/// commit or descends from it: true for the commit itself and each of its
+/// ancestors, false for a commit off the tag's history, one the repository
+/// does not have, and a later commit on the same branch.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_answers_whether_the_version_descends_from_a_commit() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let address = kit(&world, "lineage", |repo| {
+        write(repo, "kit/template/.devcontainer/devcontainer.json", "{}\n");
+    });
+    let repo = world.root.join("templates/lineage");
+    let first = git(&repo, &["rev-parse", "1.0.0"]);
+    write(&repo, "kit/template/second.txt", "second\n");
+    let second = commit_all(&repo, "second");
+    git(&repo, &["tag", "1.1.0"]);
+    let later = {
+        write(&repo, "kit/template/later.txt", "later\n");
+        commit_all(&repo, "later")
+    };
+    git(&repo, &["checkout", "-q", "-b", "side", &first]);
+    write(&repo, "kit/template/side.txt", "side\n");
+    let side = commit_all(&repo, "side");
+    git(&repo, &["checkout", "-q", "main"]);
+    let absent = "0123456789abcdef0123456789abcdef01234567".to_owned();
+    for (since, descends) in [
+        (&first, true),
+        (&second, true),
+        (&side, false),
+        (&later, false),
+        (&absent, false),
+    ] {
+        let reply = service
+            .post(
+                "/v1/templates/checks",
+                &json!({"address": address, "ref": "1.1.0", "since": since}),
+            )
+            .await;
+        assert_eq!(reply.status, 200, "{}", reply.json);
+        assert_eq!(reply.json["commit"], json!(second));
+        assert_eq!(reply.json["descends"], json!(descends), "since {since}");
+    }
+    // Without since, the reply has no descends member.
+    let plain = service
+        .post(
+            "/v1/templates/checks",
+            &json!({"address": address, "ref": "1.1.0"}),
+        )
+        .await;
+    assert_eq!(plain.status, 200, "{}", plain.json);
+    assert!(plain.json.get("descends").is_none(), "{}", plain.json);
+    // A since that is not a full object id is a malformed request.
+    for since in [
+        json!("1.0.0"),
+        json!(&first[..12]),
+        json!(first.to_uppercase()),
+        json!(7),
+    ] {
+        let reply = service
+            .post(
+                "/v1/templates/checks",
+                &json!({"address": address, "ref": "1.1.0", "since": since}),
+            )
+            .await;
+        assert_eq!(
+            (reply.status, reply.kind()),
+            (400, "malformed-request"),
+            "since {since}: {}",
+            reply.json
+        );
+    }
+    service.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_check_refuses_a_manifest_toha_cannot_load() {
     let world = World::new();

@@ -26,22 +26,29 @@ pub struct VersionsReply {
 }
 
 /// Checks one version of a template: its address, without a ref, and the
-/// version's tag.
+/// version's tag; with `since`, a commit, also whether the version's commit
+/// descends from it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckRequest {
     pub address: String,
     #[serde(rename = "ref")]
     pub reference: String,
+    #[serde(default)]
+    pub since: Option<String>,
 }
 
-/// A checked version: the commit its ref resolved to, and whether the
-/// template's content folder holds `.devcontainer/devcontainer.json`.
+/// A checked version: the commit its ref resolved to, whether the
+/// template's content folder holds `.devcontainer/devcontainer.json`, and,
+/// when the request named `since`, whether the commit is that commit or
+/// descends from it in the repository's history.
 #[derive(Debug, Serialize)]
 pub struct CheckReply {
     pub source: String,
     pub commit: String,
     pub definition: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub descends: Option<bool>,
 }
 
 /// Starts a create interview.

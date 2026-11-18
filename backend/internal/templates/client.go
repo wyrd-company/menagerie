@@ -88,6 +88,9 @@ type Checked struct {
 	Source     string `json:"source"`
 	Commit     string `json:"commit"`
 	Definition bool   `json:"definition"`
+	// Descends, answered to a check with since, says whether Commit is
+	// that commit or descends from it; nil without since.
+	Descends *bool `json:"descends"`
 }
 
 // InterviewState is the step an interview reply reports.
@@ -229,6 +232,19 @@ func (c *Client) Check(ctx context.Context, address, ref string) (*Checked, erro
 	}
 	if out.Source == "" || out.Commit == "" {
 		return nil, &UnavailableError{Err: errors.New("check reply names no source or commit")}
+	}
+	return &out, nil
+}
+
+// CheckSince checks a version as Check does and also asks whether its
+// commit is since or descends from it; the reply's Descends is never nil.
+func (c *Client) CheckSince(ctx context.Context, address, ref, since string) (*Checked, error) {
+	var out Checked
+	if err := c.call(ctx, pathChecks, map[string]string{"address": address, "ref": ref, "since": since}, &out); err != nil {
+		return nil, err
+	}
+	if out.Source == "" || out.Commit == "" || out.Descends == nil {
+		return nil, &UnavailableError{Err: errors.New("check reply names no source, commit or descent")}
 	}
 	return &out, nil
 }

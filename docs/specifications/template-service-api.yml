@@ -43,7 +43,8 @@ description: >-
   Routes. Every route is `POST` with a JSON body and answers JSON.
   `/v1/templates/addresses` reads a template's address and
   `/v1/templates/versions` lists its versions, both with `{"address"}`, and
-  `/v1/templates/checks` checks one version, with `{"address","ref"}`.
+  `/v1/templates/checks` checks one version, with `{"address","ref"}` and
+  an optional `"since"`.
   `/v1/interviews` starts a create interview and `/v1/upgrades` starts an
   upgrade, both with `{"workspace","target","address","ref","commit"}`,
   `commit` optional.
@@ -128,7 +129,13 @@ description: >-
   does, and answers 200 `{"source","commit","definition"}`: the address's
   `source`, the `commit` the ref resolved to, and `definition`, whether the
   template's content folder, from which Toha renders a workspace's files,
-  holds `.devcontainer/devcontainer.json`. It runs no hook and no other
+  holds `.devcontainer/devcontainer.json`. With `"since"`, a full Git object
+  id in Toha's spelling, the reply also has `descends`: true when the
+  `commit` is that commit or one of the commits it descends from in the
+  history Toha fetched, which holds every ancestor of the commit, and false
+  otherwise, also for a commit the repository does not have; a `since` that
+  is not such an id is `malformed-request` (400). Without `since` the reply
+  has no `descends`. It runs no hook and no other
   command of the template. A fetch Toha refuses is that refusal, such as
   `template-resolve-failed` (422) for a ref the repository does not have.
   Before Toha reads the template's files, the template folder, the checkout
@@ -550,7 +557,9 @@ validation-criteria: >-
   and refusal and the version rules, and those in `src/links.rs` each
   link and folder that leaves a checkout and those that stay in it;
   `tests/templates.rs` also checks a version with and without the
-  definition, running no hook, refuses a manifest Toha cannot load, a
+  definition, running no hook, answers `descends` true for the version's
+  commit and its ancestors and false for a commit off the tag's history, a
+  later commit and a missing one, refuses a malformed `since`, refuses a manifest Toha cannot load, a
   missing folder, an address with a ref, and a folder, a link in the
   content folder and a link beside it that leave the checkout, and refuses
   a generate and an upgrade apply whose template holds such a link, with
