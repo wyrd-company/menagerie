@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -347,6 +348,30 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 		_ = iter.ForEach(func(*object.Commit) error { n++; return nil })
 		return n
 	}
+	refusedCreate := func(t *testing.T, name string, wants ...string) {
+		t.Helper()
+		before := fetch(t, b, http.MethodGet, site+"/api/jobs", nil, nil).body
+		header := http.Header{"Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"}}
+		response := fetch(t, b, http.MethodPost, site+"/api/jobs", strings.NewReader(fmt.Sprintf(`{"operation":"create","workspace":%q,"templateId":"operator-key-check"}`, name)), header)
+		var body struct {
+			Error struct{ Kind, Message string }
+		}
+		if err := json.Unmarshal([]byte(response.body), &body); err != nil || response.status != http.StatusServiceUnavailable || body.Error.Kind != "wyrwood-unavailable" {
+			t.Fatalf("create answered %d %s: %v", response.status, response.body, err)
+		}
+		for _, want := range wants {
+			if !strings.Contains(body.Error.Message, want) {
+				t.Fatalf("create error %q does not name %q", body.Error.Message, want)
+			}
+		}
+		if after := fetch(t, b, http.MethodGet, site+"/api/jobs", nil, nil).body; after != before {
+			t.Fatal("a refused create started a job")
+		}
+		if _, err := os.Stat(filepath.Join(rootDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("a refused create left a folder: %v", err)
+		}
+		t.Logf("create refused before a job: %s", body.Error.Message)
+	}
 
 	t.Run("the services reach Wyrwood's sockets through the access group", func(t *testing.T) {
 		c.t = t
@@ -384,9 +409,16 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 			}
 			t.Logf("job error: %s", snap.Error.Message)
 		}
-		snap := runInterviewJob(t, b, site, "create", "key-check", "operator-key-check",
-			map[string]any{"label": "Sample label", "size": "small", "verbose": false, "tags": []string{"alpha"}})
-		checkFailure(snap, "ssh-agent.sock does not offer", operatorKeyName)
+		refusedCreate(t, "key-check", "ssh-agent.sock does not offer", operatorKeyName)
+		// Create now refuses before generation; an existing workspace still
+		// exercises task 23's job diagnostics without needing a successful create.
+		writeTo(t, rootDir, "key-check/.devcontainer/devcontainer.json", `{
+  "image": "busybox:1.37",
+  "runArgs": ["--name", "sample-key-check"],
+  "customizations": {"menagerie": {"wyrwood": {"accessGroup": 1000}}}
+}`)
+		chownTree(t, filepath.Join(rootDir, "key-check"))
+		checkFailure(runJob(t, b, site, "start", "key-check"), "ssh-agent.sock does not offer", operatorKeyName)
 		pageData(t, fetch(t, w.operator, http.MethodGet, w.site+"/operator-keys", nil, nil), &operatorKeys)
 		if len(operatorKeys.PendingKeys) != 0 {
 			t.Fatalf("unoffered key or unrelated Git key recorded as pending: %+v", operatorKeys.PendingKeys)
@@ -400,11 +432,15 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 			return code == 0 && strings.Contains(out, fingerprint)
 		})
 		checkFailure(runJob(t, b, site, "start", "key-check"), "not approved", fingerprint)
+		refusedCreate(t, "key-pending", "not approved", fingerprint)
 		pageData(t, fetch(t, w.operator, http.MethodGet, w.site+"/operator-keys", nil, nil), &operatorKeys)
 		if len(operatorKeys.PendingKeys) != 1 || operatorKeys.PendingKeys[0].Fingerprint != fingerprint || operatorKeys.PendingKeys[0].Label != "menagerie-"+w.agentName {
 			t.Fatalf("pending keys = %+v, want only %s under menagerie-%s", operatorKeys.PendingKeys, fingerprint, w.agentName)
 		}
 		t.Logf("Wyrwood pending key: %+v", operatorKeys.PendingKeys[0])
+		// Later creates also read the grant before starting their jobs.
+		w.savePolicy("sample-workspace", `path "auth/token/lookup-self" { capabilities = ["read"] }`, true, nil, "/run/wyrwood")
+		w.post("/operator-keys/approve", url.Values{"fingerprint": {fingerprint}, "label": {"menagerie-" + w.agentName}, "agents": {w.agentName}, "policies": {"sample-workspace"}, "actions": {"read", "bind"}})
 	})
 
 	t.Run("create fetches a private template, pulls a private image and backs up through Wyrwood", func(t *testing.T) {
@@ -506,23 +542,13 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 			t.Fatalf("rebuild unbound ended %s: %+v", snap.State, snap.Error)
 		}
 		t.Logf("rebuild unbound: %s", snap.Error.Message)
-		// The private template is fetched over SSH through the agent, so a
-		// create fails before it asks anything and writes no folder.
-		header := http.Header{"Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"}}
-		started := fetch(t, b, http.MethodPost, site+"/api/jobs", strings.NewReader(`{"operation":"create","workspace":"beta","templateId":"sample-kit-v1"}`), header)
-		if started.status != http.StatusAccepted {
-			t.Fatalf("create answered %d %s", started.status, started.body)
-		}
-		if err := json.Unmarshal([]byte(started.body), &snap); err != nil {
-			t.Fatal(err)
-		}
-		snap = waitJob(t, b, site, snap.JobID)
+		// Create reads the grant first and writes nothing. An upgrade still
+		// proves that a private template fetch through the unbound agent fails.
+		refusedCreate(t, "beta", "ssh-agent.sock")
+		snap = runInterviewJob(t, b, site, "upgrade", "alpha", "sample-kit-v1", nil)
 		if snap.State != jobs.Failed || snap.Error == nil || snap.Error.Kind != "template-refused" ||
 			!strings.Contains(snap.Error.Message, "were not accepted by the remote") {
-			t.Fatalf("create unbound ended %s: %+v", snap.State, snap.Error)
-		}
-		if _, err := os.Stat(filepath.Join(rootDir, "beta")); !os.IsNotExist(err) {
-			t.Errorf("the failed create left a folder: %v", err)
+			t.Fatalf("upgrade unbound ended %s: %+v", snap.State, snap.Error)
 		}
 	})
 }
