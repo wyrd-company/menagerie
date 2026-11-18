@@ -13,6 +13,36 @@ const shot = (page: Page, name: string) =>
 // Test-only bound on a create that builds the T3 Code Feature's image.
 const firstBuild = 30 * 60_000;
 
+/**
+ * The fixture's Git host is a temporary folder on loopback. The recording
+ * shows a short synthetic host in its place, as it blanks a pairing token:
+ * every text the page shows has the host's prefix replaced as it appears.
+ */
+async function syntheticAddresses(page: Page) {
+  const prefix = info.template.slice(0, info.template.lastIndexOf("/") + 1);
+  const pairs: [string, string][] = [
+    [prefix, "ssh://git@git.example.com/example-org/"],
+    [prefix.replace("git@", ""), "ssh://git.example.com/example-org/"],
+  ];
+  await page.addInitScript((pairs: [string, string][]) => {
+    const swap = (node: Node) => {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      for (let text = walker.currentNode; text; text = walker.nextNode()!) {
+        if (text.nodeType !== Node.TEXT_NODE || !text.nodeValue) continue;
+        let value = text.nodeValue;
+        for (const [from, to] of pairs) value = value.split(from).join(to);
+        if (value !== text.nodeValue) text.nodeValue = value;
+      }
+    };
+    new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === "characterData") swap(record.target);
+        record.addedNodes.forEach(swap);
+      }
+    }).observe(document, { subtree: true, childList: true, characterData: true });
+  }, pairs);
+}
+
 async function beginCreate(page: Page, template: RegExp, name: string, delay = 0) {
   await page.getByRole("link", { name: "New workspace" }).first().click();
   await page.getByRole("radio", { name: template }).check();
@@ -60,6 +90,7 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test("create, pair, upgrade and delete a provisioned workspace", async ({ page }) => {
+  await syntheticAddresses(page);
   await signIn(page, "sample-manager");
   await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
   await pause(1500);
