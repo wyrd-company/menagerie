@@ -240,7 +240,7 @@ func TestDiscoveryAppliesOnlyImportedNamelessSelections(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantApplied := name == "discovered" || name == "retired"
+		wantApplied := name == "discovered"
 		if wantApplied != (got.AppliedRevision != nil && *got.AppliedRevision == got.Revision) {
 			t.Fatalf("%s: %+v", name, got)
 		}
@@ -274,5 +274,31 @@ func TestHoldNameInvalidatesOnlyChangedCurrentBinding(t *testing.T) {
 	got, err := s.Selection(ctx, "alpha")
 	if err != nil || got.AppliedRevision != nil {
 		t.Fatalf("new name kept old observation: %+v %v", got, err)
+	}
+}
+
+func TestDiscoveryPreservesAnExistingNamelessApplyFailure(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if _, err := s.Discover(ctx, []string{"alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := s.Selection(ctx, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.SaveSelection(ctx, "alpha", []string{"ssh"}, initial.Revision, []string{"ssh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := ApplyFailure{Kind: "policy-outside-grant", Message: "ssh is outside the operator key's grant"}
+	if err := s.ApplyFailed(ctx, "alpha", next.Revision, failure); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Discover(ctx, []string{"alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Selection(ctx, "alpha")
+	if err != nil || after.AppliedRevision == nil || *after.AppliedRevision == after.Revision || after.ApplyFailure == nil || *after.ApplyFailure != failure {
+		t.Fatalf("discovery covered a failed apply: %+v %v", after, err)
 	}
 }

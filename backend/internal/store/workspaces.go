@@ -406,6 +406,15 @@ func (s *Store) EndCreates(ctx context.Context, folderExists func(name string) b
 func (s *Store) Discover(ctx context.Context, folders []string) (noFolder []string, err error) {
 	err = s.Update(ctx, func(t *Tx) error {
 		for _, name := range folders {
+			exists, err := t.Exists(name)
+			if err != nil {
+				return err
+			}
+			// Listing must not retry or cover an existing selection's failed apply.
+			// A newly discovered folder has no current name or prior observation.
+			if exists {
+				continue
+			}
 			if err := t.AddWorkspace(name); err != nil {
 				return err
 			}
