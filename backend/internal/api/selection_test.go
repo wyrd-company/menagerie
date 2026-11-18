@@ -176,3 +176,41 @@ func TestSelectionHTTPDoesNotRequireListingTheFolderFirst(t *testing.T) {
 		t.Fatalf("%+v %v", current, err)
 	}
 }
+
+func TestStartupRetriesARevisionWhoseLaterBindingAttemptFailed(t *testing.T) {
+	f := newFixture(t, nil)
+	_ = policyCall(f.server, "GET", "/api/workspaces", "")
+	ctx := context.Background()
+	before, err := f.data.Selection(ctx, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.data.Applied(ctx, "alpha", before.Revision); err != nil {
+		t.Fatal(err)
+	}
+	app := &selectionApplication{data: f.data}
+	f.server.opts.PolicyApplication = app
+	// The already-applied revision has no work at startup.
+	if err = f.server.ApplyPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.Wait()
+	for _, job := range f.manager.List() {
+		if job.Workspace == "alpha" {
+			t.Fatal("applied revision was retried")
+		}
+	}
+	if err = f.data.ApplyFailed(ctx, "alpha", before.Revision, store.ApplyFailure{Kind: "binding-refused", Message: "choose a policy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.server.ApplyPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.Wait()
+	for _, job := range f.manager.List() {
+		if job.Workspace == "alpha" && job.Operation == OperationApplyPolicies {
+			return
+		}
+	}
+	t.Fatal("startup skipped the failed revision")
+}

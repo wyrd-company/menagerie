@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -383,5 +384,73 @@ func TestPolicyApplyRefreshesGrantBeforeMutation(t *testing.T) {
 	wantKind(t, h.steps().ApplyPolicies(context.Background(), folder, h), KindPolicyOutsideGrant)
 	if h.changes != 0 || h.selection().AppliedRevision != nil {
 		t.Fatal("changed after grant narrowed")
+	}
+}
+
+func TestProvisioningRefusalInvalidatesPreviouslyAppliedSelection(t *testing.T) {
+	ctx := context.Background()
+	for _, operation := range []string{"create", "start", "rebuild"} {
+		for _, scenario := range []string{"empty-missing", "empty-existing", "hidden"} {
+			t.Run(operation+"/"+scenario, func(t *testing.T) {
+				selected := []string{}
+				if scenario == "hidden" {
+					selected = []string{"workspace"}
+				}
+				h := newPolicyHost(t, selected)
+				// With no current name, this revision legitimately counted as applied.
+				if err := h.steps().ApplyPolicies(ctx, folder, h); err != nil {
+					t.Fatal(err)
+				}
+				before := h.selection()
+				if before.AppliedRevision == nil || *before.AppliedRevision != before.Revision {
+					t.Fatal("no-name revision was not applied")
+				}
+				if scenario != "empty-missing" {
+					h.existing([]string{"workspace"})
+					// The next job resolves the name, as after a restart with no saved ID.
+					if err := h.data.BindingID(ctx, "sample", "container-sample", ""); err != nil {
+						t.Fatal(err)
+					}
+				}
+				h.hidden = scenario == "hidden"
+				bindings := maps.Clone(h.bindings)
+				var err error
+				switch operation {
+				case "create":
+					err = h.steps().Create(ctx, folder, h, func(context.Context) error { t.Fatal("refused create saved"); return nil })
+				case "start":
+					err = h.steps().Start(ctx, folder, h)
+				case "rebuild":
+					err = h.steps().Rebuild(ctx, folder, h)
+				}
+				kind := KindBindingRefused
+				if h.hidden {
+					kind = KindBindingOutsideGrant
+				}
+				wantKind(t, err, kind)
+				after := h.selection()
+				if after.Revision != before.Revision || !slices.Equal(after.Policies, selected) || after.AppliedRevision != nil || after.ApplyFailure == nil || after.ApplyFailure.Kind != kind {
+					t.Fatalf("refusal kept an applied selection: %+v", after)
+				}
+				if strings.ContainsAny(after.ApplyFailure.Message, "\r\n") || !strings.Contains(h.logged.String(), after.ApplyFailure.Message+"\n") {
+					t.Fatalf("failure not recorded on one console line: %+v; console %q", after.ApplyFailure, h.logged.String())
+				}
+				if !reflect.DeepEqual(h.bindings, bindings) {
+					t.Fatal("refusal changed the binding")
+				}
+				if scenario == "empty-existing" {
+					if h.changes != 1 || h.binds != 0 {
+						t.Fatalf("change %d bind %d", h.changes, h.binds)
+					}
+				} else if h.binds != 1 || h.changes != 0 {
+					t.Fatalf("change %d bind %d", h.changes, h.binds)
+				}
+				for _, call := range h.calls {
+					if call == "build" || call == "create" || call == "up" {
+						t.Fatalf("refusal brought up container: %v", h.calls)
+					}
+				}
+			})
+		}
 	}
 }

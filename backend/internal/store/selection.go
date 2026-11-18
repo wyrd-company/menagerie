@@ -223,14 +223,15 @@ func (s *Store) Applied(ctx context.Context, name string, revision int64) error 
 	})
 }
 
-// ApplyFailed retains a failure only for the selection the attempt read.
+// ApplyFailed invalidates application of the failed revision and retains its
+// failure only while that selection is current. Newer successful attempts stay.
 func (s *Store) ApplyFailed(ctx context.Context, name string, revision int64, failure ApplyFailure) error {
 	raw, err := json.Marshal(failure)
 	if err != nil {
 		return err
 	}
 	return s.Update(ctx, func(t *Tx) error {
-		_, err := t.exec(`UPDATE workspaces SET apply_failure = ? WHERE name = ? AND selection_revision = ?`, string(raw), name, revision)
+		_, err := t.exec(`UPDATE workspaces SET applied_revision = CASE WHEN applied_revision = ? THEN NULL ELSE applied_revision END, apply_failure = CASE WHEN selection_revision = ? THEN ? ELSE apply_failure END WHERE name = ?`, revision, revision, string(raw), name)
 		return err
 	})
 }
