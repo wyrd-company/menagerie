@@ -23,15 +23,6 @@ oidc:
   client-id: menagerie
   redirect-url: https://menagerie.example.test/auth/callback
 
-templates:
-  - id: sample-workspace-1
-    name: Sample workspace 1.0
-    address: gh:example-org/workspace-templates@1.0.0#sample-workspace
-  - id: sample-workspace-2
-    name: Sample workspace 2.0
-    address: gh:example-org/workspace-templates@2.0.0#sample-workspace
-    runner-image: ghcr.io/example-org/sample-workspace-runner:2.0.0
-
 registry-credentials:
   kv-mount: kv
   registries:
@@ -86,9 +77,9 @@ the container, `/run/wyrwood` in the deployment example.
 
 ## Templates
 
-`templates` is the approved list; a manager can use only these. Each entry
-has a unique `id` (lower-case letters and digits, separated by single
-dashes), a display `name`, and a Toha `address`:
+Templates are registered in the interface, not in configuration; see
+[Templates](usage.md#templates). A registration takes the template's
+address, in one of these forms:
 
 - `gh:<owner>/<repository>@<ref>#<path>`, a GitHub repository over HTTPS,
   for public templates;
@@ -99,16 +90,38 @@ dashes), a display `name`, and a Toha `address`:
   [GitHub App](#github-app) token for private templates on its server.
 
 `#<path>` names the template's folder in the repository and is optional.
-Toha refuses a Git URL that holds a password. Use the GitHub App or the
-SSH agent for private templates; see [Git hosts](install.md#git-hosts).
+`@<ref>` is optional too and, when given, is a version's tag such as `1.2.0`;
+without it the template takes the repository's newest version. Menagerie
+refuses an address that holds a password, such as
+`https://user:token@host/repo`, and stores, shows and logs it nowhere. Use
+the GitHub App or the SSH agent for private templates; see
+[Git hosts](install.md#git-hosts). It also refuses a local folder, a
+`file://`, `git://` or `http://` address and a Toha template name.
 
-An entry's optional `runner-image` is the image its hooks run in; see
-[Runner images](#runner-images).
+### The templates key
 
-Pin each entry to a tag. To move workspaces to a new template version, add
-an entry for that version; **Upgrade** then asks only the questions the new
-version adds and keeps the answers and local edits the workspace has, or
-every question with **Ask every question again**. The list can be empty.
+Earlier releases approved templates in a `templates` list, one entry per
+template version. The first start of this release imports it once into
+Menagerie's data, and a later edit of the key imports nothing:
+
+- The entries of one repository and folder become one template, at the
+  newest entry whose ref is a version. It keeps that entry's `id`, `name` and
+  `runner-image`, and its address without the ref.
+- An entry whose address Menagerie refuses, a password in it included, is
+  skipped. The start's log names the entry's `id` and the refusal, never its
+  address.
+- A repository none of whose entries names a version, such as one pinned to
+  a branch, a commit or a tag like `v1`, is not imported, and the log names
+  its entries' `id`s. Its workspaces keep working. Tag a version in its
+  repository and [register the template](usage.md#register-a-template),
+  which joins its workspaces.
+- Each workspace whose applied record names an imported template joins it.
+
+The import waits up to one minute for the template service; a start that
+does not reach it fails, and the next start imports. Every start that finds
+the key logs a warning that it is no longer read. The key keeps its rules, so
+a file that still has it starts; remove it once the import has run. A later
+release will refuse it.
 
 ## Runner images
 
@@ -122,8 +135,9 @@ workspace folder themselves.
 It cannot reach the Docker socket, the Wyrwood sockets or Menagerie's
 environment, and it is removed when its command ends.
 
-- A template's hooks run in its `runner-image`, else the top-level
-  `runner-image`.
+- A template's hooks run in its own runner image, set when the template
+  is registered and changed with **Edit** in the interface, else the
+  top-level `runner-image`.
 - `initializeCommand` runs in the top-level `runner-image`.
 - Without either, both run in Menagerie's own image, which has `sh`, `git`,
   `ssh` and `curl`.

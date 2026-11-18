@@ -19,17 +19,13 @@ oidc:
   client-id: menagerie
   redirect-url: https://menagerie.example.test/auth/callback
 
-templates:
-  - id: sample-workspace
-    name: Sample workspace
-    address: gh:example-org/workspace-templates@1.0.0#sample-workspace
-    # The image this template's hooks run in. Without it, the top-level
-    # runner-image.
-    # runner-image: ghcr.io/example-org/sample-workspace-runner:1.0.0
+# Templates are registered in the interface, under Templates. A templates
+# list from an earlier release is imported once at the first start and then
+# no longer read; remove it once that start has run.
 
 # The image of the throwaway containers that run initializeCommand and the
-# hooks of templates without their own runner-image. Without it, Menagerie's
-# own image.
+# hooks of templates registered without their own runner image. Without it,
+# Menagerie's own image.
 # runner-image: ghcr.io/example-org/workspace-runner:1.0.0
 
 # The GitHub App Menagerie authenticates to GitHub with: installation tokens

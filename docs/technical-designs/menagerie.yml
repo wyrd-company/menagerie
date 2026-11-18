@@ -1523,17 +1523,6 @@ proposed-design:
     `assets/provisioning-declaration/menagerie-customization.schema.json`:
   contract-configuration: |-
     `configuration.yml` and `assets/configuration/menagerie.schema.json`:
-    - [20] `templates` keeps its schema entry, its item rules (a unique
-      `id`, `name`, `address`, optional `runner-image`) and its place in
-      the workspace service's parser, with `deprecated: true` and a
-      description that it is read only by the first-start import
-      (templates-key). The prose drops it from what configuration names,
-      says the workspace service imports it once, skips an entry whose
-      address is refused naming only its `id`, and logs a warning naming
-      the key at each start that finds it, and says the template service
-      reads nothing of it. A template's `runner-image` is said to be read
-      only by the import; a registered template's runner image is
-      Menagerie's data.
     - [21] New optional `template-versions`, an object with
       `additionalProperties: false` and one member, `every`, required in the
       section: a duration of the shared duration pattern, absent `1h`, the
@@ -1543,56 +1532,6 @@ proposed-design:
       without quoting it.
   contract-workspace-api: |-
     `workspace-api.yml` and `assets/workspace-api/openapi.yaml`:
-    - [20] `GET /api/templates` lists the registered templates sorted by
-      name, then by `id`, in place of the configuration's order.
-    - [20] `Template` gains required `address` (string, the address without
-      a ref), `currentVersion` (string), `runnerImage` (string or null) and
-      `workspaces` (the names of the workspaces that use it).
-    - [20] `POST /api/templates` with `{"name","address","runnerImage"}`,
-      `runnerImage` optional, no other member: 201 with the `Template` and
-      `Location: /api/templates/{id}`; 400 `invalid-request` for a body that
-      is not that object, a `name` that is not one line of 1 to 100
-      characters, or a `runnerImage` that is not a Docker image reference;
-      409 `template-exists`, naming the registration; 422
-      `template-check-failed` with the new error member `check`, one of
-      `address`, `fetch`, `version`, `read` and `definition`, and a message
-      that names what failed and never quotes the address; 503
-      `template-service-unavailable`. An address without a ref takes the
-      newest version, and the `version` check is that the repository has at
-      least one version and that an address's ref, when it has one, is a
-      version's tag.
-    - [20] `POST /api/templates/{id}/upgrades` with `{"version"}`: the
-      template service lists the repository's versions, and the version
-      must be one of them newer than the current one, else 409
-      `version-not-newer`; it then passes the `fetch`, `read` and
-      `definition` checks, else 422 `template-check-failed`, and becomes the
-      current version with its commit: 200 with the `Template`; 404
-      `unknown-template`; 503 `template-service-unavailable`.
-    - [20] `PATCH /api/templates/{id}` with `name` and `runnerImage`, either
-      optional, `runnerImage` nullable, under the rules above: 200 with the
-      `Template`; 400 `invalid-request`; 404 `unknown-template`.
-    - [20] `DELETE /api/templates/{id}`: 204; 404 `unknown-template`; 409
-      `template-in-use`, whose message names the workspaces.
-    - [20] `Workspace` gains required `template`: null, or `{id, name}` of
-      its registered template.
-    - [20] The prose's runner image of a template's hooks is the registered
-      template's runner image, in place of the template entry's
-      `runner-image`, and "an approved template" becomes "a registered
-      template" throughout.
-    - [20] `POST /api/jobs`: `create`'s `templateId` names a registered
-      template, whose current version and commit the job pins, and an
-      unknown one stays 404 `unknown-template`; `upgrade` takes no
-      `templateId`, one given is 400 `invalid-request`, and it applies the
-      current version of the workspace's template, refused 409
-      `template-not-registered` when the workspace has none, and 409
-      `upgrade-not-needed` when its applied record's ref is that version or
-      a newer one; a record whose ref is not a version fails the job as
-      `template-refused` before the interview. The `JobRequest.templateId`
-      description says so.
-    - [20] New request kinds: `template-check-failed` (422),
-      `template-exists` (409), `template-in-use` (409),
-      `template-not-registered` (409), `version-not-newer` (409),
-      `upgrade-not-needed` (409).
     - [21] `POST /api/templates/{id}/version-checks`, no body: 200 with the
       `Template`, whose `lastCheck` records the outcome, also
       `template-service-unavailable` when the template service cannot be
@@ -1627,50 +1566,6 @@ proposed-design:
     - [21] New request kind: `template-version-moved` (409).
   contract-template-service-api: |-
     `template-service-api.yml`:
-    - [20] The service reads the configuration only for `workspace-root`,
-      `template-service.socket`, `template-service.hook-runner-socket` and
-      `template-service.candidate-folder`, and ignores its other members,
-      `templates` included (templates-key).
-    - [20] `/v1/interviews` and `/v1/upgrades` take
-      `{"workspace","target","address","ref","commit"}`, `commit` optional,
-      and the answer, generate and apply routes add their members to those;
-      `templateId` is an unknown member, and a missing `ref` is
-      `malformed-request` (400). `address` is admitted as template-admission
-      says, and a `ref` that resolves to another commit than a given
-      `commit` is `template-stale-revision` (422).
-    - [20] Checks: `address` is admitted in place of `templateId` being
-      approved; a session's signature is the HMAC of the flow, `workspace`,
-      `address`, `ref` and the record, and a session issued for another
-      address or ref is `session-tampered`. Revisions: "the approved
-      address" becomes "the request's address at its ref" throughout.
-    - [20] New routes: `/v1/templates/addresses` with `{"address"}`, 200
-      `{"source","reference","base"}`, an `https` base without user
-      information; `/v1/templates/versions` with
-      `{"address"}`, an address without a ref, 200 `{"source","versions"}`,
-      each `{"version","tag","commit"}` in ascending order by the rules of
-      template-versions, refused as `template-not-found` (422) when the
-      remote answers that the repository does not exist and as
-      `template-resolve-failed` (422) when it cannot be listed for any other
-      reason; `/v1/templates/checks` with `{"address","ref"}`, 200
-      `{"source","commit","definition"}`, which runs no hook. Each takes the
-      credential resolver scope of every route, and the contract test's
-      route list gains them.
-    - [20] Errors: `invalid-address` (400) is new, for an address the
-      grammar cannot read or template-admission refuses, a password in its
-      user information and a ref on the versions route included, and no
-      refusal quotes the address; `unsafe-template-link` (422) is new, for a
-      template folder that is outside the checkout once its `#path` is
-      resolved, or that holds a symbolic link resolving outside it, on the
-      check, generate and apply routes; `unknown-template` (404) leaves the
-      list, as the service does not use it.
-    - [20] Validation criteria: `tests/requests.rs` refuses each form
-      template-admission refuses on every route, a password in an address
-      without quoting it, and a session replayed into another address or
-      ref; a test of the check route answers `definition` true and false,
-      refuses a manifest Toha cannot load and a link that leaves the
-      checkout, and runs no hook; a test refuses a ref that resolves to
-      another commit than the request names; a test lists a local remote's
-      tags with release, pre-release, `v`-prefixed and annotated tags.
     - [21] `/v1/templates/checks` also takes `"since"`, a commit, and then
       answers `descends`, whether the checked commit descends from it.
       Validation criteria: a test answers `descends` true for an ancestor

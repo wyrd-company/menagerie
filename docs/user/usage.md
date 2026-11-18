@@ -26,6 +26,10 @@ folder**: it offers only [**Delete**](#delete-a-workspace), which removes
 them. **Refresh** reads the folders, the containers and Menagerie's data
 again.
 
+Each row names its [template](#templates), or **Unregistered template** for a
+workspace whose template is not registered; such a workspace keeps working and
+joins its template when a manager registers it.
+
 Each row lists its selected policies, or **No policies** for an empty selection.
 **Needs choice** names any policy group without a valid choice: exactly one
 policy for a single-select group, at least one for a multi-select group.
@@ -48,6 +52,59 @@ restart. The list can start with **apply-policies** jobs: at startup, Menagerie
 tries each workspace whose binding does not have its stored policy selection.
 
 ![The workspace list with one stopped and two running workspaces](assets/list.png)
+
+## Templates
+
+Workspaces come from registered templates. Choose **Templates** to see each
+one, its address and its current version, the version a new workspace gets
+and an upgrade applies. Registering, upgrading and removing a template needs
+no configuration change and no restart.
+
+A version is a release tag of the template's repository: `MAJOR.MINOR.PATCH`,
+with an optional leading `v`, such as `1.2.0` or `v1.2.0`. A tag with a
+pre-release or build part, such as `1.2.0-rc.1`, is not a version, and when
+`1.2.0` and `v1.2.0` both exist they are one version.
+
+### Register a template
+
+Choose **Register template**, enter a display name, the template's address
+and, when its hooks need one, a [runner image](configuration.md#runner-images),
+then **Save**. The address takes the forms and credentials in
+[Templates](configuration.md#templates): `gh:owner/repository`,
+`git@host:path`, `ssh://` or `https://`, with an optional `#folder`. With no
+ref, the template's current version is the repository's newest version; with
+a version's tag, such as `gh:example-org/kit@1.2.0`, it is that version. Its
+id, which never changes, comes from the name.
+
+Menagerie checks the template first and refuses it at the first check that
+fails, naming that check beside **Save**. The message never repeats the
+address:
+
+| Check        | Refused when                                                                                                   |
+| ------------ | -------------------------------------------------------------------------------------------------------------- |
+| `address`    | The address is not one of those forms: a folder, `file://`, a template name, `git://`, `http://`, or a password |
+| `fetch`      | The repository's versions cannot be listed: it does not exist, or the Git host refuses the credentials        |
+| `version`    | The repository has no version, or the address's ref is not a version's tag                                    |
+| `fetch`      | The current version cannot be fetched                                                                          |
+| `read`       | Toha cannot load the template, or its folder or a link in it leads outside its repository                     |
+| `definition` | The template's files have no `.devcontainer/devcontainer.json`                                                 |
+
+A template whose repository and folder are registered already is refused,
+naming that registration. Registering a template joins the workspaces whose
+applied record, `.toha.json`, names it.
+
+### Upgrade a template
+
+When the template's repository has a newer version, choose **Upgrade template**
+on its row, enter that version and **Save**. The version passes the `fetch`,
+`read` and `definition` checks before it becomes the current version. A
+version that is not one of the repository's versions newer than the current
+one is refused: a template moves only forward. Workspaces keep the version
+they have until you [upgrade them](#upgrade-a-workspace).
+
+**Edit** renames a template or changes its runner image; its address does not
+change. **Remove** removes a template no workspace uses; while workspaces use
+it, it is refused, naming them.
 
 ## Policies
 
@@ -95,13 +152,14 @@ retrying.
 
 ## Create a workspace
 
-Choose **New workspace**, pick a template and enter the workspace's name,
-which becomes its folder. Required policies are selected already. Choose a
-policy in each group, exactly one in a single-select group, and any other
-policies the workspace needs. **Begin interview** asks the template's questions.
-Answers that the template refuses come back marked on their questions, with
-your answers kept, so you can correct them and send again. Nothing is
-written until the interview is complete.
+Choose **New workspace**, pick a registered template, shown with its current
+version, and enter the workspace's name, which becomes its folder. The
+workspace gets the template's current version. Required policies are selected
+already. Choose a policy in each group, exactly one in a single-select group,
+and any other policies the workspace needs. **Begin interview** asks the
+template's questions. Answers that the template refuses come back marked on
+their questions, with your answers kept, so you can correct them and send
+again. Nothing is written until the interview is complete.
 
 The job console then shows each phase:
 
@@ -219,8 +277,11 @@ is a volume, not a bind, and a space around a field or a value is refused.
 
 ## Upgrade a workspace
 
-**Upgrade** offers the approved templates. Pick the newer version and choose
-**Begin upgrade**. Menagerie first commits any local changes and backs the
+**Upgrade** applies the current version of the workspace's template, which
+the screen names, so [upgrade the template](#upgrade-a-template) first to take
+a newer version. Choose **Begin upgrade**. An upgrade is refused when the
+workspace already has that version or a newer one, and when its template is
+not registered. Menagerie first commits any local changes and backs the
 workspace up, so the state before the upgrade is on its branch. Then it asks
 only the questions the new version adds; earlier answers come from
 `.toha.json`. Toha applies the new version to a separate checkout of the

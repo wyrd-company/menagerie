@@ -407,7 +407,13 @@ with no step by hand:
 - the container name and the Xolotl key each workspace's definition declares in
   `customizations.menagerie`, a block that is not valid included. The declared
   name becomes the workspace's current one, unless a container outside the
-  workspace has it.
+  workspace has it;
+- the configuration's `templates` entries, once, as registered templates at
+  their newest version, each workspace joining its template, as
+  [The templates key](configuration.md#the-templates-key) says. The template
+  service must answer within a minute, or the start fails and the next one
+  imports. From then on templates are registered in the interface, and each
+  start that finds the key logs that it is no longer read.
 
 When two workspaces would hold one name or key, the start log names both and
 the one that has it, and a provisioning job of the other fails until it is gone.

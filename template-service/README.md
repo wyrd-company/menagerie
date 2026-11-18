@@ -26,7 +26,8 @@ menagerie-template-service -config /etc/menagerie/config.yml -data /var/lib/mena
 - `-config` is Menagerie's configuration file. The service reads only
   `workspace-root`, `template-service.socket`,
   `template-service.hook-runner-socket` and
-  `template-service.candidate-folder` from it, and nothing of `templates`. The candidate folder is the
+  `template-service.candidate-folder` from it, and nothing of
+  `templates`. The candidate folder is the
   service's temporary folder, where Toha builds an upgrade's candidate, in
   its subfolder `.menagerie-work`. At start-up, once its socket is bound and
   before its first request, the service removes what an ended service left
