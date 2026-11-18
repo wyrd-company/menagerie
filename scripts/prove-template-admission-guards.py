@@ -54,8 +54,10 @@ MUTANTS = [
      "    if false {\n", ["unit-forms"]),
     ("user-info-one-at", "src/address.rs", "    if after_host.matches('@').count() > 1 {\n",
      "    if false {\n", ["unit-forms", "forms"]),
+    # The routes that take a ref beside the address already refuse an
+    # address in which Toha finds one, so the address route observes this.
     ("user-info-ref", "src/address.rs", "        && reference.contains(['/', ':'])\n",
-     "        && false\n", ["unit-forms", "forms", "routes"]),
+     "        && false\n", ["unit-forms", "forms"]),
     ("user-info-typed-user", "src/address.rs",
      "    if !shorthand && url.user() != typed_user {\n", "    if false {\n",
      ["unit-forms", "forms", "routes"]),
