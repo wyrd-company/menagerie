@@ -25,6 +25,25 @@ pub struct VersionsReply {
     pub versions: Vec<crate::versions::Found>,
 }
 
+/// Checks one version of a template: its address, without a ref, and the
+/// version's tag.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckRequest {
+    pub address: String,
+    #[serde(rename = "ref")]
+    pub reference: String,
+}
+
+/// A checked version: the commit its ref resolved to, and whether the
+/// template's content folder holds `.devcontainer/devcontainer.json`.
+#[derive(Debug, Serialize)]
+pub struct CheckReply {
+    pub source: String,
+    pub commit: String,
+    pub definition: bool,
+}
+
 /// Starts a create interview.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

@@ -40,7 +40,8 @@ description: >-
 
   Routes. Every route is `POST` with a JSON body and answers JSON.
   `/v1/templates/addresses` reads a template's address and
-  `/v1/templates/versions` lists its versions, both with `{"address"}`.
+  `/v1/templates/versions` lists its versions, both with `{"address"}`, and
+  `/v1/templates/checks` checks one version, with `{"address","ref"}`.
   `/v1/interviews` starts a create interview and `/v1/upgrades` starts an
   upgrade, both with `{"workspace","target","templateId"}`.
   `/v1/interviews/answers` and `/v1/upgrades/answers` add `"session"` and
@@ -92,6 +93,31 @@ description: >-
   runs on a thread of its own: when the caller goes away the request
   worker returns at once, and the listing keeps its connection until the
   remote acts, as an abandoned fetch does (below).
+
+
+  Template checks. `/v1/templates/checks` names the version by `ref`, the
+  version's tag, beside an address without a ref; an address with a ref, or
+  a ref that is empty, starts with `-`, or holds a space, a control
+  character, `@`, `#` or `:`, is `invalid-address`. It has Toha resolve and
+  fetch the repository at that ref into its cache, as a create's start
+  does, and answers 200 `{"source","commit","definition"}`: the address's
+  `source`, the `commit` the ref resolved to, and `definition`, whether the
+  template's content folder, from which Toha renders a workspace's files,
+  holds `.devcontainer/devcontainer.json`. It runs no hook and no other
+  command of the template. A fetch Toha refuses is that refusal, such as
+  `template-resolve-failed` (422) for a ref the repository does not have.
+  Before Toha reads the template's files, the template folder, the checkout
+  joined with the address's `#path` and resolved, must be in the checkout:
+  one the repository does not hold is `template-invalid` (422), and one
+  outside the checkout, or one that holds a symbolic link, followed or not,
+  that resolves outside it, is `unsafe-template-link` (422); the checkout's
+  own `.git` is not walked. Then Toha loads the template's manifest, and a
+  manifest it refuses is `template-invalid`. Generate and apply make the
+  same folder and link check, before Toha reads any of the session's
+  template, on the folder Toha's resume reads: its cache entry for the
+  session's commit with the formal name's `#path`, or the installation that
+  holds that commit. So no request makes the service read its own files,
+  such as its session key, as a template, or hand one to a hook.
 
 
   Checks. Before Toha replays or writes anything, every route checks that
@@ -399,7 +425,7 @@ description: >-
   `template-stale-revision` (422), `template-ambiguous` (422),
   `template-resolve-failed` (422), `template-refresh-failed` (422),
   `template-cache-conflict` (409),
-  `template-invalid` (422),
+  `template-invalid` (422), `unsafe-template-link` (422),
   `missing-requirements` (422), `document-invalid` (422), `parts-invalid`
   (422), `context-invalid` (422), `environment-refused` (422),
   `evaluation-failed` (422), `plan-failed` (422), `record-invalid` (422),
@@ -476,7 +502,14 @@ validation-criteria: >-
   served repository's release, pre-release, `v`-prefixed and annotated tags
   in order, and tells a repository with no tag from a missing one; the unit
   tests in `src/address.rs` and `src/versions.rs` cover each address form
-  and refusal and the version rules; `tests/credentials.rs` also lists a
+  and refusal and the version rules, and those in `src/links.rs` each
+  link and folder that leaves a checkout and those that stay in it;
+  `tests/templates.rs` also checks a version with and without the
+  definition, running no hook, refuses a manifest Toha cannot load, a
+  missing folder, an address with a ref, and a folder, a link in the
+  content folder and a link beside it that leave the checkout, and refuses
+  a generate and an upgrade apply whose template holds such a link, with
+  nothing written; `tests/credentials.rs` also lists a
   private repository's versions with the route's token, refuses the listing
   without one, and returns the worker of a stalled listing whose caller
   leaves; `tests/restart.rs` runs

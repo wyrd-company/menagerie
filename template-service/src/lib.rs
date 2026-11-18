@@ -16,6 +16,7 @@ pub mod credentials;
 pub mod error;
 pub mod hooks;
 pub mod host;
+pub mod links;
 pub mod numbers;
 pub mod reply;
 pub mod revision;

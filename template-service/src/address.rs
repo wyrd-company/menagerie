@@ -131,6 +131,53 @@ pub fn admit(
     })
 }
 
+const REF_ON_ADDRESS: &str =
+    "a template route names the version by its ref; the address must have none";
+const NOT_A_REF: &str = "the ref is not a Git tag, branch or commit name";
+
+/// Admit `address`, which names no ref, at `reference`: the repository and
+/// folder of the address, at that ref. The ref must read back as exactly
+/// the ref Toha's grammar finds.
+pub fn admit_at(
+    address: &str,
+    reference: &str,
+    host: &TohaHost,
+    config: &toha::config::Config,
+) -> Result<Admitted, ServiceError> {
+    let plain = admit(address, host, config)?;
+    if plain.reference.is_some() {
+        return Err(refused(REF_ON_ADDRESS));
+    }
+    let valid = !reference.is_empty()
+        && !reference.starts_with('-')
+        && !reference
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '@' | '#' | ':'));
+    if !valid {
+        return Err(refused(NOT_A_REF));
+    }
+    let at = admit(&with_ref(address, reference), host, config)?;
+    if at.reference.as_deref() != Some(reference) || at.source != plain.source {
+        return Err(refused(NOT_A_REF));
+    }
+    Ok(at)
+}
+
+/// `address`, which names no ref, with `@reference` before its `#` folder.
+pub fn with_ref(address: &str, reference: &str) -> String {
+    match address.split_once('#') {
+        Some((repository, folder)) => format!("{repository}@{reference}#{folder}"),
+        None => format!("{address}@{reference}"),
+    }
+}
+
+/// The address with no `#` folder.
+pub fn without_folder(address: &str) -> &str {
+    address
+        .split_once('#')
+        .map_or(address, |(repository, _)| repository)
+}
+
 /// The address with its ref removed, and that ref, read as Toha's grammar
 /// splits a Git address: the `#` folder first, then the last `@` after the
 /// authority of a URL, the `:` of `git@host:` or the `gh:` prefix.
@@ -270,6 +317,33 @@ mod tests {
             assert!(!body.contains("sample-password"), "{body}");
             assert!(!body.contains("example.invalid"), "{body}");
             assert!(!body.contains("/srv/"), "{body}");
+        }
+    }
+
+    #[test]
+    fn a_version_is_named_by_its_ref_beside_an_address_without_one() {
+        let (_temp, host, config) = context();
+        let at = admit_at("gh:owner/repo#kit", "1.2.0", &host, &config).unwrap();
+        assert_eq!(at.reference.as_deref(), Some("1.2.0"));
+        assert_eq!(at.source, "gh:owner/repo#kit");
+        assert_eq!(
+            at.at("v1.0.0").formal_name(&config.hosts),
+            "gh:owner/repo@v1.0.0#kit"
+        );
+        assert_eq!(
+            with_ref("gh:owner/repo#kit", "1.2.0"),
+            "gh:owner/repo@1.2.0#kit"
+        );
+        assert_eq!(without_folder("gh:owner/repo#kit"), "gh:owner/repo");
+        let error = admit_at("gh:owner/repo@1.0.0", "1.2.0", &host, &config).unwrap_err();
+        assert_eq!(error.message, REF_ON_ADDRESS);
+        for reference in ["", "-x", "a b", "a@b", "a#b", "a:b", "1.0\n"] {
+            let error = admit_at("gh:owner/repo", reference, &host, &config).unwrap_err();
+            assert_eq!(
+                (error.kind, error.message.as_str()),
+                ("invalid-address", NOT_A_REF),
+                "{reference:?}"
+            );
         }
     }
 

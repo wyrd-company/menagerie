@@ -19,6 +19,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 pub const TEMPLATE_ADDRESSES: &str = "/v1/templates/addresses";
 pub const TEMPLATE_VERSIONS: &str = "/v1/templates/versions";
+pub const TEMPLATE_CHECKS: &str = "/v1/templates/checks";
 pub const INTERVIEWS: &str = "/v1/interviews";
 pub const INTERVIEW_ANSWERS: &str = "/v1/interviews/answers";
 pub const GENERATE: &str = "/v1/workspaces/generate";
@@ -27,9 +28,10 @@ pub const UPGRADE_ANSWERS: &str = "/v1/upgrades/answers";
 pub const UPGRADE_APPLY: &str = "/v1/upgrades/apply";
 
 /// Every route, in documentation order.
-pub const ROUTES: [&str; 8] = [
+pub const ROUTES: [&str; 9] = [
     TEMPLATE_ADDRESSES,
     TEMPLATE_VERSIONS,
+    TEMPLATE_CHECKS,
     INTERVIEWS,
     INTERVIEW_ANSWERS,
     GENERATE,
@@ -49,6 +51,12 @@ pub fn router(service: Arc<Service>) -> Router {
         .route(
             TEMPLATE_VERSIONS,
             post(|s: State<Arc<Service>>, b: Bytes| call(s, b, crate::templates::versions)),
+        )
+        .route(
+            TEMPLATE_CHECKS,
+            post(|s: State<Arc<Service>>, b: Bytes| {
+                call(s, b, |s, r, _| crate::templates::check(s, r))
+            }),
         )
         .route(
             INTERVIEWS,

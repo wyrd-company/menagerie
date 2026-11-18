@@ -125,6 +125,7 @@ pub fn generate(
         &config,
         &registry,
     )?;
+    crate::links::check_session(&record, &service.host, &config, &registry)?;
     checks::fresh_repository(&selected.folder, &selected.target)?;
     // From here Toha renders the template and runs its hooks, so every
     // refusal is value-free.

@@ -193,3 +193,254 @@ async fn a_repository_with_no_tag_has_no_version_and_a_missing_one_is_not_found(
     assert!(!String::from_utf8_lossy(&reply.body).contains("missing"));
     service.stop().await;
 }
+
+/// A repository with a minimal template under `kit`, tagged `1.0.0`,
+/// changed by `shape` before its commit.
+fn kit(world: &World, name: &str, shape: impl FnOnce(&std::path::Path)) -> String {
+    let repo = world.root.join("templates").join(name);
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    write(
+        &repo,
+        "kit/template.yml",
+        "name: kit\ninterview:\n  - {id: label, type: text, prompt: Label}\nhooks:\n  - run: [sh, -c, 'echo ran > hook-marker.txt']\n",
+    );
+    write(&repo, "kit/template/readme.txt", "{{ label }}\n");
+    shape(&repo);
+    commit_all(&repo, "kit");
+    git(&repo, &["tag", "1.0.0"]);
+    format!("{}#kit", served(&repo))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_reads_a_version_and_its_definition_without_running_it() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let with = kit(&world, "with", |repo| {
+        write(repo, "kit/template/.devcontainer/devcontainer.json", "{}\n");
+    });
+    let without = kit(&world, "without", |_| {});
+    let commit = git(&world.root.join("templates/with"), &["rev-parse", "1.0.0"]);
+    for (address, definition) in [(&with, true), (&without, false)] {
+        let reply = service
+            .post(
+                "/v1/templates/checks",
+                &json!({"address": address, "ref": "1.0.0"}),
+            )
+            .await;
+        assert_eq!(reply.status, 200, "{}", reply.json);
+        assert_eq!(reply.json["source"], json!(address), "{address}");
+        assert_eq!(reply.json["definition"], json!(definition), "{address}");
+    }
+    let reply = service
+        .post(
+            "/v1/templates/checks",
+            &json!({"address": with, "ref": "1.0.0"}),
+        )
+        .await;
+    assert_eq!(reply.json["commit"], json!(commit));
+    // No hook ran and nothing reached the hook runner.
+    assert!(world.hooks.calls().is_empty());
+    assert!(
+        !world
+            .root
+            .join("templates/with/kit/hook-marker.txt")
+            .exists()
+    );
+    // A missing ref is the fetch's refusal; a ref on the address is refused.
+    let missing = service
+        .post(
+            "/v1/templates/checks",
+            &json!({"address": with, "ref": "9.9.9"}),
+        )
+        .await;
+    assert_eq!(missing.status, 422, "{}", missing.json);
+    let doubled = service
+        .post(
+            "/v1/templates/checks",
+            &json!({"address": with.replace("#kit", "@1.0.0#kit"), "ref": "1.0.0"}),
+        )
+        .await;
+    assert_eq!((doubled.status, doubled.kind()), (400, "invalid-address"));
+    // A folder the repository does not hold is no template.
+    let absent = service
+        .post(
+            "/v1/templates/checks",
+            &json!({"address": with.replace("#kit", "#absent"), "ref": "1.0.0"}),
+        )
+        .await;
+    assert_eq!(
+        (absent.status, absent.kind()),
+        (422, "template-invalid"),
+        "{}",
+        absent.json
+    );
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_refuses_a_manifest_toha_cannot_load() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let broken = kit(&world, "broken-manifest", |repo| {
+        write(
+            repo,
+            "kit/template.yml",
+            "name: kit\ninterview: {not: a list}\n",
+        );
+    });
+    let reply = service
+        .post(
+            "/v1/templates/checks",
+            &json!({"address": broken, "ref": "1.0.0"}),
+        )
+        .await;
+    assert_eq!(
+        (reply.status, reply.kind()),
+        (422, "template-invalid"),
+        "{}",
+        reply.json
+    );
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_refuses_a_folder_or_link_that_leaves_the_checkout() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let key = world.data.join(menagerie_template_service::seal::KEY_FILE);
+    assert!(key.exists());
+    let linked = kit(&world, "linked", |repo| {
+        std::os::unix::fs::symlink(&key, repo.join("kit/template/key.txt")).unwrap();
+    });
+    let escaping = kit(&world, "escaping", |repo| {
+        std::os::unix::fs::symlink("../../../../..", repo.join("away")).unwrap();
+    });
+    let escaping = escaping.replace("#kit", "#away");
+    let beside = kit(&world, "beside", |repo| {
+        std::fs::create_dir_all(repo.join("kit/scripts")).unwrap();
+        std::os::unix::fs::symlink(&key, repo.join("kit/scripts/key")).unwrap();
+    });
+    for address in [linked, escaping, beside] {
+        let reply = service
+            .post(
+                "/v1/templates/checks",
+                &json!({"address": address, "ref": "1.0.0"}),
+            )
+            .await;
+        assert_eq!(
+            (reply.status, reply.kind()),
+            (422, "unsafe-template-link"),
+            "{address}: {}",
+            reply.json
+        );
+        assert!(!String::from_utf8_lossy(&reply.body).contains(key.to_str().unwrap()));
+    }
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generate_refuses_a_template_whose_link_leaves_the_checkout() {
+    let holder = World::new();
+    let key = holder.data.join(menagerie_template_service::seal::KEY_FILE);
+    // Toha refuses a link in the content folder when it loads the
+    // template; one beside it, as a hook script could be, reaches generate.
+    let address = kit(&holder, "linked", |repo| {
+        std::fs::create_dir_all(repo.join("kit/scripts")).unwrap();
+        std::os::unix::fs::symlink(&key, repo.join("kit/scripts/key")).unwrap();
+    });
+    let world = World::with_templates(&[(
+        "linked",
+        &format!("{}@1.0.0#kit", address.trim_end_matches("#kit")),
+    )]);
+    let service = Running::start(&world).await;
+    let selector = world.select("alpha", "linked");
+    let start = service.post("/v1/interviews", &selector).await;
+    assert_eq!(start.status, 200, "{}", start.json);
+    let done = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                selector.clone(),
+                json!({"session": start.json["session"],
+                    "submission": submission(&start, json!({"label": "one"}))}),
+            ),
+        )
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    let folder = world.initialize("alpha");
+    let generated = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(selector, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(
+        (generated.status, generated.kind()),
+        (422, "unsafe-template-link"),
+        "{}",
+        generated.json
+    );
+    assert_eq!(entries(&folder), [".git"]);
+    assert!(world.hooks.calls().is_empty());
+    service.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_upgrade_apply_refuses_a_version_whose_link_leaves_the_checkout() {
+    let holder = World::new();
+    let key = holder.data.join(menagerie_template_service::seal::KEY_FILE);
+    let address = kit(&holder, "upgraded", |_| {});
+    let repo = holder.root.join("templates/upgraded");
+    std::fs::create_dir_all(repo.join("kit/scripts")).unwrap();
+    std::os::unix::fs::symlink(&key, repo.join("kit/scripts/key")).unwrap();
+    commit_all(&repo, "linked");
+    git(&repo, &["tag", "2.0.0"]);
+    let at = |tag: &str| address.replace("#kit", &format!("@{tag}#kit"));
+    let world = World::with_templates(&[("kit-1", &at("1.0.0")), ("kit-2", &at("2.0.0"))]);
+    let service = Running::start(&world).await;
+    let selector = world.select("alpha", "kit-1");
+    let start = service.post("/v1/interviews", &selector).await;
+    let done = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                selector.clone(),
+                json!({"session": start.json["session"],
+                    "submission": submission(&start, json!({"label": "one"}))}),
+            ),
+        )
+        .await;
+    let folder = world.initialize("alpha");
+    let generated = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(selector, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(generated.json["outcome"], "written", "{}", generated.json);
+    commit_all(&folder, "generated");
+    let selector = world.select("alpha", "kit-2");
+    let upgrade = service.post("/v1/upgrades", &selector).await;
+    assert_eq!(upgrade.status, 200, "{}", upgrade.json);
+    assert_eq!(upgrade.json["state"], "completed", "{}", upgrade.json);
+    let before = std::fs::read_to_string(folder.join(".toha.json")).unwrap();
+    let applied = service
+        .post(
+            "/v1/upgrades/apply",
+            &with(selector, json!({"session": upgrade.json["session"]})),
+        )
+        .await;
+    assert_eq!(
+        (applied.status, applied.kind()),
+        (422, "unsafe-template-link"),
+        "{}",
+        applied.json
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join(".toha.json")).unwrap(),
+        before
+    );
+    assert!(!folder.join("scripts").exists());
+    service.stop().await;
+}

@@ -124,6 +124,7 @@ pub fn apply(
         &config,
         &registry,
     )?;
+    crate::links::check_session(&record, &service.host, &config, &registry)?;
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);
     // From here Toha renders the template and runs its hooks, so every
