@@ -3,6 +3,7 @@ import { paths, useRoute } from "./router.ts";
 import { CreateWorkspace } from "./screens/CreateWorkspace.tsx";
 import { UpgradeWorkspace } from "./screens/UpgradeWorkspace.tsx";
 import { PoliciesScreen } from "./screens/Policies.tsx";
+import { TemplatesScreen } from "./screens/Templates.tsx";
 import { WorkspaceList } from "./screens/WorkspaceList.tsx";
 import mark from "./brand/mark.svg";
 import { Link } from "./ui/Link.tsx";
@@ -10,6 +11,7 @@ import { Link } from "./ui/Link.tsx";
 const titles = {
   list: "Workspaces",
   policies: "Policies",
+  templates: "Templates",
   create: "New workspace",
   upgrade: "Upgrade",
   missing: "Not found",
@@ -41,6 +43,12 @@ export function App() {
             New workspace
           </Link>
           <Link
+            href={paths.templates()}
+            aria-current={route.screen === "templates" ? "page" : undefined}
+          >
+            Templates
+          </Link>
+          <Link
             href={paths.policies()}
             aria-current={route.screen === "policies" ? "page" : undefined}
           >
@@ -55,6 +63,7 @@ export function App() {
       </header>
       <main id="main" tabIndex={-1}>
         {route.screen === "policies" ? <PoliciesScreen /> : null}
+        {route.screen === "templates" ? <TemplatesScreen /> : null}
         {route.screen === "list" ? <WorkspaceList jobId={route.jobId} /> : null}
         {route.screen === "create" ? <CreateWorkspace jobId={route.jobId} /> : null}
         {route.screen === "upgrade" ? (

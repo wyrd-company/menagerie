@@ -5,7 +5,7 @@ test.beforeEach(async ({ request }) => reset(request));
 
 async function beginCreate(page: Page, name = "sample-space") {
   await page.goto("/create");
-  await page.getByRole("radio", { name: /Sample kit, version 1/ }).check();
+  await page.getByRole("radio", { name: /Sample kit/ }).check();
   await page.getByLabel("Workspace name").fill(name);
   await page.getByRole("button", { name: "Begin interview" }).click();
   await expect(page.getByText("Question batch 1")).toBeVisible();
@@ -183,7 +183,7 @@ test("checks the start form and shows the service's refusals", async ({ page }) 
     "must be one folder name, without slashes",
   );
 
-  await page.getByRole("radio", { name: /Sample kit, version 1/ }).check();
+  await page.getByRole("radio", { name: /Sample kit/ }).check();
   await page.getByLabel("Workspace name").fill("sample-alpha");
   await page.getByRole("button", { name: "Begin interview" }).click();
   await expect(page.getByRole("alert")).toContainText("workspace-exists");
@@ -192,10 +192,10 @@ test("checks the start form and shows the service's refusals", async ({ page }) 
 
 test("can be driven from the keyboard alone", async ({ page }) => {
   await page.goto("/create");
-  await expect(page.getByRole("radio", { name: /Sample kit, version 1/ })).toBeVisible();
-  await page.getByRole("radio", { name: /Sample kit, version 1/ }).focus();
+  await expect(page.getByRole("radio", { name: /Sample kit/ })).toBeVisible();
+  await page.getByRole("radio", { name: /Sample kit/ }).focus();
   await page.keyboard.press("ArrowDown");
-  await expect(page.getByRole("radio", { name: /Sample kit, version 2/ })).toBeChecked();
+  await expect(page.getByRole("radio", { name: /Tools kit/ })).toBeChecked();
   await page.keyboard.press("Tab");
   await expect(page.getByLabel("Workspace name")).toBeFocused();
   await page.keyboard.type("sample-keys");
@@ -259,7 +259,6 @@ test("sends a document's large integers exactly as typed", async ({ page }) => {
 test("moves focus to a choice question from the error summary", async ({ page }) => {
   await control(page.request, "options", { upgradeDocument: "uncovered" });
   await page.goto("/workspaces/sample-gamma/upgrade");
-  await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
   await page.getByRole("button", { name: "Begin upgrade" }).click();
   await page.getByRole("button", { name: "Send answers" }).click();
   await page.locator(".error-summary").getByRole("link", { name: "Region" }).click();

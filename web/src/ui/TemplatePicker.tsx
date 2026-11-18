@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { ApiError, listTemplates } from "../api/client.ts";
 import type { Template } from "../api/types.ts";
+import { paths } from "../router.ts";
+import { Link } from "./Link.tsx";
 
 interface Props {
   value: string | null;
@@ -8,7 +10,7 @@ interface Props {
   legend: string;
 }
 
-/** The approved template list as a set of choice cards. */
+/** The registered templates as a set of choice cards, each at its current version. */
 export function TemplatePicker({ value, onChange, legend }: Props) {
   const [templates, setTemplates] = useState<Template[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,11 +34,11 @@ export function TemplatePicker({ value, onChange, legend }: Props) {
           {error}
         </p>
       ) : null}
-      {templates === null && !error ? (
-        <p className="muted">Reading the approved templates…</p>
-      ) : null}
+      {templates === null && !error ? <p className="muted">Reading templates…</p> : null}
       {templates?.length === 0 ? (
-        <p className="muted">No templates are approved in the configuration.</p>
+        <p className="muted">
+          No registered templates. <Link href={paths.templates()}>Register a template</Link>.
+        </p>
       ) : null}
       <div className="template-cards" role="radiogroup">
         {templates?.map((t) => (
@@ -49,7 +51,7 @@ export function TemplatePicker({ value, onChange, legend }: Props) {
               onChange={() => onChange(t.id)}
             />
             <span className="template-name">{t.name}</span>
-            <span className="template-id mono">{t.id}</span>
+            <span className="template-id mono">{t.currentVersion}</span>
           </label>
         ))}
       </div>

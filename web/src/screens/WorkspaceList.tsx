@@ -194,6 +194,9 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                           ? "folder gone"
                           : "no container"}
                     </p>
+                    <p className="entry-template">
+                      {ws.template ? ws.template.name : "Unregistered template"}
+                    </p>
                     <p className="entry-policies mono" aria-label={`Policies for ${ws.name}`}>
                       {ws.policies.length ? ws.policies.join(" · ") : "No policies"}
                     </p>

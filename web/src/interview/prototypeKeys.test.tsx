@@ -95,6 +95,7 @@ describe.each(names)("a workspace or state named %s", (name) => {
                     applyFailure: null,
                     selectionImported: true,
                     xolotlKey: null,
+                    template: null,
                   },
                 ] satisfies Workspace[],
               },

@@ -7,7 +7,6 @@ test.beforeEach(async ({ request }) => reset(request));
 async function beginUpgrade(page: Page, workspace: string) {
   await page.goto(`/workspaces/${workspace}/upgrade`);
   await expect(page.getByRole("heading", { name: `Upgrade ${workspace}` })).toBeVisible();
-  await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
   await page.getByRole("button", { name: "Begin upgrade" }).click();
   await expect(page.getByText("Question batch 1")).toBeVisible();
 }
@@ -19,7 +18,6 @@ test("renders the whole producer batch it receives and completes the upgrade job
   await page.goto("/workspaces/sample-alpha/upgrade");
   await expect(page.locator(".upgrade-current .status")).toHaveText("Running");
   await shot(page, "upgrade-start");
-  await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
   await page.getByRole("button", { name: "Begin upgrade" }).click();
   await expect(page.getByText("Question batch 1")).toBeVisible();
   await expect(page).toHaveURL(/\/workspaces\/sample-alpha\/upgrade\?job=job-/);
@@ -92,7 +90,6 @@ test("asks only what a narrowed batch asks (synthetic uncovered-question fixture
 
 test("reports merge conflicts as a failed upgrade with the conflicted paths", async ({ page }) => {
   await page.goto("/workspaces/sample-beta/upgrade");
-  await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
   await page.getByRole("button", { name: "Begin upgrade" }).click();
   await page
     .getByRole("group", { name: /^Region/ })
@@ -117,7 +114,6 @@ test("keeps an upgrade off a workspace that already has a job", async ({ page, r
   const { jobId } = await started.json();
   await page.goto("/workspaces/sample-slow/upgrade");
   await expect(page.getByRole("status")).toContainText("already has a stop job");
-  await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
   await expect(page.getByRole("button", { name: "Begin upgrade" })).toBeDisabled();
   await page.getByRole("link", { name: "Show the running job" }).click();
   await expect(page).toHaveURL(new RegExp(`/\\?job=${jobId}$`));

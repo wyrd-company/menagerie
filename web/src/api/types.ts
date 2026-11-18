@@ -23,12 +23,29 @@ export interface Workspace {
   applyFailure: { kind: string; message: string } | null;
   selectionImported: boolean;
   xolotlKey: string | null;
+  /** The workspace's registered template, or null when its source is not registered. */
+  template: TemplateRef | null;
 }
 
-export interface Template {
+export interface TemplateRef {
   id: string;
   name: string;
 }
+
+/** A registered template. */
+export interface Template {
+  id: string;
+  name: string;
+  /** The address without a ref. */
+  address: string;
+  currentVersion: string;
+  runnerImage: string | null;
+  /** The names of the workspaces that use it. */
+  workspaces: string[];
+}
+
+/** The registration checks, in the order they run. */
+export type TemplateCheck = "address" | "fetch" | "version" | "read" | "definition";
 
 export type Operation =
   | "create"
@@ -45,6 +62,8 @@ export interface ErrorBody {
   kind: string;
   message: string;
   activeJobId?: string;
+  /** With template-check-failed: the first registration check that failed. */
+  check?: TemplateCheck | (string & {});
 }
 
 export type JobState = "running" | "waiting-for-answers" | "succeeded" | "failed" | "ended";

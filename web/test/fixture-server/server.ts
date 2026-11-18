@@ -14,16 +14,19 @@ import { extname, join, normalize } from "node:path";
 import { finish, log, send, summary } from "./events.ts";
 import { answer, run } from "./scenarios.ts";
 import {
+  initialTemplates,
   initialWorkspaces,
-  templates,
+  newer,
   type FixtureJob,
   type FixtureOptions,
+  type FixtureTemplate,
   type World,
 } from "./state.ts";
 
 export function createFixture(options: { distDir: string }) {
   const world: World = {
     workspaces: initialWorkspaces(),
+    templates: initialTemplates(),
     options: { upgradeDocument: "raw", t3CodeInstalled: true },
   };
   let jobs = new Map<string, FixtureJob>();
@@ -40,6 +43,7 @@ export function createFixture(options: { distDir: string }) {
   const reset = () => {
     for (const job of jobs.values()) for (const res of job.listeners) res.end();
     world.workspaces = initialWorkspaces();
+    world.templates = initialTemplates();
     world.options = { upgradeDocument: "raw", t3CodeInstalled: true };
     jobs = new Map();
     signedIn = true;
@@ -230,8 +234,12 @@ export function createFixture(options: { distDir: string }) {
           const active = [...jobs.values()].find(
             (j) => j.workspace === w.name && j.finishedAt === null,
           );
+          const template = world.templates.find((t) => t.id === w.template);
           return {
-            ...w,
+            name: w.name,
+            state: w.state,
+            containerId: w.containerId,
+            template: template ? { id: template.id, name: template.name } : null,
             policies: selections.get(w.name) ?? [],
             selectionRevision: revisions.get(w.name) ?? 0,
             appliedRevision: applied.get(w.name) ?? 0,
@@ -295,7 +303,131 @@ export function createFixture(options: { distDir: string }) {
         expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
       });
     }
-    if (pathname === "/api/templates" && method === "GET") return json(res, 200, { templates });
+    const templateBody = (t: FixtureTemplate) => ({
+      id: t.id,
+      name: t.name,
+      address: t.address,
+      currentVersion: t.currentVersion,
+      runnerImage: t.runnerImage,
+      workspaces: world.workspaces.filter((w) => w.template === t.id).map((w) => w.name),
+    });
+    const validName = (name: unknown) =>
+      typeof name === "string" &&
+      name.trim() !== "" &&
+      [...name].length <= 100 &&
+      ![...name].some((c) => c.charCodeAt(0) < 0x20 || "\u007f\u2028\u2029".includes(c));
+    if (pathname === "/api/templates" && method === "GET") {
+      const sorted = [...world.templates].sort(
+        (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+      );
+      return json(res, 200, { templates: sorted.map(templateBody) });
+    }
+    if (pathname === "/api/templates" && method === "POST") {
+      // The fixture's checks stand in for the template service's: an address
+      // naming a repository below gives that refusal, by its check.
+      const input = JSON.parse(await readBody(req)) as {
+        name?: unknown;
+        address?: unknown;
+        runnerImage?: unknown;
+      };
+      if (!validName(input.name) || typeof input.address !== "string")
+        return fail(res, 400, "invalid-request", "name must be one line of 1 to 100 characters");
+      const address = input.address;
+      const check = (name: string, message: string) =>
+        fail(res, 422, "template-check-failed", message, { check: name });
+      if (!/^(gh:|git@|ssh:\/\/|https:\/\/)/.test(address) || /:\/\/[^/@]*:[^/@]*@/.test(address))
+        return check(
+          "address",
+          "the address is refused: it must be gh:owner/repository, git@host:path, ssh:// or https://, with no password",
+        );
+      if (address.includes("missing"))
+        return check(
+          "fetch",
+          "the template could not be fetched: the Git host has no such repository",
+        );
+      if (address.includes("untagged"))
+        return check(
+          "version",
+          "the repository has no version: a version is a tag MAJOR.MINOR.PATCH, with an optional leading v",
+        );
+      if (address.includes("bare"))
+        return check(
+          "definition",
+          "the template's files at version 1.0.0 have no .devcontainer/devcontainer.json",
+        );
+      const base = address.replace(/@[^@/#]*(#|$)/, "$1");
+      const existing = world.templates.find((t) => t.address === base);
+      if (existing)
+        return fail(
+          res,
+          409,
+          "template-exists",
+          `this template is registered already, as ${existing.name} (${existing.id})`,
+        );
+      const stem =
+        (input.name as string)
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(Boolean)
+          .join("-") || "template";
+      let id = stem;
+      for (let n = 2; world.templates.some((t) => t.id === id); n++) id = `${stem}-${n}`;
+      const template: FixtureTemplate = {
+        id,
+        name: (input.name as string).trim(),
+        address: base,
+        currentVersion: "1.0.0",
+        runnerImage: typeof input.runnerImage === "string" ? input.runnerImage : null,
+        versions: ["1.0.0", "1.1.0"],
+      };
+      world.templates.push(template);
+      return json(res, 201, templateBody(template), { Location: `/api/templates/${id}` });
+    }
+    const templateMatch = /^\/api\/templates\/([^/]+)(\/upgrades)?$/.exec(pathname);
+    if (templateMatch) {
+      const template = world.templates.find((t) => t.id === decodeURIComponent(templateMatch[1]!));
+      if (!template)
+        return fail(res, 404, "unknown-template", "no registered template has this id");
+      if (templateMatch[2] && method === "POST") {
+        const { version } = JSON.parse(await readBody(req)) as { version?: string };
+        if (
+          !version ||
+          !template.versions.includes(version) ||
+          !newer(version, template.currentVersion)
+        )
+          return fail(
+            res,
+            409,
+            "version-not-newer",
+            "the version is not a version of the template's repository newer than its current version",
+          );
+        template.currentVersion = version;
+        return json(res, 200, templateBody(template));
+      }
+      if (!templateMatch[2] && method === "PATCH") {
+        const edit = JSON.parse(await readBody(req)) as { name?: unknown; runnerImage?: unknown };
+        if (edit.name !== undefined && !validName(edit.name))
+          return fail(res, 400, "invalid-request", "name must be one line of 1 to 100 characters");
+        if (typeof edit.name === "string") template.name = edit.name;
+        if (edit.runnerImage !== undefined)
+          template.runnerImage = typeof edit.runnerImage === "string" ? edit.runnerImage : null;
+        return json(res, 200, templateBody(template));
+      }
+      if (!templateMatch[2] && method === "DELETE") {
+        const users = templateBody(template).workspaces;
+        if (users.length)
+          return fail(
+            res,
+            409,
+            "template-in-use",
+            `the template is used by workspace ${users.join(", ")}; delete those workspaces first`,
+          );
+        world.templates = world.templates.filter((t) => t !== template);
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+    }
     if (pathname === "/api/jobs" && method === "GET") {
       return json(res, 200, { jobs: [...jobs.values()].reverse().map(summary) });
     }
@@ -327,11 +459,11 @@ export function createFixture(options: { distDir: string }) {
       if (operation === "apply-branch" && !input.branch) {
         return fail(res, 400, "invalid-request", "branch is required");
       }
-      if (
-        (operation === "create" || operation === "upgrade") &&
-        !templates.some((t) => t.id === input.templateId)
-      ) {
-        return fail(res, 404, "unknown-template", `no approved template ${input.templateId}`);
+      if (operation === "create" && !world.templates.some((t) => t.id === input.templateId)) {
+        return fail(res, 404, "unknown-template", `no registered template ${input.templateId}`);
+      }
+      if (operation === "upgrade" && input.templateId !== undefined) {
+        return fail(res, 400, "invalid-request", "an upgrade takes no templateId");
       }
       if (operation === "create") {
         const chosen = [...new Set([...(input.policies ?? []), ...policySettings.required])];
@@ -347,6 +479,23 @@ export function createFixture(options: { distDir: string }) {
         applied.set(name, 1);
       }
       const ws = world.workspaces.find((w) => w.name === name);
+      if (operation === "upgrade" && ws && ws.state !== "no-folder") {
+        const template = world.templates.find((t) => t.id === ws.template);
+        if (!template)
+          return fail(
+            res,
+            409,
+            "template-not-registered",
+            `workspace ${name} has no registered template`,
+          );
+        if (ws.applied && !newer(template.currentVersion, ws.applied))
+          return fail(
+            res,
+            409,
+            "upgrade-not-needed",
+            `workspace ${name} already has version ${ws.applied} of template ${template.id}, whose current version is ${template.currentVersion}`,
+          );
+      }
       if (operation === "create" && ws)
         return fail(res, 409, "workspace-exists", `workspace ${name} already exists`);
       if (operation !== "create" && (!ws || (ws.state === "no-folder" && operation !== "delete")))

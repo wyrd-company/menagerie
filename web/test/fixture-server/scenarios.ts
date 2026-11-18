@@ -102,10 +102,24 @@ async function complete(world: World, job: FixtureJob) {
   log(job, "initialize: ok");
   setState(job, "running", job.operation === "create" ? "up" : "rebuild");
   let ws = workspace(world, job.workspace);
+  // A create generates, and an upgrade applies, the current version of its template.
+  const template = world.templates.find(
+    (t) => t.id === (job.operation === "create" ? job.templateId : ws?.template),
+  );
   if (!ws) {
-    ws = { name: job.workspace, state: "running", containerId: null };
+    ws = {
+      name: job.workspace,
+      state: "running",
+      containerId: null,
+      template: null,
+      applied: null,
+    };
     world.workspaces.push(ws);
     world.workspaces.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  if (template) {
+    ws.template = template.id;
+    ws.applied = template.currentVersion;
   }
   ws.state = "running";
   ws.containerId = containerId(job.workspace);

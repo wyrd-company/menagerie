@@ -1,11 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { ApiError, listWorkspaces, startJob } from "../api/client.ts";
-import type { Workspace } from "../api/types.ts";
+import { ApiError, listTemplates, listWorkspaces, startJob } from "../api/client.ts";
+import type { Template, Workspace } from "../api/types.ts";
 import { JobPanel } from "../jobs/JobPanel.tsx";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
 import { StatusBadge } from "../ui/StatusBadge.tsx";
-import { TemplatePicker } from "../ui/TemplatePicker.tsx";
 
 export function UpgradeWorkspace({
   workspace,
@@ -43,15 +42,18 @@ export function UpgradeWorkspace({
 
 function StartUpgrade({ workspace }: { workspace: string }) {
   const [current, setCurrent] = useState<Workspace | null | undefined>(undefined);
-  const [templateId, setTemplateId] = useState<string | null>(null);
+  const [template, setTemplate] = useState<Template | null>(null);
   const [reanswer, setReanswer] = useState(false);
-  const [checked, setChecked] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
-    listWorkspaces()
-      .then((all) => setCurrent(all.find((w) => w.name === workspace) ?? null))
+    Promise.all([listWorkspaces(), listTemplates()])
+      .then(([all, templates]) => {
+        const found = all.find((w) => w.name === workspace) ?? null;
+        setCurrent(found);
+        setTemplate(templates.find((t) => t.id === found?.template?.id) ?? null);
+      })
       .catch((e: unknown) =>
         setError(e instanceof ApiError ? e : new ApiError(0, null, String(e))),
       );
@@ -59,15 +61,13 @@ function StartUpgrade({ workspace }: { workspace: string }) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setChecked(true);
-    if (templateId === null) return;
     setStarting(true);
     setError(null);
     try {
+      // The upgrade applies the current version of the workspace's own template.
       const job = await startJob({
         operation: "upgrade",
         workspace,
-        templateId,
         ...(reanswer ? { reanswer } : {}),
       });
       navigate(paths.upgrade(workspace, job.jobId), { replace: true });
@@ -89,17 +89,23 @@ function StartUpgrade({ workspace }: { workspace: string }) {
   }
 
   const active = current?.activeJob ?? null;
+  const unregistered = current !== undefined && current.template === null;
   return (
     <form className="start-form" noValidate onSubmit={(e) => void submit(e)}>
       <div className="upgrade-current">
         {current ? <StatusBadge state={current.state} /> : <span className="muted">Reading…</span>}
-        <p>
-          Menagerie commits and backs up local changes to tracked files first. The interview then
-          asks only the questions that the recorded answers in{" "}
-          <span className="mono">.toha.json</span> do not cover, and the workspace is rebuilt after
-          the merge.
-        </p>
+        {current?.template ? (
+          <p>
+            Current template <strong>{current.template.name}</strong>{" "}
+            {template ? <strong className="mono">{template.currentVersion}</strong> : null}
+          </p>
+        ) : null}
       </div>
+      {unregistered ? (
+        <p className="field-errors" role="alert">
+          Register this workspace's template before upgrading.
+        </p>
+      ) : null}
       {active ? (
         <div className="notice notice-warn" role="status">
           <p>
@@ -109,32 +115,10 @@ function StartUpgrade({ workspace }: { workspace: string }) {
           <Link href={paths.list(active.jobId)}>Show the running job</Link>
         </div>
       ) : null}
-      <TemplatePicker value={templateId} onChange={setTemplateId} legend="Upgrade to template" />
-      {checked && templateId === null ? (
-        <p className="field-errors" role="alert">
-          Choose a template.
-        </p>
-      ) : null}
-      <fieldset className="field">
-        <legend className="field-label">
-          <span className="field-title">Questions</span>
-        </legend>
-        <label className="choice">
-          <input
-            type="checkbox"
-            checked={reanswer}
-            onChange={(e) => setReanswer(e.target.checked)}
-            aria-describedby="reanswer-desc"
-          />
-          <span>Ask every question again</span>
-        </label>
-        <p className="field-description" id="reanswer-desc">
-          Without it, the interview asks only what the recorded answers do not settle, so an option
-          the new version adds to a question already answered is never offered. With it, every
-          question is asked, starting from the recorded answers; documents are still read from the
-          workspace.
-        </p>
-      </fieldset>
+      <label className="choice">
+        <input type="checkbox" checked={reanswer} onChange={(e) => setReanswer(e.target.checked)} />
+        <span>Ask every question again</span>
+      </label>
       {error ? (
         <div className="notice notice-bad" role="alert">
           <p>
@@ -146,7 +130,11 @@ function StartUpgrade({ workspace }: { workspace: string }) {
         </div>
       ) : null}
       <div className="interview-actions">
-        <button type="submit" className="primary" disabled={starting || active !== null}>
+        <button
+          type="submit"
+          className="primary"
+          disabled={starting || active !== null || unregistered}
+        >
           {starting ? "Starting…" : "Begin upgrade"}
         </button>
       </div>

@@ -18,7 +18,7 @@ for (const width of [1280, 390]) {
       });
       expect(response.ok()).toBeTruthy();
       await page.goto("/create");
-      await page.getByRole("radio", { name: /Sample kit, version 1/ }).check();
+      await page.getByRole("radio", { name: /Sample kit/ }).check();
       await page.getByLabel("Workspace name").fill("sample-policy");
       await page.getByRole("checkbox", { name: "bob-ssh", exact: true }).check();
       await expectNoHorizontalScroll(page);
@@ -62,7 +62,7 @@ for (const [name, message] of [
       });
     });
     await page.goto("/create");
-    await page.getByRole("radio", { name: /Sample kit, version 1/ }).check();
+    await page.getByRole("radio", { name: /Sample kit/ }).check();
     await page.getByLabel("Workspace name").fill("sample-key-refused");
     await page.getByRole("button", { name: "Begin interview" }).click();
     const alert = page.getByRole("alert");

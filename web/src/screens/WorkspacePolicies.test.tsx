@@ -30,6 +30,7 @@ const workspace: Workspace = {
   selectionImported: true,
   applyFailure: null,
   xolotlKey: null,
+  template: null,
 };
 afterEach(() => {
   vi.unstubAllGlobals();

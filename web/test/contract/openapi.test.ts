@@ -169,6 +169,88 @@ describe("the fixture server keeps the workspace API contract", () => {
     await expectResponse("/api/jobs", "get", await call("/api/jobs"));
   });
 
+  it("registers, upgrades, edits and removes templates", async () => {
+    await post("/__fixture/reset", {});
+    const registered = await post("/api/templates", {
+      name: "Sample tools",
+      address: "https://git.example.test/example-org/sample-tools@1.0.0",
+      runnerImage: "alpine:3.22",
+    });
+    expect(registered.headers.get("location")).toBe("/api/templates/sample-tools");
+    expect(await expectResponse("/api/templates", "post", registered)).toMatchObject({
+      id: "sample-tools",
+      address: "https://git.example.test/example-org/sample-tools",
+      currentVersion: "1.0.0",
+    });
+    for (const [address, check] of [
+      ["/srv/templates/kit", "address"],
+      ["https://git.example.test/example-org/bare", "definition"],
+    ] as const) {
+      const refused = await expectResponse(
+        "/api/templates",
+        "post",
+        await post("/api/templates", { name: "Kit", address }),
+      );
+      expect(refused).toMatchObject({ error: { kind: "template-check-failed", check } });
+    }
+    expect(
+      await expectResponse(
+        "/api/templates",
+        "post",
+        await post("/api/templates", {
+          name: "Again",
+          address: "https://git.example.test/example-org/sample-tools",
+        }),
+      ),
+    ).toMatchObject({ error: { kind: "template-exists" } });
+    const path = "/api/templates/{id}/upgrades";
+    expect(
+      await expectResponse(
+        path,
+        "post",
+        await post("/api/templates/sample-tools/upgrades", { version: "1.0.0" }),
+      ),
+    ).toMatchObject({ error: { kind: "version-not-newer" } });
+    expect(
+      await expectResponse(
+        path,
+        "post",
+        await post("/api/templates/sample-tools/upgrades", { version: "1.1.0" }),
+      ),
+    ).toMatchObject({ currentVersion: "1.1.0" });
+    const edited = await call("/api/templates/sample-tools", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Tools", runnerImage: null }),
+    });
+    expect(await expectResponse("/api/templates/{id}", "patch", edited)).toMatchObject({
+      name: "Tools",
+      runnerImage: null,
+    });
+    const inUse = await call("/api/templates/sample-kit", { method: "DELETE" });
+    expect(await expectResponse("/api/templates/{id}", "delete", inUse)).toMatchObject({
+      error: { kind: "template-in-use" },
+    });
+    const removed = await call("/api/templates/sample-tools", { method: "DELETE" });
+    expect(removed.status).toBe(204);
+    expect(Object.keys(spec.paths["/api/templates/{id}"]!.delete!.responses)).toContain("204");
+    const missing = await call("/api/templates/sample-tools", { method: "DELETE" });
+    expect(await expectResponse("/api/templates/{id}", "delete", missing)).toMatchObject({
+      error: { kind: "unknown-template" },
+    });
+    expect(
+      await expectResponse(
+        "/api/jobs",
+        "post",
+        await post("/api/jobs", {
+          operation: "upgrade",
+          workspace: "sample-alpha",
+          templateId: "x",
+        }),
+      ),
+    ).toMatchObject({ error: { kind: "invalid-request" } });
+  });
+
   it("starts a container job, streams it and refuses a second job for the workspace", async () => {
     await post("/__fixture/reset", {});
     const started = await post("/api/jobs", { operation: "rebuild", workspace: "sample-slow" });
@@ -232,7 +314,7 @@ describe("the fixture server keeps the workspace API contract", () => {
           await post("/api/jobs", {
             operation: "create",
             workspace: "sample-alpha",
-            templateId: "sample-kit-v1",
+            templateId: "sample-kit",
           }),
         ),
         "workspace-exists",
@@ -255,7 +337,7 @@ describe("the fixture server keeps the workspace API contract", () => {
       await post("/api/jobs", {
         operation: "create",
         workspace: "sample-space",
-        templateId: "sample-kit-v1",
+        templateId: "sample-kit",
       })
     ).json()) as { jobId: string };
     const first = await readEvents(job.jobId, (types) => types.includes("interview"));
@@ -310,7 +392,6 @@ describe("the fixture server keeps the workspace API contract", () => {
       await post("/api/jobs", {
         operation: "upgrade",
         workspace: "sample-beta",
-        templateId: "sample-kit-v2",
       })
     ).json()) as { jobId: string };
     const events = await readEvents(job.jobId, (types) => types.includes("interview"));
@@ -348,8 +429,8 @@ describe("the UI client sends request bodies the contract accepts", () => {
     try {
       for (const operation of ["start", "stop", "rebuild"] as const)
         await startJob({ operation, workspace: "sample" });
-      for (const operation of ["create", "upgrade"] as const)
-        await startJob({ operation, workspace: "sample", templateId: "sample-kit" });
+      await startJob({ operation: "create", workspace: "sample", templateId: "sample-kit" });
+      await startJob({ operation: "upgrade", workspace: "sample" });
     } finally {
       vi.unstubAllGlobals();
     }

@@ -46,6 +46,7 @@ describe("a commit job", () => {
                     applyFailure: null,
                     selectionImported: true,
                     xolotlKey: null,
+                    template: null,
                     name: "sample",
                     state: "running",
                     containerId: "c1",

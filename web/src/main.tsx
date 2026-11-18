@@ -8,6 +8,7 @@ import "./styles/register.css";
 import "./styles/console.css";
 import "./styles/forms.css";
 import "./styles/policies.css";
+import "./styles/templates.css";
 import { App } from "./App.tsx";
 
 const root = document.getElementById("root");

@@ -97,6 +97,35 @@ export async function listTemplates(): Promise<Template[]> {
   return (await json<{ templates: Template[] }>("/api/templates")).templates;
 }
 
+export interface TemplateRegistration {
+  name: string;
+  address: string;
+  runnerImage?: string;
+}
+
+/** Registers a template once it passes the minimum checks. */
+export const registerTemplate = (registration: TemplateRegistration) =>
+  json<Template>("/api/templates", { method: "POST", body: JSON.stringify(registration) });
+
+/** Makes a newer version of the template's repository its current version. */
+export const upgradeTemplate = (id: string, version: string) =>
+  json<Template>(`/api/templates/${encodeURIComponent(id)}/upgrades`, {
+    method: "POST",
+    body: JSON.stringify({ version }),
+  });
+
+/** Renames a template or changes its runner image; null runs its hooks in the default. */
+export const editTemplate = (id: string, edit: { name?: string; runnerImage?: string | null }) =>
+  json<Template>(`/api/templates/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(edit),
+  });
+
+/** Removes a template no workspace uses. */
+export async function removeTemplate(id: string): Promise<void> {
+  await request(`/api/templates/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 export async function mintT3CodePairingToken(workspace: string): Promise<T3CodePairingToken> {
   return json<T3CodePairingToken>(
     `/api/workspaces/${encodeURIComponent(workspace)}/t3-code-pairing-tokens`,
