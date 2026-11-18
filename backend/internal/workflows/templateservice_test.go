@@ -929,6 +929,19 @@ func TestRegistrationChecksAgainstTheTemplateService(t *testing.T) {
 	untagged := a.kitRepository(t, "untagged", "", false)
 	tagged := a.kitRepository(t, "tagged", "1.0.0", false)
 	gitCLI(t, filepath.Join(a.templates, "tagged"), "tag", "next")
+	// A manifest Toha cannot load, and a link that leads out of the
+	// checkout, as a hook script could be.
+	unreadable := a.kitRepository(t, "unreadable", "", false)
+	writeFile(t, filepath.Join(a.templates, "unreadable"), "template.yml", "name: sample\ninterview: {not: a list}\n")
+	gitCLI(t, filepath.Join(a.templates, "unreadable"), "commit", "-q", "-am", "unreadable")
+	gitCLI(t, filepath.Join(a.templates, "unreadable"), "tag", "1.0.0")
+	linked := a.kitRepository(t, "linked", "", false)
+	if err := os.Symlink("/etc/hostname", filepath.Join(a.templates, "linked", "hook.sh")); err != nil {
+		t.Fatal(err)
+	}
+	gitCLI(t, filepath.Join(a.templates, "linked"), "add", "-A")
+	gitCLI(t, filepath.Join(a.templates, "linked"), "commit", "-q", "-m", "linked")
+	gitCLI(t, filepath.Join(a.templates, "linked"), "tag", "1.0.0")
 	password := strings.Replace(tagged, "https://", "https://sample-user:sample-password@", 1)
 	for _, c := range []struct{ address, check string }{
 		{filepath.Join(a.templates, "tagged"), "address"},
@@ -939,6 +952,8 @@ func TestRegistrationChecksAgainstTheTemplateService(t *testing.T) {
 		{untagged, "version"},
 		{tagged + "@next", "version"},
 		{tagged + "@main", "version"},
+		{unreadable, "read"},
+		{linked, "read"},
 		{bare, "definition"},
 	} {
 		status, body := a.post(t, "/api/templates", `{"name":"Kit","address":"`+c.address+`"}`)
