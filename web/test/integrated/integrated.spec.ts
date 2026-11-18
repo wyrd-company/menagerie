@@ -55,7 +55,8 @@ test.describe("as a manager", () => {
     await expect(page.getByRole("heading", { name: "Sample kit", exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "Register template" }).first().click();
     await page.getByLabel("Display name").fill("Sample kit");
-    await page.getByLabel("Address").fill(info.template.replace("https://", "file:///"));
+    // A local repository is never read, whatever the run's Git host.
+    await page.getByLabel("Address").fill("file:///srv/templates/sample-kit");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("alert")).toContainText("address:");
     await page.getByLabel("Address").fill(info.template);
