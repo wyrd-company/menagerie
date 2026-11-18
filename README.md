@@ -12,9 +12,10 @@ web UI.
 A workspace is a folder created from a [Toha](https://github.com/wyrd-company/toha)
 template, together with the devcontainer it defines. Managers sign in with
 your identity provider, answer a template's interview to create a workspace,
-see every workspace and its container, start, stop and rebuild them, and
-upgrade a workspace to a newer template version. An upgrade asks only the new
-questions and keeps local edits. A reviewed branch, such as a pull request's
+see every workspace and its container, start, stop and rebuild them, register
+templates from their Git repositories and move them to newer release tags, and
+upgrade a workspace to its template's current version. An upgrade asks only
+the new questions and keeps local edits. A reviewed branch, such as a pull request's
 head, can be applied to a workspace. Every workspace is a Git repository that
 Menagerie backs up to its own branch, on a schedule or when its
 devcontainer asks through its own socket.
@@ -23,7 +24,7 @@ builds and runs the devcontainers, and
 [Wyrwood](https://github.com/wyrd-company/wyrwood) gives Menagerie its SSH
 key or GitHub App key and registry credentials.
 
-![Creating a provisioned workspace, minting a T3 Code pairing token, upgrading and deleting it](docs/user/assets/demo.gif)
+![Creating a provisioned workspace, minting a T3 Code pairing token, upgrading its template and then the workspace, and deleting it](docs/user/assets/demo.gif)
 
 Documentation is at [wyrd.foo/docs/menagerie](https://wyrd.foo/docs/menagerie),
 published from [`docs/user/`](docs/user).

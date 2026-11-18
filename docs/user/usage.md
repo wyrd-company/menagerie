@@ -102,6 +102,8 @@ version that is not one of the repository's versions newer than the current
 one is refused: a template moves only forward. Workspaces keep the version
 they have until you [upgrade them](#upgrade-a-workspace).
 
+![The Templates screen with version 2.0.0 typed into a template's upgrade form](assets/template-upgrade.png)
+
 **Edit** renames a template or changes its runner image; its address does not
 change. **Remove** removes a template no workspace uses; while workspaces use
 it, it is refused, naming them.

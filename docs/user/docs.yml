@@ -9,6 +9,7 @@ assets:
   - assets/demo.gif
   - assets/list.png
   - assets/create-interview.png
+  - assets/template-upgrade.png
   - assets/upgrade-interview.png
   - assets/provisioning-console.png
   - assets/t3-code-token.png
@@ -52,8 +53,10 @@ products:
         and rebuilds it as a job with a live console, and mints a T3 Code pairing
         token for a running workspace that has the t3code-server Feature.
       - >-
-        Upgrades a workspace to a newer template version, asks only the new
-        questions and keeps local edits.
+        Registers a template from its Git address in the browser, checks it
+        and moves it forward to newer release tags. Upgrading a workspace
+        applies its template's current version, asks only the new questions and
+        keeps local edits.
       - >-
         Deletes a workspace after you type its name: backs it up, then removes
         its binding, Xolotl key, containers and folder. Its backup branch stays.
@@ -68,12 +71,13 @@ products:
       - src: assets/demo.gif
         caption: >-
           Creating a provisioned workspace, minting a T3 Code pairing token,
-          upgrading and deleting. An earlier job built the image, so this create
-          reads the build cache.
+          upgrading its template and then the workspace, and deleting. An
+          earlier job built the image, so this create reads the build cache.
         alt: >-
           Recording of the Menagerie web UI: a template interview creates a
           workspace, the job console passes issue-key, bind, wait-for-sockets
-          and verify, the row mints a T3 Code token with its text hidden, an
+          and verify, the row mints a T3 Code token with its text hidden, the
+          Templates screen moves the template to version 2.0.0, the workspace's
           upgrade asks one question, and a typed name deletes the workspace.
       - src: assets/provisioning-console.png
         caption: A create job that provisioned the workspace's credentials.
@@ -89,6 +93,12 @@ products:
       - src: assets/create-interview.png
         caption: A template interview that creates a workspace.
         alt: The create-workspace form showing a template's interview questions.
+      - src: assets/template-upgrade.png
+        caption: A template moving forward to a newer release tag of its repository.
+        alt: >-
+          The Templates screen listing the registered templates with their
+          addresses and current versions, with version 2.0.0 typed into one
+          template's upgrade form.
       - src: assets/upgrade-interview.png
         caption: An upgrade that asks one new question.
         alt: The upgrade form asking only the question the newer template added.

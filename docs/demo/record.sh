@@ -22,7 +22,7 @@ ffmpeg -loglevel error -y -i "$video" \
   -vf "fps=5,scale=720:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
   "$out/demo.gif"
 gifsicle -O3 --lossy=100 "$out/demo.gif" -o "$repo/docs/user/assets/demo.gif"
-for shot in list create-interview upgrade-interview provisioning-console t3-code-token delete-workspace; do
+for shot in list create-interview template-upgrade upgrade-interview provisioning-console t3-code-token delete-workspace; do
   magick "$repo/docs/user/assets/$shot.png" -strip -colors 256 "PNG8:$repo/docs/user/assets/$shot.png"
 done
 ls -l "$repo/docs/user/assets"
