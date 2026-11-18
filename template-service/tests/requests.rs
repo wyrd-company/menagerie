@@ -268,9 +268,7 @@ async fn a_session_is_pinned_to_its_template_target_and_flow() {
             edit(record)
         })
     };
-    let renamed = edit(&|r| {
-        r["template"] = json!(format!("file://{}/templates/flows", world.root.display()))
-    });
+    let renamed = edit(&|r| r["template"] = json!(served(&world.root.join("templates/flows"))));
     let named = edit(&|r| r["named"] = json!(true));
     let moved = edit(&|r| r["target"] = json!(world.folder("beta")));
     let upgraded = edit(&|r| r["base"] = json!("{}"));

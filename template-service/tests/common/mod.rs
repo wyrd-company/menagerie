@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
+mod githost;
+pub use githost::*;
+
 pub fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -141,6 +144,7 @@ impl World {
 
     /// A world whose approved list also has `templates`, as `(id, address)`.
     pub fn with_templates(templates: &[(&str, &str)]) -> Self {
+        authority();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let sample = root.join("templates/sample");
@@ -207,20 +211,25 @@ impl World {
         let socket = root.join("run/template.sock");
         let hook_socket = root.join("run/hook-runner.sock");
         let config = root.join("config.yml");
-        let s = sample.display();
-        let t = root.join("templates");
-        let t = t.display();
+        let s = served(&sample);
+        let t = |name: &str| served(&root.join("templates").join(name));
+        let folder = root.join("templates/flows");
         write(
             &root,
             "config.yml",
             format!(
-                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}, hook-runner-socket: {}, candidate-folder: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: 'file://{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: 'file://{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: 'file://{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: 'file://{s}'}}\n  - {{id: sample-commit, name: Sample, address: 'file://{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: 'file://{t}/flows'}}\n  - {{id: flows-folder, name: Flows, address: '{t}/flows'}}\n  - {{id: broken, name: Broken, address: 'file://{t}/broken'}}\n  - {{id: collision, name: Collision, address: 'file://{t}/sample_v1'}}\n  - {{id: fork, name: Fork, address: 'file://{f}'}}\n  - {{id: dotted-v1, name: Dotted, address: 'file://{t}/dotted.git@v1'}}\n  - {{id: dotted-v2, name: Dotted, address: 'file://{t}/dotted.git@v2'}}\n  - {{id: dotted-main, name: Dotted, address: 'file://{t}/dotted.git'}}\n{extra}",
+                "workspace-root: {}\nworkspace-repository: git@example.invalid:sample/backups\nwyrwood-directory: /run/sample\noidc: {{issuer: 'https://issuer.example.invalid', client-id: sample}}\ntemplate-service: {{socket: {}, hook-runner-socket: {}, candidate-folder: {}}}\ntemplates:\n  - {{id: sample-v1, name: Sample, address: '{s}@v1'}}\n  - {{id: sample-v2, name: Sample, address: '{s}@v2'}}\n  - {{id: sample-v3, name: Sample, address: '{s}@v3'}}\n  - {{id: sample-main, name: Sample, address: '{s}'}}\n  - {{id: sample-commit, name: Sample, address: '{s}@{v1}'}}\n  - {{id: flows, name: Flows, address: '{flows}'}}\n  - {{id: flows-folder, name: Flows, address: '{folder}'}}\n  - {{id: broken, name: Broken, address: '{broken}'}}\n  - {{id: collision, name: Collision, address: '{collision}'}}\n  - {{id: fork, name: Fork, address: '{f}'}}\n  - {{id: dotted-v1, name: Dotted, address: '{dotted}@v1'}}\n  - {{id: dotted-v2, name: Dotted, address: '{dotted}@v2'}}\n  - {{id: dotted-main, name: Dotted, address: '{dotted}'}}\n{extra}",
                 workspaces.display(),
                 socket.display(),
                 hook_socket.display(),
                 root.join("candidates").display(),
                 v1 = v1,
-                f = fork.display(),
+                flows = t("flows"),
+                folder = folder.display(),
+                broken = t("broken"),
+                collision = t("sample_v1"),
+                dotted = t("dotted.git"),
+                f = served(&fork),
                 extra = templates
                     .iter()
                     .map(|(id, address)| format!(
@@ -267,8 +276,9 @@ impl World {
         .unwrap();
     }
 
+    /// The sample template's address on the test host, with `reference`.
     pub fn address(&self, reference: &str) -> String {
-        format!("file://{}{reference}", self.sample.display())
+        format!("{}{reference}", served(&self.sample))
     }
 
     pub fn folder(&self, workspace: &str) -> PathBuf {

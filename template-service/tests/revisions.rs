@@ -656,10 +656,7 @@ async fn an_installed_dot_git_source_is_admitted() {
         &world.root.join("templates/dotted.git"),
         &["merge", "-q", "--ff-only", "origin/next"],
     );
-    world.install(&format!(
-        "file://{}/templates/dotted.git",
-        world.root.display()
-    ));
+    world.install(&served(&world.root.join("templates/dotted.git")));
     let (selector, start) = answered(&service, &world, "alpha", "dotted-main").await;
     assert_eq!(start["document"]["context"]["commit"], world.v2.as_str());
     let envelope = {

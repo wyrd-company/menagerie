@@ -286,7 +286,7 @@ fn shaped_world(settings: &str) -> World {
     git(&source, &["init", "-q", "-b", "main"]);
     commit_all(&source, "shaped");
     git(&source, &["tag", "v1"]);
-    let address = format!("file://{}@v1", source.display());
+    let address = format!("{}@v1", served(&source));
     World::with_templates(&[("shaped", &address)])
 }
 

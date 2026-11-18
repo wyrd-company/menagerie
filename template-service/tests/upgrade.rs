@@ -523,7 +523,7 @@ fn tiered_world() -> World {
     write(&source, "template.yml", version("a, b, c"));
     commit_all(&source, "v2");
     git(&source, &["tag", "v2"]);
-    let address = |tag: &str| format!("file://{}@{tag}", source.display());
+    let address = |tag: &str| format!("{}@{tag}", served(&source));
     World::with_templates(&[("tiered-v1", &address("v1")), ("tiered-v2", &address("v2"))])
 }
 
