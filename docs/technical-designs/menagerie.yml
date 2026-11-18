@@ -259,13 +259,20 @@ proposed-design:
     `invalid-address` a local folder, a name from Toha's registry, every
     other transport, `file://`, `git://` and `http://` included, a host or
     user that starts with `-`, user information that holds a password, such
-    as `https://user:token@host/repo`, an address that does not read one way
-    (a password that holds a `/` reads as a host, a port, a path and a ref,
-    so the parts gix and Toha read, each in a strict character set, must
-    write back to the address exactly, and an `@` that could end such a
-    password, after `git@host:path`, after a port with no user name, or
-    before a ref that holds a `.`, starts a version's tag), and, on the
-    versions route, an address with a ref. An SSH address keeps its user name, which is no
+    as `https://user:token@host/repo`, an address that does not read one way,
+    and, on the versions route, an address with a ref. A password that holds
+    a `/` reads as a host, a port, a path and a ref, so an address reads one
+    way only when: in an `https://` or `ssh://` address, the text after
+    `://` holds no `:` before an `@`, checked on the text before any parser
+    reads it, which refuses a password and also a port followed by a ref;
+    the parts gix and Toha read, each in a strict character set, write back
+    to the address exactly; and a ref that holds a `.` or follows
+    `git@host:path` is a version's tag. User information with no `:` is a
+    user name, not a password. A route that names the version beside the
+    address admits the address without its ref, checks that ref by itself,
+    and requires Toha's reading of the address at that ref to name the same
+    repository and folder at exactly that ref, so a port and a version
+    beside it are taken. An SSH address keeps its user name, which is no
     secret. The `base` of an `https` address has no user information at all,
     since the GitHub App, its one credential, ignores it, so a token written
     as a user name is stored nowhere either. No refusal, log line or answer of either service quotes an
@@ -300,9 +307,10 @@ proposed-design:
     address whose ref is anything else, but for one the `address` check
     refuses first as not reading one way (see template-admission): a ref
     that holds a character outside letters, digits, `.`, `_` and `-`, such
-    as `/` or `:`, more than one `@` after the host, and a ref that holds a
-    `.`, or follows `git@host:path` or a port with no user name, but is no
-    version's tag.
+    as `/` or `:`, more than one `@` after the host, a ref that holds a `.`
+    or follows `git@host:path` but is no version's tag, and any ref of an
+    `https://` or `ssh://` address with a port. Such an address registers
+    without its ref and takes the newest version.
     Menagerie stores the address without its ref, as the address route's
     `base`. Registration runs the minimum checks in this order and refuses
     the template at the first that fails, naming the check: `address`, the

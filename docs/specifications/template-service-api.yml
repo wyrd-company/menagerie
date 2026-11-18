@@ -75,17 +75,21 @@ description: >-
   `user:@` included, an address that does not read one way, and, on the
   versions route, an address with a ref. Git, gix and Toha end a URL's
   authority at its first `/`, so a password that holds one, as in
-  `https://user:12/token@host` or `https://user:12/token@host/repo@1.0.0`,
+  `https://user:12/token@host` or `https://alice@host:12/token@gitserver`,
   reads as a host, a port, a path and a ref. So an address reads one way
-  only when: the user name and host gix reads of the repository, its path,
-  and Toha's ref and `#` folder are each in a strict set, a user name,
-  path, ref and folder of letters, digits and `.` `_` `~` `-` (a path and
-  folder also `/`) and a host of lower-case letters, digits, `.` and `-`;
-  a strict writer, given those parts, writes the address back exactly, so
-  nothing was decoded from a `%` escape, dropped or read across a
-  separator; and where the `@` before a ref could end such a password,
-  after `git@host:path`, after a port with no user name, or before a ref
-  that holds a `.` and so could be a host name, the ref is a version's tag.
+  only when: in an `https://` or `ssh://` address, the text after `://`
+  holds no `:` before an `@`, checked on the text before any parser reads
+  it, which refuses a password and also a port followed by a ref; the user
+  name and host gix reads of the repository, its path, and Toha's ref and
+  `#` folder are each in a strict set, a user name and path of letters,
+  digits and `.` `_` `~` `-` (a path also `/`), a ref of letters, digits
+  and `.` `_` `-`, a folder of those and `/`, and a host of lower-case
+  letters, digits, `.` and `-`; a strict writer, given those parts, writes
+  the address back exactly, so nothing was decoded from a `%` escape,
+  dropped or read across a separator; and a ref that follows
+  `git@host:path`, or holds a `.` and so could be a host name, is a
+  version's tag. User information with no `:` is a user name, not a
+  password.
   No refusal quotes the address, so a password given by mistake is shown
   nowhere. `/v1/templates/addresses`
   answers 200 `{"source","reference","base"}`: `source` is Toha's formal name
@@ -148,9 +152,12 @@ description: >-
   workspace root joined with it, that the folder's real path, with symbolic
   links resolved, is a direct child of the root's real path, that `commit`,
   when given, is a full Git object id, else `malformed-request`, and that
-  `address` at `ref` is admitted (see Addresses): `ref` is not empty, does
-  not start with `-`, holds no space, control character, `@`, `#` or `:`,
-  and the address has no ref of its own, else `invalid-address`. A route
+  `address` at `ref` is admitted (see Addresses): the address without a
+  ref of its own is admitted; `ref` is letters, digits, `.`, `_` and `-`,
+  not starting with `-`; and Toha's reading of the address at `ref` names
+  the admitted repository and folder at exactly that ref, else
+  `invalid-address`. So a route takes a version beside an address with a
+  port, which the address alone could not name. A route
   that carries a session then verifies its signature for this flow (create
   or upgrade), `workspace`, `address` and `ref`, and refuses an unsigned
   value, an altered record or signature, and a value issued for another

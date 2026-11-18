@@ -191,8 +191,9 @@ description: >-
   names what failed and never quotes the address: `address`, the template
   service reads and admits the address, so a folder, `file://`, a registry
   name, `git://`, `http://`, a password or user information that reads
-  more than one way, as a password holding `/` does, is refused before any
-  fetch;
+  more than one way, as a password holding `/` does, and an `https://` or
+  `ssh://` address with both a port and a ref, are refused before any
+  fetch; such an address registers without its ref, at the newest version;
   `fetch`, the repository's versions can be listed; `version`, the list
   holds at least one version and an address's ref is a version's tag;
   `fetch` again, the current version can be fetched; `read`, Toha loads

@@ -96,11 +96,15 @@ refuses an address that holds a password, such as
 `https://user:token@host/repo`, and stores, shows and logs it nowhere. It
 also refuses an address a password could hide in, since Git reads
 `https://user:12/token@host` as host `user`, port 12, path `/token` and ref
-`host`. So an address must be written plainly: a user name, path, ref and
-`#` folder of letters, digits and `.` `_` `~` `-` (a path and folder also
-`/`), a host in lower case, and no `%` escapes; and a ref that holds a `.`,
-or follows `git@host:path` or a port with no user name, is a version's tag,
-such as `1.2.0`. Use the GitHub App or the SSH agent for private templates;
+`host`. So in an `https://` or `ssh://` address no `:` may come before an
+`@`: a host with a port, such as `https://git.example.com:8443/repo`, takes
+no `@<ref>`; register it without one, and it takes the newest version. User
+information with no `:` is a user name, not a password. An address must
+also be written plainly: a user name and path of letters, digits and `.`
+`_` `~` `-` (a path also `/`), a ref of letters, digits and `.` `_` `-`, a
+`#` folder of those and `/`, a host in lower case, and no `%` escapes; and a
+ref that holds a `.`, or follows `git@host:path`, is a version's tag, such
+as `1.2.0`. Use the GitHub App or the SSH agent for private templates;
 see [Git hosts](install.md#git-hosts). It also refuses a local
 folder, a `file://`, `git://` or `http://` address and a Toha template name.
 
@@ -115,7 +119,9 @@ Menagerie's data, and a later edit of the key imports nothing:
   `runner-image`, and its address without the ref.
 - An entry whose address Menagerie refuses, a password in it included, is
   skipped. The start's log names the entry's `id` and the refusal, never its
-  address.
+  address. So is an entry on a host with a port that names a ref, as every
+  entry does: [register the template](usage.md#register-a-template) without
+  the ref instead, which takes its repository's newest version.
 - A repository none of whose entries names a version, such as one pinned to
   a branch, a commit or a tag like `v1`, is not imported, and the log names
   its entries' `id`s. Its workspaces keep working. Tag a version in its
