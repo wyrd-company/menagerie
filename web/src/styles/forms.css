@@ -81,7 +81,7 @@
 
 .template-id {
   font-size: 0.75rem;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 /* ---- Fields ---- */

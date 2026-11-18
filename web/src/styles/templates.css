@@ -37,6 +37,11 @@
   margin: 0;
 }
 
+/* Faint text is under 4.5:1 on the light theme's surfaces. */
+.templates .muted {
+  color: var(--text-muted);
+}
+
 .template-address {
   margin: 0.375rem 0 0;
   font-size: 0.85rem;
