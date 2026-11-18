@@ -666,7 +666,8 @@ validation-criteria: >-
   covering waiting, single answers, flow ends, failures and slot release;
   `go test ./backend/internal/backup/` pushes through an isolated SSH server
   and agent, and pushes and fetches through an isolated HTTPS Git host
-  with a token, whose every failure names neither the URL nor the token; `go test -tags templateservice ./backend/internal/workflows/`
+  with a token, whose every failure names neither the URL nor the token;
+  `go test -tags templateservice ./backend/internal/workflows/`
   runs create and upgrade against the real template service, with an
   upgrade whose hook changes a tracked file's content that only Toha's
   merge brings into the workspace folder. `go test
