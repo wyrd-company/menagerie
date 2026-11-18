@@ -413,7 +413,7 @@ func TestImageWyrwoodGitHubApp(t *testing.T) {
 	browserTemplate(t, work, 1)
 	gitRun(t, work, "add", "-A")
 	gitRun(t, work, "commit", "-q", "-m", "v1")
-	gitRun(t, work, "tag", "v1")
+	gitRun(t, work, "tag", "1.0.0")
 	templateDir := filepath.Join(gh.Dir, sampleAccount, sampleTemplateRepo+".git")
 	gitRun(t, base, "clone", "-q", "--bare", work, templateDir)
 	backupDir := filepath.Join(gh.Dir, sampleAccount, sampleBackupRepo+".git")
@@ -443,7 +443,7 @@ oidc:
   client-id: %s
   redirect-url: %s
 templates:
-  - {id: sample-kit-v1, name: "Sample kit, version 1", address: '%s@v1'}
+  - {id: sample-kit, name: "Sample kit", address: '%s@1.0.0'}
 github-app:
   app-id: %d
   transit-key: %s
@@ -512,7 +512,7 @@ github-app:
 
 	t.Run("create fetches a private template and backs up with installation tokens only", func(t *testing.T) {
 		c.t = t
-		snap := runInterviewJob(t, b, site, "create", "alpha", "sample-kit-v1",
+		snap := runInterviewJob(t, b, site, "create", "alpha", "sample-kit",
 			map[string]any{"label": "Sample label", "size": "small", "verbose": false, "tags": []string{"alpha"}})
 		text := jobText(t, b, site, snap.JobID)
 		if !strings.Contains(text, "event: result") {

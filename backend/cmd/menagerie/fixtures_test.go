@@ -3,14 +3,28 @@
 package main
 
 // Fixtures the Pocket ID-backed suites share: required settings, test Git
-// repositories and the generic two-version sample template.
+// repositories, the generic two-version sample template and the HTTPS host
+// that serves template repositories.
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/cgi"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func requireEnv(t *testing.T, name string) string {
@@ -71,4 +85,103 @@ func browserTemplate(t *testing.T, dir string, version int) {
   "initializeCommand": "mkdir -p markers && echo initialized > markers/initialize.txt"
 }
 `)
+}
+
+// templateHost serves the template repositories under Dir anonymously,
+// as a Git host over HTTPS on 127.0.0.1, with a certificate signed by an
+// authority generated for the test. The template service, which refuses
+// file:// and folder addresses, trusts it through GIT_SSL_CAINFO when it
+// runs here and through SSL_CERT_FILE in the image. Git runs here only as
+// the host's http-backend program.
+type templateHost struct {
+	Dir string
+	// URL is the host's origin.
+	URL string
+	// Authority is the PEM file of the authority that signed its
+	// certificate, readable by the image's services.
+	Authority string
+}
+
+func newTemplateHost(t *testing.T, dir string) *templateHost {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	caTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Sample template host authority"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, _ := x509.ParseCertificate(caDER)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "127.0.0.1"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+		KeyUsage:    x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}, ca, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal("the template host needs git on PATH")
+	}
+	backend := &cgi.Handler{Path: gitPath, Args: []string{"http-backend"}, Stderr: io.Discard, Env: []string{
+		"GIT_PROJECT_ROOT=" + dir, "GIT_HTTP_EXPORT_ALL=1", "GIT_CONFIG_NOSYSTEM=1", "HOME=" + t.TempDir(),
+	}}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: backend, TLSConfig: &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}}}}
+	go func() { _ = server.ServeTLS(listener, "", "") }()
+	t.Cleanup(func() { _ = server.Close() })
+	authority := filepath.Join(dir, ".authority.pem")
+	if err := os.WriteFile(authority, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return &templateHost{Dir: dir, URL: "https://" + listener.Addr().String(), Authority: authority}
+}
+
+// Address is the address of the repository at name under Dir.
+func (h *templateHost) Address(name string) string { return h.URL + "/" + name }
+
+// kitRepository writes the sample template under the host as name, at
+// version 1 tagged 1.0.0 and, when both, at version 2 tagged 2.0.0.
+func (h *templateHost) kitRepository(t *testing.T, name string, both bool) string {
+	t.Helper()
+	repo := filepath.Join(h.Dir, name)
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "init", "-q", "-b", "main")
+	browserTemplate(t, repo, 1)
+	gitRun(t, repo, "add", "-A")
+	gitRun(t, repo, "commit", "-q", "-m", "v1")
+	gitRun(t, repo, "tag", "1.0.0")
+	if both {
+		h.newVersion(t, name, "2.0.0")
+	}
+	return repo
+}
+
+// newVersion commits version 2 of the sample template to the repository
+// at name and tags it, as a template author releases a version.
+func (h *templateHost) newVersion(t *testing.T, name, tag string) {
+	t.Helper()
+	repo := filepath.Join(h.Dir, name)
+	browserTemplate(t, repo, 2)
+	gitRun(t, repo, "add", "-A")
+	gitRun(t, repo, "commit", "-q", "-m", "v2")
+	gitRun(t, repo, "tag", tag)
 }

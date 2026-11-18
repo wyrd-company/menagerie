@@ -23,14 +23,14 @@ test("choose at create, edit immediately, and retain choices across an upgrade",
     data: {
       operation: "create",
       workspace: "policy-missing-choice",
-      templateId: "workspace-kit-v1",
+      templateId: "workspace-kit",
       policies: [],
     },
   });
   expect(invalid.status()).toBe(422);
   expect((await invalid.json()).error.kind).toBe("policy-choice-required");
   await page.goto(info.site + "/create");
-  await page.getByRole("radio", { name: /Workspace kit, version 1/ }).check();
+  await page.getByRole("radio", { name: /Workspace kit/ }).check();
   await page.getByLabel("Workspace name").fill("policy-space");
   await page.getByRole("checkbox", { name: "bob-ssh", exact: true }).check();
   await shot(page, "policy-create-choices");
@@ -62,8 +62,13 @@ test("choose at create, edit immediately, and retain choices across an upgrade",
   expect(binding.Policies.sort()).toEqual(["bob-ssh", "ira-ssh", "workspace", "xolotl-client-key"]);
   expect((await containerFor(page.request, "policy-space"))?.id).toBe(before?.id);
   await shot(page, "policy-edited-no-rebuild");
+  // The workspace kit's repository also has 2.0.0, its next current version.
+  const upgraded = await page.request.post(info.site + "/api/templates/workspace-kit/upgrades", {
+    headers,
+    data: { version: "2.0.0" },
+  });
+  expect(upgraded.status()).toBe(200);
   await page.goto(info.site + "/workspaces/policy-space/upgrade");
-  await page.getByRole("radio", { name: /Workspace kit, version 2/ }).check();
   await page.getByRole("button", { name: "Begin upgrade" }).click();
   await page.getByRole("radio", { name: "north" }).check();
   await page.getByRole("button", { name: "Send answers" }).click();

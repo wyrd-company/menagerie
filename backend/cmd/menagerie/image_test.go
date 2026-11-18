@@ -191,18 +191,16 @@ func TestImage(t *testing.T) {
 
 	base := t.TempDir()
 	rootDir := filepath.Join(base, "workspaces")
-	repo := filepath.Join(base, "templates", "sample-kit")
 	wyrwood := filepath.Join(base, "wyrwood")
-	for _, d := range []string{filepath.Join(rootDir, "alpha"), repo, wyrwood} {
+	for _, d := range []string{filepath.Join(rootDir, "alpha"), filepath.Join(base, "templates"), wyrwood} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	gitRun(t, repo, "init", "-q", "-b", "main")
-	browserTemplate(t, repo, 1)
-	gitRun(t, repo, "add", "-A")
-	gitRun(t, repo, "commit", "-q", "-m", "v1")
-	gitRun(t, repo, "tag", "v1")
+	// The template on an HTTPS Git host the image trusts through
+	// SSL_CERT_FILE; the first start imports it from the templates key.
+	templates := newTemplateHost(t, filepath.Join(base, "templates"))
+	templates.kitRepository(t, "sample-kit", false)
 
 	port := freePort(t)
 	site := fmt.Sprintf("http://localhost:%d", port)
@@ -222,13 +220,13 @@ oidc:
   client-id: %s
   redirect-url: %s
 templates:
-  - {id: sample-kit, name: Sample kit, address: 'file://%s@v1'}
-`, port, rootDir, wyrwood, p.url, client["id"], site+auth.CallbackPath, repo))
+  - {id: sample-kit, name: Sample kit, address: '%s@1.0.0'}
+`, port, rootDir, wyrwood, p.url, client["id"], site+auth.CallbackPath, templates.Address("sample-kit")))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
 			Image:  ref,
-			Env:    []string{"SSH_AUTH_SOCK=" + filepath.Join(wyrwood, "ssh-agent.sock"), fmt.Sprintf("MENAGERIE_HEALTH_URL=http://127.0.0.1:%d/healthz", port)},
+			Env:    []string{"SSH_AUTH_SOCK=" + filepath.Join(wyrwood, "ssh-agent.sock"), fmt.Sprintf("MENAGERIE_HEALTH_URL=http://127.0.0.1:%d/healthz", port), "SSL_CERT_FILE=" + templates.Authority},
 			Labels: map[string]string{"menagerie-test": "image"},
 		},
 		&container.HostConfig{

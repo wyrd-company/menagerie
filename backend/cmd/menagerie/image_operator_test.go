@@ -165,12 +165,28 @@ func firstInterview(t *testing.T, c *http.Client, site, jobID string) interviewR
 	return interviewReply{}
 }
 
-// runInterviewJob starts an interview operation, answers every question it
-// asks from answers, waits for the job to end and returns its snapshot.
+// upgradeTemplate makes version the current version of the registered
+// template id, as a manager's upgrade of the template does.
+func upgradeTemplate(t *testing.T, c *http.Client, site, id, version string) {
+	t.Helper()
+	header := http.Header{"Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"}}
+	s := fetch(t, c, http.MethodPost, site+"/api/templates/"+id+"/upgrades", strings.NewReader(fmt.Sprintf(`{"version":%q}`, version)), header)
+	if s.status != http.StatusOK {
+		t.Fatalf("the template upgrade answered %d %s", s.status, s.body)
+	}
+}
+
+// runInterviewJob starts an interview operation, a create of templateID or
+// an upgrade, which takes no template, answers every question it asks from
+// answers, waits for the job to end and returns its snapshot.
 func runInterviewJob(t *testing.T, c *http.Client, site, operation, workspace, templateID string, answers map[string]any) jobs.Snapshot {
 	t.Helper()
 	header := http.Header{"Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"}}
-	s := fetch(t, c, http.MethodPost, site+"/api/jobs", strings.NewReader(fmt.Sprintf(`{"operation":%q,"workspace":%q,"templateId":%q}`, operation, workspace, templateID)), header)
+	body := fmt.Sprintf(`{"operation":%q,"workspace":%q,"templateId":%q}`, operation, workspace, templateID)
+	if templateID == "" {
+		body = fmt.Sprintf(`{"operation":%q,"workspace":%q}`, operation, workspace)
+	}
+	s := fetch(t, c, http.MethodPost, site+"/api/jobs", strings.NewReader(body), header)
 	if s.status != http.StatusAccepted {
 		t.Fatalf("%s answered %d %s", operation, s.status, s.body)
 	}
@@ -257,19 +273,21 @@ func TestImageOperatorWorkspace(t *testing.T) {
 	operatorTemplate(t, repo, 1)
 	gitRun(t, repo, "add", "-A")
 	gitRun(t, repo, "commit", "-q", "-m", "v1")
-	gitRun(t, repo, "tag", "v1")
+	gitRun(t, repo, "tag", "1.0.0")
 	operatorTemplate(t, repo, 2)
 	gitRun(t, repo, "add", "-A")
 	gitRun(t, repo, "commit", "-q", "-m", "v2")
-	gitRun(t, repo, "tag", "v2")
+	gitRun(t, repo, "tag", "2.0.0")
+	// The template on an HTTPS Git host the image trusts through
+	// SSL_CERT_FILE; the first start imports it at 1.0.0.
+	templates := newTemplateHost(t, filepath.Dir(repo))
 	// The workspace socket folder, mounted at its own path with tmp.
 	socketDir := filepath.Join(base, "sockets")
 	if err := os.Mkdir(socketDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The operator owns the workspace root, the socket folder and the
-	// templates, as on a host.
-	chownTree(t, filepath.Join(base, "templates"))
+	// The operator owns the workspace root and the socket folder, as on a
+	// host.
 	chownTree(t, rootDir)
 	chownTree(t, socketDir)
 
@@ -307,11 +325,10 @@ oidc:
   client-id: %s
   redirect-url: %s
 templates:
-  - {id: sample-kit-v1, name: "Sample kit, version 1", address: 'file://%s@v1'}
-  - {id: sample-kit-v2, name: "Sample kit, version 2", address: 'file://%s@v2'}
+  - {id: sample-kit, name: "Sample kit", address: '%s@1.0.0'}
 workspace-socket:
   folder: %s
-`, port, rootDir, host.URL("backups.git"), agentDir, p.url, client["id"], site+auth.CallbackPath, repo, repo, socketDir))
+`, port, rootDir, host.URL("backups.git"), agentDir, p.url, client["id"], site+auth.CallbackPath, templates.Address("sample-kit"), socketDir))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -320,6 +337,7 @@ workspace-socket:
 				"SSH_AUTH_SOCK=" + host.AgentPath,
 				"SSH_KNOWN_HOSTS=" + host.KnownHosts,
 				fmt.Sprintf("MENAGERIE_HEALTH_URL=http://127.0.0.1:%d/healthz", port),
+				"SSL_CERT_FILE=" + templates.Authority,
 			},
 			Labels: map[string]string{"menagerie-test": "image"},
 		},
@@ -397,7 +415,7 @@ workspace-socket:
 
 	t.Run("create writes operator-owned files a non-root devcontainer user edits", func(t *testing.T) {
 		c.t = t
-		snap := runInterviewJob(t, b, site, "create", "alpha", "sample-kit-v1",
+		snap := runInterviewJob(t, b, site, "create", "alpha", "sample-kit",
 			map[string]any{"label": "Sample label", "size": "small", "verbose": false, "tags": []string{"alpha"}})
 		if snap.State != jobs.Succeeded {
 			t.Fatalf("create ended %s: %+v\n%s", snap.State, snap.Error, c.logs(time.Time{}))
@@ -426,7 +444,8 @@ workspace-socket:
 
 	t.Run("upgrade and rebuild keep the edit, the new file and the ownership", func(t *testing.T) {
 		c.t = t
-		snap := runInterviewJob(t, b, site, "upgrade", "alpha", "sample-kit-v2", map[string]any{"region": "north"})
+		upgradeTemplate(t, b, site, "sample-kit", "2.0.0")
+		snap := runInterviewJob(t, b, site, "upgrade", "alpha", "", map[string]any{"region": "north"})
 		if snap.State != jobs.Succeeded {
 			t.Fatalf("upgrade ended %s: %+v\n%s", snap.State, snap.Error, c.logs(time.Time{}))
 		}

@@ -8,6 +8,8 @@ export const info = JSON.parse(readFileSync(process.env.MENAGERIE_BROWSER_INFO!,
   pocket: string;
   control: string;
   root: string;
+  /** The sample template's address, which a manager registers. */
+  template: string;
 };
 
 // The acceptance run keeps its evidence in its scratch folder.

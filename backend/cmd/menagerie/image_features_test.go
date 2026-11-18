@@ -116,7 +116,8 @@ func TestImageWorkspaceFeatures(t *testing.T) {
 	featureTemplate(t, repo)
 	gitRun(t, repo, "add", "-A")
 	gitRun(t, repo, "commit", "-q", "-m", "v1")
-	gitRun(t, repo, "tag", "v1")
+	gitRun(t, repo, "tag", "1.0.0")
+	templates := newTemplateHost(t, filepath.Dir(repo))
 
 	host := backuptest.New(t)
 	if _, err := git.PlainInit(filepath.Join(host.Dir, "backups.git"), true); err != nil {
@@ -137,8 +138,8 @@ oidc:
   client-id: %s
   redirect-url: %s
 templates:
-  - {id: sample-kit-go, name: "Sample kit with Go", address: 'file://%s@v1'}
-`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, repo))
+  - {id: sample-kit-go, name: "Sample kit with Go", address: '%s@1.0.0'}
+`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, templates.Address("sample-kit")))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -147,6 +148,7 @@ templates:
 				"SSH_AUTH_SOCK=" + host.AgentPath,
 				"SSH_KNOWN_HOSTS=" + host.KnownHosts,
 				fmt.Sprintf("MENAGERIE_HEALTH_URL=http://127.0.0.1:%d/healthz", port),
+				"SSL_CERT_FILE=" + templates.Authority,
 			},
 			Labels: map[string]string{"menagerie-test": "image"},
 		},

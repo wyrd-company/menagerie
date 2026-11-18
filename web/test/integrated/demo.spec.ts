@@ -28,13 +28,13 @@ test.beforeAll(async ({ browser }) => {
   test.setTimeout(firstBuild + 5 * 60_000);
   const page = await browser.newPage();
   await signIn(page, "sample-manager");
-  await beginCreate(page, /Workspace kit, version 1/, "sample-tools");
+  await beginCreate(page, /Workspace kit 1\.0\.0/, "sample-tools");
   await page.getByRole("button", { name: "Send answers" }).click();
   await expect(console_(page).locator(".outcome")).toContainText("Completed.", {
     timeout: firstBuild,
   });
   await page.getByRole("link", { name: "Back to the workspace list" }).click();
-  await beginCreate(page, /Sample kit, version 1/, "sample-notes");
+  await beginCreate(page, /Kept kit/, "sample-notes");
   await page.getByRole("button", { name: "Send answers" }).click();
   await expect(console_(page).locator(".outcome")).toContainText("Completed.");
   await page.getByRole("link", { name: "Back to the workspace list" }).click();
@@ -48,7 +48,7 @@ test("create, pair, upgrade and delete a provisioned workspace", async ({ page }
   await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
   await pause(1500);
 
-  await beginCreate(page, /Workspace kit, version 1/, "sample-space", 60);
+  await beginCreate(page, /Workspace kit 1\.0\.0/, "sample-space", 60);
   await page.getByRole("group", { name: /^Size/ }).getByRole("radio", { name: "large" }).check();
   await shot(page, "create-interview");
   await pause(1000);
@@ -79,8 +79,21 @@ test("create, pair, upgrade and delete a provisioned workspace", async ({ page }
   await token.getByRole("button", { name: "Dismiss" }).click();
   await pause(1000);
 
+  // The template's repository has a newer version: the template moves to
+  // it, and then the workspace.
+  await page.getByRole("link", { name: "Templates" }).click();
+  const template = page
+    .getByRole("listitem")
+    .filter({ has: page.getByRole("heading", { name: "Workspace kit", exact: true }) });
+  await template.getByRole("button", { name: "Upgrade template" }).click();
+  await template.getByLabel("Current version").pressSequentially("2.0.0", { delay: 60 });
+  await shot(page, "template-upgrade");
+  await pause(1000);
+  await template.getByRole("button", { name: "Save" }).click();
+  await expect(template.getByText("2.0.0")).toBeVisible();
+  await pause(1500);
+  await page.getByRole("link", { name: "Workspaces", exact: true }).click();
   await row.getByRole("link", { name: "Upgrade" }).click();
-  await page.getByRole("radio", { name: /Workspace kit, version 2/ }).check();
   await page.getByRole("button", { name: "Begin upgrade" }).click();
   await expect(page.locator("[data-question]")).toHaveCount(1);
   await page.getByRole("radio", { name: "north" }).check();

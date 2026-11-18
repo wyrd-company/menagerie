@@ -49,9 +49,27 @@ test.describe("as a manager", () => {
     await shot(page, "02-list-folder");
   });
 
+  test("registers a template from its address with no configuration change", async () => {
+    await page.getByRole("link", { name: "Templates" }).click();
+    await expect(page.getByRole("heading", { name: "Templates", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sample kit", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Register template" }).first().click();
+    await page.getByLabel("Display name").fill("Sample kit");
+    await page.getByLabel("Address").fill(info.template.replace("https://", "file:///"));
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("alert")).toContainText("address:");
+    await page.getByLabel("Address").fill(info.template);
+    await page.getByRole("button", { name: "Save" }).click();
+    const template = page
+      .getByRole("listitem")
+      .filter({ has: page.getByRole("heading", { name: "Sample kit", exact: true }) });
+    await expect(template.getByText("1.0.0")).toBeVisible();
+    await shot(page, "03-template-registered");
+  });
+
   test("creates a workspace through its interview and starts its devcontainer", async () => {
     await page.getByRole("link", { name: "New workspace" }).first().click();
-    await page.getByRole("radio", { name: /Sample kit, version 1/ }).check();
+    await page.getByRole("radio", { name: /^Sample kit 1\.0\.0/ }).check();
     await page.getByLabel("Workspace name").fill("sample-space");
     await page.getByRole("button", { name: "Begin interview" }).click();
     await expect(page.locator("[data-question]")).toHaveCount(4);
@@ -84,6 +102,7 @@ test.describe("as a manager", () => {
 
     await page.getByRole("link", { name: "Back to the workspace list" }).click();
     await expect(entry(page, "sample-space").locator(".status")).toHaveText("Running");
+    await expect(entry(page, "sample-space")).toContainText("Sample kit");
   });
 
   test("stops, starts and rebuilds the workspace", async () => {
@@ -104,6 +123,22 @@ test.describe("as a manager", () => {
     await shot(page, "05-list-after-rebuild");
   });
 
+  test("upgrades the template to its repository's newer version with no restart", async () => {
+    await control(page.request, "POST", "/template-version?name=sample-kit&tag=1.1.0");
+    await page.getByRole("link", { name: "Templates" }).click();
+    const template = page
+      .getByRole("listitem")
+      .filter({ has: page.getByRole("heading", { name: "Sample kit", exact: true }) });
+    await template.getByRole("button", { name: "Upgrade template" }).click();
+    await template.getByLabel("Current version").fill("1.1.0");
+    await template.getByRole("button", { name: "Save" }).click();
+    await expect(template.getByText("1.1.0")).toBeVisible();
+    await template.getByRole("button", { name: "Remove" }).click();
+    await expect(template.getByRole("alert")).toContainText("sample-space");
+    await shot(page, "06-template-upgraded");
+    await page.getByRole("link", { name: "Workspaces", exact: true }).click();
+  });
+
   test("upgrades with only the new question and keeps an operator edit", async () => {
     const local = await control(page.request, "GET", "/file?workspace=sample-space&path=local.txt");
     await control(
@@ -113,16 +148,16 @@ test.describe("as a manager", () => {
       local.body.replace("second: template", "second: operator"),
     );
     await entry(page, "sample-space").getByRole("link", { name: "Upgrade" }).click();
-    await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
+    await expect(page.locator(".upgrade-current")).toContainText("Sample kit 1.1.0");
     await page.getByRole("button", { name: "Begin upgrade" }).click();
     await expect(page.locator("[data-question]")).toHaveCount(1);
     await expect(page.locator('[data-question="region"]')).toBeVisible();
-    await shot(page, "06-upgrade-interview");
+    await shot(page, "07-upgrade-interview");
     await page.getByRole("radio", { name: "north" }).check();
     await page.getByRole("button", { name: "Send answers" }).click();
     await expect(console_(page).locator(".outcome")).toContainText("Completed.");
     await expect(console_(page).locator(".apply")).toContainText("written");
-    await shot(page, "07-upgrade-completed");
+    await shot(page, "08-upgrade-completed");
 
     const branch = await backup(page.request, "sample-space");
     expect(branch.commits.length).toBeGreaterThanOrEqual(3);
@@ -130,6 +165,14 @@ test.describe("as a manager", () => {
     expect(branch.files["local.txt"]).toContain("fifth: v2");
     expect(branch.files["result.txt"]).toBe("label: Sample project\nsize: large\nregion: north\n");
     expect((await containerFor(page.request, "sample-space"))?.state).toBe("running");
+    expect(branch.files[".toha.json"]).toContain("sample-kit@1.1.0");
+    // The workspace has its template's current version: no upgrade is needed.
+    const again = await page.request.post(info.site + "/api/jobs", {
+      data: { operation: "upgrade", workspace: "sample-space" },
+      headers: { "Sec-Fetch-Site": "same-origin" },
+    });
+    expect(again.status()).toBe(409);
+    expect(await again.json()).toMatchObject({ error: { kind: "upgrade-not-needed" } });
   });
 
   test("a 401 from the event stream sends the person to sign in", async () => {
@@ -167,6 +210,6 @@ test.describe("as a manager", () => {
     expect((await logout).method()).toBe("POST");
     await page.waitForURL((u) => u.pathname === "/auth/signed-out");
     expect((await page.request.get(info.site + "/api/workspaces")).status()).toBe(401);
-    await shot(page, "08-signed-out");
+    await shot(page, "09-signed-out");
   });
 });

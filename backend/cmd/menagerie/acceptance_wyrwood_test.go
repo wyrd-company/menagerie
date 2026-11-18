@@ -207,24 +207,31 @@ func TestImageWyrwood(t *testing.T) {
 	wyrwoodTemplate(t, work, 1, v1Image)
 	gitRun(t, work, "add", "-A")
 	gitRun(t, work, "commit", "-q", "-m", "v1")
-	gitRun(t, work, "tag", "v1")
+	gitRun(t, work, "tag", "1.0.0")
 	wyrwoodTemplate(t, work, 2, v2Image)
 	gitRun(t, work, "add", "-A")
 	gitRun(t, work, "commit", "-q", "-m", "v2")
-	gitRun(t, work, "tag", "v2")
-	// This template reaches provisioning before any workspace container starts.
-	wyrwoodTemplate(t, work, 1, v1Image)
-	writeTo(t, work, "template/.devcontainer/devcontainer.json", `{
+	gitRun(t, work, "tag", "2.0.0")
+	gitRun(t, host.Dir, "clone", "-q", "--bare", work, filepath.Join(host.Dir, "sample-kit.git"))
+	// This template, a repository of its own, reaches provisioning before
+	// any workspace container starts.
+	check := filepath.Join(base, "key-check-work")
+	if err := os.MkdirAll(check, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, check, "init", "-q", "-b", "main")
+	wyrwoodTemplate(t, check, 1, v1Image)
+	writeTo(t, check, "template/.devcontainer/devcontainer.json", `{
   "name": "sample",
   "image": "busybox:1.37",
   "runArgs": ["--name", "sample-key-check"],
   "customizations": {"menagerie": {"wyrwood": {"policies": ["sample-workspace"], "accessGroup": 1000}}}
 }
 `)
-	gitRun(t, work, "add", "-A")
-	gitRun(t, work, "commit", "-q", "-m", "operator key check")
-	gitRun(t, work, "tag", "key-check")
-	gitRun(t, host.Dir, "clone", "-q", "--bare", work, filepath.Join(host.Dir, "sample-kit.git"))
+	gitRun(t, check, "add", "-A")
+	gitRun(t, check, "commit", "-q", "-m", "operator key check")
+	gitRun(t, check, "tag", "1.0.0")
+	gitRun(t, host.Dir, "clone", "-q", "--bare", check, filepath.Join(host.Dir, "key-check.git"))
 	if _, err := git.PlainInit(filepath.Join(host.Dir, "backups.git"), true); err != nil {
 		t.Fatal(err)
 	}
@@ -257,9 +264,8 @@ oidc:
   client-id: %s
   redirect-url: %s
 templates:
-  - {id: sample-kit-v1, name: "Sample kit, version 1", address: '%s@v1'}
-  - {id: sample-kit-v2, name: "Sample kit, version 2", address: '%s@v2'}
-  - {id: operator-key-check, name: "Operator key check", address: '%s@key-check'}
+  - {id: sample-kit, name: "Sample kit", address: '%s@1.0.0'}
+  - {id: operator-key-check, name: "Operator key check", address: '%s@1.0.0'}
 provisioning:
   wyrwood:
     controller: ssh://%s
@@ -271,7 +277,7 @@ registry-credentials:
   registries:
     - {registry: '%s', path: sample/registry}
 `, port, rootDir, host.URL("backups.git"), p.url, client["id"], site+auth.CallbackPath,
-		host.URL("sample-kit.git"), host.URL("sample-kit.git"), host.URL("sample-kit.git"), w.sshAddr, operatorKeys.HostKey, w.agentName, operatorKeyName, reg.addr))
+		host.URL("sample-kit.git"), host.URL("key-check.git"), w.sshAddr, operatorKeys.HostKey, w.agentName, operatorKeyName, reg.addr))
 
 	created, err := p.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -445,7 +451,7 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 
 	t.Run("create fetches a private template, pulls a private image and backs up through Wyrwood", func(t *testing.T) {
 		c.t = t
-		snap := runInterviewJob(t, b, site, "create", "alpha", "sample-kit-v1",
+		snap := runInterviewJob(t, b, site, "create", "alpha", "sample-kit",
 			map[string]any{"label": "Sample label", "size": "small", "verbose": false, "tags": []string{"alpha"}})
 		if snap.State != jobs.Succeeded {
 			t.Fatalf("create ended %s: %+v\n%s", snap.State, snap.Error, c.logs(time.Time{}))
@@ -481,7 +487,8 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 			t.Fatalf("lookup-self after %s: %d %q", time.Since(started).Round(time.Second), code, out)
 		}
 		// The upgrade pulls version 2's private image with the renewed token.
-		snap := runInterviewJob(t, b, site, "upgrade", "alpha", "sample-kit-v2", map[string]any{"region": "north"})
+		upgradeTemplate(t, b, site, "sample-kit", "2.0.0")
+		snap := runInterviewJob(t, b, site, "upgrade", "alpha", "", map[string]any{"region": "north"})
 		if snap.State != jobs.Succeeded {
 			t.Fatalf("upgrade ended %s: %+v\n%s", snap.State, snap.Error, c.logs(time.Time{}))
 		}
@@ -533,7 +540,7 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 			return code == 0 && strings.Contains(out, fingerprint) && !strings.Contains(out, gitFingerprint)
 		})
 		header := http.Header{"Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"}}
-		started := fetch(t, b, http.MethodPost, site+"/api/jobs", strings.NewReader(`{"operation":"create","workspace":"beta","templateId":"sample-kit-v1"}`), header)
+		started := fetch(t, b, http.MethodPost, site+"/api/jobs", strings.NewReader(`{"operation":"create","workspace":"beta","templateId":"sample-kit"}`), header)
 		if started.status != http.StatusAccepted {
 			t.Fatalf("create answered %d %s", started.status, started.body)
 		}

@@ -9,7 +9,9 @@ package main
 //   - the workspace service composed by newHandler from a configuration file
 //     loaded by config.Load, serving the built UI from web.FS
 //   - the real template service binary (MENAGERIE_TEMPLATE_SERVICE) on its
-//     Unix socket, with a two-version generic template in local repositories
+//     Unix socket, and the generic sample template, tagged 1.0.0, on an
+//     HTTPS Git host, from which a manager registers it in the UI; the
+//     control server releases its next version
 //   - an isolated SSH Git host and agent (backuptest) holding the workspace
 //     repository
 //   - a disposable Pocket ID with a manager and a non-manager, and a public
@@ -60,10 +62,12 @@ import (
 	"github.com/wyrd-company/menagerie/web"
 )
 
-// runTemplateService runs the template service binary until the test ends.
-func runTemplateService(t *testing.T, bin, cfg, data, socket string) {
+// runTemplateService runs the template service binary until the test ends,
+// with env added to its environment.
+func runTemplateService(t *testing.T, bin, cfg, data, socket string, env ...string) {
 	t.Helper()
 	cmd := exec.Command(bin, "-config", cfg, "-data", data)
+	cmd.Env = append(os.Environ(), env...)
 	out, _ := cmd.StdoutPipe()
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
@@ -117,21 +121,13 @@ func TestBrowserFixture(t *testing.T) {
 
 	// Templates, the workspace root and the Git host.
 	rootDir := filepath.Join(base, "workspaces")
-	repo := filepath.Join(base, "templates", "sample-kit")
-	for _, d := range []string{rootDir, repo} {
+	for _, d := range []string{rootDir, filepath.Join(base, "templates")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	gitRun(t, repo, "init", "-q", "-b", "main")
-	browserTemplate(t, repo, 1)
-	gitRun(t, repo, "add", "-A")
-	gitRun(t, repo, "commit", "-q", "-m", "v1")
-	gitRun(t, repo, "tag", "v1")
-	browserTemplate(t, repo, 2)
-	gitRun(t, repo, "add", "-A")
-	gitRun(t, repo, "commit", "-q", "-m", "v2")
-	gitRun(t, repo, "tag", "v2")
+	templateHost := newTemplateHost(t, filepath.Join(base, "templates"))
+	templateHost.kitRepository(t, "sample-kit", false)
 
 	host := backuptest.New(t)
 	bare := filepath.Join(host.Dir, "backups.git")
@@ -165,11 +161,8 @@ oidc:
   redirect-url: %s
 template-service: {socket: %s, hook-runner-socket: %s, candidate-folder: %s}
 runner-image: busybox:1.37
-templates:
-  - {id: sample-kit-v1, name: "Sample kit, version 1", address: 'file://%s@v1'}
-  - {id: sample-kit-v2, name: "Sample kit, version 2", address: 'file://%s@v2'}
-`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, socket, filepath.Join(sockDir, "hook-runner.sock"), filepath.Join(base, "candidates"), repo, repo))
-	runTemplateService(t, bin, cfgPath, filepath.Join(base, "template-data"), socket)
+`, port, rootDir, host.URL("backups.git"), filepath.Dir(host.AgentPath), p.url, client["id"], site+auth.CallbackPath, socket, filepath.Join(sockDir, "hook-runner.sock"), filepath.Join(base, "candidates")))
+	runTemplateService(t, bin, cfgPath, filepath.Join(base, "template-data"), socket, "GIT_SSL_CAINFO="+templateHost.Authority)
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -187,13 +180,14 @@ templates:
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := jobs.NewManager(ctx, jobs.Options{})
 	var opts devcontainer.Options
-	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
+	data := testData(t)
+	parts := throwawayContainers(ctx, cfg, root, docker, data, &opts)
 	_, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(stopHooks)
-	handler, err := newHandler(cfg, root, testData(t), backupRemote(cfg, nil), devcontainer.New(docker, opts), provisioning.Clients{}, manager, parts.hooks, parts.images)
+	handler, err := newHandler(cfg, root, data, backupRemote(cfg, nil), devcontainer.New(docker, opts), provisioning.Clients{}, manager, parts.hooks, parts.images)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,21 +196,23 @@ templates:
 	t.Cleanup(func() { cancel(); _ = srv.Shutdown(context.Background()); manager.Wait() })
 
 	done := make(chan struct{})
-	control := controlServer(t, controlFixture{p: p, rootDir: rootDir, bare: bare, docker: docker, done: done})
+	control := controlServer(t, controlFixture{p: p, rootDir: rootDir, bare: bare, docker: docker, done: done,
+		newVersion: func(name, tag string) error { templateHost.newVersion(t, name, tag); return nil }})
 	csrv := &http.Server{Addr: "127.0.0.1:" + controlPort, Handler: control}
 	go func() { _ = csrv.ListenAndServe() }()
 	t.Cleanup(func() { _ = csrv.Shutdown(context.Background()) })
 
-	data, _ := json.Marshal(map[string]string{
-		"site":    site,
-		"pocket":  p.url,
-		"control": "http://127.0.0.1:" + controlPort,
-		"root":    rootDir,
+	described, _ := json.Marshal(map[string]string{
+		"site":     site,
+		"pocket":   p.url,
+		"control":  "http://127.0.0.1:" + controlPort,
+		"root":     rootDir,
+		"template": templateHost.Address("sample-kit"),
 	})
-	if err := os.WriteFile(info, data, 0o644); err != nil {
+	if err := os.WriteFile(info, described, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("fixture ready: %s", data)
+	t.Logf("fixture ready: %s", described)
 	<-done
 }
 
@@ -269,6 +265,9 @@ type controlFixture struct {
 	// The image run's controls; the in-process run leaves them unset.
 	restart func() error
 	release bool
+	// newVersion releases the next version of the template repository
+	// at name with tag; nil serves no release.
+	newVersion func(name, tag string) error
 }
 
 func controlServer(t *testing.T, f controlFixture) http.Handler {
@@ -431,6 +430,16 @@ func controlServer(t *testing.T, f controlFixture) http.Handler {
 				return
 			}
 			writeJSON(w, map[string]bool{"ok": true})
+		})
+	}
+	if f.newVersion != nil {
+		// A template author releases the sample template's next version.
+		mux.HandleFunc("POST /template-version", func(w http.ResponseWriter, r *http.Request) {
+			if err := f.newVersion(r.URL.Query().Get("name"), r.URL.Query().Get("tag")); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			writeJSON(w, map[string]bool{"released": true})
 		})
 	}
 	mux.HandleFunc("POST /shutdown", func(w http.ResponseWriter, r *http.Request) {

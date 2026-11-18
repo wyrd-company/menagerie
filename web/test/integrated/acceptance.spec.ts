@@ -63,7 +63,7 @@ test("a non-manager's job requests change nothing", async ({ page }) => {
     await postJob(page, {
       operation: "create",
       workspace: "denied-space",
-      templateId: "sample-kit-v1",
+      templateId: "kept-kit",
     }),
   ).toBe(401);
   expect(await containerFor(page.request, "sample-space")).toEqual(before);
@@ -82,7 +82,8 @@ test.describe("as a manager", () => {
   test("an invalid answer stays in the form to correct", async () => {
     await page.goto("/");
     await page.getByRole("link", { name: "New workspace" }).first().click();
-    await page.getByRole("radio", { name: /Sample kit, version 1/ }).check();
+    // The kept kit came from the templates key at the first start.
+    await page.getByRole("radio", { name: /Kept kit 1\.0\.0/ }).check();
     await page.getByLabel("Workspace name").fill("kept-space");
     await page.getByRole("button", { name: "Begin interview" }).click();
     await expect(page.locator("[data-question]")).toHaveCount(4);
@@ -135,8 +136,13 @@ test.describe("as a manager", () => {
     await control(page.request, "POST", "/backup/break");
     try {
       await page.goto("/");
+      // The kept kit's repository also has 2.0.0, its next current version.
+      const upgraded = await page.request.post(info.site + "/api/templates/kept-kit/upgrades", {
+        data: { version: "2.0.0" },
+        headers: { Origin: info.site, "Sec-Fetch-Site": "same-origin" },
+      });
+      expect(upgraded.status()).toBe(200);
       await entry(page, "kept-space").getByRole("link", { name: "Upgrade" }).click();
-      await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
       // The upgrade backs the workspace up before it asks anything.
       await page.getByRole("button", { name: "Begin upgrade" }).click();
       await expect(console_(page).locator(".outcome")).toContainText("Failed.");
@@ -225,7 +231,7 @@ test.describe("as a manager", () => {
         await postJob(page, {
           operation: "create",
           workspace: "held-space",
-          templateId: "sample-kit-v1",
+          templateId: "kept-kit",
         }),
       ).toBe(409);
       await page.goto("/");
@@ -299,7 +305,7 @@ test.describe("as a manager", () => {
 
     // The applied answers are in the workspace: the upgrade asks only the new question.
     await entry(page, "kept-space").getByRole("link", { name: "Upgrade" }).click();
-    await page.getByRole("radio", { name: /Sample kit, version 2/ }).check();
+    await expect(page.locator(".upgrade-current")).toContainText("Kept kit 2.0.0");
     await page.getByRole("button", { name: "Begin upgrade" }).click();
     await expect(page.locator("[data-question]")).toHaveCount(1);
     await page.getByRole("radio", { name: "north" }).check();
