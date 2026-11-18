@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
@@ -223,6 +224,15 @@ func TestEveryMountedRouteRequiresAManagerSession(t *testing.T) {
 		t.Fatalf("sign-in ended with %d", s)
 	}
 	jobID := m.startJob(managerClient)
+	// The manager's held job reaches the runtime on its own goroutine;
+	// count its call before any anonymous request, so that only theirs
+	// could add one. Test-only bound: the job starts at once.
+	for deadline := time.Now().Add(10 * time.Second); m.runtime.callCount() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the manager's job never reached the runtime")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	calls := m.runtime.callCount()
 
 	anonymous := anonymousClient()
