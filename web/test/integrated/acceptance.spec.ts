@@ -245,7 +245,14 @@ test.describe("as a manager", () => {
       .toBe("succeeded");
   });
 
-  test("a restart keeps folders and answers and forgets the jobs", async () => {
+  test("a restart keeps folders and answers and forgets prior jobs", async () => {
+    const { jobs: priorJobs } = (await (
+      await page.request.get(info.site + "/api/jobs")
+    ).json()) as {
+      jobs: Snapshot[];
+    };
+    expect(priorJobs.length).toBeGreaterThan(0);
+    const priorIDs = new Set(priorJobs.map((job) => job.jobId));
     await control(page.request, "POST", "/restart");
     // Sessions live in memory: the restart signed everyone out.
     expect((await page.request.get(info.site + "/api/workspaces")).status()).toBe(401);
@@ -254,13 +261,15 @@ test.describe("as a manager", () => {
     for (const name of ["sample-space", "sample-folder", "kept-space", "held-space"]) {
       await expect(entry(page, name)).toBeVisible();
     }
-    await expect(page.getByRole("heading", { name: "Jobs since Menagerie started" })).toHaveCount(
-      0,
-    );
     const { jobs } = (await (await page.request.get(info.site + "/api/jobs")).json()) as {
       jobs: Snapshot[];
     };
-    expect(jobs).toHaveLength(0);
+    // History is in memory. Startup may create fresh policy-application jobs
+    // for imported selections; none of the previous jobs may survive.
+    for (const job of jobs) {
+      expect(priorIDs.has(job.jobId), `prior job ${job.jobId} survived restart`).toBe(false);
+      expect(job.operation).toBe("apply-policies");
+    }
     await shot(page, "13-after-restart");
 
     // The applied answers are in the workspace: the upgrade asks only the new question.
