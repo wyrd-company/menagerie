@@ -520,7 +520,38 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 		}
 	})
 
-	t.Run("an unbound Menagerie fails pulls and private template fetches", func(t *testing.T) {
+	t.Run("a missing Git key refuses a private template without writing", func(t *testing.T) {
+		c.t = t
+		// Keep the approved operator key usable, so create can read its grant,
+		// while the private template's Git signing key is no longer offered.
+		w.savePolicy("sample-menagerie-operator-only", hcl, true, []string{operatorKeyName}, "/run/wyrwood")
+		w.rebind(menagerieName, []string{"sample-menagerie-operator-only"}, tokenTTL, "1h", wyrwoodGID)
+		fingerprint := ssh.FingerprintSHA256(transitKey(t, w, operatorKeyName))
+		gitFingerprint := ssh.FingerprintSHA256(transitKey(t, w, "sample-git"))
+		waitFor(t, "only the operator key on Menagerie's socket", func() bool {
+			out, code := c.exec("", "sh", "-c", "SSH_AUTH_SOCK=/run/wyrwood/ssh-agent.sock ssh-add -l")
+			return code == 0 && strings.Contains(out, fingerprint) && !strings.Contains(out, gitFingerprint)
+		})
+		header := http.Header{"Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"}}
+		started := fetch(t, b, http.MethodPost, site+"/api/jobs", strings.NewReader(`{"operation":"create","workspace":"beta","templateId":"sample-kit-v1"}`), header)
+		if started.status != http.StatusAccepted {
+			t.Fatalf("create answered %d %s", started.status, started.body)
+		}
+		var snap jobs.Snapshot
+		if err := json.Unmarshal([]byte(started.body), &snap); err != nil {
+			t.Fatal(err)
+		}
+		snap = waitJob(t, b, site, snap.JobID)
+		if snap.State != jobs.Failed || snap.Error == nil || snap.Error.Kind != "template-refused" ||
+			!strings.Contains(snap.Error.Message, "were not accepted by the remote") {
+			t.Fatalf("create without its Git key ended %s: %+v", snap.State, snap.Error)
+		}
+		if _, err := os.Stat(filepath.Join(rootDir, "beta")); !os.IsNotExist(err) {
+			t.Fatalf("the failed private fetch left a folder: %v", err)
+		}
+	})
+
+	t.Run("an unbound Menagerie refuses pulls and creates", func(t *testing.T) {
 		c.t = t
 		w.unbind(menagerieName)
 		waitFor(t, "the sockets to go", func() bool {
@@ -542,13 +573,7 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 			t.Fatalf("rebuild unbound ended %s: %+v", snap.State, snap.Error)
 		}
 		t.Logf("rebuild unbound: %s", snap.Error.Message)
-		// Create reads the grant first and writes nothing. An upgrade still
-		// proves that a private template fetch through the unbound agent fails.
+		// Create cannot read its grant and refuses before a job or a fetch.
 		refusedCreate(t, "beta", "ssh-agent.sock")
-		snap = runInterviewJob(t, b, site, "upgrade", "alpha", "sample-kit-v1", nil)
-		if snap.State != jobs.Failed || snap.Error == nil || snap.Error.Kind != "template-refused" ||
-			!strings.Contains(snap.Error.Message, "were not accepted by the remote") {
-			t.Fatalf("upgrade unbound ended %s: %+v", snap.State, snap.Error)
-		}
 	})
 }
