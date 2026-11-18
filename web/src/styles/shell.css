@@ -42,6 +42,7 @@
 
 .masthead nav {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.25rem;
   justify-self: start;
   align-self: stretch;
@@ -56,6 +57,7 @@
   padding: 0 0.75rem;
   margin-bottom: -1px;
   border-bottom: 2px solid transparent;
+  white-space: nowrap;
 }
 
 .masthead nav a:hover {
@@ -102,10 +104,13 @@ main:focus {
 
   .masthead nav {
     grid-area: nav;
+    gap: 0;
   }
 
+  /* Each label stays whole; Policies wraps to a second row. */
   .masthead nav a {
-    padding: 0.6rem 0.75rem;
+    padding: 0.75rem;
+    font-size: 0.875rem;
   }
 
   .signout {

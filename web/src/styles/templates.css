@@ -1,5 +1,11 @@
-/* The templates screen follows the task-18 approved mockup. */
+/* The templates screen follows the approved mockup. Its list spans the
+   content width; the registration form keeps the forms' width. */
+.screen.templates {
+  max-width: none;
+}
+
 .template-panel {
+  max-width: 880px;
   display: grid;
   gap: 1rem;
   margin-bottom: 1.5rem;
@@ -12,6 +18,24 @@
 .template-panel h2 {
   font-size: 1.1rem;
   margin: 0;
+}
+
+/* Labels in regular weight, inputs no wider than the mockup's. */
+.template-panel .field-label,
+.template-panel .field-title,
+.template-edit .field-label,
+.template-edit .field-title {
+  font-weight: 400;
+}
+
+.template-panel .field-label .muted,
+.template-edit .field-label .muted {
+  font-size: 0.875rem;
+}
+
+.template-panel input,
+.template-edit input {
+  max-width: 500px;
 }
 
 .form-error,
