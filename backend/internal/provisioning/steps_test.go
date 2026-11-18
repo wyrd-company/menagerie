@@ -392,6 +392,51 @@ func TestACreateRunsEveryStepInOrder(t *testing.T) {
 	}
 }
 
+func TestSelectionSavedDuringProvisioningCreateRemainsUnapplied(t *testing.T) {
+	for _, policies := range [][]string{{"a", "client-key", "workspace"}, {}} {
+		t.Run(fmt.Sprint(policies), func(t *testing.T) {
+			ctx := context.Background()
+			h := newHost(t)
+			allowed := []string{"a", "client-key", "workspace"}
+			if _, err := h.data.SavePolicySettings(ctx, store.PolicySettings{Revision: 1}, allowed); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.data.BeginCreate(ctx, "sample"); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.data.SetCreateSelection(ctx, "sample", []string{"client-key", "workspace"}, allowed); err != nil {
+				t.Fatal(err)
+			}
+			var boundRevision int64
+			saved := false
+			if err := h.steps().Create(ctx, folder, h, func(ctx context.Context) error {
+				before, err := h.data.Selection(ctx, "sample")
+				if err != nil || before.AppliedRevision == nil || *before.AppliedRevision != before.Revision {
+					t.Fatalf("save ran before binding was confirmed: %+v %v", before, err)
+				}
+				boundRevision = before.Revision
+				if !slices.Equal(h.bound["container-sample"].Policies, before.Policies) {
+					t.Fatal("confirmed binding differs from the original selection")
+				}
+				// A policy edit queues behind this job; it must not count as
+				// applied when the create finishes without applying the edit.
+				_, err = h.data.SaveSelection(ctx, "sample", policies, before.Revision, allowed)
+				saved = true
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			after, err := h.data.Selection(ctx, "sample")
+			if err != nil || !saved || after.Revision != boundRevision+1 || !slices.Equal(after.Policies, policies) || after.AppliedRevision == nil || *after.AppliedRevision != boundRevision || after.ApplyFailure != nil {
+				t.Fatalf("create recorded the newer selection as applied: %+v %v", after, err)
+			}
+			if h.held("sample").Current() != "container-sample" || !slices.Equal(h.bound["container-sample"].Policies, []string{"client-key", "workspace"}) {
+				t.Fatalf("create changed the original binding: %+v", h.bound)
+			}
+		})
+	}
+}
+
 // A repeat neither rotates the key nor rewrites the binding, because each
 // client treats an equal repeat as done.
 func TestARetriedJobContinuesFromWhatIsMissing(t *testing.T) {
