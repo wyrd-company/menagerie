@@ -20,7 +20,9 @@ mutations = [
     (name, "backend/internal/provisioning/policies.go", before, after, "provisioning", test)
     for name, before, after, test in mutations
 ] + [
-    ("failed-revision-cleared", "backend/internal/store/selection.go", "THEN NULL ELSE applied_revision END", "THEN applied_revision ELSE applied_revision END", "provisioning", "TestProvisioningRefusalInvalidatesPreviouslyAppliedSelection"),
+    ("failed-revision-cleared", "backend/internal/store/selection.go", "THEN NULL ELSE applied_revision END, apply_failure", "THEN applied_revision ELSE applied_revision END, apply_failure", "store", "TestFailedApplyClearsOnlyItsOwnAppliedRevision"),
+    ("unapplied-before-write", "backend/internal/provisioning/policies.go", "if e = s.opts.Data.Applying(ctx, workspace, current.Revision); e != nil {", "if false {", "provisioning", "TestInterruptedPolicyWriteIsUnappliedBeforeMutation"),
+    ("import-before-retirement", "backend/internal/provisioning/steps.go", "if err := s.EnsureImported(ctx, folder); err != nil {", "if false {", "provisioning", "TestPendingImportPrecedesRetirementWithoutDeclaration"),
     ("stored-key-to-bringup", "backend/internal/provisioning/steps.go", "naming.SetXolotlKey(d.Xolotl.String())", "_ = naming", "provisioning", "TestProvisioningPassesStoredXolotlKeyToBringUp"),
     ("noncurrent-legacy-selection", "backend/internal/provisioning/policies.go", "tx.ImportSelection(name, policies, values, key)", "tx.ImportSelection(name, policies[:0], values, key)", "provisioning", "TestSelectionImportWithoutCurrentDeclaredNameUsesLegacyMembers"),
     ("frozen-absent-key", "backend/internal/provisioning/policies.go", "s.opts.Data.ImportSelection(ctx, workspace, policies, values, current.Key)", "s.opts.Data.ImportSelection(ctx, workspace, policies, values, func() *Key { if current.Key != nil { return current.Key }; _, _, key := legacySelection(def); return key }())", "provisioning", "TestDelayedSelectionImportKeepsOriginallyAbsentKey"),
