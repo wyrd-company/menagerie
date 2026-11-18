@@ -26,6 +26,12 @@ mutations = [
     ("stored-key-to-bringup", "backend/internal/provisioning/steps.go", "naming.SetXolotlKey(d.Xolotl.String())", "_ = naming", "provisioning", "TestProvisioningPassesStoredXolotlKeyToBringUp"),
     ("noncurrent-legacy-selection", "backend/internal/provisioning/policies.go", "tx.ImportSelection(name, policies, values, key)", "tx.ImportSelection(name, policies[:0], values, key)", "provisioning", "TestSelectionImportWithoutCurrentDeclaredNameUsesLegacyMembers"),
     ("frozen-absent-key", "backend/internal/provisioning/policies.go", "s.opts.Data.ImportSelection(ctx, workspace, policies, values, current.Key)", "s.opts.Data.ImportSelection(ctx, workspace, policies, values, func() *Key { if current.Key != nil { return current.Key }; _, _, key := legacySelection(def); return key }())", "provisioning", "TestDelayedSelectionImportKeepsOriginallyAbsentKey"),
+    ("plain-job-applied", "backend/internal/provisioning/steps.go", "return s.opts.Data.AppliedWithoutName(ctx, filepath.Base(folder))", "return nil", "provisioning", "TestPlainJobsRecordNamelessSelectionImmediately"),
+    ("discovery-applied", "backend/internal/store/workspaces.go", "if err := t.appliedWithoutName(name); err != nil {", "if err := error(nil); err != nil {", "store", "TestDiscoveryAppliesOnlyImportedNamelessSelections"),
+    ("nameless-observation-only", "backend/internal/store/selection.go", "AND NOT EXISTS (SELECT 1 FROM container_names WHERE workspace = ? AND current = 1)", "AND EXISTS (SELECT 1 FROM container_names WHERE workspace = ? AND current = 1)", "store", "TestDiscoveryAppliesOnlyImportedNamelessSelections"),
+    ("invalidate-with-current-name", "backend/internal/store/workspaces.go", "SET applied_revision = NULL WHERE name = ?", "SET applied_revision = applied_revision WHERE name = ?", "provisioning", "TestInterruptedCurrentNameChangeIsUnappliedBeforeNetwork"),
+    ("listen-before-network-import", "backend/cmd/menagerie/main.go", 'listener, err := net.Listen("tcp", httpServer.Addr)', 'if err := recoverPolicies(ctx); err != nil { return err }; listener, err := net.Listen("tcp", httpServer.Addr)', "cmd/menagerie", "TestServiceListensWhilePolicyImportCannotReachWyrwood"),
+    ("no-folder-settings-apply", "backend/internal/api/policies.go", "if _, err := ExistingFolder(s.opts.Root, name); err != nil {", "if _, err := ExistingFolder(s.opts.Root, name); err != nil && false {", "api", "TestSettingsApplySkipsWorkspacesWithNoFolder"),
 ]
 for name, relative, before, after, package, test in mutations:
     source = root / relative
@@ -36,7 +42,7 @@ for name, relative, before, after, package, test in mutations:
     try:
         source.write_text(original.replace(before, after, 1))
         result = subprocess.run(
-            ["nice", "-n", "15", "go", "test", "-p", "2", "-count=1", "./backend/internal/" + package, "-run", "^" + test + "$", "-v"],
+            ["nice", "-n", "15", "go", "test", "-p", "2", "-count=1", "./backend/" + (package if "/" in package else "internal/" + package), "-run", "^" + test + "$", "-v"],
             cwd=root, env={**os.environ, "GOFLAGS": "-p=2"},
             capture_output=True, text=True, check=False,
         )
