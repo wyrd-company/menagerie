@@ -176,14 +176,21 @@ async fn versions_are_the_release_tags_in_ascending_order() {
             ]
         })
     );
-    // An address with a ref names a version, not a repository to list.
-    let with_ref = service
-        .post(
-            "/v1/templates/versions",
-            &json!({"address": format!("{address}@1.0.0")}),
-        )
-        .await;
-    assert_eq!((with_ref.status, with_ref.kind()), (400, "invalid-address"));
+    // An address with a ref names a version, not a repository to list; a
+    // host with a port takes no ref at all. Neither is fetched.
+    for with_ref in [
+        format!("{address}@1.0.0"),
+        "https://git.example.invalid/example-org/kit@1.0.0".to_owned(),
+    ] {
+        let refused = service
+            .post("/v1/templates/versions", &json!({"address": with_ref}))
+            .await;
+        assert_eq!(
+            (refused.status, refused.kind()),
+            (400, "invalid-address"),
+            "{with_ref}"
+        );
+    }
     // Listing fetched no history into Toha's cache.
     assert!(!world.data.join("cache/sources").exists());
     service.stop().await;
