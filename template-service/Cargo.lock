@@ -2233,6 +2233,7 @@ dependencies = [
  "ring",
  "rustix",
  "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "serde_norway",

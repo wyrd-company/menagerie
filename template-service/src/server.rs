@@ -17,6 +17,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::net::{UnixListener, UnixStream};
 
+pub const TEMPLATE_ADDRESSES: &str = "/v1/templates/addresses";
+pub const TEMPLATE_VERSIONS: &str = "/v1/templates/versions";
 pub const INTERVIEWS: &str = "/v1/interviews";
 pub const INTERVIEW_ANSWERS: &str = "/v1/interviews/answers";
 pub const GENERATE: &str = "/v1/workspaces/generate";
@@ -25,7 +27,9 @@ pub const UPGRADE_ANSWERS: &str = "/v1/upgrades/answers";
 pub const UPGRADE_APPLY: &str = "/v1/upgrades/apply";
 
 /// Every route, in documentation order.
-pub const ROUTES: [&str; 6] = [
+pub const ROUTES: [&str; 8] = [
+    TEMPLATE_ADDRESSES,
+    TEMPLATE_VERSIONS,
     INTERVIEWS,
     INTERVIEW_ANSWERS,
     GENERATE,
@@ -36,6 +40,16 @@ pub const ROUTES: [&str; 6] = [
 
 pub fn router(service: Arc<Service>) -> Router {
     Router::new()
+        .route(
+            TEMPLATE_ADDRESSES,
+            post(|s: State<Arc<Service>>, b: Bytes| {
+                call(s, b, |s, r, _| crate::templates::address(s, r))
+            }),
+        )
+        .route(
+            TEMPLATE_VERSIONS,
+            post(|s: State<Arc<Service>>, b: Bytes| call(s, b, crate::templates::versions)),
+        )
         .route(
             INTERVIEWS,
             post(|s: State<Arc<Service>>, b: Bytes| {
@@ -50,7 +64,9 @@ pub fn router(service: Arc<Service>) -> Router {
         )
         .route(
             GENERATE,
-            post(|s: State<Arc<Service>>, b: Bytes| call(s, b, crate::create::generate)),
+            post(|s: State<Arc<Service>>, b: Bytes| {
+                call(s, b, |s, r, c| crate::create::generate(s, r, &c.ended))
+            }),
         )
         .route(
             UPGRADES,
@@ -66,7 +82,9 @@ pub fn router(service: Arc<Service>) -> Router {
         )
         .route(
             UPGRADE_APPLY,
-            post(|s: State<Arc<Service>>, b: Bytes| call(s, b, crate::upgrade::apply)),
+            post(|s: State<Arc<Service>>, b: Bytes| {
+                call(s, b, |s, r, c| crate::upgrade::apply(s, r, &c.ended))
+            }),
         )
         .fallback(|| async { error(&ServiceError::new(404, "not-found", "no such route")) })
         .method_not_allowed_fallback(|| async {
@@ -80,9 +98,17 @@ pub fn router(service: Arc<Service>) -> Router {
         .with_state(service)
 }
 
-/// One route's work. It gets its caller's `Ended` signal, which the routes
-/// that write to a folder also check before they start to write.
-type Operation<Req, Rep> = fn(&Service, Req, &Ended) -> Result<Rep, ServiceError>;
+/// What a route's work gets besides its request: its caller's `Ended`
+/// signal, which the routes that write to a folder also check before they
+/// start to write, and the record of the credentials its resolver handed
+/// out, which a connection the service opens itself adds to.
+pub struct Call {
+    pub ended: Ended,
+    pub handed: crate::credentials::Handed,
+}
+
+/// One route's work.
+type Operation<Req, Rep> = fn(&Service, Req, &Call) -> Result<Rep, ServiceError>;
 
 async fn call<Req, Rep>(
     State(service): State<Arc<Service>>,
@@ -144,12 +170,17 @@ where
     let (_alive, ended) = crate::credentials::lifetime();
     let kept = handed.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let resolver =
-            crate::credentials::resolver(&service.settings.hook_runner_socket, kept, ended.clone());
+        let resolver = crate::credentials::resolver(
+            &service.settings.hook_runner_socket,
+            kept.clone(),
+            ended.clone(),
+        );
+        let call = Call {
+            ended: ended.clone(),
+            handed: kept,
+        };
         ended.scope(|| {
-            toha::source::with_credential_resolver(resolver, || {
-                operation(&service, request, &ended)
-            })
+            toha::source::with_credential_resolver(resolver, || operation(&service, request, &call))
         })
     })
     .await;
@@ -240,7 +271,8 @@ mod tests {
     // Use the real request worker and Toha file loop, pausing only in the
     // reporting callback after the first file. Dropping the request must
     // stop the next file even though no hook or network call intervenes.
-    fn files(service: &Service, root: PathBuf, ended: &Ended) -> Result<(), ServiceError> {
+    fn files(service: &Service, root: PathBuf, call: &Call) -> Result<(), ServiceError> {
+        let ended = &call.ended;
         let template = toha::Template::load(&root.join("source"))?;
         let (config, _, _) = service.host.context()?;
         let interview = toha::interview::configured_defaults(

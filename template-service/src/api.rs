@@ -3,6 +3,28 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
+/// Names a template by its address, for the address and versions routes.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddressRequest {
+    pub address: String,
+}
+
+/// What Toha's grammar makes of an address, reaching no network.
+#[derive(Debug, Serialize)]
+pub struct AddressReply {
+    pub source: String,
+    pub reference: Option<String>,
+    pub base: String,
+}
+
+/// A repository's versions, in ascending order.
+#[derive(Debug, Serialize)]
+pub struct VersionsReply {
+    pub source: String,
+    pub versions: Vec<crate::versions::Found>,
+}
+
 /// Starts a create interview.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

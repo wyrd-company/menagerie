@@ -39,6 +39,8 @@ description: >-
 
 
   Routes. Every route is `POST` with a JSON body and answers JSON.
+  `/v1/templates/addresses` reads a template's address and
+  `/v1/templates/versions` lists its versions, both with `{"address"}`.
   `/v1/interviews` starts a create interview and `/v1/upgrades` starts an
   upgrade, both with `{"workspace","target","templateId"}`.
   `/v1/interviews/answers` and `/v1/upgrades/answers` add `"session"` and
@@ -50,6 +52,46 @@ description: >-
   approved template's `id`; for an upgrade it names the template version to
   upgrade to. Another path answers 404 `not-found`, another method 405
   `method-not-allowed`.
+
+
+  Addresses. The service holds no list of templates: the workspace service
+  names each address, and every route that takes one admits it before any
+  other work, reaching no network and no file. It accepts only a remote Git
+  address of the forms the user documentation lists: `gh:` with an owner and
+  a repository, which must still be `https` once Toha expands it with the
+  hosts of the service's Toha configuration, `git@host:path`, `ssh://` and
+  `https://`. It refuses as `invalid-address` (400) a local folder, a name
+  from Toha's registry, every other transport, `file://`, `git://` and
+  `http://` included, a host or user that starts with `-`, user information
+  that holds a password, such as `https://user:token@host/repo`, and, on the
+  versions route, an address with a ref. No refusal quotes the address, so a
+  password given by mistake is shown nowhere. `/v1/templates/addresses`
+  answers 200 `{"source","reference","base"}`: `source` is Toha's formal name
+  of the repository and folder without a ref, the source an applied record
+  names; `reference` is the ref the address names, or null; and `base` is the
+  address as given with its ref removed, and for an `https` address also
+  without user information.
+
+
+  Versions. `/v1/templates/versions` lists the tags of the repository an
+  address without a ref names, without fetching its history, through the
+  transport and credentials a Toha fetch of that address uses: an HTTPS
+  challenge asks the credential route below as a fetch's does, curl's
+  verbose output stays off, and curl's bundled rustls trusts the platform's
+  roots when Git names no certificate bundle. It answers 200
+  `{"source","versions"}`, each version `{"version","tag","commit"}`, in
+  ascending order. A version is a tag `MAJOR.MINOR.PATCH`, with an optional
+  leading `v`, whose numbers have no leading zero; a tag with a pre-release
+  or build part is not one. Versions order by their numbers; `version` is
+  the numbers without `v`, and when `1.2.0` and `v1.2.0` both exist the tag
+  without `v` is the version's. `commit` is the commit the tag names, an
+  annotated tag peeled. A remote that answers that the repository does not
+  exist, an HTTP 404 or a Git host's not-found answer over SSH, is
+  `template-not-found` (422), and any other failure to list is
+  `template-resolve-failed` (422), each with a fixed sentence. The listing
+  runs on a thread of its own: when the caller goes away the request
+  worker returns at once, and the listing keeps its connection until the
+  remote acts, as an abandoned fetch does (below).
 
 
   Checks. Before Toha replays or writes anything, every route checks that
@@ -343,7 +385,8 @@ description: >-
   `malformed-submission` (400),
   `submission-template-mismatch` (400), `number-not-representable` (400),
   `nesting-too-deep` (400),
-  `invalid-workspace` (400), `target-mismatch` (400), `unknown-template`
+  `invalid-address` (400), `invalid-workspace` (400), `target-mismatch`
+  (400), `unknown-template`
   (404), `workspace-not-found` (404), `not-found` (404),
   `method-not-allowed` (405), `target-outside-root` (409),
   `session-mismatch` (409). Interview state: `interview-complete` (409),
@@ -427,7 +470,16 @@ validation-criteria: >-
   `tests/requests.rs` covers every request check, and refuses a session
   with any record member altered, without its signature, signed with
   another key, or replayed into another workspace, template or flow, while
-  the untouched session completes and generates; `tests/restart.rs` runs
+  the untouched session completes and generates; `tests/templates.rs`
+  reads addresses without reaching the network, refuses each form admission
+  refuses on the address and versions routes without quoting it, lists a
+  served repository's release, pre-release, `v`-prefixed and annotated tags
+  in order, and tells a repository with no tag from a missing one; the unit
+  tests in `src/address.rs` and `src/versions.rs` cover each address form
+  and refusal and the version rules; `tests/credentials.rs` also lists a
+  private repository's versions with the route's token, refuses the listing
+  without one, and returns the worker of a stalled listing whose caller
+  leaves; `tests/restart.rs` runs
   the binary across a restart; `tests/limits.rs` sends the binary a request
   nested far deeper than any value; `tests/contract.rs` checks that this
   specification names every route and error kind the service uses.

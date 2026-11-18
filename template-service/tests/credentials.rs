@@ -755,3 +755,84 @@ fn every_route_returns_its_worker_and_closes_a_stalled_schema_fetch() {
         1,
     );
 }
+
+/// Tag the private host's copy of `name` with the release tag `1.0.0` at
+/// the sample's first version.
+fn release(host: &GitHost, world: &World, name: &str) {
+    git(&host.root.join(name), &["tag", "1.0.0", &world.v1]);
+}
+
+#[test]
+fn a_private_repositorys_versions_are_listed_with_the_routes_token() {
+    run(async {
+        let host = GitHost::start();
+        let world = world(&host);
+        release(&host, &world, "example-org/kit-a.git");
+        let repo = host.url("example-org/kit-a.git");
+        host.admit(TOKEN_A, "example-org/kit-a.git");
+        world
+            .hooks
+            .answer_credentials(grants(vec![(repo.clone(), TOKEN_A)]));
+        let service = Running::start(&world).await;
+        let reply = service
+            .post("/v1/templates/versions", &json!({"address": repo}))
+            .await;
+        assert_eq!(reply.status, 200, "{}", reply.json);
+        token_free(&reply);
+        assert_eq!(
+            reply.json["versions"],
+            json!([{"version": "1.0.0", "tag": "1.0.0", "commit": world.v1}])
+        );
+        let urls = world.hooks.credential_urls();
+        assert!(
+            !urls.is_empty() && urls.iter().all(|u| *u == repo),
+            "{urls:?}"
+        );
+        assert!(
+            host.seen()
+                .iter()
+                .any(|s| s.user == Some(("x-access-token".to_owned(), TOKEN_A.to_owned()))),
+            "{:?}",
+            host.seen()
+        );
+        // Without a grant the host refuses the listing.
+        world.hooks.answer_credentials(grants(vec![]));
+        let refused = service
+            .post("/v1/templates/versions", &json!({"address": repo}))
+            .await;
+        assert_eq!(
+            (refused.status, refused.kind()),
+            (422, "template-resolve-failed"),
+            "{}",
+            refused.json
+        );
+        service.stop().await;
+    });
+}
+
+#[test]
+fn a_stalled_version_listing_returns_its_worker_when_the_caller_leaves() {
+    run_with_workers(
+        async {
+            let host = GitHost::start();
+            let world = world(&host);
+            release(&host, &world, "example-org/kit-a.git");
+            host.admit(TOKEN_A, "example-org/kit-a.git");
+            world
+                .hooks
+                .answer_credentials(grants(vec![(host.url("example-org/kit-a.git"), TOKEN_A)]));
+            let service = Running::start(&world).await;
+            lose_the_caller_during_a_fetch(
+                &host,
+                &world,
+                &service,
+                "/v1/templates/versions",
+                &json!({"address": host.url("example-org/kit-a.git")}),
+                0,
+            )
+            .await;
+            service.stop().await;
+        },
+        1,
+    );
+}

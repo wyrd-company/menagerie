@@ -22,6 +22,7 @@ indexmap = "2.14.2"
 jiff = "1"
 ring = "0.17"
 rustix = { version = "1.1.6", features = ["system", "process", "fs"] }
+rustls-native-certs = "0.8.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 serde_norway = "0.9.42"

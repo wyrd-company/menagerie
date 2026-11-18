@@ -301,6 +301,18 @@ pub fn ask(
     ended: &Ended,
     handed: &Handed,
 ) -> Result<Option<Credential>, String> {
+    Ok(ask_pair(socket, url, ended, handed)?
+        .map(|(username, password)| Credential::new(username, password)))
+}
+
+/// `ask`'s answer as the user name and password, for a connection this
+/// service opens itself rather than through Toha.
+pub(crate) fn ask_pair(
+    socket: &Path,
+    url: &str,
+    ended: &Ended,
+    handed: &Handed,
+) -> Result<Option<(String, String)>, String> {
     let body = serde_json::to_vec(&Request { url }).map_err(|_| refused(MALFORMED))?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -321,10 +333,10 @@ pub fn ask(
         .ok_or_else(|| refused(ENDED))?
         .map_err(|_| refused(UNREACHABLE))?;
     let granted = answer(status, &reply)?;
-    Ok(granted.map(|(username, password)| {
-        handed.keep(&username, &password);
-        Credential::new(username, password)
-    }))
+    if let Some((username, password)) = &granted {
+        handed.keep(username, password);
+    }
+    Ok(granted)
 }
 
 /// The route's answer as Toha's: a username and password, the default

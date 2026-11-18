@@ -5,6 +5,7 @@
 // A request produces at most one `ServiceError`, which is serialized at once;
 // its size does not matter on this path.
 #![allow(clippy::result_large_err)]
+pub mod address;
 pub mod api;
 pub mod blanks;
 pub mod candidates;
@@ -22,7 +23,9 @@ pub mod revision;
 mod scripted;
 pub mod seal;
 pub mod server;
+pub mod templates;
 pub mod upgrade;
+pub mod versions;
 
 /// The settings, Toha host inputs and session key every request reads.
 #[derive(Debug, Clone)]
