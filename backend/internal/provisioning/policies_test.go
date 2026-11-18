@@ -238,12 +238,13 @@ func TestProvisioningConvergesMatchingPoliciesWithChangedSettings(t *testing.T) 
 				confirmingReads++
 				assertUnapplied() // A successful write response is not confirmation.
 			}
-			if err := h.with(Clients{Bindings: client, Agent: sampleAgent, Keys: h}).Start(ctx, folder, h); err != nil {
-				t.Fatal(err)
-			}
+			jobErr := h.with(Clients{Bindings: client, Agent: sampleAgent, Keys: h}).Start(ctx, folder, h)
 			after, err := h.data.Selection(ctx, "sample")
 			if err != nil || writes != 1 || confirmingReads != 1 || after.AppliedRevision == nil || *after.AppliedRevision != before.Revision || after.ApplyFailure != nil {
-				t.Fatalf("change/confirmation not recorded: writes %d, reads %d, selection %+v %v", writes, confirmingReads, after, err)
+				t.Fatalf("change/confirmation not recorded: writes %d, reads %d, selection %+v %v; job error %v", writes, confirmingReads, after, err, jobErr)
+			}
+			if jobErr != nil {
+				t.Fatal(jobErr)
 			}
 			if !strings.Contains(h.logged.String(), message+"\n") {
 				t.Fatalf("console did not name the changed field: %q", h.logged.String())
