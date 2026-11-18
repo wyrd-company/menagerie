@@ -1022,29 +1022,34 @@ func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
 	a := newAccept(t, &fakeRuntime{})
 	kept := a.kitRepository(t, "kept", "1.0.0", false)
 	listed := a.kitRepository(t, "listed", "1.0.0", false)
+	a.kitRepository(t, "target", "1.0.0", false)
 	const marker = "sample-marker-secret"
 	host := strings.TrimPrefix(a.origin, "https://")
 	port := host[strings.LastIndex(host, ":")+1:]
 	var standard lockedText
 	log.SetOutput(&standard)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	// Each form names repository REPO: the registrations a served one, and
+	// the import entries another, so that neither, let through, stops the
+	// other's channels being scanned.
 	hidden := map[string]string{
 		// Git, gix and Toha read the Git host on its port, and a path that
 		// holds the rest of the password.
-		"port-path":       "https://127.0.0.1:" + port + "/" + marker + "@git.example.invalid/kept@1.0.0",
-		"port-path-noref": "https://127.0.0.1:" + port + "/" + marker + "@git.example.invalid/kept",
-		"slash":           "https://sample-user:/" + marker + "@" + host + "/kept@1.0.0",
-		"slash-noref":     "https://sample-user:/" + marker + "@" + host + "/kept",
-		"slash-at":        "https://sample-user:/" + marker + "@x@" + host + "/kept@1.0.0",
-		"escaped":         "https://sample-user%3A" + marker + "@" + host + "/kept@1.0.0",
-		"empty":           "https://" + marker + ":@" + host + "/kept@1.0.0",
-		"ssh":             "ssh://sample-user:12/" + marker + "@" + host + "/kept@1.0.0",
-		"scp":             "git@sample-user:/" + marker + "@" + host + ":kept@1.0.0",
-		"gh":              "gh:sample-user:/" + marker + "@example-org/kept@1.0.0",
+		"port-path":       "https://127.0.0.1:" + port + "/" + marker + "@git.example.invalid/REPO@1.0.0",
+		"port-path-noref": "https://127.0.0.1:" + port + "/" + marker + "@git.example.invalid/REPO",
+		"slash":           "https://sample-user:/" + marker + "@" + host + "/REPO@1.0.0",
+		"slash-noref":     "https://sample-user:/" + marker + "@" + host + "/REPO",
+		"slash-at":        "https://sample-user:/" + marker + "@x@" + host + "/REPO@1.0.0",
+		"escaped":         "https://sample-user%3A" + marker + "@" + host + "/REPO@1.0.0",
+		"empty":           "https://" + marker + ":@" + host + "/REPO@1.0.0",
+		"ssh":             "ssh://sample-user:12/" + marker + "@" + host + "/REPO@1.0.0",
+		"scp":             "git@sample-user:/" + marker + "@" + host + ":REPO@1.0.0",
+		"gh":              "gh:sample-user:/" + marker + "@example-org/REPO@1.0.0",
 	}
 	var replies []string
 	entries := []registry.Entry{{ID: "kept", Name: "Kept", Address: kept + "@1.0.0"}}
-	for id, address := range hidden {
+	for id, form := range hidden {
+		address := strings.ReplaceAll(form, "REPO", "target")
 		body, err := json.Marshal(map[string]string{"name": "Hidden", "address": address})
 		if err != nil {
 			t.Fatal(err)
@@ -1054,11 +1059,11 @@ func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
 			t.Errorf("%s: %d %s", id, status, reply)
 		}
 		replies = append(replies, reply)
-		entries = append(entries, registry.Entry{ID: id, Name: "Hidden", Address: address})
+		entries = append(entries, registry.Entry{ID: id, Name: "Hidden", Address: strings.ReplaceAll(form, "REPO", "imported-"+id)})
 	}
 	// A registration that fetches, so the Git host's record is not empty.
 	if status, reply := a.post(t, "/api/templates", `{"name":"Listed","address":"`+listed+`"}`); status != http.StatusCreated {
-		t.Fatalf("%d %s", status, reply)
+		t.Errorf("the registration that fetches: %d %s", status, reply)
 	}
 	root, err := workspace.NewRoot(a.root)
 	if err != nil {
