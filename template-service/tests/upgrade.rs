@@ -591,3 +591,36 @@ async fn a_batch_accepted_as_shown_moves_on_in_a_create_and_a_reanswered_upgrade
     assert_eq!(read(&folder, "out.txt"), "tools: a,c\ndetail: fallback\n");
     service.stop().await;
 }
+
+/// A tag that moves after an upgrade start's first resolution, which was
+/// checked, and before its second, which Toha's preparation reads, is
+/// refused as stale, also with no commit recorded, as for an imported
+/// template: content no check saw never reaches the workspace.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tag_moved_between_the_upgrade_starts_two_fetches_is_stale() {
+    let host = GitHost::anonymous();
+    let kit = |tag: &str| format!("{}@{tag}", host.url("example-org/kit.git"));
+    let world = World::with_templates(&[("kit-1", &kit("1.0.0")), ("kit-2", &kit("2.0.0"))]);
+    host.publish("example-org/kit.git", &world.sample);
+    let bare = host.root.join("example-org/kit.git");
+    git(&bare, &["tag", "1.0.0", &world.v1]);
+    git(&bare, &["tag", "2.0.0", &world.v2]);
+    let service = Running::start(&world).await;
+    let folder = create(&world, &service, "alpha", "kit-1").await;
+    let before = head(&folder);
+    let selector = world.select("alpha", "kit-2");
+    assert!(selector.get("commit").is_none(), "{selector}");
+    let (moved, v3) = (bare.clone(), world.v3.clone());
+    host.after_next_fetch(move || {
+        git(&moved, &["tag", "-f", "2.0.0", &v3]);
+    });
+    let reply = service.post("/v1/upgrades", &selector).await;
+    assert_eq!(
+        (reply.status, reply.kind()),
+        (422, "template-stale-revision"),
+        "{}",
+        reply.json
+    );
+    assert_eq!(head(&folder), before);
+    service.stop().await;
+}

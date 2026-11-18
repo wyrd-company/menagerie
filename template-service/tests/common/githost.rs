@@ -91,6 +91,8 @@ struct HostState {
     hold_schema: bool,
     schema_stalls: usize,
     schema_closed: usize,
+    /// Run once, after the next fetch command is answered.
+    after_fetch: Option<Box<dyn FnOnce() + Send>>,
 }
 
 /// A smart HTTP Git host over TLS on loopback.
@@ -123,6 +125,19 @@ pub fn served(path: &Path) -> String {
 }
 
 impl GitHost {
+    /// An anonymous host of its own, over its own folder.
+    pub fn anonymous() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        Self::listen(root, Some(dir), true)
+    }
+
+    /// Run `then` once the host has answered the next fetch command, before
+    /// it reads any other request.
+    pub fn after_next_fetch(&self, then: impl FnOnce() + Send + 'static) {
+        self.state.0.lock().unwrap().after_fetch = Some(Box::new(then));
+    }
+
     /// A private host over its own folder, which admits only a token
     /// granted for the repository.
     pub fn start() -> Self {
@@ -359,13 +374,23 @@ fn serve(
     }
     let out = reader.get_mut();
     if host.public {
-        drop(host);
-        let (status, headers, body) = http_backend(root, &method, path, query, &headers, &body);
+        // A fetch command's hook runs before the host lets another request
+        // through, so the next one sees what it changed.
+        let fetch =
+            path.ends_with("/git-upload-pack") && body.windows(13).any(|w| w == b"command=fetch");
+        let after = if fetch { host.after_fetch.take() } else { None };
+        if after.is_none() {
+            drop(host);
+        }
+        let (status, headers, reply) = http_backend(root, &method, path, query, &headers, &body);
         let headers: Vec<(&str, &str)> = headers
             .iter()
             .map(|(n, v)| (n.as_str(), v.as_str()))
             .collect();
-        respond(out, &status, &headers, &body);
+        respond(out, &status, &headers, &reply);
+        if let Some(after) = after {
+            after();
+        }
         return;
     }
     // Credentials the host did not issue are challenged, as GitHub does; a

@@ -13,7 +13,8 @@ version's tag), loses its user name in an `https` base, names no ref where
 a route names the version beside it; a template folder and its links stay in the
 checkout, checked before a start, a generate or an apply reads the
 template; a ref that resolves to another commit than the recorded one is
-stale; a session's signature covers its address and ref. The source stays
+stale, and so is a tag that moves between an upgrade start's two
+resolutions; a session's signature covers its address and ref. The source stays
 unchanged. The report starts failed and passes only after every baseline
 test passes and every mutant compiles and fails each of its tests.
 """
@@ -41,6 +42,7 @@ TESTS = {
     "unit-links": ("--lib", "links::tests::a_folder_or_link_that_leaves_the_checkout_is_refused"),
     "route-links": ("--test", "templates", "every_route_that_reads_a_template_refuses_a_link_that_leaves_the_checkout"),
     "stale": ("--test", "requests", "a_ref_that_resolves_to_another_commit_than_the_recorded_one_is_stale"),
+    "moved-tag": ("--test", "upgrade", "a_tag_moved_between_the_upgrade_starts_two_fetches_is_stale"),
     "signature": ("--test", "requests", "a_session_value_is_signed_for_its_record_workspace_template_and_flow"),
 }
 
@@ -108,6 +110,8 @@ MUTANTS = [
      ["route-links"]),
     ("stale-commit", "src/checks.rs", "            Some(recorded) if recorded != commit => Err(",
      "            Some(recorded) if false && recorded != commit => Err(", ["stale"]),
+    ("upgrade-moved-between", "src/upgrade.rs",
+     "    if prepared.resolved.commit != checked.commit {\n", "    if false {\n", ["moved-tag"]),
     ("signature-ref", "src/seal.rs", "        binding.reference.as_bytes(),\n", "",
      ["signature"]),
 ]
