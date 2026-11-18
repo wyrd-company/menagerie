@@ -1,9 +1,10 @@
 // The README's demo and the documentation's screenshots, recorded against
 // a fresh acceptance fixture by docs/demo/record.sh. The fixture's host is
 // prepared for provisioning. A manager creates a workspace whose template
-// declares its credentials, pairs T3 Code, upgrades it and deletes it.
+// declares its credentials, pairs T3 Code, upgrades its template and then
+// the workspace, and deletes it.
 import { expect, test, type Page } from "@playwright/test";
-import { console_, entry, finished, signIn } from "./support.ts";
+import { console_, entry, finished, info, signIn } from "./support.ts";
 
 const assets = process.env.MENAGERIE_DEMO_ASSETS!;
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,6 +29,21 @@ test.beforeAll(async ({ browser }) => {
   test.setTimeout(firstBuild + 5 * 60_000);
   const page = await browser.newPage();
   await signIn(page, "sample-manager");
+  // Wyrwood refuses a binding with no policy: every workspace gets the one
+  // its provisioned template's credential check needs, which reads the Xolotl
+  // key and signs with the workspace's SSH key.
+  const catalog = (await (await page.request.get("/api/policies")).json()) as {
+    settings: { revision: number };
+  };
+  const settings = await page.request.put("/api/policies/settings", {
+    headers: { Origin: info.site, "Sec-Fetch-Site": "same-origin" },
+    data: {
+      revision: catalog.settings.revision,
+      required: ["sample-workspace"],
+      groups: [],
+    },
+  });
+  expect(settings.ok()).toBeTruthy();
   await beginCreate(page, /Workspace kit 1\.0\.0/, "sample-tools");
   await page.getByRole("button", { name: "Send answers" }).click();
   await expect(console_(page).locator(".outcome")).toContainText("Completed.", {
