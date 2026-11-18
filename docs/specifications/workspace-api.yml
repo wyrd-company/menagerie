@@ -157,11 +157,38 @@ description: >-
   cancellation keeps its workspace busy.
   A cancelled generate or apply revokes its hook token and kills and
   removes its running hook containers before the job ends, so no hook
-  writes to the folder afterwards. A generate or apply whose request ended
-  before its first write writes nothing to the folder, also when a template
-  fetch returns later. The template service cannot interrupt a template
-  fetch, which runs until the remote or the network ends it, and the files
-  Toha is writing when the request ends are finished up to its next hook.
+  writes to the folder afterwards. When a template service request ends,
+  it fires Toha's stop signal: its template fetch, schema load, apply or
+  update returns, the request worker returns, and it writes no further file.
+
+  gix cannot interrupt a transfer that waits for a remote, so the transfer
+  a stop abandons keeps running, without blocking the caller, until the
+  remote acts. Over HTTP(S) it keeps its Toha thread, gix's curl thread and the
+  connection until the remote answers or closes the connection, or Git's
+  `http.lowSpeedLimit` and `http.lowSpeedTime` end the transfer. Over SSH
+  and `file://` it keeps its Toha thread and the `ssh` or `git-upload-pack`
+  process until that process answers or exits. The transfer then ends: it
+  writes nothing more and removes its folder
+  ([Toha #78](https://github.com/wyrd-company/toha/issues/78)).
+
+  A document schema fetch's stop aborts it and closes its connection within
+  a fraction of a second (Toha checks the signal at least every 100 ms),
+  also while the schema endpoint sends nothing. One part of it can't be
+  interrupted: a name lookup still pending at the stop, either the schema
+  host's or the target's that curl looks up itself behind a `socks4://` or
+  `socks5://` proxy. The fetch still returns within 2 s, but the threads
+  that wait on the lookup run on. Those are curl's resolver threads,
+  detached instead of joined, and, behind such a proxy, one
+  `toha-schema-release` thread that finishes releasing curl's handles and
+  is waited for at most 250 ms. They hold no connection and end by
+  themselves when the system resolver returns
+  ([Toha #81](https://github.com/wyrd-company/toha/issues/81)). With a
+  libcurl that supports neither curl's transfer nor its multi-handle
+  quick-exit option, the stop waits for the lookup instead.
+
+  Neither limit holds a job, request worker or workspace in Menagerie's
+  image, which builds curl with quick-exit support.
+
   Stopping Menagerie also cancels jobs, which fail with their own error,
   not `timed-out`. A timed-out create keeps its folder, as every failed
   create does, for manual recovery. A timed-out build or up can leave a

@@ -368,9 +368,39 @@ once the cancelled work has stopped.
   `backup-local-changes` or `backup`. Template hooks run inside `generate`
   and `apply`; a hook
   still running when its job is cancelled has its container killed and
-  removed before the job ends. A template fetch cannot be interrupted, so it
-  runs until the remote or the network ends it; if the job has ended by
-  then, it writes nothing to the workspace folder.
+  removed before the job ends.
+
+When a template request ends, its template fetch, document schema load,
+generation or upgrade stops, its request worker returns, and it writes
+no further file. Two narrower limits remain:
+
+gix cannot interrupt a transfer that waits for a remote, so the transfer a
+stop abandons keeps running, without blocking the caller, until the remote
+acts. Over HTTP(S) it keeps its Toha thread, gix's curl thread and the
+connection until the remote answers or closes the connection, or Git's
+`http.lowSpeedLimit` and `http.lowSpeedTime` end the transfer. Over SSH
+and `file://` it keeps its Toha thread and the `ssh` or `git-upload-pack`
+process until that process answers or exits. The transfer then ends: it
+writes nothing more and removes its folder
+([Toha #78](https://github.com/wyrd-company/toha/issues/78)).
+
+A document schema fetch's stop aborts it and closes its connection within
+a fraction of a second (Toha checks the signal at least every 100 ms),
+also while the schema endpoint sends nothing. One part of it can't be
+interrupted: a name lookup still pending at the stop, either the schema
+host's or the target's that curl looks up itself behind a `socks4://` or
+`socks5://` proxy. The fetch still returns within 2 s, but the threads
+that wait on the lookup run on. Those are curl's resolver threads,
+detached instead of joined, and, behind such a proxy, one
+`toha-schema-release` thread that finishes releasing curl's handles and
+is waited for at most 250 ms. They hold no connection and end by
+themselves when the system resolver returns
+([Toha #81](https://github.com/wyrd-company/toha/issues/81)). With a
+libcurl that supports neither curl's transfer nor its multi-handle
+quick-exit option, the stop waits for the lookup instead.
+
+Neither limit holds a job, request worker or workspace in Menagerie's
+image, which builds curl with quick-exit support.
 
 A duration is whole hours, minutes and seconds, such as `2h`, `45m` or
 `1h30m`. A key without a value, such as `rebuild:` or `default: ""`, is an

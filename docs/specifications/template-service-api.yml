@@ -228,7 +228,7 @@ description: >-
 
 
   Every request runs its Toha work on one worker thread inside one Toha
-  credential resolver scope, so every fetch of that request, and only that
+  credential resolver scope and stop signal scope, so every fetch of that request, and only that
   request, can ask the route. This service asks only when an `https`
   remote asks for credentials, once for each challenge, with the URL
   `https://host[:port]/path`. The default port 443 is left out, and the path
@@ -281,16 +281,42 @@ description: >-
 
 
   When the workspace service's request ends before its reply, because the
-  job was cancelled or reached its time limit, the request's credential
-  requests end with it: one in flight loses its connection, and the fetch
-  fails with `GitHub App credentials are unavailable: the operation ended
-  before credentials arrived`; no later one is sent. Toha's own network
-  reads and local work for that request are not interrupted and run until
-  they return. A generate or apply checks the request just before its first
-  write: when the request has ended, the operation stops with
-  `request-ended` and writes nothing. Files Toha is already writing are
-  finished up to its next hook.
+  job was cancelled or reached its time limit, the request fires Toha's
+  stop signal synchronously. Every route's whole operation runs inside
+  `toha::stop::with_stop_signal`, including `Template::load` in create
+  start, session resume and upgrade preparation. Its template fetch,
+  schema load, apply or update returns, the request worker returns, and it
+  writes no further file. Credential requests end with it: one in flight
+  loses its connection and no later one is sent. A stopped operation is
+  `request-ended`, including a template load with `LoadError.stopped` set.
 
+  gix cannot interrupt a transfer that waits for a remote, so the transfer
+  a stop abandons keeps running, without blocking the caller, until the
+  remote acts. Over HTTP(S) it keeps its Toha thread, gix's curl thread and the
+  connection until the remote answers or closes the connection, or Git's
+  `http.lowSpeedLimit` and `http.lowSpeedTime` end the transfer. Over SSH
+  and `file://` it keeps its Toha thread and the `ssh` or `git-upload-pack`
+  process until that process answers or exits. The transfer then ends: it
+  writes nothing more and removes its folder
+  ([Toha #78](https://github.com/wyrd-company/toha/issues/78)).
+
+  A document schema fetch's stop aborts it and closes its connection within
+  a fraction of a second (Toha checks the signal at least every 100 ms),
+  also while the schema endpoint sends nothing. One part of it can't be
+  interrupted: a name lookup still pending at the stop, either the schema
+  host's or the target's that curl looks up itself behind a `socks4://` or
+  `socks5://` proxy. The fetch still returns within 2 s, but the threads
+  that wait on the lookup run on. Those are curl's resolver threads,
+  detached instead of joined, and, behind such a proxy, one
+  `toha-schema-release` thread that finishes releasing curl's handles and
+  is waited for at most 250 ms. They hold no connection and end by
+  themselves when the system resolver returns
+  ([Toha #81](https://github.com/wyrd-company/toha/issues/81)). With a
+  libcurl that supports neither curl's transfer nor its multi-handle
+  quick-exit option, the stop waits for the lookup instead.
+
+  Neither limit holds a job, request worker or workspace in Menagerie's
+  image, which builds curl with quick-exit support.
 
   Apply replies. Generate and apply answer 200 with `{"outcome","files",
   "recordPath","messages","hooks","conflicts"}`. `outcome` is `written`,
@@ -376,9 +402,17 @@ validation-criteria: >-
   when no credential was handed out, and ends the credential request and its worker of
   each caller that goes away, without leaving a thread, and writes nothing
   to the folder when a generate's or an apply's fetch returns after its
-  caller went away; `go test -tags
+  caller went away. With a single blocking worker, it also proves that
+  stalled interview, generate and apply fetches return the request worker
+  within 2 s while the Git host still holds the connection, and that all
+  six routes return that worker and close a stalled HTTPS schema
+  connection within 2 s. The request-worker test in `src/server.rs`
+  cancels between Toha's first and second file writes and observes no
+  second file; `go test -tags
   templateservice ./backend/internal/workflows/` ends the credential
-  request of a create whose job reaches its time limit;
+  request of a create whose job reaches its time limit and times out two
+  creates of the same workspace during a stalled HTTPS schema load,
+  observing that each job ends and its schema connection closes;
   `tests/numbers.rs` covers number values through the session and the
   applied record; `tests/revisions.rs` covers admitted revisions for
   fixed and moving addresses, installed branches and tags;

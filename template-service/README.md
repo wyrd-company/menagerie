@@ -54,7 +54,8 @@ Private templates are fetched in one of two ways:
   which could echo the token in forms no redaction can list. Every reply
   also passes one boundary in `src/server.rs` that removes each written
   form of the handed-out tokens. When the workspace service's request ends
-  early, the resolver's credential request ends with it.
+  early, the resolver's credential request ends with it. Toha refuses a Git
+  URL that holds a password; use the credential route or SSH agent instead.
 
 The image builds curl with rustls. Toha's transport then trusts only the
 certificates in `SSL_CERT_FILE` or `SSL_CERT_DIR` when either is set, and
@@ -75,5 +76,21 @@ against Toha's library code and generic local Git template repositories. The
 credential tests also serve those repositories over TLS behind basic
 authentication, and play the credential route on the hook runner socket.
 
-Toha is pinned in `Cargo.toml` to a full commit of its public repository, with
-default features off.
+Toha comes from crates.io as `toha = "0.5"`, with default features off.
+Every request worker runs inside `toha::stop::with_stop_signal`; dropping
+the request fires its signal, including during template loads, Git fetches,
+generation and upgrade preparation. See the
+[time limit reference](https://wyrd.foo/docs/menagerie/configuration#job-time-limits)
+for the transport and name lookup limits.
+
+The stop regressions prove that a stalled Git fetch returns the request worker,
+that all six routes close a stalled schema connection, and that a stop between
+file writes prevents the next file. To prove the guards by removing each one in
+a disposable source copy, run from the repository root:
+
+```sh
+python3 scripts/prove-template-stop-guards.py --report stop-guards.json
+```
+
+The report passes only after its baseline tests pass and every compiling mutant
+fails its regression test.
