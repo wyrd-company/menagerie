@@ -159,18 +159,22 @@ func Import(ctx context.Context, opts ImportOptions) error {
 // cannot be reached, until deadline.
 func readWaiting(ctx context.Context, service TemplateService, address string, deadline time.Time) (*templates.Address, error) {
 	for {
-		read, err := service.ReadAddress(ctx, address)
+		// A service that takes the request and never answers ends the call
+		// at the deadline, which is the wait running out.
+		call, cancel := context.WithDeadline(ctx, deadline)
+		read, err := service.ReadAddress(call, address)
+		cancel()
 		var unavailable *templates.UnavailableError
 		if !errors.As(err, &unavailable) {
 			return read, err
 		}
-		if time.Now().After(deadline) {
+		if !time.Now().Before(deadline) {
 			return nil, fmt.Errorf("the template service did not answer within the import's wait: %w", err)
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(time.Second):
+		case <-time.After(min(time.Second, time.Until(deadline))):
 		}
 	}
 }

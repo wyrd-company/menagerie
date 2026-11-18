@@ -152,7 +152,9 @@ func TestATemplateServiceFaultFailsTheStartAndImportsLater(t *testing.T) {
 			r, f, _ := world(t)
 			ctx := context.Background()
 			var logged []string
-			opts := ImportOptions{Data: r.Data, Root: r.Root, Wait: time.Millisecond,
+			// The service answers at once; the wait bounds each read, so it
+			// must outlast a slow run's request.
+			opts := ImportOptions{Data: r.Data, Root: r.Root, Wait: 10 * time.Second,
 				Templates: replying(t, reply.status, `{"error":{"kind":"`+reply.kind+`","message":"reading https://sample-user:sample-password@git.example.invalid/kit failed"}}`),
 				Entries:   []Entry{{ID: "kit", Name: "Kit", Address: kit + "@1.0.0"}},
 				Logf:      func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) },
@@ -193,5 +195,89 @@ func TestAHostWithNoTemplatesKeyMarksTheImportWithoutTheTemplateService(t *testi
 	}
 	if done, _ := r.Data.Imported(ctx, ImportID); !done || len(f.calls) != 0 {
 		t.Fatalf("done %t, calls %v", done, f.calls)
+	}
+}
+
+// hanging is a template service on a unix socket that takes each request
+// and never answers.
+func hanging(t *testing.T) *templates.Client {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "tsvc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	server := &http.Server{Handler: http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-released:
+		}
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { close(released); _ = server.Close() })
+	return templates.New(socket)
+}
+
+// A template service that takes the request and never answers fails the
+// start within the wait, recording no mark.
+func TestATemplateServiceThatNeverAnswersFailsTheStartWithinTheWait(t *testing.T) {
+	r, _, _ := world(t)
+	ctx := context.Background()
+	opts := ImportOptions{Data: r.Data, Root: r.Root, Wait: 300 * time.Millisecond, Templates: hanging(t),
+		Entries: []Entry{{ID: "kit", Name: "Kit", Address: kit + "@1.0.0"}}}
+	done := make(chan error, 1)
+	go func() { done <- Import(ctx, opts) }()
+	select {
+	case err := <-done:
+		var unavailable *templates.UnavailableError
+		if !errors.As(err, &unavailable) || !strings.Contains(err.Error(), "within the import's wait") {
+			t.Fatalf("%v", err)
+		}
+	// Test-only bound: far above the wait, so a passing run never waits it.
+	case <-time.After(10 * time.Second):
+		t.Fatal("the import still waits for a template service that never answers")
+	}
+	if done, _ := r.Data.Imported(ctx, ImportID); done {
+		t.Fatal("a failed import was marked done")
+	}
+}
+
+// comingUp is the template service of world, unreachable for its first
+// calls, as one that starts during the wait.
+type comingUp struct {
+	*fakeService
+	down int
+}
+
+func (c *comingUp) ReadAddress(ctx context.Context, address string) (*templates.Address, error) {
+	if c.down > 0 {
+		c.down--
+		return nil, &templates.UnavailableError{Err: errors.New("starting")}
+	}
+	return c.fakeService.ReadAddress(ctx, address)
+}
+
+// A template service that comes up during the wait is asked again, and the
+// import imports.
+func TestATemplateServiceThatComesUpDuringTheWaitIsAskedAgain(t *testing.T) {
+	r, f, _ := world(t)
+	ctx := context.Background()
+	f.read[kit+"@1.0.0"] = templates.Address{Source: kit, Reference: ref("1.0.0"), Base: kit}
+	service := &comingUp{fakeService: f, down: 1}
+	if err := Import(ctx, ImportOptions{Data: r.Data, Root: r.Root, Wait: 10 * time.Second, Templates: service,
+		Entries: []Entry{{ID: "kit", Name: "Kit", Address: kit + "@1.0.0"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if tpl, err := r.Data.Template(ctx, "kit"); err != nil || tpl.CurrentVersion != "1.0.0" {
+		t.Fatalf("%+v %v", tpl, err)
+	}
+	if service.down != 0 {
+		t.Fatal("the import never asked the template service")
 	}
 }
