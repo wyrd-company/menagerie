@@ -281,3 +281,22 @@ func TestATemplateServiceThatComesUpDuringTheWaitIsAskedAgain(t *testing.T) {
 		t.Fatal("the import never asked the template service")
 	}
 }
+
+// When one source has entries at v1.2.0 and 1.2.0, the plain tag is the
+// version's, whichever entry comes first.
+func TestAnImportPrefersThePlainTagOfAVersion(t *testing.T) {
+	r, f, _ := world(t)
+	ctx := context.Background()
+	f.read[kit+"@v1.2.0"] = templates.Address{Source: kit, Reference: ref("v1.2.0"), Base: kit}
+	f.read[kit+"@1.2.0"] = templates.Address{Source: kit, Reference: ref("1.2.0"), Base: kit}
+	if err := Import(ctx, ImportOptions{Data: r.Data, Templates: f, Root: r.Root, Entries: []Entry{
+		{ID: "prefixed", Name: "Prefixed", Address: kit + "@v1.2.0"},
+		{ID: "plain", Name: "Plain", Address: kit + "@1.2.0"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := r.Data.Templates(ctx)
+	if err != nil || len(list) != 1 || list[0].ID != "plain" || list[0].CurrentTag != "1.2.0" {
+		t.Fatalf("%+v %v", list, err)
+	}
+}

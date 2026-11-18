@@ -109,7 +109,10 @@ func Import(ctx context.Context, opts ImportOptions) error {
 			if !ok {
 				continue
 			}
-			if newest == nil || v.Compare(newestVersion) > 0 {
+			// The tag without `v` is the version's, when both name it.
+			plainer := v.Compare(newestVersion) == 0 && !strings.HasPrefix(*r.address.Reference, "v") &&
+				strings.HasPrefix(*newest.address.Reference, "v")
+			if newest == nil || v.Compare(newestVersion) > 0 || plainer {
 				newest, newestVersion = &bySource[source][i], v
 			}
 		}
