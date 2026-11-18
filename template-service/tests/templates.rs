@@ -109,6 +109,14 @@ async fn every_route_refuses_an_address_it_must_never_read_without_quoting_it() 
         "git@sample-user:12/sample-password@git.example.invalid:example-org/kit".to_owned(),
         // A user name whose escapes hide a password.
         "https://sample-user%3Asample-password@git.example.invalid/example-org/kit".to_owned(),
+        // Passwords before a host with no path, and passwords a `#` folder
+        // hid.
+        "https://sample-user:12/sample-password@git.example.invalid".to_owned(),
+        "https://sample-user:/sample-password@git.example.invalid".to_owned(),
+        "ssh://git:22/sample-password@git.example.invalid".to_owned(),
+        "gh:sample-user:12/sample-password@git.example.invalid".to_owned(),
+        "https://sample-user:12#x/sample-password@git.example.invalid/o/r".to_owned(),
+        "https://sample-user:12/repo@1.0.0#/sample-password@git.example.invalid".to_owned(),
     ];
     for route in ["/v1/templates/addresses", "/v1/templates/versions"] {
         for address in &refused {
@@ -159,7 +167,8 @@ async fn versions_are_the_release_tags_in_ascending_order() {
     assert_eq!(
         reply.json,
         json!({
-            "source": address,
+            // The formal name, without the served address's user name.
+            "source": address.replacen("https://sample@", "https://", 1),
             "versions": [
                 {"version": "1.0.0", "tag": "1.0.0", "commit": commit_of(&commits, "1.0.0")},
                 {"version": "1.1.0", "tag": "v1.1.0", "commit": commit_of(&commits, "v1.1.0")},
@@ -239,7 +248,11 @@ async fn a_check_reads_a_version_and_its_definition_without_running_it() {
             )
             .await;
         assert_eq!(reply.status, 200, "{}", reply.json);
-        assert_eq!(reply.json["source"], json!(address), "{address}");
+        assert_eq!(
+            reply.json["source"],
+            json!(address.replacen("https://sample@", "https://", 1)),
+            "{address}"
+        );
         assert_eq!(reply.json["definition"], json!(definition), "{address}");
     }
     let reply = service

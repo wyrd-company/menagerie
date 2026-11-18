@@ -55,12 +55,15 @@ fn token_free(reply: &Reply) {
 /// A world with the sample template served by `host` as
 /// `example-org/kit-a.git` and `example-org/kit-b.git`, and as
 /// `example-org/kit-c`, a name Toha's formal name keeps, in two versions.
+/// After the host's port, with no user name, admission takes only a
+/// version's tag, so the copies are tagged `0.1.0` and `0.2.0` at the
+/// sample's first and second versions.
 fn world(host: &GitHost) -> World {
     let (a, b, c, next) = (
-        format!("{}@v1", host.url("example-org/kit-a.git")),
-        format!("{}@v1", host.url("example-org/kit-b.git")),
-        format!("{}@v1", host.url("example-org/kit-c")),
-        format!("{}@v2", host.url("example-org/kit-c")),
+        format!("{}@0.1.0", host.url("example-org/kit-a.git")),
+        format!("{}@0.1.0", host.url("example-org/kit-b.git")),
+        format!("{}@0.1.0", host.url("example-org/kit-c")),
+        format!("{}@0.2.0", host.url("example-org/kit-c")),
     );
     let world = World::with_templates(&[
         ("private-a", &a),
@@ -68,9 +71,18 @@ fn world(host: &GitHost) -> World {
         ("private-c", &c),
         ("private-c-next", &next),
     ]);
-    host.publish("example-org/kit-c", &world.sample);
-    host.publish("example-org/kit-a.git", &world.sample);
-    host.publish("example-org/kit-b.git", &world.sample);
+    for name in [
+        "example-org/kit-c",
+        "example-org/kit-a.git",
+        "example-org/kit-b.git",
+    ] {
+        host.publish(name, &world.sample);
+        git(&host.root.join(name), &["tag", "0.1.0", &world.v1]);
+    }
+    git(
+        &host.root.join("example-org/kit-c"),
+        &["tag", "0.2.0", &world.v2],
+    );
     world
 }
 
@@ -288,7 +300,7 @@ fn a_token_in_served_template_content_is_scrubbed_from_a_success_reply() {
     run(async {
         let host = GitHost::start();
         let repo = host.url("example-org/echo.git");
-        let world = World::with_templates(&[("echo", &format!("{repo}@v1"))]);
+        let world = World::with_templates(&[("echo", &format!("{repo}@0.1.0"))]);
         let source = world.root.join("templates/echo");
         write(
             &source,
@@ -304,7 +316,7 @@ fn a_token_in_served_template_content_is_scrubbed_from_a_success_reply() {
         write(&source, "template/out.txt", "label: {{ label }}\n");
         git(&source, &["init", "-q", "-b", "main"]);
         commit_all(&source, "echo");
-        git(&source, &["tag", "v1"]);
+        git(&source, &["tag", "0.1.0"]);
         host.publish("example-org/echo.git", &source);
         host.admit(TOKEN_A, "example-org/echo.git");
         world
@@ -786,7 +798,10 @@ fn a_private_repositorys_versions_are_listed_with_the_routes_token() {
         token_free(&reply);
         assert_eq!(
             reply.json["versions"],
-            json!([{"version": "1.0.0", "tag": "1.0.0", "commit": world.v1}])
+            json!([
+                {"version": "0.1.0", "tag": "0.1.0", "commit": world.v1},
+                {"version": "1.0.0", "tag": "1.0.0", "commit": world.v1}
+            ])
         );
         let urls = world.hooks.credential_urls();
         assert!(

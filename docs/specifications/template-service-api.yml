@@ -72,20 +72,27 @@ description: >-
   from Toha's registry, every other transport, `file://`, `git://` and
   `http://` included, a host or user that starts with `-`, user information
   that holds a password, such as `https://user:token@host/repo`, empty
-  `user:@` included, user information that reads more than one way, and, on
-  the versions route, an address with a ref. Git, gix and Toha end a URL's
+  `user:@` included, an address that does not read one way, and, on the
+  versions route, an address with a ref. Git, gix and Toha end a URL's
   authority at its first `/`, so a password that holds one, as in
-  `https://user:12/token@host/repo`, reads as a host, a port and a path:
-  after the host of a URL, the `host:` of `git@host:` or the `gh:` prefix,
-  an address may hold one `@`, which starts a ref holding no `/` or `:`, and
-  the user name gix reads, with its `%` escapes decoded, must be the one
-  typed. No refusal quotes the address, so a password given by mistake is
-  shown nowhere. `/v1/templates/addresses`
+  `https://user:12/token@host` or `https://user:12/token@host/repo@1.0.0`,
+  reads as a host, a port, a path and a ref. So an address reads one way
+  only when: the user name and host gix reads of the repository, its path,
+  and Toha's ref and `#` folder are each in a strict set, a user name,
+  path, ref and folder of letters, digits and `.` `_` `~` `-` (a path and
+  folder also `/`) and a host of lower-case letters, digits, `.` and `-`;
+  a strict writer, given those parts, writes the address back exactly, so
+  nothing was decoded from a `%` escape, dropped or read across a
+  separator; and where the `@` before a ref could end such a password,
+  after `git@host:path`, after a port with no user name, or before a ref
+  that holds a `.` and so could be a host name, the ref is a version's tag.
+  No refusal quotes the address, so a password given by mistake is shown
+  nowhere. `/v1/templates/addresses`
   answers 200 `{"source","reference","base"}`: `source` is Toha's formal name
   of the repository and folder without a ref, the source an applied record
   names; `reference` is the ref the address names, or null; and `base` is the
-  address as given with its ref removed, and for an `https` address also
-  without the user name gix reads.
+  address the strict writer writes without its ref, and for an `https`
+  address also without its user name.
 
 
   Versions. `/v1/templates/versions` lists the tags of the repository an

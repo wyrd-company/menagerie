@@ -500,6 +500,11 @@ async fn every_route_refuses_an_address_it_must_never_read() {
         "https://sample-user:/sample-password@git.example.invalid/example-org/kit".to_owned(),
         "ssh://sample-user:12/sample-password@git.example.invalid/example-org/kit".to_owned(),
         "https://sample-user%3Asample-password@git.example.invalid/example-org/kit".to_owned(),
+        "https://sample-user:12/sample-password@git.example.invalid".to_owned(),
+        "https://sample-user:/sample-password@git.example.invalid".to_owned(),
+        "ssh://git:22/sample-password@git.example.invalid".to_owned(),
+        "gh:sample-user:12/sample-password@git.example.invalid".to_owned(),
+        "https://sample-user:12#x/sample-password@git.example.invalid/o/r".to_owned(),
     ] {
         for route in [
             "/v1/interviews",

@@ -52,7 +52,7 @@ func TestAJobLimitEndsTheTemplateServicesCredentialRequest(t *testing.T) {
 	a := newAcceptWith(t, &fakeRuntime{}, acceptOptions{
 		containers: localContainers{}, image: "runner:local",
 		limits:      jobs.Limits{Phases: map[string]time.Duration{"interview": 2 * time.Second}},
-		templates:   map[string]string{"private": host + "/example-org/sample-kit.git@v1"},
+		templates:   map[string]string{"private": host + "/example-org/sample-kit.git@1.0.0"},
 		credentials: route,
 		authorities: []string{authority},
 	})

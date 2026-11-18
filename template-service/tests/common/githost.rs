@@ -105,7 +105,9 @@ pub struct GitHost {
 }
 
 /// The address of the repository at `path`, under the system's temporary
-/// folder, on the anonymous host every test shares.
+/// folder, on the anonymous host every test shares. It names a user, so a
+/// test may name a branch or a commit after its port: admission takes only a
+/// version's tag after the port of an address with no user name.
 pub fn served(path: &Path) -> String {
     static PUBLIC: OnceLock<GitHost> = OnceLock::new();
     let host = PUBLIC.get_or_init(|| {
@@ -116,7 +118,8 @@ pub fn served(path: &Path) -> String {
     let relative = path
         .strip_prefix(&host.root)
         .unwrap_or_else(|_| panic!("{} is not under the temporary folder", path.display()));
-    format!("{}/{}", host.origin, relative.display())
+    let origin = host.origin.replacen("https://", "https://sample@", 1);
+    format!("{origin}/{}", relative.display())
 }
 
 impl GitHost {

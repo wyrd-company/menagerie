@@ -6,10 +6,11 @@ Run from any directory:
   python3 scripts/prove-template-admission-guards.py --report report.json
 
 The guards: an address is a remote Git address of a documented form, holds
-no password and no dashed host or user, reads one way for its user
-information (one `@` after the host, starting a ref with no `/` or `:`, and
-a user name the fetcher reads as typed), loses its user name in an `https`
-base, names no ref where a route names the version beside it; a template folder and its links stay in the
+no password and no dashed host or user, reads one way (each part gix and
+Toha read is in its strict character set, the strict writer writes the
+parts back as the address, and a ref that could end a password is a
+version's tag), loses its user name in an `https` base, names no ref where
+a route names the version beside it; a template folder and its links stay in the
 checkout, checked before a start, a generate or an apply reads the
 template; a ref that resolves to another commit than the recorded one is
 stale; a session's signature covers its address and ref. The source stays
@@ -32,6 +33,7 @@ TESTS = {
     "routes": ("--test", "requests", "every_route_refuses_an_address_it_must_never_read"),
     "unit-forms": ("--lib", "address::tests::refuses_every_other_address_without_quoting_it"),
     "unit-admits": ("--lib", "address::tests::admits_each_documented_form"),
+    "unit-shapes": ("--lib", "address::tests::every_password_shape_is_refused_on_every_transport_and_tail"),
     "shorthand": ("--lib", "address::tests::a_shorthand_must_stay_https_once_expanded"),
     "versions": ("--test", "templates", "versions_are_the_release_tags_in_ascending_order"),
     "refs": ("--lib", "address::tests::a_version_is_named_by_its_ref_beside_an_address_without_one"),
@@ -45,27 +47,48 @@ TESTS = {
 # Each mutant: a name, the source file, the text it replaces (exactly once),
 # its replacement, and the tests that must each fail.
 MUTANTS = [
-    ("remote-forms", "src/address.rs", "    if !remote {\n", "    if false {\n",
-     ["forms", "unit-forms"]),
-    ("password", "src/address.rs", "    if source::has_password(address) {\n",
-     "    if false {\n", ["unit-forms"]),
-    ("dashed", "src/address.rs",
+    ('remote-forms', "src/address.rs",
+     '    } else {\n        return Err(refused(NOT_REMOTE));\n    };\n',
+     '    } else {\n        Form::Url("https")\n    };\n', ['unit-forms']),
+    ('password', "src/address.rs",
+     '    if source::has_password(address) {\n',
+     '    if false {\n', ['unit-forms']),
+    ('dashed', "src/address.rs",
      "    if host_name.starts_with('-') || url.user().is_some_and(|user| user.starts_with('-')) {\n",
-     "    if false {\n", ["unit-forms"]),
-    ("user-info-one-at", "src/address.rs", "    if after_host.matches('@').count() > 1 {\n",
-     "    if false {\n", ["unit-forms", "forms"]),
-    # The routes that take a ref beside the address already refuse an
-    # address in which Toha finds one, so the address route observes this.
-    ("user-info-ref", "src/address.rs", "        && reference.contains(['/', ':'])\n",
-     "        && false\n", ["unit-forms", "forms"]),
-    ("user-info-typed-user", "src/address.rs",
-     "    if !shorthand && url.user() != typed_user {\n", "    if false {\n",
-     ["unit-forms", "forms", "routes"]),
-    ("base-without-user", "src/address.rs",
-     "        Some(user) if https && !shorthand => {\n            written.replacen(&format!(\"https://{user}@\"), \"https://\", 1)\n        }\n",
-     "        Some(_) if https && !shorthand => written.clone(),\n", ["unit-admits"]),
-    ("shorthand-https", "src/address.rs", "    if !(https || ssh) || (shorthand && !https) {\n",
-     "    if !(https || ssh) {\n", ["shorthand"]),
+     '    if false {\n', ['unit-forms']),
+    ('shorthand-https', "src/address.rs",
+     '    if !(https || ssh) || (form == Form::Shorthand && !https) {\n',
+     '    if !(https || ssh) {\n', ['shorthand']),
+    ('strict-user', "src/address.rs",
+     '    if url.user().is_some_and(|user| !strictly(user, user_char)) {\n',
+     '    if false {\n', ['unit-forms', 'unit-shapes']),
+    ('strict-host', "src/address.rs",
+     '    if !strictly(host_name, host_char) {\n',
+     '    if false {\n', ['unit-forms']),
+    ('strict-path', "src/address.rs",
+     '    if !strictly(&String::from_utf8_lossy(url.path.as_ref()), path_char) {\n',
+     '    if false {\n', ['unit-forms', 'unit-shapes']),
+    ('strict-ref', "src/address.rs",
+     '    if reference.is_some_and(|reference| !strictly(reference, ref_char)) {\n',
+     '    if false {\n', ['unit-forms']),
+    ('strict-folder', "src/address.rs",
+     '    if folder.is_some_and(|folder| !strictly(folder, folder_char)) {\n',
+     '    if false {\n', ['unit-forms']),
+    ('rebuild', "src/address.rs",
+     '    if write(form, &url, true, reference, folder).as_deref() != Some(address) {\n',
+     '    if false {\n', ['unit-forms', 'unit-shapes']),
+    ('ref-host-like', "src/address.rs",
+     "    let host_like = reference.is_some_and(|reference| reference.contains('.'));\n",
+     '    let host_like = false;\n', ['unit-forms', 'unit-shapes']),
+    ('ref-after-scp', "src/address.rs",
+     '    let after_scp = form == Form::Scp;\n',
+     '    let after_scp = false;\n', ['unit-forms']),
+    ('ref-after-port', "src/address.rs",
+     '    let after_port = url.port.is_some() && url.user().is_none();\n',
+     '    let after_port = false;\n', ['unit-forms']),
+    ('base-without-user', "src/address.rs",
+     '    let base = write(form, &url, !https || form == Form::Shorthand, None, folder)\n',
+     '    let base = write(form, &url, true, None, folder)\n', ['unit-admits']),
     ("versions-ref", "src/templates.rs", "    if admitted.reference.is_some() {\n",
      "    if false {\n", ["versions"]),
     ("ref-on-address", "src/address.rs", "    if plain.reference.is_some() {\n",

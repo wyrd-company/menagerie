@@ -94,11 +94,14 @@ address, in one of these forms:
 without it the template takes the repository's newest version. Menagerie
 refuses an address that holds a password, such as
 `https://user:token@host/repo`, and stores, shows and logs it nowhere. It
-also refuses an address that a password could hide in: one with more than
-one `@` after its host, a ref that holds `/` or `:`, or a `%` escape in its
-user name, since Git reads `https://user:12/token@host/repo` as host `user`,
-port 12 and a path. Use the GitHub App or the SSH agent for private
-templates; see [Git hosts](install.md#git-hosts). It also refuses a local
+also refuses an address a password could hide in, since Git reads
+`https://user:12/token@host` as host `user`, port 12, path `/token` and ref
+`host`. So an address must be written plainly: a user name, path, ref and
+`#` folder of letters, digits and `.` `_` `~` `-` (a path and folder also
+`/`), a host in lower case, and no `%` escapes; and a ref that holds a `.`,
+or follows `git@host:path` or a port with no user name, is a version's tag,
+such as `1.2.0`. Use the GitHub App or the SSH agent for private templates;
+see [Git hosts](install.md#git-hosts). It also refuses a local
 folder, a `file://`, `git://` or `http://` address and a Toha template name.
 
 ### The templates key

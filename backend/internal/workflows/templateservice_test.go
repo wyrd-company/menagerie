@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -246,7 +247,9 @@ func (a *accept) register(t *testing.T, id, address, version, ref string) {
 	if strings.HasPrefix(address, a.origin+"/") {
 		commit = gitCLI(t, filepath.Join(a.templates, strings.TrimPrefix(address, a.origin+"/")), "rev-parse", ref+"^{commit}")
 	}
-	_, err := a.data.RegisterTemplate(context.Background(), store.Template{ID: id, Name: id, Address: address, Source: address,
+	// Its source is the repository's formal name, which names no user.
+	source := strings.Replace(address, "https://sample@", "https://", 1)
+	_, err := a.data.RegisterTemplate(context.Background(), store.Template{ID: id, Name: id, Address: address, Source: source,
 		CurrentVersion: version, CurrentTag: ref, CurrentCommit: commit}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -352,6 +355,10 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	}
 	var bundle string
 	a.origin, bundle = servedTemplates(t, a.templates, opts.authorities, a.requests)
+	// The served addresses name a user, so a fixture may name a branch
+	// after the host's port: admission takes only a version's tag after the
+	// port of an address with no user name, whose @ could end a password.
+	a.origin = strings.Replace(a.origin, "https://", "https://sample@", 1)
 
 	a.host = backuptest.New(t)
 	if _, err := git.PlainInit(filepath.Join(a.host.Dir, "backups.git"), true); err != nil {
@@ -917,7 +924,10 @@ func TestRegisterCreateTagAndUpgradeThroughTheTemplateService(t *testing.T) {
 		t.Fatalf("create %+v %+v", snap, snap.Error)
 	}
 	folder := filepath.Join(a.root, "alpha")
-	if applied, err := registry.ReadApplied(folder); err != nil || applied.Ref != "1.0.0" || applied.Source != kit {
+	// The applied record names the repository by its formal name, without
+	// the served addresses' user name.
+	source := strings.Replace(kit, "https://sample@", "https://", 1)
+	if applied, err := registry.ReadApplied(folder); err != nil || applied.Ref != "1.0.0" || applied.Source != source {
 		t.Fatalf("applied %+v %v", applied, err)
 	}
 	if status, body := a.send(t, http.MethodGet, "/api/workspaces", ""); status != 200 || !strings.Contains(body, `"template":{"id":"kit","name":"Kit"},"name":"alpha"`) {
@@ -991,6 +1001,9 @@ func TestRegistrationChecksAgainstTheTemplateService(t *testing.T) {
 		{untagged, "version"},
 		{tagged + "@next", "version"},
 		{tagged + "@main", "version"},
+		// After the port of an address with no user name, a ref's @ could
+		// end a password: only a version's tag is admitted there.
+		{strings.Replace(tagged, "sample@", "", 1) + "@main", "address"},
 		{unreadable, "read"},
 		{linked, "read"},
 		{bare, "definition"},
@@ -1024,8 +1037,11 @@ func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
 	listed := a.kitRepository(t, "listed", "1.0.0", false)
 	a.kitRepository(t, "target", "1.0.0", false)
 	const marker = "sample-marker-secret"
-	host := strings.TrimPrefix(a.origin, "https://")
-	port := host[strings.LastIndex(host, ":")+1:]
+	origin, err := url.Parse(a.origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, port := origin.Host, origin.Port()
 	var standard lockedText
 	log.SetOutput(&standard)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
@@ -1045,10 +1061,24 @@ func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
 		"ssh":             "ssh://sample-user:12/" + marker + "@" + host + "/REPO@1.0.0",
 		"scp":             "git@sample-user:/" + marker + "@" + host + ":REPO@1.0.0",
 		"gh":              "gh:sample-user:/" + marker + "@example-org/REPO@1.0.0",
+		// Passwords before a host with no path after it, where the host
+		// reads as a ref, and passwords a # folder hid.
+		"port-nopath":  "https://127.0.0.1:" + port + "/" + marker + "@git.example.invalid",
+		"slash-nopath": "https://sample-user:/" + marker + "@" + host,
+		"ssh-nopath":   "ssh://git:22/" + marker + "@" + host,
+		"gh-nopath":    "gh:sample-user:12/" + marker + "@" + host,
+		"hash-x":       "https://sample-user:12#x/" + marker + "@" + host + "/REPO",
+		"hash-folder":  "https://sample-user:12/REPO@1.0.0#/" + marker + "@" + host,
 	}
 	var replies []string
 	entries := []registry.Entry{{ID: "kept", Name: "Kept", Address: kept + "@1.0.0"}}
 	for id, form := range hidden {
+		entries = append(entries, registry.Entry{ID: id, Name: "Hidden", Address: strings.ReplaceAll(form, "REPO", "imported-"+id)})
+		if strings.HasPrefix(form, "gh:") {
+			// A gh: address expands to github.com: were one let through, its
+			// registration would fetch from there. The import fetches nothing.
+			continue
+		}
 		address := strings.ReplaceAll(form, "REPO", "target")
 		body, err := json.Marshal(map[string]string{"name": "Hidden", "address": address})
 		if err != nil {
@@ -1059,7 +1089,6 @@ func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
 			t.Errorf("%s: %d %s", id, status, reply)
 		}
 		replies = append(replies, reply)
-		entries = append(entries, registry.Entry{ID: id, Name: "Hidden", Address: strings.ReplaceAll(form, "REPO", "imported-"+id)})
 	}
 	// A registration that fetches, so the Git host's record is not empty.
 	if status, reply := a.post(t, "/api/templates", `{"name":"Listed","address":"`+listed+`"}`); status != http.StatusCreated {
