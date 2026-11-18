@@ -82,7 +82,7 @@ test.describe("as a manager", () => {
   test("an invalid answer stays in the form to correct", async () => {
     await page.goto("/");
     await page.getByRole("link", { name: "New workspace" }).first().click();
-    // The kept kit came from the templates key at the first start.
+    // The fixture registered the kept kit at 1.0.0 once Menagerie was ready.
     await page.getByRole("radio", { name: /Kept kit 1\.0\.0/ }).check();
     await page.getByLabel("Workspace name").fill("kept-space");
     await page.getByRole("button", { name: "Begin interview" }).click();
@@ -136,7 +136,7 @@ test.describe("as a manager", () => {
     await control(page.request, "POST", "/backup/break");
     try {
       await page.goto("/");
-      // The kept kit's repository also has 2.0.0, its next current version.
+      // The fixture released 2.0.0 after the registration: the next current version.
       const upgraded = await page.request.post(info.site + "/api/templates/kept-kit/upgrades", {
         data: { version: "2.0.0" },
         headers: { Origin: info.site, "Sec-Fetch-Site": "same-origin" },
