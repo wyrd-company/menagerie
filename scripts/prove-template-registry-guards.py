@@ -12,7 +12,11 @@ its id and not by the reply's message, which could quote the address; each
 read of an address is bounded by what remains of the import's wait, whose
 end fails the start, and an unreachable service is asked again within it.
 A check alone, of a registration or of a template's upgrade, stores nothing
-and answers 200 with no Location. Each mutation changes one guard in place,
+and answers 200 with no Location. A template service fault is no failed
+check; a registered source is refused before any fetch; an import prefers
+a version's plain tag; the list orders names without regard to case; the
+foreign key and the store's own transaction keep a template in use and its
+version moving forward. Each mutation changes one guard in place,
 and its tests must fail; the source is restored even on interruption. The
 report starts failed and passes only after every baseline test passes and
 every mutant compiles and fails each of its tests.
@@ -34,12 +38,19 @@ TESTS = {
     "check-register": ("./backend/internal/registry", "TestACheckAloneStoresNothingAndARegistrationChecksAgain"),
     "check-upgrade": ("./backend/internal/registry", "TestACheckOfAnUpgradeStoresNothingAndTheUpgradeChecksAgain"),
     "check-api": ("./backend/internal/api", "TestACheckRegistersAndUpgradesNothing"),
+    "fault": ("./backend/internal/registry", "TestATemplateServiceFaultIsNoFailedCheck"),
+    "exists-first": ("./backend/internal/registry", "TestARegisteredSourceIsRefusedBeforeAnyFetch"),
+    "import-plain-tag": ("./backend/internal/registry", "TestAnImportPrefersThePlainTagOfAVersion"),
+    "list-order": ("./backend/internal/store", "TestTemplatesListByNameWithoutRegardToCase"),
+    "foreign-key": ("./backend/internal/store", "TestTheForeignKeyKeepsATemplateAWorkspaceUses"),
+    "advance-in-tx": ("./backend/internal/store", "TestAdvanceTemplateMovesOnlyForwardInItsTransaction"),
 }
 
 IMPORT = "backend/internal/registry/import.go"
 REGISTRY = "backend/internal/registry/registry.go"
 API = "backend/internal/api/templates.go"
 STORE = "backend/internal/store/store.go"
+TEMPLATES = "backend/internal/store/templates.go"
 
 # Each mutant: a name, the source file, the text it replaces (exactly once),
 # its replacement, and the tests that must each fail.
@@ -73,6 +84,22 @@ MUTANTS = [
      "\treturn fn(&Tx{ctx: ctx, tx: tx})\n}\n\nfunc (t *Tx) exec(",
      "\tif err := fn(&Tx{ctx: ctx, tx: tx}); err != nil {\n\t\treturn err\n\t}\n\treturn tx.Commit()\n}\n\nfunc (t *Tx) exec(",
      ["check-register", "check-upgrade"]),
+    ("fault-is-unavailable", REGISTRY,
+     "\tif refused.Status >= http.StatusInternalServerError {\n",
+     "\tif refused.Status >= http.StatusInternalServerError && false {\n", ["fault"]),
+    ("exists-before-fetch", REGISTRY,
+     "\t\tif t.Source == read.Source {\n", "\t\tif false && t.Source == read.Source {\n", ["exists-first"]),
+    ("import-prefers-plain-tag", IMPORT,
+     "\t\t\tplainer := v.Compare(newestVersion) == 0 &&", "\t\t\tplainer := false && v.Compare(newestVersion) == 0 &&",
+     ["import-plain-tag"]),
+    ("list-without-case", TEMPLATES,
+     "ORDER BY name COLLATE NOCASE, name, id", "ORDER BY name, id", ["list-order"]),
+    ("foreign-key-keeps-used", STORE,
+     "\tALTER TABLE workspaces ADD COLUMN template TEXT REFERENCES templates(id);\n",
+     "\tALTER TABLE workspaces ADD COLUMN template TEXT;\n", ["foreign-key"]),
+    ("advance-newer-in-tx", TEMPLATES,
+     "\tif !newer(version, current.CurrentVersion) {\n",
+     "\tif !newer(version, current.CurrentVersion) && false {\n", ["advance-in-tx"]),
 ]
 
 

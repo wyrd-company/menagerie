@@ -463,3 +463,22 @@ func TestATemplateServiceFaultIsNoFailedCheck(t *testing.T) {
 		}
 	}
 }
+
+// A registered source is refused before any fetch, so a repository that
+// cannot be listed now still gives template-exists.
+func TestARegisteredSourceIsRefusedBeforeAnyFetch(t *testing.T) {
+	r, f, _ := world(t)
+	ctx := context.Background()
+	if _, err := r.Register(ctx, "Sample kit", kit, "", false); err != nil {
+		t.Fatal(err)
+	}
+	f.refuse["versions "+kit] = &templates.Error{Kind: "template-resolve-failed", Message: "refused"}
+	calls := len(f.calls)
+	var exists *store.TemplateExistsError
+	if _, err := r.Register(ctx, "Again", kit, "", false); !errors.As(err, &exists) {
+		t.Fatalf("%v", err)
+	}
+	if slices.Contains(f.calls[calls:], "versions "+kit) {
+		t.Fatalf("a registered source was fetched: %v", f.calls[calls:])
+	}
+}

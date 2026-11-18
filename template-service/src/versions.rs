@@ -388,6 +388,9 @@ mod tests {
             tag("latest", "y"),
             tag("1.3.0", "e"),
             tag("v1.3.0", "f"),
+            // The plain tag also wins when the prefixed one comes first.
+            tag("v1.4.0", "g"),
+            tag("1.4.0", "h"),
         ]);
         let found: Vec<(&str, &str, &str)> = found
             .iter()
@@ -398,6 +401,7 @@ mod tests {
             [
                 ("1.2.0", "1.2.0", "a"),
                 ("1.3.0", "1.3.0", "e"),
+                ("1.4.0", "1.4.0", "h"),
                 ("1.10.0", "v1.10.0", "c"),
                 ("2.0.0", "v2.0.0", "d"),
             ]
