@@ -271,9 +271,33 @@ func (s *Store) BindingID(ctx context.Context, workspace, name, id string) error
 	})
 }
 
+type selectionImportFallback struct {
+	Policies []string          `json:"policies"`
+	Values   map[string]string `json:"values"`
+}
+
+// SelectionImportFallback reads the legacy members frozen with import 5's mark.
+// A pending import must not take them from files an upgrade has since replaced.
+func (s *Store) SelectionImportFallback(ctx context.Context, name string) (policies []string, values map[string]string, err error) {
+	var fallback selectionImportFallback
+	err = s.Update(ctx, func(t *Tx) error {
+		var raw string
+		if err := t.tx.QueryRowContext(t.ctx, `SELECT selection_import_fallback FROM workspaces WHERE name = ?`, name).Scan(&raw); err != nil {
+			return err
+		}
+		return json.Unmarshal([]byte(raw), &fallback)
+	})
+	return fallback.Policies, fallback.Values, err
+}
+
 // PrepareSelectionImport runs with import 5's global mark. A declared current
-// name waits for a binding read; identities are taken over even during outages.
-func (t *Tx) PrepareSelectionImport(name string, key *Key) error {
+// name waits for a binding read; its fallback and identity are frozen even
+// during outages, before a template change can replace their source files.
+func (t *Tx) PrepareSelectionImport(name string, policies []string, values map[string]string, key *Key) error {
+	fallback, err := json.Marshal(selectionImportFallback{Policies: policies, Values: values})
+	if err != nil {
+		return err
+	}
 	var identity any
 	if key != nil {
 		raw, err := json.Marshal(key)
@@ -282,6 +306,6 @@ func (t *Tx) PrepareSelectionImport(name string, key *Key) error {
 		}
 		identity = string(raw)
 	}
-	_, err := t.exec(`UPDATE workspaces SET selection_imported = 0, xolotl_identity = ?, selection_revision = selection_revision + 1 WHERE name = ?`, identity, name)
+	_, err = t.exec(`UPDATE workspaces SET selection_imported = 0, xolotl_identity = ?, selection_import_fallback = ?, selection_revision = selection_revision + 1 WHERE name = ?`, identity, string(fallback), name)
 	return err
 }

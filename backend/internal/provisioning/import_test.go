@@ -497,6 +497,69 @@ func TestSelectionImportUsesLegacyMembersWhenCurrentBindingIsNotShown(t *testing
 	}
 }
 
+func TestPendingSelectionImportKeepsFrozenLegacyMembersAcrossUpgradeAndReopen(t *testing.T) {
+	for _, hidden := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hidden=%t", hidden), func(t *testing.T) {
+			p := newPrevious(t, "sample")
+			ctx := context.Background()
+			p.hold("sample", "container-sample", true)
+			p.definitions[p.folder("sample")] = definition(`{"wyrwood":{"accessGroup":1000,"policies":["old"],"values":{"key_name":"old-value"}}}`)
+			if hidden {
+				group := uint32(4321)
+				p.bound["container-sample"] = wyrwood.Selection{Policies: []string{"outside"}, Values: map[string]string{"key_name": "hidden-value"}, AccessGroup: &group}
+			}
+			bindings := &selectionImportBindings{host: p.host, hidden: hidden}
+			steps := p.steps()
+			steps.opts.Bindings = bindings
+			if err := steps.PrepareSelectionImports(ctx, p.root, t.Logf); err != nil {
+				t.Fatal(err)
+			}
+			pending, err := p.data.Selection(ctx, "sample")
+			if err != nil || pending.Imported || len(bindings.reads) != 0 {
+				t.Fatalf("preparation did not leave a locally frozen pending import: %+v %v", pending, err)
+			}
+			// Upgrade/Apply branch replaces the files while import 5 is pending.
+			p.definitions[p.folder("sample")] = definition(`{"wyrwood":{"accessGroup":1000,"policies":["a"],"values":{"key_name":"new-template-value"}}}`)
+			reopen := func() {
+				t.Helper()
+				path := p.data.Path()
+				if err := p.data.Close(); err != nil {
+					t.Fatal(err)
+				}
+				data, err := store.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = data.Close() })
+				p.data, steps.opts.Data = data, data
+			}
+			reopen() // The pending snapshot must survive a process restart too.
+			if err := steps.PrepareSelectionImports(ctx, p.root, t.Logf); err != nil {
+				t.Fatal(err)
+			}
+			if err := steps.EnsureImported(ctx, p.folder("sample")); err != nil {
+				t.Fatal(err)
+			}
+			assertFrozen := func() store.Selection {
+				t.Helper()
+				got, err := p.data.Selection(ctx, "sample")
+				if err != nil || !got.Imported || !slices.Equal(got.Policies, []string{"client-key", "old", "workspace"}) || !maps.Equal(got.Values, map[string]string{"key_name": "old-value"}) || got.AppliedRevision != nil {
+					t.Fatalf("upgrade replaced frozen import members: %+v %v", got, err)
+				}
+				return got
+			}
+			imported := assertFrozen()
+			reopen()
+			if got := assertFrozen(); got.Revision != imported.Revision {
+				t.Fatalf("reopen changed the imported revision: %+v", got)
+			}
+			if !slices.Equal(bindings.reads, []string{"container-sample"}) || len(p.calls) != 0 {
+				t.Fatalf("import changed provisioning: reads %v, calls %v", bindings.reads, p.calls)
+			}
+		})
+	}
+}
+
 func TestDelayedSelectionImportKeepsOriginallyAbsentKey(t *testing.T) {
 	p := newPrevious(t, "sample")
 	ctx := context.Background()

@@ -19,6 +19,7 @@ mutations = [
     ("matching-access-group", " && sameAccessGroup(binding.Settings.AccessGroup, wanted.AccessGroup)", "", "TestProvisioningConvergesMatchingPoliciesWithChangedSettings"),
     ("unshown-binding-legacy-policies", "binding, found, e := client.Read(ctx, name)", "binding, found, e := client.Read(ctx, name)\n\t\tif !found { policies = nil }", "TestSelectionImportUsesLegacyMembersWhenCurrentBindingIsNotShown"),
     ("unshown-binding-legacy-values", "binding, found, e := client.Read(ctx, name)", "binding, found, e := client.Read(ctx, name)\n\t\tif !found { values = nil }", "TestSelectionImportUsesLegacyMembersWhenCurrentBindingIsNotShown"),
+    ("frozen-legacy-fallback", "policies, values, err := s.opts.Data.SelectionImportFallback(ctx, workspace)", "def, _ := s.opts.Runtime.Definition(folder)\n\tpolicies, values, _ := legacySelection(def)", "TestPendingSelectionImportKeepsFrozenLegacyMembersAcrossUpgradeAndReopen"),
 ]
 mutations = [
     (name, "backend/internal/provisioning/policies.go", before, after, "provisioning", test)
@@ -29,7 +30,7 @@ mutations = [
     ("import-before-retirement", "backend/internal/provisioning/steps.go", "if err := s.EnsureImported(ctx, folder); err != nil {", "if false {", "provisioning", "TestPendingImportPrecedesRetirementWithoutDeclaration"),
     ("stored-key-to-bringup", "backend/internal/provisioning/steps.go", "naming.SetXolotlKey(d.Xolotl.String())", "_ = naming", "provisioning", "TestProvisioningPassesStoredXolotlKeyToBringUp"),
     ("noncurrent-legacy-selection", "backend/internal/provisioning/policies.go", "tx.ImportSelection(name, policies, values, key)", "tx.ImportSelection(name, policies[:0], values, key)", "provisioning", "TestSelectionImportWithoutCurrentDeclaredNameUsesLegacyMembers"),
-    ("frozen-absent-key", "backend/internal/provisioning/policies.go", "s.opts.Data.ImportSelection(ctx, workspace, policies, values, current.Key)", "s.opts.Data.ImportSelection(ctx, workspace, policies, values, func() *Key { if current.Key != nil { return current.Key }; _, _, key := legacySelection(def); return key }())", "provisioning", "TestDelayedSelectionImportKeepsOriginallyAbsentKey"),
+    ("frozen-absent-key", "backend/internal/provisioning/policies.go", "s.opts.Data.ImportSelection(ctx, workspace, policies, values, current.Key)", "s.opts.Data.ImportSelection(ctx, workspace, policies, values, func() *Key { if current.Key != nil { return current.Key }; def, _ := s.opts.Runtime.Definition(folder); _, _, key := legacySelection(def); return key }())", "provisioning", "TestDelayedSelectionImportKeepsOriginallyAbsentKey"),
     ("plain-job-applied", "backend/internal/provisioning/steps.go", "return s.opts.Data.AppliedWithoutName(ctx, filepath.Base(folder))", "return nil", "provisioning", "TestPlainJobsRecordNamelessSelectionImmediately"),
     ("discovery-preserves-failure", "backend/internal/store/workspaces.go", "if exists {\n\t\t\t\tcontinue\n\t\t\t}", "if false && exists {\n\t\t\t\tcontinue\n\t\t\t}", "store", "TestDiscoveryPreservesAnExistingNamelessApplyFailure"),
     ("discovery-applied", "backend/internal/store/workspaces.go", "if err := t.appliedWithoutName(name); err != nil {", "if err := error(nil); err != nil {", "store", "TestDiscoveryAppliesOnlyImportedNamelessSelections"),

@@ -87,7 +87,8 @@ var migrations = []string{
 	ALTER TABLE workspaces ADD COLUMN selection_imported INTEGER NOT NULL DEFAULT 1 CHECK (selection_imported IN (0, 1));
 	UPDATE workspaces SET selection_imported = 0;
 	ALTER TABLE workspaces ADD COLUMN policy_values TEXT NOT NULL DEFAULT '{}';
-	ALTER TABLE workspaces ADD COLUMN xolotl_identity TEXT;`,
+	ALTER TABLE workspaces ADD COLUMN xolotl_identity TEXT;
+	ALTER TABLE workspaces ADD COLUMN selection_import_fallback TEXT NOT NULL DEFAULT '{}';`,
 }
 
 // SchemaVersion is the version of the schema this Menagerie reads and writes.

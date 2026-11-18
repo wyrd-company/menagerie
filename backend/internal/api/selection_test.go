@@ -40,7 +40,7 @@ func TestSelectionHTTPImportsBeforeRevisionAndStoresNothingOnOutage(t *testing.T
 	f := newFixture(t, nil)
 	_ = policyCall(f.server, "GET", "/api/workspaces", "")
 	f.server.opts.Policies = &policyFixture{policies: []operator.Policy{{Name: "one"}, {Name: "two"}}}
-	if _, err := f.data.Import(context.Background(), 99, func(tx *store.Tx) error { return tx.PrepareSelectionImport("alpha", nil) }); err != nil {
+	if _, err := f.data.Import(context.Background(), 99, func(tx *store.Tx) error { return tx.PrepareSelectionImport("alpha", nil, nil, nil) }); err != nil {
 		t.Fatal(err)
 	}
 	before, err := f.data.Selection(context.Background(), "alpha")

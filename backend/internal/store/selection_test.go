@@ -229,7 +229,7 @@ func TestDiscoveryAppliesOnlyImportedNamelessSelections(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.Import(ctx, 99, func(tx *Tx) error { return tx.PrepareSelectionImport("pending", nil) }); err != nil {
+	if _, err := s.Import(ctx, 99, func(tx *Tx) error { return tx.PrepareSelectionImport("pending", nil, nil, nil) }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Discover(ctx, []string{"discovered", "pending", "bound", "retired"}); err != nil {

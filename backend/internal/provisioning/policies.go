@@ -380,8 +380,10 @@ func (s *Steps) EnsureImported(ctx context.Context, folder string) error {
 		return err
 	}
 	name := held.Current()
-	def, _ := s.opts.Runtime.Definition(folder)
-	policies, values, _ := legacySelection(def)
+	policies, values, err := s.opts.Data.SelectionImportFallback(ctx, workspace)
+	if err != nil {
+		return err
+	}
 	if name != "" {
 		client, e := s.policyClient()
 		if e != nil {
@@ -422,7 +424,7 @@ func (s *Steps) PrepareSelectionImports(ctx context.Context, root Workspaces, lo
 				return e
 			}
 			pending := def.Block != nil && def.ContainerName != "" && held.Current() == def.ContainerName
-			if e = tx.PrepareSelectionImport(name, key); e != nil {
+			if e = tx.PrepareSelectionImport(name, policies, values, key); e != nil {
 				return e
 			}
 			if !pending {
