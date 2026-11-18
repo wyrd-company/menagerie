@@ -121,7 +121,8 @@ Menagerie's data, and a later edit of the key imports nothing:
 - Each workspace whose applied record names an imported template joins it.
 
 The import waits up to one minute for the template service; a start that
-does not reach it fails, and the next start imports. Every start that finds
+does not reach it, or that it answers with a fault rather than a refusal,
+fails and imports nothing, and the next start imports. Every start that finds
 the key logs a warning that it is no longer read. The key keeps its rules, so
 a file that still has it starts; remove it once the import has run. A later
 release will refuse it.

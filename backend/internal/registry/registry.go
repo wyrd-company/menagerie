@@ -259,7 +259,7 @@ func refusal(check string, err error) error {
 		return err
 	}
 	switch refused.Kind {
-	case "invalid-address":
+	case templates.KindInvalidAddress:
 		// The template service's admission refusals are fixed sentences
 		// that never quote the address.
 		return &CheckError{Check: CheckAddress, Message: "the address is refused: " + refused.Message}

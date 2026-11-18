@@ -152,7 +152,12 @@ type Applied struct {
 	Conflicts  []string        `json:"conflicts"`
 }
 
-// Error is a template service refusal.
+// KindInvalidAddress is the template service's refusal of an address it
+// must not read: the one answer that says the address itself is refused.
+const KindInvalidAddress = "invalid-address"
+
+// Error is an error reply of the template service: a refusal, or, with a
+// 5xx status, a fault.
 type Error struct {
 	Status    int      `json:"-"`
 	Kind      string   `json:"kind"`

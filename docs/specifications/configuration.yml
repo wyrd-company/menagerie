@@ -54,9 +54,12 @@ description: >-
   that it did, so a later edit of the key imports nothing. The import asks
   the template service to read each entry's address, waiting up to one
   minute for it, and a start that does not reach it fails, so the next
-  start imports. An entry whose address the template service refuses, a
-  password in it included, is skipped, and the start log names its `id`
-  and the refusal's kind, never its address. The entries that have one
+  start imports. An entry whose address the template service refuses,
+  answering `invalid-address`, a password in it included, is skipped, and
+  the start log names its `id` and the refusal's kind, never its address.
+  Any other error reply, a fault such as `internal-error` or `io-failed`
+  included, fails the start, naming the entry's `id` and the reply's status
+  and kind, and records nothing, so the next start imports it. The entries that have one
   source are one template: the newest entry whose ref is a version gives
   its current version, `id`, name and runner image, and its address is
   that entry's without the ref. A source with no entry whose ref is a
@@ -270,8 +273,12 @@ validation-criteria: >-
   as one template per source at its newest version, skips and names by
   `id` alone each refused entry and each source with no version, joins the
   workspaces of an imported source, fails a start that cannot reach the
-  template service and imports at the next one, and marks a host with no
-  key without asking the template service.
+  template service, or that a fault or any error reply but
+  `invalid-address` answers, naming the entry by `id` and not by the
+  reply's message, and imports at the next one, and marks a host with no
+  key without asking the template service;
+  `scripts/prove-template-import-guards.py` breaks each of those import
+  guards in turn and requires its test to fail.
   `go test ./backend/cmd/menagerie/` checks that `local-env` reaches the
   devcontainer runtime, that `job-limits` and `alerts` reach the jobs
   manager, and that `github-app` gives backups on its server a write token

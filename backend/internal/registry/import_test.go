@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -108,6 +111,77 @@ func TestAStartThatCannotReachTheTemplateServiceFailsAndImportsLater(t *testing.
 	}
 	if tpl, err := r.Data.Template(ctx, "kit"); err != nil || tpl.CurrentVersion != "1.0.0" || tpl.CurrentCommit != "" {
 		t.Fatalf("%+v %v", tpl, err)
+	}
+}
+
+// replying is a template service on a unix socket that answers every
+// request with status and body.
+func replying(t *testing.T, status int, body string) *templates.Client {
+	t.Helper()
+	// A unix socket's path must stay short.
+	dir, err := os.MkdirTemp("", "tsvc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	return templates.New(socket)
+}
+
+// A template service fault, or any error reply but its refusal of the
+// address, is no refusal: the start fails, naming the entry by its id and
+// not by the reply's message, the import records nothing and no mark, and
+// the next start imports the entry.
+func TestATemplateServiceFaultFailsTheStartAndImportsLater(t *testing.T) {
+	for _, reply := range []struct {
+		status int
+		kind   string
+	}{{500, "internal-error"}, {500, "io-failed"}, {400, "malformed-request"}} {
+		t.Run(reply.kind, func(t *testing.T) {
+			r, f, _ := world(t)
+			ctx := context.Background()
+			var logged []string
+			opts := ImportOptions{Data: r.Data, Root: r.Root, Wait: time.Millisecond,
+				Templates: replying(t, reply.status, `{"error":{"kind":"`+reply.kind+`","message":"reading https://sample-user:sample-password@git.example.invalid/kit failed"}}`),
+				Entries:   []Entry{{ID: "kit", Name: "Kit", Address: kit + "@1.0.0"}},
+				Logf:      func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) },
+			}
+			err := Import(ctx, opts)
+			if err == nil || !strings.Contains(err.Error(), "entry kit") || !strings.Contains(err.Error(), reply.kind) {
+				t.Fatalf("the import did not fail naming the entry and the kind: %v", err)
+			}
+			if strings.Contains(err.Error(), "sample-password") || strings.Contains(err.Error(), "example.invalid") {
+				t.Fatalf("the error quotes the reply's message: %v", err)
+			}
+			if done, _ := r.Data.Imported(ctx, ImportID); done {
+				t.Fatal("a failed import was marked done")
+			}
+			if list, _ := r.Data.Templates(ctx); len(list) != 0 {
+				t.Fatalf("a failed import stored %+v", list)
+			}
+			if text := strings.Join(logged, "\n"); strings.Contains(text, "not imported") {
+				t.Fatalf("the fault was logged as a skipped entry:\n%s", text)
+			}
+			f.read[kit+"@1.0.0"] = templates.Address{Source: kit, Reference: ref("1.0.0"), Base: kit}
+			opts.Templates = f
+			if err := Import(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			if tpl, err := r.Data.Template(ctx, "kit"); err != nil || tpl.CurrentVersion != "1.0.0" {
+				t.Fatalf("the next start did not import the entry: %+v %v", tpl, err)
+			}
+		})
 	}
 }
 

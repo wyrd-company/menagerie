@@ -45,8 +45,11 @@ type ImportOptions struct {
 
 // Import takes over the configuration's templates entries once, at the
 // first start whose data has no templates import: an entry whose address
-// the template service refuses is skipped and named by its id and the
-// refusal's kind, never by its address. The entries of one source are one
+// the template service refuses, answering invalid-address, is skipped and
+// named by its id and that kind, never by its address. Any other error
+// reply, a fault included, fails the start like an unreachable service,
+// naming the entry by its id, and records no mark, so the next start
+// imports that entry. The entries of one source are one
 // template, which the newest entry whose ref is a version gives its current
 // version, id, name and runner image, its address being that entry's
 // without the ref; its commit stays unknown until a check fetches it. A
@@ -77,11 +80,15 @@ func Import(ctx context.Context, opts ImportOptions) error {
 	bySource := map[string][]read{}
 	for _, entry := range opts.Entries {
 		address, err := readWaiting(ctx, opts.Templates, entry.Address, deadline)
-		var refused *templates.Error
+		var answered *templates.Error
 		switch {
-		case errors.As(err, &refused):
-			logf("menagerie: the templates entry %s is not imported: the template service refuses its address (%s)", entry.ID, refused.Kind)
+		case errors.As(err, &answered) && answered.Kind == templates.KindInvalidAddress:
+			logf("menagerie: the templates entry %s is not imported: the template service refuses its address (%s)", entry.ID, answered.Kind)
 			continue
+		case errors.As(err, &answered):
+			// Its message is the template service's and could name the
+			// address; the kind and status do not.
+			return fmt.Errorf("importing the templates key: the template service failed reading the address of entry %s (%d %s); the next start imports", entry.ID, answered.Status, answered.Kind)
 		case err != nil:
 			return fmt.Errorf("importing the templates key: %w", err)
 		}
