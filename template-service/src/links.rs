@@ -55,9 +55,7 @@ pub fn checked_folder(root: &Path, path: Option<&str>) -> Result<PathBuf, Servic
 }
 
 /// Check the template a session's record names, at its commit, where
-/// Toha's resume reads it: Toha's cache entry for the commit, with the
-/// formal name's `#path`, or the installation that holds the commit. Call
-/// it before Toha reads any of the template's files.
+/// Toha's resume reads it. Call it before Toha reads any of its files.
 pub fn check_session(
     record: &toha::staging::StagedRecord,
     host: &crate::host::TohaHost,
@@ -73,17 +71,32 @@ pub fn check_session(
         &host.paths,
         &host.cwd,
     )?;
-    let path =
-        match toha::source::parse(&record.template, &config.hosts, &host.cwd, &host.paths.home) {
-            Ok(toha::source::Address::Git { path, .. }) => path,
-            _ => None,
-        };
+    check_resolved(&resolved, host, config)
+}
+
+/// Check a resolved template where Toha reads it: its cache entry for the
+/// commit, joined with the formal name's `#path`, or the installation that
+/// holds the commit, which is the template's folder itself.
+pub fn check_resolved(
+    resolved: &toha::resolve::ResolvedTemplate,
+    host: &crate::host::TohaHost,
+    config: &toha::config::Config,
+) -> Result<(), ServiceError> {
+    let path = match toha::source::parse(
+        &resolved.formal_name,
+        &config.hosts,
+        &host.cwd,
+        &host.paths.home,
+    ) {
+        Ok(toha::source::Address::Git { path, .. }) => path,
+        _ => None,
+    };
     let entry = host
         .paths
         .cache
         .join("sources")
-        .join(toha::source::install_key(&record.template))
-        .join(&record.commit);
+        .join(toha::source::install_key(&resolved.formal_name))
+        .join(&resolved.commit);
     let cached = entry
         .canonicalize()
         .is_ok_and(|entry| resolved.folder.starts_with(entry));

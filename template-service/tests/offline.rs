@@ -11,7 +11,7 @@ async fn post(world: &World, path: &str, body: &Value) -> Reply {
 #[tokio::test(flavor = "multi_thread")]
 async fn every_resume_route_works_offline_after_a_restart() {
     let world = World::new();
-    world.install(&world.address(""));
+    world.install(&world.address("@main"));
     let service = launch(&world);
     // Online: a created workspace, a pending upgrade, a pending create, and a
     // pending create on an installed branch that then moves.

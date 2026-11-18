@@ -8,19 +8,44 @@ use serde_json::{Value, json};
 async fn selectors_name_an_approved_template_and_a_workspace_under_the_root() {
     let world = World::new();
     let service = Running::start(&world).await;
+    let selector = world.select("alpha", "sample-v1");
     for route in ROUTES {
+        // A template id is no member of any route.
         let unknown = service
-            .post(route, &world.select("alpha", "unlisted"))
+            .post(
+                route,
+                &with(selector.clone(), json!({"templateId": "sample-v1"})),
+            )
             .await;
-        let expected = if route.ends_with("interviews") || route.ends_with("upgrades") {
-            (404, "unknown-template")
-        } else {
-            (400, "malformed-request")
-        };
-        assert_eq!((unknown.status, unknown.kind()), expected, "{route}");
+        assert_eq!(
+            (unknown.status, unknown.kind()),
+            (400, "malformed-request"),
+            "{route}"
+        );
+    }
+    for route in ["/v1/interviews", "/v1/upgrades"] {
+        let mut unpinned = selector.clone();
+        unpinned.as_object_mut().unwrap().remove("ref");
+        let missing = service.post(route, &unpinned).await;
+        assert_eq!(
+            (missing.status, missing.kind()),
+            (400, "malformed-request"),
+            "{route}"
+        );
+        let short = service
+            .post(route, &with(selector.clone(), json!({"commit": "abc123"})))
+            .await;
+        assert_eq!(
+            (short.status, short.kind()),
+            (400, "malformed-request"),
+            "{route}"
+        );
     }
     for name in ["", ".", "..", "a/b", "../alpha"] {
-        let body = json!({"workspace": name, "target": world.workspaces.join(name), "templateId": "sample-v1"});
+        let body = with(
+            selector.clone(),
+            json!({"workspace": name, "target": world.workspaces.join(name)}),
+        );
         let refused = service.post("/v1/interviews", &body).await;
         assert_eq!(
             (refused.status, refused.kind()),
@@ -33,7 +58,7 @@ async fn selectors_name_an_approved_template_and_a_workspace_under_the_root() {
         world.workspaces.join("beta"),
         "alpha".into(),
     ] {
-        let body = json!({"workspace": "alpha", "target": target, "templateId": "sample-v1"});
+        let body = with(selector.clone(), json!({"target": target}));
         let refused = service.post("/v1/interviews", &body).await;
         assert_eq!(
             (refused.status, refused.kind()),
@@ -41,7 +66,10 @@ async fn selectors_name_an_approved_template_and_a_workspace_under_the_root() {
             "{target:?}"
         );
     }
-    let dotted = json!({"workspace": "alpha", "target": world.workspaces.join("./alpha/"), "templateId": "sample-v1"});
+    let dotted = with(
+        selector.clone(),
+        json!({"target": world.workspaces.join("./alpha/")}),
+    );
     assert_eq!(service.post("/v1/interviews", &dotted).await.status, 200);
     assert!(!world.folder("alpha").exists());
     service.stop().await;
@@ -130,7 +158,12 @@ async fn a_session_value_is_signed_for_its_record_workspace_template_and_flow() 
     unsigned.as_object_mut().unwrap().remove("signature");
     let foreign = menagerie_template_service::seal::sealed(
         &menagerie_template_service::seal::SessionKey::new(&[1; 32]),
-        menagerie_template_service::seal::Binding::new(Operation::Create, "alpha", "sample-v1"),
+        menagerie_template_service::seal::Binding::new(
+            Operation::Create,
+            "alpha",
+            selector["address"].as_str().unwrap(),
+            selector["ref"].as_str().unwrap(),
+        ),
         start.record().clone(),
     )
     .unwrap();
@@ -443,4 +476,186 @@ fn owned_results_cross_the_worker_boundary() {
     send::<menagerie_template_service::api::StartRequest>();
     send::<menagerie_template_service::api::AnswerRequest>();
     send::<menagerie_template_service::api::ApplyRequest>();
+}
+
+/// Every route that names a template admits its address first, and refuses
+/// one it must never read without quoting it, before any fetch.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_route_refuses_an_address_it_must_never_read() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let start = service
+        .post("/v1/interviews", &world.select("alpha", "sample-v1"))
+        .await;
+    assert_eq!(start.status, 200, "{}", start.json);
+    let folder = world.root.join("templates/sample");
+    let password = "https://sample-user:sample-password@git.example.invalid/example-org/kit";
+    for address in [
+        folder.display().to_string(),
+        format!("file://{}", folder.display()),
+        "sample-kit".to_owned(),
+        "git://git.example.invalid/example-org/kit".to_owned(),
+        "http://git.example.invalid/example-org/kit".to_owned(),
+        password.to_owned(),
+    ] {
+        for route in [
+            "/v1/interviews",
+            "/v1/interviews/answers",
+            "/v1/workspaces/generate",
+            "/v1/upgrades",
+            "/v1/upgrades/answers",
+            "/v1/upgrades/apply",
+            "/v1/templates/checks",
+        ] {
+            let body = json!({"workspace": "beta", "target": world.folder("beta"),
+                "address": address, "ref": "v1", "session": start.json["session"],
+                "submission": {}});
+            let body = match route {
+                "/v1/interviews" | "/v1/upgrades" => json!({"workspace": "beta",
+                    "target": world.folder("beta"), "address": address, "ref": "v1"}),
+                "/v1/workspaces/generate" | "/v1/upgrades/apply" => {
+                    let mut body = body;
+                    body.as_object_mut().unwrap().remove("submission");
+                    body
+                }
+                "/v1/templates/checks" => json!({"address": address, "ref": "v1"}),
+                _ => body,
+            };
+            let reply = service.post(route, &body).await;
+            assert_eq!(
+                (reply.status, reply.kind()),
+                (400, "invalid-address"),
+                "{route} {address}: {}",
+                reply.json
+            );
+            let text = String::from_utf8_lossy(&reply.body);
+            for quoted in ["sample-password", "example.invalid", "sample-kit"] {
+                assert!(!text.contains(quoted), "{route} {address}: {text}");
+            }
+            assert!(!text.contains(folder.to_str().unwrap()), "{route}: {text}");
+        }
+    }
+    assert!(!world.folder("beta").exists());
+    service.stop().await;
+}
+
+/// A ref that resolves to another commit than the one the workspace
+/// service recorded is refused, at the start and on every later request of
+/// the session, so a moved tag never brings in content no check saw.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ref_that_resolves_to_another_commit_than_the_recorded_one_is_stale() {
+    let world = World::new();
+    let service = Running::start(&world).await;
+    let pinned = with(
+        world.select("alpha", "sample-v1"),
+        json!({"commit": world.v1}),
+    );
+    let start = service.post("/v1/interviews", &pinned).await;
+    assert_eq!(start.status, 200, "{}", start.json);
+    let moved = with(
+        world.select("alpha", "sample-v1"),
+        json!({"commit": world.v2}),
+    );
+    let refused = service.post("/v1/interviews", &moved).await;
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (422, "template-stale-revision"),
+        "{}",
+        refused.json
+    );
+    let answers = submission(&start, sample_answers("first"));
+    let stale = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                moved.clone(),
+                json!({"session": start.json["session"], "submission": answers.clone()}),
+            ),
+        )
+        .await;
+    assert_eq!(
+        (stale.status, stale.kind()),
+        (422, "template-stale-revision"),
+        "{}",
+        stale.json
+    );
+    let done = service
+        .post(
+            "/v1/interviews/answers",
+            &with(
+                pinned.clone(),
+                json!({"session": start.json["session"], "submission": answers}),
+            ),
+        )
+        .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
+    let folder = world.initialize("alpha");
+    let stale = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(moved, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(
+        (stale.status, stale.kind()),
+        (422, "template-stale-revision"),
+        "{}",
+        stale.json
+    );
+    assert_eq!(entries(&folder), [".git"]);
+    let generated = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(pinned, json!({"session": done.json["session"]})),
+        )
+        .await;
+    assert_eq!(generated.json["outcome"], "written", "{}", generated.json);
+    commit_all(&folder, "generated");
+    write(
+        &folder,
+        "catalog.json",
+        sample_answers("first")["catalog"].to_string(),
+    );
+    commit_all(&folder, "document input");
+
+    // The tag moves after the version was checked: the upgrade refuses it.
+    git(&world.sample, &["tag", "-f", "v2", &world.v3]);
+    let upgrade = with(
+        world.select("alpha", "sample-v2"),
+        json!({"commit": world.v2}),
+    );
+    let refused = service.post("/v1/upgrades", &upgrade).await;
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (422, "template-stale-revision"),
+        "{}",
+        refused.json
+    );
+    git(&world.sample, &["tag", "-f", "v2", &world.v2]);
+    let started = service.post("/v1/upgrades", &upgrade).await;
+    assert_eq!(started.status, 200, "{}", started.json);
+    let wrong = with(
+        world.select("alpha", "sample-v2"),
+        json!({"commit": world.v3}),
+    );
+    for (route, members) in [
+        (
+            "/v1/upgrades/answers",
+            json!({"session": started.json["session"],
+                "submission": submission(&started, json!({"extra": "added"}))}),
+        ),
+        (
+            "/v1/upgrades/apply",
+            json!({"session": started.json["session"]}),
+        ),
+    ] {
+        let reply = service.post(route, &with(wrong.clone(), members)).await;
+        assert_eq!(
+            (reply.status, reply.kind()),
+            (422, "template-stale-revision"),
+            "{route}: {}",
+            reply.json
+        );
+    }
+    service.stop().await;
 }

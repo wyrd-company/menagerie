@@ -632,7 +632,12 @@ fn a_template_address_with_a_password_is_refused_without_contacting_the_host() {
         let reply = service
             .post("/v1/interviews", &world.select("alpha", "password"))
             .await;
-        assert_eq!(reply.status, 422, "{}", reply.json);
+        assert_eq!(
+            (reply.status, reply.kind()),
+            (400, "invalid-address"),
+            "{}",
+            reply.json
+        );
         assert!(!String::from_utf8_lossy(&reply.body).contains("sample-password"));
         assert!(host.seen().is_empty());
         assert!(world.hooks.credential_urls().is_empty());

@@ -6,6 +6,7 @@ use serde_json::json;
 #[tokio::test(flavor = "multi_thread")]
 async fn equivalent_numbers_keep_their_value_through_the_session_and_record() {
     let world = World::new();
+    let address = world.address("");
     let service = Running::start(&world).await;
     let start = service
         .post("/v1/interviews", &world.select("alpha", "sample-v1"))
@@ -17,7 +18,7 @@ async fn equivalent_numbers_keep_their_value_through_the_session_and_record() {
     let target = world.folder("alpha");
     let body = |size: &str, ratio: &str| {
         format!(
-            r#"{{"workspace":"alpha","target":"{}","templateId":"sample-v1","session":{session},"submission":{{"template":"{template}","answers":{{"label":"first","note":null,"catalog":{{"$schema":"{CATALOG}","title":"first","size":{size},"ratio":{ratio},"offset":-0}}}}}}}}"#,
+            r#"{{"workspace":"alpha","target":"{}","address":"{address}","ref":"v1","session":{session},"submission":{{"template":"{template}","answers":{{"label":"first","note":null,"catalog":{{"$schema":"{CATALOG}","title":"first","size":{size},"ratio":{ratio},"offset":-0}}}}}}}}"#,
             target.display()
         )
     };
@@ -76,7 +77,7 @@ async fn equivalent_numbers_keep_their_value_through_the_session_and_record() {
         &world.socket,
         "/v1/workspaces/generate",
         format!(
-            r#"{{"workspace":"alpha","target":"{}","templateId":"sample-v1","hookToken":"{HOOK_TOKEN}","session":{}}}"#,
+            r#"{{"workspace":"alpha","target":"{}","address":"{address}","ref":"v1","hookToken":"{HOOK_TOKEN}","session":{}}}"#,
             target.display(),
             String::from_utf8(done.session_bytes()).unwrap()
         )
@@ -95,6 +96,7 @@ async fn equivalent_numbers_keep_their_value_through_the_session_and_record() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tampered_session_number_is_refused_before_any_write() {
     let world = World::new();
+    let address = world.address("");
     let service = Running::start(&world).await;
     let selector = world.select("alpha", "sample-v1");
     let start = service.post("/v1/interviews", &selector).await;
@@ -113,7 +115,7 @@ async fn a_tampered_session_number_is_refused_before_any_write() {
         .unwrap()
         .replace("18446744073709551615", "18446744073709551616");
     let body = format!(
-        r#"{{"workspace":"alpha","target":"{}","templateId":"sample-v1","session":{session}}}"#,
+        r#"{{"workspace":"alpha","target":"{}","address":"{address}","ref":"v1","session":{session}}}"#,
         folder.display()
     );
     let refused = post_bytes(&world.socket, "/v1/workspaces/generate", body.into_bytes()).await;

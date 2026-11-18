@@ -16,7 +16,7 @@ use toha::staging::StagedRecord;
 /// The key file under the service's data folder.
 pub const KEY_FILE: &str = "session-key";
 const KEY_LEN: usize = 32;
-const DOMAIN: &[u8] = b"menagerie-template-session-1";
+const DOMAIN: &[u8] = b"menagerie-template-session-2";
 
 /// The signing key. It lives in the data folder so that sessions continue
 /// across a service restart.
@@ -94,20 +94,29 @@ impl SessionKey {
     }
 }
 
-/// What a session is bound to besides its record.
+/// What a session is bound to besides its record: its flow, its workspace,
+/// and the template's address and ref, so a session cannot be replayed into
+/// another template or version.
 #[derive(Debug, Clone, Copy)]
 pub struct Binding<'a> {
     pub operation: Operation,
     pub workspace: &'a str,
-    pub template_id: &'a str,
+    pub address: &'a str,
+    pub reference: &'a str,
 }
 
 impl<'a> Binding<'a> {
-    pub fn new(operation: Operation, workspace: &'a str, template_id: &'a str) -> Self {
+    pub fn new(
+        operation: Operation,
+        workspace: &'a str,
+        address: &'a str,
+        reference: &'a str,
+    ) -> Self {
         Self {
             operation,
             workspace,
-            template_id,
+            address,
+            reference,
         }
     }
 }
@@ -171,7 +180,7 @@ fn verify(key: &SessionKey, binding: Binding<'_>, session: Value) -> Result<Valu
 fn tampered() -> ServiceError {
     ServiceError::bad_request(
         "session-tampered",
-        "the session is unsigned or altered, or was issued for another workspace, template or flow",
+        "the session is unsigned or altered, or was issued for another workspace, template, ref or flow",
     )
 }
 
@@ -189,7 +198,8 @@ fn message(binding: Binding<'_>, record: &Value) -> Result<Vec<u8>, ServiceError
         DOMAIN,
         operation,
         binding.workspace.as_bytes(),
-        binding.template_id.as_bytes(),
+        binding.address.as_bytes(),
+        binding.reference.as_bytes(),
         &record,
     ] {
         message.extend_from_slice(&(part.len() as u64).to_be_bytes());
@@ -207,12 +217,14 @@ mod tests {
     fn binding(
         operation: Operation,
         workspace: &'static str,
-        template_id: &'static str,
+        address: &'static str,
+        reference: &'static str,
     ) -> Binding<'static> {
         Binding {
             operation,
             workspace,
-            template_id,
+            address,
+            reference,
         }
     }
 
@@ -223,7 +235,7 @@ mod tests {
     #[test]
     fn a_signature_binds_the_record_flow_workspace_and_template() {
         let key = SessionKey::new(&[7; KEY_LEN]);
-        let bound = binding(Operation::Create, "alpha", "sample-v1");
+        let bound = binding(Operation::Create, "alpha", "gh:example-org/kit", "1.0.0");
         let record = json!({"template": "sample", "submissions": [{"n": 1.5}]});
         let session = sealed(&key, bound, record.clone()).unwrap();
         assert!(verifies(&key, bound, session.clone()));
@@ -232,9 +244,10 @@ mod tests {
         assert!(verifies(&key, bound, serde_json::from_str(&text).unwrap()));
 
         for other in [
-            binding(Operation::Upgrade, "alpha", "sample-v1"),
-            binding(Operation::Create, "beta", "sample-v1"),
-            binding(Operation::Create, "alpha", "sample-v2"),
+            binding(Operation::Upgrade, "alpha", "gh:example-org/kit", "1.0.0"),
+            binding(Operation::Create, "beta", "gh:example-org/kit", "1.0.0"),
+            binding(Operation::Create, "alpha", "gh:example-org/other", "1.0.0"),
+            binding(Operation::Create, "alpha", "gh:example-org/kit", "1.1.0"),
         ] {
             assert!(!verifies(&key, other, session.clone()), "{other:?}");
         }
@@ -257,15 +270,19 @@ mod tests {
     fn length_prefixes_keep_bound_values_apart() {
         let record = json!({});
         assert_ne!(
-            message(binding(Operation::Create, "ab", "c"), &record).unwrap(),
-            message(binding(Operation::Create, "a", "bc"), &record).unwrap()
+            message(binding(Operation::Create, "ab", "c", "d"), &record).unwrap(),
+            message(binding(Operation::Create, "a", "bc", "d"), &record).unwrap()
+        );
+        assert_ne!(
+            message(binding(Operation::Create, "a", "bc", "d"), &record).unwrap(),
+            message(binding(Operation::Create, "a", "b", "cd"), &record).unwrap()
         );
     }
 
     #[test]
     fn open_refuses_every_unsigned_shape() {
         let key = SessionKey::new(&[7; KEY_LEN]);
-        let bound = binding(Operation::Create, "alpha", "sample-v1");
+        let bound = binding(Operation::Create, "alpha", "gh:example-org/kit", "1.0.0");
         for session in [
             json!(null),
             json!("text"),
@@ -303,7 +320,7 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         let second = SessionKey::load_or_create(&folder).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        let bound = binding(Operation::Create, "alpha", "sample-v1");
+        let bound = binding(Operation::Create, "alpha", "gh:example-org/kit", "1.0.0");
         let session = sealed(&first, bound, json!({})).unwrap();
         assert!(verifies(&second, bound, session));
         assert_eq!(

@@ -135,6 +135,19 @@ pub struct World {
     pub socket: PathBuf,
     pub data: PathBuf,
     pub config: PathBuf,
+    /// Each test template by its id: its address without a ref, and the ref
+    /// the workspace service names beside it.
+    pub templates: std::collections::BTreeMap<String, (String, String)>,
+    _sibling: Sibling,
+}
+
+/// A folder beside the world's, removed when the world is.
+struct Sibling(PathBuf);
+
+impl Drop for Sibling {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 impl World {
@@ -142,7 +155,8 @@ impl World {
         Self::with_templates(&[])
     }
 
-    /// A world whose approved list also has `templates`, as `(id, address)`.
+    /// A world whose test templates also have `templates`, as `(id,
+    /// address)`, each address with a ref or with `main`'s.
     pub fn with_templates(templates: &[(&str, &str)]) -> Self {
         authority();
         let temp = tempfile::tempdir().unwrap();
@@ -172,18 +186,23 @@ impl World {
             flows_template(&dir, hook);
             commit_all(&dir, "flows");
         }
-        // A different repository whose address folds to the same Toha cache
-        // key as `sample@v1`.
-        let collision = root.join("templates/sample_v1");
+        // A different repository whose address at `v1` folds to the same
+        // Toha cache key as `sample@v1`: `<root>_templates/sample@v1`, in a
+        // folder beside the world's, removed with it.
+        let sibling = Sibling(root.with_file_name(format!(
+            "{}_templates",
+            root.file_name().unwrap().to_str().unwrap()
+        )));
+        let collision = sibling.0.join("sample");
         std::fs::create_dir_all(&collision).unwrap();
         git(&collision, &["init", "-q", "-b", "main"]);
         sample_template(&collision, 1);
         write(&collision, "template/local.txt", "first: collision\n");
         commit_all(&collision, "collision");
-        // A clone of `sample` sharing its commits, whose address also folds
-        // to `sample@v1`'s cache key.
-        let fork = root.join("templates_sample/v1");
-        std::fs::create_dir_all(fork.parent().unwrap()).unwrap();
+        git(&collision, &["tag", "v1"]);
+        // A clone of `sample` sharing its commits, whose address at `v1`
+        // also folds to `sample@v1`'s cache key.
+        let fork = root.join("templates_sample");
         git(
             &root,
             &[
@@ -227,7 +246,7 @@ impl World {
                 flows = t("flows"),
                 folder = folder.display(),
                 broken = t("broken"),
-                collision = t("sample_v1"),
+                collision = served(&collision),
                 dotted = t("dotted.git"),
                 f = served(&fork),
                 extra = templates
@@ -238,6 +257,27 @@ impl World {
                     .collect::<String>(),
             ),
         );
+        let mut table = std::collections::BTreeMap::new();
+        let commit = v1.clone();
+        for (id, address) in [
+            ("sample-v1", format!("{s}@v1")),
+            ("sample-v2", format!("{s}@v2")),
+            ("sample-v3", format!("{s}@v3")),
+            ("sample-main", format!("{s}@main")),
+            ("sample-commit", format!("{s}@{commit}")),
+            ("flows", format!("{}@main", t("flows"))),
+            ("broken", format!("{}@main", t("broken"))),
+            ("collision", format!("{}@v1", served(&collision))),
+            ("fork", format!("{}@v1", served(&fork))),
+            ("dotted-v1", format!("{}@v1", t("dotted.git"))),
+            ("dotted-v2", format!("{}@v2", t("dotted.git"))),
+            ("dotted-main", format!("{}@main", t("dotted.git"))),
+        ]
+        .into_iter()
+        .chain(templates.iter().map(|(id, a)| (*id, a.to_string())))
+        {
+            table.insert(id.to_owned(), split_ref(&address));
+        }
         let hooks = HookHost::start(&hook_socket);
         Self {
             hooks,
@@ -251,6 +291,8 @@ impl World {
             socket,
             data,
             config,
+            templates: table,
+            _sibling: sibling,
         }
     }
 
@@ -294,8 +336,13 @@ impl World {
         folder
     }
 
+    /// A request selector for a test template by its id: the workspace, its
+    /// folder, and the template's address and ref, as the workspace service
+    /// names them.
     pub fn select(&self, workspace: &str, template: &str) -> Value {
-        json!({"workspace": workspace, "target": self.folder(workspace), "templateId": template})
+        let (address, reference) = &self.templates[template];
+        json!({"workspace": workspace, "target": self.folder(workspace),
+            "address": address, "ref": reference})
     }
 
     /// The service's session key, from its data folder.
@@ -310,7 +357,8 @@ impl World {
         let binding = Binding::new(
             operation,
             selector["workspace"].as_str().unwrap(),
-            selector["templateId"].as_str().unwrap(),
+            selector["address"].as_str().unwrap(),
+            selector["ref"].as_str().unwrap(),
         );
         seal::sealed(&self.key(), binding, record).unwrap()
     }
@@ -328,6 +376,29 @@ impl World {
         edit(&mut record);
         self.signed(operation, selector, record)
     }
+}
+
+/// A test address with a ref as the address without it, and the ref, or
+/// `main` for an address with none: the `@` after the address's path, and
+/// a `#` folder kept on the address.
+pub fn split_ref(address: &str) -> (String, String) {
+    let (repository, folder) = address
+        .split_once('#')
+        .map_or((address, None), |(r, f)| (r, Some(f)));
+    let path = repository.find("://").map_or(0, |scheme| {
+        repository[scheme + 3..]
+            .find('/')
+            .map_or(repository.len(), |slash| scheme + 3 + slash)
+    });
+    let (base, reference) = match repository[path..].rfind('@') {
+        Some(at) => (&repository[..path + at], &repository[path + at + 1..]),
+        None => (repository, "main"),
+    };
+    let base = match folder {
+        Some(folder) => format!("{base}#{folder}"),
+        None => base.to_owned(),
+    };
+    (base, reference.to_owned())
 }
 
 /// The service running in this process on the world's socket.

@@ -50,7 +50,15 @@ pub struct CheckReply {
 pub struct StartRequest {
     pub workspace: String,
     pub target: PathBuf,
-    pub template_id: String,
+    /// The template's address, without a ref.
+    pub address: String,
+    /// The version's tag, or another ref of the repository.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// The commit the workspace service recorded for the ref, when it has
+    /// one: a ref that resolves to another is refused.
+    #[serde(default)]
+    pub commit: Option<String>,
 }
 
 /// Starts an upgrade. `reanswer` asks every question again, with the
@@ -60,7 +68,15 @@ pub struct StartRequest {
 pub struct UpgradeRequest {
     pub workspace: String,
     pub target: PathBuf,
-    pub template_id: String,
+    /// The template's address, without a ref.
+    pub address: String,
+    /// The version's tag, or another ref of the repository.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// The commit the workspace service recorded for the ref, when it has
+    /// one: a ref that resolves to another is refused.
+    #[serde(default)]
+    pub commit: Option<String>,
     #[serde(default)]
     pub reanswer: bool,
 }
@@ -71,7 +87,15 @@ pub struct UpgradeRequest {
 pub struct AnswerRequest {
     pub workspace: String,
     pub target: PathBuf,
-    pub template_id: String,
+    /// The template's address, without a ref.
+    pub address: String,
+    /// The version's tag, or another ref of the repository.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// The commit the workspace service recorded for the ref, when it has
+    /// one: a ref that resolves to another is refused.
+    #[serde(default)]
+    pub commit: Option<String>,
     /// Toha's staged record, as returned in the latest reply.
     pub session: Value,
     /// Toha's answers envelope `{"template","answers"}`.
@@ -86,7 +110,15 @@ pub struct AnswerRequest {
 pub struct ApplyRequest {
     pub workspace: String,
     pub target: PathBuf,
-    pub template_id: String,
+    /// The template's address, without a ref.
+    pub address: String,
+    /// The version's tag, or another ref of the repository.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// The commit the workspace service recorded for the ref, when it has
+    /// one: a ref that resolves to another is refused.
+    #[serde(default)]
+    pub commit: Option<String>,
     pub session: Value,
     #[serde(default)]
     pub hook_token: Option<String>,
@@ -96,7 +128,9 @@ pub struct ApplyRequest {
 pub struct Selector<'a> {
     pub workspace: &'a str,
     pub target: &'a std::path::Path,
-    pub template_id: &'a str,
+    pub address: &'a str,
+    pub reference: &'a str,
+    pub commit: Option<&'a str>,
 }
 
 macro_rules! selector {
@@ -106,7 +140,9 @@ macro_rules! selector {
                 Selector {
                     workspace: &self.workspace,
                     target: &self.target,
-                    template_id: &self.template_id,
+                    address: &self.address,
+                    reference: &self.reference,
+                    commit: self.commit.as_deref(),
                 }
             }
         }

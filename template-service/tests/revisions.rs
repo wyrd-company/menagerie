@@ -126,7 +126,7 @@ async fn a_fixed_upgrade_address_refuses_a_session_on_another_revision() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_installed_branch_moves_when_a_create_starts_and_never_on_resume() {
     let world = World::new();
-    world.install(&world.address(""));
+    world.install(&world.address("@main"));
     let service = Running::start(&world).await;
     let (selector, pending) = answered(&service, &world, "gamma", "sample-main").await;
     assert_eq!(pending["document"]["context"]["commit"], world.v1.as_str());
@@ -159,7 +159,7 @@ async fn an_installed_branch_moves_when_a_create_starts_and_never_on_resume() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_installed_branch_moves_when_an_upgrade_starts() {
     let world = World::new();
-    world.install(&world.address(""));
+    world.install(&world.address("@main"));
     let service = Running::start(&world).await;
     let folder = create(&world, &service, "alpha", "sample-main").await;
     assert_eq!(application(&folder)["commit"], world.v1.as_str());
@@ -248,7 +248,7 @@ async fn an_installed_tag_stays_on_its_revision() {
 #[tokio::test(flavor = "multi_thread")]
 async fn installations_toha_does_not_update_are_used_as_they_are() {
     let world = World::new();
-    world.install(&world.address(""));
+    world.install(&world.address("@main"));
     let user = world.data.join("data/templates.yml");
     let system = world.data.join("system/data/templates.yml");
     std::fs::create_dir_all(system.parent().unwrap()).unwrap();
@@ -264,12 +264,22 @@ async fn installations_toha_does_not_update_are_used_as_they_are() {
         world.v1.as_str()
     );
 
-    world.install(&format!("{}/templates/flows", world.root.display()));
+    // A folder address is never read, installed or not.
+    let flows = world.root.join("templates/flows");
+    world.install(&flows.display().to_string());
     let folder = service
-        .post("/v1/interviews", &world.select("beta", "flows-folder"))
+        .post(
+            "/v1/interviews",
+            &json!({"workspace": "beta", "target": world.folder("beta"),
+                "address": flows, "ref": "main"}),
+        )
         .await;
-    assert_eq!(folder.status, 200, "{}", folder.json);
-    assert_eq!(folder.json["state"], "questions");
+    assert_eq!(
+        (folder.status, folder.kind()),
+        (400, "invalid-address"),
+        "{}",
+        folder.json
+    );
     service.stop().await;
 }
 
@@ -511,7 +521,7 @@ async fn a_cache_entry_must_hold_its_commit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_installed_upgrade_session_keeps_its_admission_offline() {
     let world = World::new();
-    world.install(&world.address(""));
+    world.install(&world.address("@main"));
     let service = Running::start(&world).await;
     let folder = create(&world, &service, "alpha", "sample-main").await;
     git(&world.sample, &["merge", "-q", "--ff-only", "next"]);
@@ -656,7 +666,10 @@ async fn an_installed_dot_git_source_is_admitted() {
         &world.root.join("templates/dotted.git"),
         &["merge", "-q", "--ff-only", "origin/next"],
     );
-    world.install(&served(&world.root.join("templates/dotted.git")));
+    world.install(&format!(
+        "{}@main",
+        served(&world.root.join("templates/dotted.git"))
+    ));
     let (selector, start) = answered(&service, &world, "alpha", "dotted-main").await;
     assert_eq!(start["document"]["context"]["commit"], world.v2.as_str());
     let envelope = {

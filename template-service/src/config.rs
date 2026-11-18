@@ -1,14 +1,15 @@
 //! The template service's settings, read from Menagerie's shared configuration file.
 //!
 //! The workspace service owns the file's full schema and strict validation. This
-//! service reads only the members it uses: `workspace-root`, `templates`,
+//! service reads only the members it uses: `workspace-root`,
 //! `template-service.socket`, `template-service.hook-runner-socket` and
 //! `template-service.candidate-folder`, with the workspace service's rules
 //! for each: the root is cleaned lexically and never `/`, an empty socket or
-//! folder takes the default, the candidate folder is clean, never `/`, and
-//! neither inside the root nor containing it, template ids are unique.
-//! Other members are ignored here. Toha's storage folder is this service's
-//! own `-data` flag, not a configuration key.
+//! folder takes the default, and the candidate folder is clean, never `/`,
+//! and neither inside the root nor containing it. Other members are ignored
+//! here, `templates` included: the workspace service names each template's
+//! address in its requests. Toha's storage folder is this service's own
+//! `-data` flag, not a configuration key.
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 
@@ -18,23 +19,10 @@ pub const DEFAULT_HOOK_RUNNER_SOCKET: &str = "/run/menagerie/hook-runner.sock";
 pub const DEFAULT_DATA: &str = "/var/lib/menagerie/toha";
 pub const DEFAULT_CANDIDATE_FOLDER: &str = "/var/lib/menagerie/candidates";
 
-/// One approved template: its configuration id, display name and Toha address.
-/// Its `runner-image` belongs to the workspace service, which runs the hooks.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ApprovedTemplate {
-    pub id: String,
-    pub name: String,
-    pub address: String,
-    #[serde(rename = "runner-image", default)]
-    pub runner_image: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct Settings {
     /// Absolute, cleaned workspace root, used as written.
     pub workspace_root: PathBuf,
-    pub templates: Vec<ApprovedTemplate>,
     pub socket: PathBuf,
     /// The workspace service's hook runner, which runs every hook.
     pub hook_runner_socket: PathBuf,
@@ -50,8 +38,6 @@ pub struct Settings {
 struct File {
     #[serde(rename = "workspace-root")]
     workspace_root: Option<String>,
-    #[serde(default)]
-    templates: Vec<ApprovedTemplate>,
     #[serde(rename = "template-service")]
     template_service: Option<Service>,
 }
@@ -123,39 +109,13 @@ impl Settings {
         let data = clean_absolute(&data.to_string_lossy()).ok_or_else(|| {
             ConfigError::Invalid(format!("data folder {} must be absolute", data.display()))
         })?;
-        let mut seen = std::collections::HashSet::new();
-        for template in &file.templates {
-            if !valid_id(&template.id) {
-                return Err(ConfigError::Invalid(format!(
-                    "template id {:?} must be lower-case letters and digits separated by single dashes",
-                    template.id
-                )));
-            }
-            if !seen.insert(template.id.as_str()) {
-                return Err(ConfigError::Invalid(format!(
-                    "template id {:?} is repeated",
-                    template.id
-                )));
-            }
-            if template.name.is_empty() || template.address.is_empty() {
-                return Err(ConfigError::Invalid(format!(
-                    "template {:?} needs a name and an address",
-                    template.id
-                )));
-            }
-        }
         Ok(Self {
             workspace_root,
-            templates: file.templates,
             socket,
             hook_runner_socket,
             candidate_folder,
             data,
         })
-    }
-
-    pub fn template(&self, id: &str) -> Option<&ApprovedTemplate> {
-        self.templates.iter().find(|t| t.id == id)
     }
 }
 
@@ -221,17 +181,6 @@ pub fn prepare_candidate_folder(folder: &Path) -> std::io::Result<PathBuf> {
     Ok(work)
 }
 
-/// `^[a-z0-9]+(-[a-z0-9]+)*$`, the workspace service's template id rule.
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.split('-').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-        })
-}
-
 /// The path cleaned lexically (`.`, `..`, repeated separators), when absolute.
 pub fn clean_absolute(path: &str) -> Option<PathBuf> {
     let path = Path::new(path);
@@ -274,11 +223,26 @@ mod tests {
             settings.candidate_folder,
             PathBuf::from(DEFAULT_CANDIDATE_FOLDER)
         );
-        assert_eq!(
-            settings.template("sample-one").unwrap().address,
-            "https://example.invalid/t"
-        );
-        assert!(settings.template("other").is_none());
+    }
+
+    #[test]
+    fn reads_nothing_of_the_templates_key() {
+        for templates in [
+            "templates:\n  - {id: sample-one, name: Sample, address: 'https://example.invalid/t'}\n",
+            "templates: [{id: Bad, name: '', address: a, extra: 1}, {id: Bad}]\n",
+            "templates: {not: a list}\n",
+        ] {
+            let settings = Settings::parse(
+                &format!("workspace-root: /srv\n{templates}"),
+                Path::new(DATA),
+            )
+            .unwrap();
+            assert_eq!(
+                settings.workspace_root,
+                PathBuf::from("/srv"),
+                "{templates}"
+            );
+        }
     }
 
     #[test]
@@ -296,7 +260,7 @@ mod tests {
         .unwrap();
         assert_eq!(settings.socket, PathBuf::from(DEFAULT_SOCKET));
         let settings = Settings::parse(
-            "workspace-root: /srv\ntemplate-service: {hook-runner-socket: /run/sample/h.sock}\ntemplates: [{id: a, name: n, address: a, runner-image: 'alpine:3.22'}]\n",
+            "workspace-root: /srv\ntemplate-service: {hook-runner-socket: /run/sample/h.sock}\n",
             Path::new(DATA),
         )
         .unwrap();
@@ -349,26 +313,6 @@ template-service: {candidate-folder: /srv/candidates}
             (
                 "workspace-root: /srv/spaces\ntemplate-service: {candidate-folder: /srv}\n",
                 "neither inside workspace-root nor contain it",
-            ),
-            (
-                "workspace-root: /srv\ntemplates: [{id: Bad, name: n, address: a}]\n",
-                "lower-case",
-            ),
-            (
-                "workspace-root: /srv\ntemplates: [{id: a--b, name: n, address: a}]\n",
-                "lower-case",
-            ),
-            (
-                "workspace-root: /srv\ntemplates: [{id: a, name: n, address: a}, {id: a, name: m, address: b}]\n",
-                "repeated",
-            ),
-            (
-                "workspace-root: /srv\ntemplates: [{id: a, name: '', address: a}]\n",
-                "needs a name",
-            ),
-            (
-                "workspace-root: /srv\ntemplates: [{id: a, name: n, address: a, extra: 1}]\n",
-                "unknown field",
             ),
         ] {
             let error = Settings::parse(text, Path::new(DATA))

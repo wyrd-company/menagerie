@@ -13,10 +13,16 @@ use toha::context::{EnvironmentDecision, ExecutionFacts};
 use toha::operations::{Preparation, Session};
 use toha::{ApplyOptions, RawAnswers, Template};
 
-/// Start the interview of an approved template for a workspace folder that does
-/// not exist yet.
+/// Start the interview of a template at a ref for a workspace folder that
+/// does not exist yet.
 pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply, ServiceError> {
-    let selected = checks::select(&service.settings, request.selector())?;
+    let (mut config, mut registry, mut warnings) = service.host.context()?;
+    let selected = checks::select(
+        &service.settings,
+        &service.host,
+        &config,
+        request.selector(),
+    )?;
     if std::fs::symlink_metadata(&selected.folder).is_ok() {
         return Err(ServiceError::conflict(
             "workspace-exists",
@@ -26,8 +32,12 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
             ),
         ));
     }
-    let (mut config, mut registry, mut warnings) = service.host.context()?;
-    if crate::revision::refresh(selected.template, &service.host, &config, &registry)? {
+    if crate::revision::refresh(
+        &selected.template.address,
+        &service.host,
+        &config,
+        &registry,
+    )? {
         (config, registry, warnings) = service.host.context()?;
     }
     let resolved = toha::resolve::resolve_template(
@@ -37,6 +47,8 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
         &service.host.paths,
         &service.host.cwd,
     )?;
+    selected.template.current(&resolved.commit)?;
+    crate::links::check_resolved(&resolved, &service.host, &config)?;
     let template = Template::load(&resolved.folder)?;
     let preparation = Preparation::new(
         template,
@@ -46,7 +58,7 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
         &RawAnswers::new(),
     )?;
     crate::revision::admit(
-        selected.template,
+        &selected.template.address,
         &preparation.resolved.formal_name,
         &preparation.resolved.commit,
         &service.host,
@@ -71,7 +83,12 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
     let state = session.state()?;
     let sealed = seal::seal(
         &service.key,
-        Binding::new(Operation::Create, &request.workspace, &request.template_id),
+        Binding::new(
+            Operation::Create,
+            &request.workspace,
+            &request.address,
+            &request.reference,
+        ),
         &session.record,
     )?;
     reply::interview(&session.record, sealed, &selected.target, state, warnings)
@@ -80,20 +97,31 @@ pub fn start(service: &Service, request: StartRequest) -> Result<InterviewReply,
 /// Rebuild the session and submit one batch. A rejected batch returns the same
 /// questions with their errors and an unchanged session.
 pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewReply, ServiceError> {
-    let selected = checks::select(&service.settings, request.selector())?;
-    let binding = Binding::new(Operation::Create, &request.workspace, &request.template_id);
-    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, warnings) = service.host.context()?;
-    let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
+    let selected = checks::select(
+        &service.settings,
+        &service.host,
+        &config,
+        request.selector(),
+    )?;
+    let binding = Binding::new(
+        Operation::Create,
+        &request.workspace,
+        &request.address,
+        &request.reference,
+    );
+    let record = seal::open(&service.key, binding, request.session)?;
+    let expected = checks::identity(&selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;
     crate::revision::check(
         &record,
         &expected.formal_name,
-        selected.template,
+        &selected.template.address,
         &service.host,
         &config,
         &registry,
     )?;
+    selected.template.current(&record.commit)?;
     let answers = checks::submission(&record, &request.submission)?;
     let mut session = resume(service, record, &selected.target, config, &registry)?;
     let shown = session.state()?;
@@ -111,20 +139,31 @@ pub fn generate(
     request: ApplyRequest,
     ended: &Ended,
 ) -> Result<ApplyReply, ServiceError> {
-    let selected = checks::select(&service.settings, request.selector())?;
-    let binding = Binding::new(Operation::Create, &request.workspace, &request.template_id);
-    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, _) = service.host.context()?;
-    let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
+    let selected = checks::select(
+        &service.settings,
+        &service.host,
+        &config,
+        request.selector(),
+    )?;
+    let binding = Binding::new(
+        Operation::Create,
+        &request.workspace,
+        &request.address,
+        &request.reference,
+    );
+    let record = seal::open(&service.key, binding, request.session)?;
+    let expected = checks::identity(&selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Create)?;
     crate::revision::check(
         &record,
         &expected.formal_name,
-        selected.template,
+        &selected.template.address,
         &service.host,
         &config,
         &registry,
     )?;
+    selected.template.current(&record.commit)?;
     crate::links::check_session(&record, &service.host, &config, &registry)?;
     checks::fresh_repository(&selected.folder, &selected.target)?;
     // From here Toha renders the template and runs its hooks, so every

@@ -1,17 +1,41 @@
 //! Checks every route makes before Toha replays or writes anything: the
-//! workspace and target, the approved template, and the session's pinned
-//! template, target and operation.
+//! workspace and target, the admitted template address at its ref, and the
+//! session's pinned template, revision, target and operation.
+use crate::address::{self, Admitted};
 use crate::api::Selector;
-use crate::config::{ApprovedTemplate, Settings, clean_absolute};
+use crate::config::{Settings, clean_absolute};
 use crate::error::ServiceError;
 use crate::host::TohaHost;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use toha::staging::{CanonicalTarget, StagedRecord, canonical_target};
 
-/// A request's checked workspace folder and approved template.
-pub struct Selected<'a> {
-    pub template: &'a ApprovedTemplate,
+/// The template a request names: its admitted address at its ref, and the
+/// commit the workspace service recorded for that ref.
+pub struct Requested {
+    /// The address at the ref, as written, which Toha resolves.
+    pub address: String,
+    pub admitted: Admitted,
+    pub commit: Option<String>,
+}
+
+impl Requested {
+    /// Refuse a revision other than the recorded commit, when there is one,
+    /// so a moved tag never brings in content no check saw.
+    pub fn current(&self, commit: &str) -> Result<(), ServiceError> {
+        match &self.commit {
+            Some(recorded) if recorded != commit => Err(ServiceError::refused(
+                "template-stale-revision",
+                "the template's ref resolves to another commit than the one Menagerie recorded for it",
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// A request's checked workspace folder and template.
+pub struct Selected {
+    pub template: Requested,
     /// The workspace folder under the root, as configured.
     pub folder: PathBuf,
     pub target: CanonicalTarget,
@@ -25,13 +49,16 @@ pub enum Operation {
 }
 
 /// The workspace is a plain folder name, the target is exactly that folder
-/// under the workspace root, and the template id is approved. The folder's
-/// real path, with symbolic links resolved, must still be that direct child of
-/// the root's real path, so a link cannot move a workspace elsewhere.
-pub fn select<'a>(
-    settings: &'a Settings,
+/// under the workspace root, and the address, at the ref, is one this
+/// service may read (see `address`). The folder's real path, with symbolic
+/// links resolved, must still be that direct child of the root's real path,
+/// so a link cannot move a workspace elsewhere.
+pub fn select(
+    settings: &Settings,
+    host: &TohaHost,
+    config: &toha::config::Config,
     request: Selector<'_>,
-) -> Result<Selected<'a>, ServiceError> {
+) -> Result<Selected, ServiceError> {
     let name = request.workspace;
     let plain = !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0']);
     if !plain {
@@ -51,13 +78,20 @@ pub fn select<'a>(
             ),
         ));
     }
-    let template = settings.template(request.template_id).ok_or_else(|| {
-        ServiceError::new(
-            404,
-            "unknown-template",
-            format!("template {:?} is not approved", request.template_id),
-        )
-    })?;
+    if let Some(commit) = request.commit
+        && !crate::revision::is_commit(commit)
+    {
+        return Err(ServiceError::bad_request(
+            "malformed-request",
+            "commit must be a full Git object id",
+        ));
+    }
+    let admitted = address::admit_at(request.address, request.reference, host, config)?;
+    let template = Requested {
+        address: address::with_ref(request.address, request.reference),
+        admitted,
+        commit: request.commit.map(str::to_owned),
+    };
     let target = contained(&settings.workspace_root, &folder, name)?;
     Ok(Selected {
         template,
@@ -96,15 +130,16 @@ pub fn session(value: Value) -> Result<StagedRecord, ServiceError> {
     })
 }
 
-/// The pinned identity an approved template's sessions must carry.
+/// The pinned identity a requested template's sessions must carry.
 pub struct Identity {
     pub formal_name: String,
     pub named: bool,
 }
 
-/// The approved address's formal name, computed without fetching.
+/// The requested address's formal name at its ref, computed without
+/// fetching.
 pub fn identity(
-    template: &ApprovedTemplate,
+    template: &Requested,
     host: &TohaHost,
     config: &toha::config::Config,
     registry: &toha::registry::Registry,
@@ -123,7 +158,8 @@ pub fn identity(
     Ok(Identity { formal_name, named })
 }
 
-/// The session was produced for this approved template, this target and this flow.
+/// The session was produced for this template at this ref, this target and
+/// this flow.
 pub fn pinned(
     record: &StagedRecord,
     expected: &Identity,
@@ -134,7 +170,7 @@ pub fn pinned(
         return Err(ServiceError::conflict(
             "session-mismatch",
             format!(
-                "session template {:?} is not the approved template {:?}",
+                "session template {:?} is not the requested template {:?}",
                 record.template, expected.formal_name
             ),
         ));

@@ -10,10 +10,12 @@ description: >-
   client, with JSON over HTTP/1.1 on the Unix socket named by
   `template-service.socket` in the Menagerie configuration. It reads that
   file (`-config`, default `/etc/menagerie/config.yml`) only for
-  `workspace-root`, `templates`, `template-service.socket`,
+  `workspace-root`, `template-service.socket`,
   `template-service.hook-runner-socket` and
   `template-service.candidate-folder`, with the workspace service's rules
-  for them, and ignores its other members. The service starts no process:
+  for them, and ignores its other members, `templates` included: the
+  workspace service names each template's address in its requests, and
+  this service holds no list of templates. The service starts no process:
   the workspace service runs every template hook. The candidate folder,
   default `/var/lib/menagerie/candidates`, is the service's temporary
   folder: the service creates it when it is missing, private to its user,
@@ -43,15 +45,20 @@ description: >-
   `/v1/templates/versions` lists its versions, both with `{"address"}`, and
   `/v1/templates/checks` checks one version, with `{"address","ref"}`.
   `/v1/interviews` starts a create interview and `/v1/upgrades` starts an
-  upgrade, both with `{"workspace","target","templateId"}`.
+  upgrade, both with `{"workspace","target","address","ref","commit"}`,
+  `commit` optional.
   `/v1/interviews/answers` and `/v1/upgrades/answers` add `"session"` and
   `"submission"`. `/v1/workspaces/generate` and `/v1/upgrades/apply` add
   `"session"` and an optional `"hookToken"`, the workspace service's grant
   for that request's hooks. `/v1/upgrades` also takes an optional boolean
-  `"reanswer"`, false when absent. Other members are refused. `workspace` is the folder name,
-  `target` is that folder under the workspace root, and `templateId` is an
-  approved template's `id`; for an upgrade it names the template version to
-  upgrade to. Another path answers 404 `not-found`, another method 405
+  `"reanswer"`, false when absent. Other members are refused, a `templateId`
+  included, and a missing member, a missing `ref` included, is
+  `malformed-request` (400). `workspace` is the folder name, `target` is
+  that folder under the workspace root, `address` is the template's address
+  without a ref, `ref` is the version's tag, and `commit`, when the
+  workspace service recorded one for the version, is the commit the ref
+  must resolve to; for an upgrade they name the template version to upgrade
+  to. Another path answers 404 `not-found`, another method 405
   `method-not-allowed`.
 
 
@@ -116,22 +123,34 @@ description: >-
   same folder and link check, before Toha reads any of the session's
   template, on the folder Toha's resume reads: its cache entry for the
   session's commit with the formal name's `#path`, or the installation that
-  holds that commit. So no request makes the service read its own files,
-  such as its session key, as a template, or hand one to a hook.
+  holds that commit; the create and upgrade starts make it once they have
+  fetched the version, before Toha loads it. So no request makes the service
+  read its own files, such as its session key, as a template, or hand one
+  to a hook.
 
 
   Checks. Before Toha replays or writes anything, every route checks that
   `workspace` is a plain folder name, that `target` is lexically the
   workspace root joined with it, that the folder's real path, with symbolic
-  links resolved, is a direct child of the root's real path, and that
-  `templateId` is approved. A route that carries a session then verifies its
-  signature for this flow (create or upgrade), `workspace` and `templateId`,
-  and refuses an unsigned value, an altered record or signature, and a value
-  issued for another flow, workspace or template as `session-tampered`. Only
-  then does it read the record and check that the session's template and named flag are the approved address's formal
-  identity, computed without fetching, that it was started for this target,
-  and that it belongs to this flow: a create session has no update base, and
-  an upgrade session's base is a recorded application. A submission is
+  links resolved, is a direct child of the root's real path, that `commit`,
+  when given, is a full Git object id, else `malformed-request`, and that
+  `address` at `ref` is admitted (see Addresses): `ref` is not empty, does
+  not start with `-`, holds no space, control character, `@`, `#` or `:`,
+  and the address has no ref of its own, else `invalid-address`. A route
+  that carries a session then verifies its signature for this flow (create
+  or upgrade), `workspace`, `address` and `ref`, and refuses an unsigned
+  value, an altered record or signature, and a value issued for another
+  flow, workspace, address or ref as `session-tampered`. Only then does it
+  read the record and check that the session's template and named flag are
+  the formal identity of the request's address at its ref, computed without
+  fetching, that it was started for this target, and that it belongs to
+  this flow: a create session has no update base, and an upgrade session's
+  base is a recorded application. With `commit`, a session's commit, and at
+  a start the commit the ref resolves to once fetched, before Toha reads the
+  version's files, must be that commit, else `template-stale-revision`
+  (422); an upgrade start fetches the version again through Toha's upgrade
+  preparation and refuses a commit that changed in between the same way.
+  So a moved tag never brings in content no check saw. A submission is
   Toha's answers envelope `{"template","answers"}`, which Toha verifies
   against the session's template before any answer exists. A question the
   latest reply showed and the submission leaves out is answered as Toha's
@@ -148,9 +167,9 @@ description: >-
   `{"record","signature"}`. `record` is Toha's whole staged record: the
   pinned template and revision, the invocation context, admitted documents
   and accepted submissions. `signature` is the unpadded base64url
-  HMAC-SHA256, under the session key, of the flow, `workspace`,
-  `templateId` and the record's JSON serialization, each prefixed by its
-  length. The workspace service returns the session unchanged with the next
+  HMAC-SHA256, under the session key, of a domain tag, the flow,
+  `workspace`, `address`, `ref` and the record's JSON serialization, each
+  prefixed by its length. The workspace service returns the session unchanged with the next
   request. `state` is `questions`, `completed` or
   `ended`. `document` is Toha's batch document while questions remain,
   Toha's ended document after a flow `stop` or `abort`, and `null` once the
@@ -160,28 +179,28 @@ description: >-
   continues after a service restart.
 
 
-  Revisions. A start admits the revision its approved address resolves to:
-  a tag or commit address its fixed commit, a branch address, or one
-  without a reference, the branch's current commit. Its session keeps that
-  revision until it ends. The admission is Toha's source cache entry for
-  the approved template, the folder Toha replays a resumed revision from:
+  Revisions. A start admits the revision the request's address at its ref
+  resolves to: a tag or commit ref its fixed commit, a branch ref the
+  branch's current commit. Its session keeps that revision until it ends.
+  The admission is Toha's source cache entry for the requested template,
+  the folder Toha replays a resumed revision from:
   a start that resolves through Toha's cache records it there, and one that
   resolves through an installation materializes it there through Toha's
   resume. Before any replay, a session's commit must be a full Git object
-  id whose cache entry for the approved template, inside the service's
+  id whose cache entry for the requested template, inside the service's
   cache, is a checkout of exactly that commit whose origin is a repository
-  Toha fetches the approved template from: the approved address as Toha
-  parses it, or the repository Toha derives from the template's formal
+  Toha fetches the requested template from: the request's address at its
+  ref as Toha parses it, or the repository Toha derives from the template's formal
   name, which drops a `.git` suffix and writes a known host as its
   shorthand. An installation that holds exactly that commit also admits
   it, as Toha's resume replays from it; when Toha cannot fetch an installed
   template from its formal name, only the installation admits the commit,
   until the installation moves. When the cache holds no admission at all
-  for the approved template, the
-  session is admitted only when the approved address resolves to exactly
-  its commit now, without any refresh. Any other session is refused as
+  for the requested template, the session is admitted only when the
+  request's address at its ref resolves to exactly its commit now, without
+  any refresh. Any other session is refused as
   `session-mismatch`. An admitted session replays from the cache
-  without reaching its source. A start first refreshes an approved template
+  without reaching its source. A start first refreshes a requested template
   installed in Toha's user registry the way Toha's catalog update does: an
   installed branch moves to its current commit, an installed tag or commit
   stays. A start whose commit already has another source's entry under the
@@ -412,8 +431,7 @@ description: >-
   `submission-template-mismatch` (400), `number-not-representable` (400),
   `nesting-too-deep` (400),
   `invalid-address` (400), `invalid-workspace` (400), `target-mismatch`
-  (400), `unknown-template`
-  (404), `workspace-not-found` (404), `not-found` (404),
+  (400), `workspace-not-found` (404), `not-found` (404),
   `method-not-allowed` (405), `target-outside-root` (409),
   `session-mismatch` (409). Interview state: `interview-complete` (409),
   `interview-ended` (409), `interview-not-complete` (409). Workspace state:
@@ -486,17 +504,23 @@ validation-criteria: >-
   observing that each job ends and its schema connection closes;
   `tests/numbers.rs` covers number values through the session and the
   applied record; `tests/revisions.rs` covers admitted revisions for
-  fixed and moving addresses, installed branches and tags;
+  fixed and moving refs, installed branches and tags, and refuses a folder
+  address even when it is installed;
   `tests/offline.rs` resumes every route offline after a restart; `tests/upgrade.rs` covers an
   upgrade between two template versions that asks only the new question and
   keeps local edits, a re-answered upgrade that asks every question with
   the recorded answers as defaults, a create and a re-answered upgrade of
   two batches whose second is accepted as shown, `{}`, rejected recorded answers, fresh and kept documents,
   stale and dirty workspaces, conflicts and the document-file number limit;
-  `tests/requests.rs` covers every request check, and refuses a session
+  `tests/requests.rs` covers every request check, refuses a template id, a
+  missing ref and a short commit, refuses each form admission refuses on
+  every route that names a template without quoting it, refuses a session
   with any record member altered, without its signature, signed with
-  another key, or replayed into another workspace, template or flow, while
-  the untouched session completes and generates; `tests/templates.rs`
+  another key, or replayed into another workspace, address, ref or flow,
+  while the untouched session completes and generates, and refuses as stale
+  a ref that resolves to another commit than the request names at a create
+  start, an answer, a generate, an upgrade start whose tag moved, and an
+  upgrade's answer and apply; `tests/templates.rs`
   reads addresses without reaching the network, refuses each form admission
   refuses on the address and versions routes without quoting it, lists a
   served repository's release, pre-release, `v`-prefixed and annotated tags

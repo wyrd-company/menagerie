@@ -339,55 +339,11 @@ async fn a_check_refuses_a_folder_or_link_that_leaves_the_checkout() {
     service.stop().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn generate_refuses_a_template_whose_link_leaves_the_checkout() {
-    let holder = World::new();
-    let key = holder.data.join(menagerie_template_service::seal::KEY_FILE);
-    // Toha refuses a link in the content folder when it loads the
-    // template; one beside it, as a hook script could be, reaches generate.
-    let address = kit(&holder, "linked", |repo| {
-        std::fs::create_dir_all(repo.join("kit/scripts")).unwrap();
-        std::os::unix::fs::symlink(&key, repo.join("kit/scripts/key")).unwrap();
-    });
-    let world = World::with_templates(&[(
-        "linked",
-        &format!("{}@1.0.0#kit", address.trim_end_matches("#kit")),
-    )]);
-    let service = Running::start(&world).await;
-    let selector = world.select("alpha", "linked");
-    let start = service.post("/v1/interviews", &selector).await;
-    assert_eq!(start.status, 200, "{}", start.json);
-    let done = service
-        .post(
-            "/v1/interviews/answers",
-            &with(
-                selector.clone(),
-                json!({"session": start.json["session"],
-                    "submission": submission(&start, json!({"label": "one"}))}),
-            ),
-        )
-        .await;
-    assert_eq!(done.json["state"], "completed", "{}", done.json);
-    let folder = world.initialize("alpha");
-    let generated = service
-        .post(
-            "/v1/workspaces/generate",
-            &with(selector, json!({"session": done.json["session"]})),
-        )
-        .await;
-    assert_eq!(
-        (generated.status, generated.kind()),
-        (422, "unsafe-template-link"),
-        "{}",
-        generated.json
-    );
-    assert_eq!(entries(&folder), [".git"]);
-    assert!(world.hooks.calls().is_empty());
-    service.stop().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn an_upgrade_apply_refuses_a_version_whose_link_leaves_the_checkout() {
+/// A kit with a clean `1.0.0` and a `2.0.0` whose link beside the content
+/// folder, as a hook script could be, leads to the service's session key:
+/// Toha refuses a link in the content folder itself when it loads the
+/// template. The world names `kit-1` and `kit-2`.
+fn linked_kit() -> (World, World, std::path::PathBuf) {
     let holder = World::new();
     let key = holder.data.join(menagerie_template_service::seal::KEY_FILE);
     let address = kit(&holder, "upgraded", |_| {});
@@ -398,7 +354,47 @@ async fn an_upgrade_apply_refuses_a_version_whose_link_leaves_the_checkout() {
     git(&repo, &["tag", "2.0.0"]);
     let at = |tag: &str| address.replace("#kit", &format!("@{tag}#kit"));
     let world = World::with_templates(&[("kit-1", &at("1.0.0")), ("kit-2", &at("2.0.0"))]);
+    (holder, world, repo)
+}
+
+/// `session` moved to `kit-2`'s version and signed for it, as only a holder
+/// of the service's key can, so that a test reaches the checks behind the
+/// signature.
+fn moved_to_the_linked_version(
+    world: &World,
+    repo: &std::path::Path,
+    operation: Operation,
+    session: &Value,
+) -> (Value, Value) {
+    let selector = world.select("alpha", "kit-2");
+    let commit = git(repo, &["rev-parse", "2.0.0"]);
+    let session = world.resigned(operation, &selector, session, |record| {
+        let template = record["template"]
+            .as_str()
+            .unwrap()
+            .replace("@1.0.0", "@2.0.0");
+        record["template"] = json!(template);
+        record["commit"] = json!(commit);
+    });
+    (selector, session)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_route_that_reads_a_template_refuses_a_link_that_leaves_the_checkout() {
+    let (_holder, world, repo) = linked_kit();
     let service = Running::start(&world).await;
+    // A start fetches the version and refuses it before Toha loads it.
+    let refused = service
+        .post("/v1/interviews", &world.select("alpha", "kit-2"))
+        .await;
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (422, "unsafe-template-link"),
+        "{}",
+        refused.json
+    );
+    // A create session, moved behind its signature to the linked version,
+    // is refused by generate before anything is written.
     let selector = world.select("alpha", "kit-1");
     let start = service.post("/v1/interviews", &selector).await;
     let done = service
@@ -411,24 +407,53 @@ async fn an_upgrade_apply_refuses_a_version_whose_link_leaves_the_checkout() {
             ),
         )
         .await;
+    assert_eq!(done.json["state"], "completed", "{}", done.json);
     let folder = world.initialize("alpha");
+    let (linked, session) =
+        moved_to_the_linked_version(&world, &repo, Operation::Create, &done.json["session"]);
     let generated = service
         .post(
             "/v1/workspaces/generate",
-            &with(selector, json!({"session": done.json["session"]})),
+            &with(linked, json!({"session": session})),
+        )
+        .await;
+    assert_eq!(
+        (generated.status, generated.kind()),
+        (422, "unsafe-template-link"),
+        "{}",
+        generated.json
+    );
+    assert_eq!(entries(&folder), [".git"]);
+    assert!(world.hooks.calls().is_empty());
+
+    // The clean version generates, and an upgrade session moved to the
+    // linked version is refused by apply with the workspace unchanged.
+    let generated = service
+        .post(
+            "/v1/workspaces/generate",
+            &with(selector.clone(), json!({"session": done.json["session"]})),
         )
         .await;
     assert_eq!(generated.json["outcome"], "written", "{}", generated.json);
     commit_all(&folder, "generated");
-    let selector = world.select("alpha", "kit-2");
+    let refused = service
+        .post("/v1/upgrades", &world.select("alpha", "kit-2"))
+        .await;
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (422, "unsafe-template-link"),
+        "{}",
+        refused.json
+    );
     let upgrade = service.post("/v1/upgrades", &selector).await;
-    assert_eq!(upgrade.status, 200, "{}", upgrade.json);
     assert_eq!(upgrade.json["state"], "completed", "{}", upgrade.json);
     let before = std::fs::read_to_string(folder.join(".toha.json")).unwrap();
+    let (linked, session) =
+        moved_to_the_linked_version(&world, &repo, Operation::Upgrade, &upgrade.json["session"]);
     let applied = service
         .post(
             "/v1/upgrades/apply",
-            &with(selector, json!({"session": upgrade.json["session"]})),
+            &with(linked, json!({"session": session})),
         )
         .await;
     assert_eq!(

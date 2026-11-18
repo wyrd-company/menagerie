@@ -1,13 +1,18 @@
 # Template service
 
 The template service is Menagerie's Rust service. It embeds
-[Toha](https://github.com/wyrd-company/toha) as a library and serves create
-interviews, workspace generation and upgrades to the workspace service. It uses
-JSON over HTTP on a private Unix socket. It keeps no state between requests:
-each request carries Toha's whole interview session, signed with the key in
-`session-key` under the data folder. The service refuses a session it did not
-sign for that workspace, template and flow, and rebuilds the interview from a
-session it did, so an interview continues after a restart.
+[Toha](https://github.com/wyrd-company/toha) as a library and serves the
+workspace service: it reads template addresses, lists and checks template
+versions, and runs create interviews, workspace generation and upgrades. It
+uses JSON over HTTP on a private Unix socket. It holds no list of templates:
+the workspace service names each template by its address and the version's
+ref in every request, and the service refuses an address it must never read,
+such as a local folder or a `file://` repository (`src/address.rs`). It keeps
+no state between requests: each request carries Toha's whole interview
+session, signed with the key in `session-key` under the data folder. The
+service refuses a session it did not sign for that workspace, address, ref
+and flow, and rebuilds the interview from a session it did, so an interview
+continues after a restart.
 
 The API is specified in
 [`docs/specifications/template-service-api.yml`](../docs/specifications/template-service-api.yml).
@@ -19,9 +24,9 @@ menagerie-template-service -config /etc/menagerie/config.yml -data /var/lib/mena
 ```
 
 - `-config` is Menagerie's configuration file. The service reads only
-  `workspace-root`, `templates`, `template-service.socket`,
+  `workspace-root`, `template-service.socket`,
   `template-service.hook-runner-socket` and
-  `template-service.candidate-folder` from it. The candidate folder is the
+  `template-service.candidate-folder` from it, and nothing of `templates`. The candidate folder is the
   service's temporary folder, where Toha builds an upgrade's candidate, in
   its subfolder `.menagerie-work`. At start-up, once its socket is bound and
   before its first request, the service removes what an ended service left
@@ -94,3 +99,14 @@ python3 scripts/prove-template-stop-guards.py --report stop-guards.json
 
 The report passes only after its baseline tests pass and every compiling mutant
 fails its regression test.
+
+The admission regressions prove that every route refuses an address it must
+never read, that a template folder or link leaving its checkout is refused
+before a start, a generate or an apply reads it, that a ref resolving to
+another commit than the recorded one is stale, and that a session cannot be
+replayed into another ref. To prove each guard by removing it in a
+disposable source copy, run from the repository root:
+
+```sh
+python3 scripts/prove-template-admission-guards.py --report admission-guards.json
+```

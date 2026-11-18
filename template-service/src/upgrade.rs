@@ -14,13 +14,19 @@ use toha::RawAnswers;
 use toha::staging::{CanonicalTarget, StagedRecord};
 use toha::updates::{self, Environment, PrepareMode, UpdateBase, UpdateSession};
 
-/// Start an upgrade of an existing workspace to the approved template version:
+/// Start an upgrade of an existing workspace to the template at a ref:
 /// replay the workspace's recorded answers and ask only what they do not cover.
 /// Current document inputs and defaults are admitted now and kept for the
 /// session. With `reanswer` every question is asked again; Toha gives each the
 /// recorded answer as its default.
 pub fn start(service: &Service, request: UpgradeRequest) -> Result<InterviewReply, ServiceError> {
-    let selected = checks::select(&service.settings, request.selector())?;
+    let (mut config, mut registry, mut warnings) = service.host.context()?;
+    let selected = checks::select(
+        &service.settings,
+        &service.host,
+        &config,
+        request.selector(),
+    )?;
     if !selected.folder.is_dir() {
         return Err(ServiceError::new(
             404,
@@ -31,10 +37,26 @@ pub fn start(service: &Service, request: UpgradeRequest) -> Result<InterviewRepl
             ),
         ));
     }
-    let (mut config, mut registry, mut warnings) = service.host.context()?;
-    if crate::revision::refresh(selected.template, &service.host, &config, &registry)? {
+    if crate::revision::refresh(
+        &selected.template.address,
+        &service.host,
+        &config,
+        &registry,
+    )? {
         (config, registry, warnings) = service.host.context()?;
     }
+    // Toha's upgrade preparation reads the version's files as it resolves
+    // it, so the version is resolved and checked first: its commit is the
+    // recorded one and its links stay in its checkout.
+    let checked = toha::resolve::resolve_template(
+        &selected.template.address,
+        &config,
+        &registry,
+        &service.host.paths,
+        &service.host.cwd,
+    )?;
+    selected.template.current(&checked.commit)?;
+    crate::links::check_resolved(&checked, &service.host, &config)?;
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);
     let prepared = updates::prepare(
@@ -47,8 +69,16 @@ pub fn start(service: &Service, request: UpgradeRequest) -> Result<InterviewRepl
         host::INTERACTIVE,
         &mut environment,
     )?;
+    // A tag that moved between the two resolutions brings another commit.
+    selected.template.current(&prepared.resolved.commit)?;
+    if prepared.resolved.commit != checked.commit {
+        return Err(ServiceError::refused(
+            "template-stale-revision",
+            "the template's ref moved while the upgrade started",
+        ));
+    }
     crate::revision::admit(
-        selected.template,
+        &selected.template.address,
         &prepared.resolved.formal_name,
         &prepared.resolved.commit,
         &service.host,
@@ -69,7 +99,12 @@ pub fn start(service: &Service, request: UpgradeRequest) -> Result<InterviewRepl
     let state = session.state()?;
     let sealed = seal::seal(
         &service.key,
-        Binding::new(Operation::Upgrade, &request.workspace, &request.template_id),
+        Binding::new(
+            Operation::Upgrade,
+            &request.workspace,
+            &request.address,
+            &request.reference,
+        ),
         &session.record,
     )?;
     reply::interview(&session.record, sealed, &selected.target, state, warnings)
@@ -77,20 +112,31 @@ pub fn start(service: &Service, request: UpgradeRequest) -> Result<InterviewRepl
 
 /// Rebuild the upgrade session and submit one batch.
 pub fn answer(service: &Service, request: AnswerRequest) -> Result<InterviewReply, ServiceError> {
-    let selected = checks::select(&service.settings, request.selector())?;
-    let binding = Binding::new(Operation::Upgrade, &request.workspace, &request.template_id);
-    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, _) = service.host.context()?;
-    let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
+    let selected = checks::select(
+        &service.settings,
+        &service.host,
+        &config,
+        request.selector(),
+    )?;
+    let binding = Binding::new(
+        Operation::Upgrade,
+        &request.workspace,
+        &request.address,
+        &request.reference,
+    );
+    let record = seal::open(&service.key, binding, request.session)?;
+    let expected = checks::identity(&selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;
     crate::revision::check(
         &record,
         &expected.formal_name,
-        selected.template,
+        &selected.template.address,
         &service.host,
         &config,
         &registry,
     )?;
+    selected.template.current(&record.commit)?;
     let answers = checks::submission(&record, &request.submission)?;
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);
@@ -110,20 +156,31 @@ pub fn apply(
     request: ApplyRequest,
     ended: &Ended,
 ) -> Result<ApplyReply, ServiceError> {
-    let selected = checks::select(&service.settings, request.selector())?;
-    let binding = Binding::new(Operation::Upgrade, &request.workspace, &request.template_id);
-    let record = seal::open(&service.key, binding, request.session)?;
     let (config, registry, _) = service.host.context()?;
-    let expected = checks::identity(selected.template, &service.host, &config, &registry)?;
+    let selected = checks::select(
+        &service.settings,
+        &service.host,
+        &config,
+        request.selector(),
+    )?;
+    let binding = Binding::new(
+        Operation::Upgrade,
+        &request.workspace,
+        &request.address,
+        &request.reference,
+    );
+    let record = seal::open(&service.key, binding, request.session)?;
+    let expected = checks::identity(&selected.template, &service.host, &config, &registry)?;
     checks::pinned(&record, &expected, &selected.target, Operation::Upgrade)?;
     crate::revision::check(
         &record,
         &expected.formal_name,
-        selected.template,
+        &selected.template.address,
         &service.host,
         &config,
         &registry,
     )?;
+    selected.template.current(&record.commit)?;
     crate::links::check_session(&record, &service.host, &config, &registry)?;
     let mut source = ProcessEnvironment;
     let mut environment = environment(service, &config, &registry, &mut source);
