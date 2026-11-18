@@ -101,17 +101,19 @@ export interface TemplateRegistration {
   name: string;
   address: string;
   runnerImage?: string;
+  /** Run the checks alone and store nothing. */
+  check?: boolean;
 }
 
-/** Registers a template once it passes the minimum checks. */
+/** Registers a template once it passes the minimum checks; with check, runs the checks alone. */
 export const registerTemplate = (registration: TemplateRegistration) =>
   json<Template>("/api/templates", { method: "POST", body: JSON.stringify(registration) });
 
-/** Makes a newer version of the template's repository its current version. */
-export const upgradeTemplate = (id: string, version: string) =>
+/** Makes a newer version of the template's repository its current version; with check, runs its checks alone. */
+export const upgradeTemplate = (id: string, version: string, check = false) =>
   json<Template>(`/api/templates/${encodeURIComponent(id)}/upgrades`, {
     method: "POST",
-    body: JSON.stringify({ version }),
+    body: JSON.stringify(check ? { version, check } : { version }),
   });
 
 /** Renames a template or changes its runner image; null runs its hooks in the default. */

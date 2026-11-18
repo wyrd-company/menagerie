@@ -88,28 +88,54 @@ export function TemplatesScreen() {
   );
 }
 
+/**
+ * Validate, then save: Validate runs the checks alone and stores nothing; Save
+ * stays disabled until a Validate of the current values passes, and checks
+ * again. Any edit disables Save and clears the result and refusal.
+ */
+function useValidated() {
+  const [error, setError] = useState<ApiError | null>(null);
+  const [validated, setValidated] = useState<Template | null>(null);
+  const [busy, setBusy] = useState<"validating" | "saving" | null>(null);
+  const edited = () => {
+    setValidated(null);
+    setError(null);
+  };
+  const run = async (kind: "validating" | "saving", call: () => Promise<Template>) => {
+    setBusy(kind);
+    setError(null);
+    try {
+      const template = await call();
+      if (kind === "validating") setValidated(template);
+      return template;
+    } catch (e) {
+      setError(asError(e));
+      setValidated(null);
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+  return { error, validated, busy, edited, run };
+}
+
 function Registration({ onRegistered }: { onRegistered: () => void }) {
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [runnerImage, setRunnerImage] = useState("");
-  const [error, setError] = useState<ApiError | null>(null);
-  const [saving, setSaving] = useState(false);
+  const { error, validated, busy, edited, run } = useValidated();
+  const registration = (check: boolean) => ({
+    name: name.trim(),
+    address: address.trim(),
+    ...(runnerImage.trim() ? { runnerImage: runnerImage.trim() } : {}),
+    ...(check ? { check } : {}),
+  });
+  const filled = name.trim() !== "" && address.trim() !== "";
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setSaving(true);
-    setError(null);
-    try {
-      await registerTemplate({
-        name: name.trim(),
-        address: address.trim(),
-        ...(runnerImage.trim() ? { runnerImage: runnerImage.trim() } : {}),
-      });
-      onRegistered();
-    } catch (e) {
-      setError(asError(e));
-      setSaving(false);
-    }
+    if (!validated) return;
+    if (await run("saving", () => registerTemplate(registration(false)))) onRegistered();
   };
 
   return (
@@ -130,7 +156,10 @@ function Registration({ onRegistered }: { onRegistered: () => void }) {
           autoComplete="off"
           autoFocus
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            edited();
+          }}
         />
       </div>
       <div className="field">
@@ -145,8 +174,11 @@ function Registration({ onRegistered }: { onRegistered: () => void }) {
           spellCheck={false}
           value={address}
           aria-describedby="registration-error"
-          aria-invalid={error?.body?.check ? true : undefined}
-          onChange={(e) => setAddress(e.target.value)}
+          aria-invalid={error?.body?.check === "address" ? true : undefined}
+          onChange={(e) => {
+            setAddress(e.target.value);
+            edited();
+          }}
         />
       </div>
       <div className="field">
@@ -161,19 +193,28 @@ function Registration({ onRegistered }: { onRegistered: () => void }) {
           spellCheck={false}
           placeholder="Use host default"
           value={runnerImage}
-          onChange={(e) => setRunnerImage(e.target.value)}
+          onChange={(e) => {
+            setRunnerImage(e.target.value);
+            edited();
+          }}
         />
       </div>
-      <p className="field-errors" id="registration-error" role="alert">
+      <p className="form-error" id="registration-error" role="alert">
         {error ? refusal(error) : null}
       </p>
-      <div className="interview-actions">
+      <p className="form-success" id="registration-result" role="status">
+        {validated ? `Checks passed · ${validated.currentVersion}` : null}
+      </p>
+      <div className="form-actions">
         <button
-          type="submit"
-          className="primary"
-          disabled={saving || !name.trim() || !address.trim()}
+          type="button"
+          disabled={busy !== null || !filled}
+          onClick={() => void run("validating", () => registerTemplate(registration(true)))}
         >
-          {saving ? "Checking…" : "Save"}
+          {busy === "validating" ? "Checking…" : "Validate"}
+        </button>
+        <button type="submit" className="primary" disabled={busy !== null || !validated}>
+          {busy === "saving" ? "Saving…" : "Save"}
         </button>
       </div>
     </form>
@@ -214,7 +255,7 @@ function TemplateEntry({
         <h2 id={`template-${t.id}`}>{t.name}</h2>
         <p className="muted mono template-address">{t.address}</p>
         {removeError ? (
-          <p className="field-errors" role="alert">
+          <p className="form-error" role="alert">
             {removeError.message}
           </p>
         ) : null}
@@ -269,18 +310,12 @@ function VersionEditor({
   onSaved: (t: Template) => void;
 }) {
   const [version, setVersion] = useState("");
-  const [error, setError] = useState<ApiError | null>(null);
-  const [saving, setSaving] = useState(false);
+  const { error, validated, busy, edited, run } = useValidated();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setSaving(true);
-    setError(null);
-    try {
-      onSaved(await upgradeTemplate(t.id, version.trim()));
-    } catch (e) {
-      setError(asError(e));
-      setSaving(false);
-    }
+    if (!validated) return;
+    const saved = await run("saving", () => upgradeTemplate(t.id, version.trim()));
+    if (saved) onSaved(saved);
   };
   return (
     <form className="template-edit" onSubmit={(e) => void submit(e)}>
@@ -298,15 +333,28 @@ function VersionEditor({
           placeholder={`newer than ${t.currentVersion}`}
           value={version}
           aria-describedby={`version-error-${t.id}`}
-          onChange={(e) => setVersion(e.target.value)}
+          onChange={(e) => {
+            setVersion(e.target.value);
+            edited();
+          }}
         />
       </div>
-      <p className="field-errors" id={`version-error-${t.id}`} role="alert">
+      <p className="form-error" id={`version-error-${t.id}`} role="alert">
         {error ? refusal(error) : null}
       </p>
-      <div className="interview-actions">
-        <button type="submit" className="primary" disabled={saving || !version.trim()}>
-          {saving ? "Checking…" : "Save"}
+      <p className="form-success" id={`version-result-${t.id}`} role="status">
+        {validated ? `Checks passed · ${validated.currentVersion}` : null}
+      </p>
+      <div className="form-actions">
+        <button
+          type="button"
+          disabled={busy !== null || !version.trim()}
+          onClick={() => void run("validating", () => upgradeTemplate(t.id, version.trim(), true))}
+        >
+          {busy === "validating" ? "Checking…" : "Validate"}
+        </button>
+        <button type="submit" className="primary" disabled={busy !== null || !validated}>
+          {busy === "saving" ? "Saving…" : "Save"}
         </button>
       </div>
     </form>
@@ -370,10 +418,10 @@ function DetailsEditor({
           onChange={(e) => setRunnerImage(e.target.value)}
         />
       </div>
-      <p className="field-errors" role="alert">
+      <p className="form-error" role="alert">
         {error ? error.message : null}
       </p>
-      <div className="interview-actions">
+      <div className="form-actions">
         <button type="submit" className="primary" disabled={saving || !name.trim()}>
           {saving ? "Saving…" : "Save"}
         </button>

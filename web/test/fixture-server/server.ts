@@ -318,7 +318,10 @@ export function createFixture(options: { distDir: string }) {
       ![...name].some((c) => c.charCodeAt(0) < 0x20 || "\u007f\u2028\u2029".includes(c));
     if (pathname === "/api/templates" && method === "GET") {
       const sorted = [...world.templates].sort(
-        (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+        (a, b) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase()) ||
+          a.name.localeCompare(b.name) ||
+          a.id.localeCompare(b.id),
       );
       return json(res, 200, { templates: sorted.map(templateBody) });
     }
@@ -329,9 +332,12 @@ export function createFixture(options: { distDir: string }) {
         name?: unknown;
         address?: unknown;
         runnerImage?: unknown;
+        check?: unknown;
       };
       if (!validName(input.name) || typeof input.address !== "string")
         return fail(res, 400, "invalid-request", "name must be one line of 1 to 100 characters");
+      if (input.check !== undefined && typeof input.check !== "boolean")
+        return fail(res, 400, "invalid-request", "member check has the wrong type");
       const address = input.address;
       const check = (name: string, message: string) =>
         fail(res, 422, "template-check-failed", message, { check: name });
@@ -380,6 +386,8 @@ export function createFixture(options: { distDir: string }) {
         runnerImage: typeof input.runnerImage === "string" ? input.runnerImage : null,
         versions: ["1.0.0", "1.1.0"],
       };
+      // A check alone answers the template a registration would store.
+      if (input.check === true) return json(res, 200, templateBody(template));
       world.templates.push(template);
       return json(res, 201, templateBody(template), { Location: `/api/templates/${id}` });
     }
@@ -389,7 +397,12 @@ export function createFixture(options: { distDir: string }) {
       if (!template)
         return fail(res, 404, "unknown-template", "no registered template has this id");
       if (templateMatch[2] && method === "POST") {
-        const { version } = JSON.parse(await readBody(req)) as { version?: string };
+        const { version, check } = JSON.parse(await readBody(req)) as {
+          version?: string;
+          check?: unknown;
+        };
+        if (check !== undefined && typeof check !== "boolean")
+          return fail(res, 400, "invalid-request", "member check has the wrong type");
         if (
           !version ||
           !template.versions.includes(version) ||
@@ -401,6 +414,8 @@ export function createFixture(options: { distDir: string }) {
             "version-not-newer",
             "the version is not a version of the template's repository newer than its current version",
           );
+        if (check === true)
+          return json(res, 200, templateBody({ ...template, currentVersion: version }));
         template.currentVersion = version;
         return json(res, 200, templateBody(template));
       }

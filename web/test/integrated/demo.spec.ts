@@ -103,6 +103,8 @@ test("create, pair, upgrade and delete a provisioned workspace", async ({ page }
     .filter({ has: page.getByRole("heading", { name: "Workspace kit", exact: true }) });
   await template.getByRole("button", { name: "Upgrade template" }).click();
   await template.getByLabel("Current version").pressSequentially("2.0.0", { delay: 60 });
+  await template.getByRole("button", { name: "Validate" }).click();
+  await expect(template.getByRole("status")).toContainText("Checks passed · 2.0.0");
   await shot(page, "template-upgrade");
   await pause(1000);
   await template.getByRole("button", { name: "Save" }).click();

@@ -14,9 +14,30 @@
   margin: 0;
 }
 
-.template-panel .field-errors:empty,
-.template-edit .field-errors:empty {
+.form-error,
+.form-success {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.form-error {
+  color: var(--danger);
+}
+
+.form-success {
+  color: var(--ok);
+}
+
+.form-error:empty,
+.form-success:empty {
   display: none;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .template-entry {

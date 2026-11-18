@@ -12,11 +12,29 @@ test("registers a template from its address and creates from it", async ({ page 
   );
   await shot(page, "templates-registered");
   await page.getByRole("button", { name: "Register template" }).first().click();
+  const save = page.getByRole("button", { name: "Save" });
+  await expect(save).toBeDisabled();
   await page.getByLabel("Display name").fill("Sample tools");
   await page.getByLabel("Address").fill("https://git.example.test/example-org/sample-tools");
   await page.getByLabel(/Runner image/).fill("alpine:3.22");
   await shot(page, "templates-register");
-  await page.getByRole("button", { name: "Save" }).click();
+  await expect(save).toBeDisabled();
+  await page.getByRole("button", { name: "Validate" }).click();
+  await expect(page.getByRole("status")).toHaveText("Checks passed · 1.0.0");
+  await expect(save).toBeEnabled();
+  await shot(page, "templates-register-validated");
+  // Any edit asks for another Validate.
+  await page.getByLabel(/Runner image/).fill("alpine:3.21");
+  await expect(save).toBeDisabled();
+  await expect(page.getByRole("status")).toHaveCount(0);
+  await page.getByRole("button", { name: "Validate" }).click();
+  await expect(save).toBeEnabled();
+  // The check stored nothing.
+  const listed = (await (await page.request.get("/api/templates")).json()) as {
+    templates: { name: string }[];
+  };
+  expect(listed.templates.map((t) => t.name)).not.toContain("Sample tools");
+  await save.click();
   const entry = page.getByRole("listitem").filter({ hasText: "Sample tools" });
   await expect(entry.getByText("example-org/sample-tools")).toBeVisible();
   await expect(entry.getByText("1.0.0")).toBeVisible();
@@ -32,18 +50,22 @@ test("names the check a refused template failed, by the address", async ({ page 
   await page.getByRole("button", { name: "Register template" }).first().click();
   await page.getByLabel("Display name").fill("Bare kit");
   await page.getByLabel("Address").fill("https://git.example.test/example-org/bare");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Validate" }).click();
   await expect(page.getByRole("alert")).toContainText(
     "definition: the template's files at version 1.0.0 have no .devcontainer/devcontainer.json",
   );
+  // Only an address refusal marks the address.
+  await expect(page.getByLabel("Address")).not.toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
   await shot(page, "templates-missing-definition");
   await page.getByLabel("Address").fill("file:///srv/templates/kit");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Validate" }).click();
   await expect(page.getByRole("alert")).toContainText("address: the address is refused");
   await expect(page.getByRole("alert")).not.toContainText("/srv/templates");
+  await expect(page.getByLabel("Address")).toHaveAttribute("aria-invalid", "true");
   await shot(page, "templates-address-refused");
   await page.getByLabel("Address").fill("https://git.example.test/example-org/sample-kit");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Validate" }).click();
   await expect(page.getByRole("alert")).toContainText("registered already, as Sample kit");
 });
 
@@ -53,13 +75,22 @@ test("upgrades a template to a newer version, edits it and refuses its removal w
   await page.goto("/templates");
   const entry = page.getByRole("listitem").filter({ hasText: "Sample kit" });
   await entry.getByRole("button", { name: "Upgrade template" }).click();
+  await expect(entry.getByRole("button", { name: "Save" })).toBeDisabled();
   await entry.getByLabel("Current version").fill("1.1.0");
-  await entry.getByRole("button", { name: "Save" }).click();
+  await entry.getByRole("button", { name: "Validate" }).click();
   await expect(entry.getByRole("alert")).toContainText(
     "not a version of the template's repository newer",
   );
   await entry.getByLabel("Current version").fill("1.2.0");
   await shot(page, "templates-upgrade");
+  await entry.getByRole("button", { name: "Validate" }).click();
+  await expect(entry.getByRole("status")).toHaveText("Checks passed · 1.2.0");
+  await expect(entry.getByText("Current 1.1.0")).toBeVisible();
+  await shot(page, "templates-upgrade-validated");
+  await entry.getByLabel("Current version").fill("1.2.0 ");
+  await expect(entry.getByRole("button", { name: "Save" })).toBeDisabled();
+  await entry.getByLabel("Current version").fill("1.2.0");
+  await entry.getByRole("button", { name: "Validate" }).click();
   await entry.getByRole("button", { name: "Save" }).click();
   await expect(entry.getByText("1.2.0")).toBeVisible();
   await expect(entry.getByLabel("Current version")).toHaveCount(0);

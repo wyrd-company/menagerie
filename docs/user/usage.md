@@ -67,18 +67,20 @@ pre-release or build part, such as `1.2.0-rc.1`, is not a version, and when
 
 ### Register a template
 
-Choose **Register template**, enter a display name, the template's address
-and, when its hooks need one, a [runner image](configuration.md#runner-images),
-then **Save**. The address takes the forms and credentials in
+Choose **Register template** and enter a display name, the template's address
+and, when its hooks need one, a [runner image](configuration.md#runner-images).
+**Validate** runs the checks below and stores nothing; when they pass, the form
+shows `Checks passed` with the version, and **Save** registers the template,
+running the checks again. Save waits for a Validate of the values as they are:
+any edit asks for another. The address takes the forms and credentials in
 [Templates](configuration.md#templates): `gh:owner/repository`,
 `git@host:path`, `ssh://` or `https://`, with an optional `#folder`. With no
 ref, the template's current version is the repository's newest version; with
 a version's tag, such as `gh:example-org/kit@1.2.0`, it is that version. Its
 id, which never changes, comes from the name.
 
-Menagerie checks the template first and refuses it at the first check that
-fails, naming that check beside **Save**. The message never repeats the
-address:
+Menagerie refuses the template at the first check that fails, naming that
+check under the form. The message never repeats the address:
 
 | Check        | Refused when                                                                                                                                                                                                                                                                                                                                     |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -96,13 +98,14 @@ applied record, `.toha.json`, names it.
 ### Upgrade a template
 
 When the template's repository has a newer version, choose **Upgrade template**
-on its row, enter that version and **Save**. The version passes the `fetch`,
-`read` and `definition` checks before it becomes the current version. A
+on its row, enter that version, **Validate** it and **Save** it. The version
+passes the `fetch`, `read` and `definition` checks, at Validate and again at
+Save, before it becomes the current version. A
 version that is not one of the repository's versions newer than the current
 one is refused: a template moves only forward. Workspaces keep the version
 they have until you [upgrade them](#upgrade-a-workspace).
 
-![The Templates screen with version 2.0.0 typed into a template's upgrade form](assets/template-upgrade.png)
+![The Templates screen with version 2.0.0 validated in a template's upgrade form](assets/template-upgrade.png)
 
 **Edit** renames a template or changes its runner image; its address does not
 change. **Remove** removes a template no workspace uses; while workspaces use

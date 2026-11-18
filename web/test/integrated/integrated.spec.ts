@@ -57,9 +57,11 @@ test.describe("as a manager", () => {
     await page.getByLabel("Display name").fill("Sample kit");
     // A local repository is never read, whatever the run's Git host.
     await page.getByLabel("Address").fill("file:///srv/templates/sample-kit");
-    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("button", { name: "Validate" }).click();
     await expect(page.getByRole("alert")).toContainText("address:");
     await page.getByLabel("Address").fill(info.template);
+    await page.getByRole("button", { name: "Validate" }).click();
+    await expect(page.getByRole("status")).toContainText("Checks passed · 1.0.0");
     await page.getByRole("button", { name: "Save" }).click();
     const template = page
       .getByRole("listitem")
@@ -132,6 +134,8 @@ test.describe("as a manager", () => {
       .filter({ has: page.getByRole("heading", { name: "Sample kit", exact: true }) });
     await template.getByRole("button", { name: "Upgrade template" }).click();
     await template.getByLabel("Current version").fill("1.1.0");
+    await template.getByRole("button", { name: "Validate" }).click();
+    await expect(template.getByRole("status")).toContainText("Checks passed · 1.1.0");
     await template.getByRole("button", { name: "Save" }).click();
     await expect(template.getByText("1.1.0")).toBeVisible();
     await template.getByRole("button", { name: "Remove" }).click();

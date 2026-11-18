@@ -97,8 +97,8 @@ products:
         caption: A template moving forward to a newer release tag of its repository.
         alt: >-
           The Templates screen listing the registered templates with their
-          addresses and current versions, with version 2.0.0 typed into one
-          template's upgrade form.
+          addresses and current versions, with version 2.0.0 validated in one
+          template's upgrade form, its checks passed and Save enabled.
       - src: assets/upgrade-interview.png
         caption: An upgrade that asks one new question.
         alt: The upgrade form asking only the question the newer template added.
