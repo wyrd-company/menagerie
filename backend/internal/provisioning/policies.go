@@ -188,6 +188,11 @@ func (s *Steps) applySelection(ctx context.Context, folder, name string, group *
 		if e = store.CheckAllowed(wanted.Policies, allowed); e != nil {
 			return &jobs.Failure{Kind: KindPolicyOutsideGrant, Err: e}
 		}
+		// Persist before the external write: even a crash or panic before its
+		// outcome must leave this revision unapplied for startup to retry.
+		if e = s.opts.Data.Applying(ctx, workspace, current.Revision); e != nil {
+			return e
+		}
 		wrote = true
 		if found {
 			reportChanges(binding, wanted, p)

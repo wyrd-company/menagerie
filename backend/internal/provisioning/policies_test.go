@@ -498,3 +498,74 @@ func TestPolicyApplyKeepsAnAbsentAccessGroupWithoutReadingDefinition(t *testing.
 		t.Fatalf("binding %+v selection %+v", binding, h.selection())
 	}
 }
+
+// interruptedPolicyWrite stops after Wyrwood saves a pending mutation but before
+// applySelection receives its outcome. A panic also bypasses error-only cleanup.
+type interruptedPolicyWrite struct {
+	*policyHost
+	beforeWrite func()
+}
+
+func (h interruptedPolicyWrite) Bind(ctx context.Context, name string, wanted wyrwood.Selection) (operator.Binding, error) {
+	h.beforeWrite()
+	_, _ = h.policyHost.Bind(ctx, name, wanted)
+	panic("stopped after pending write")
+}
+
+func (h interruptedPolicyWrite) Change(ctx context.Context, binding operator.Binding, wanted wyrwood.Selection) (operator.Binding, error) {
+	h.beforeWrite()
+	_, _ = h.policyHost.Change(ctx, binding, wanted)
+	panic("stopped after pending write")
+}
+
+func TestInterruptedPolicyWriteIsUnappliedBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	for _, operation := range []string{"bind", "change"} {
+		t.Run(operation, func(t *testing.T) {
+			h := newPolicyHost(t, []string{"workspace", "ssh"})
+			// A nameless apply or an earlier successful job applied this revision.
+			if err := h.steps().ApplyPolicies(ctx, folder, h); err != nil {
+				t.Fatal(err)
+			}
+			revision := h.selection().Revision
+			if operation == "change" {
+				h.existing([]string{"workspace"})
+			} else {
+				h.hold("sample", "container-sample", true)
+			}
+			h.pending = 1
+			var atWrite store.Selection
+			steps := h.steps()
+			steps.opts.Bindings = interruptedPolicyWrite{h, func() { atWrite = h.selection() }}
+			func() {
+				defer func() {
+					if got := recover(); got != "stopped after pending write" {
+						t.Fatalf("interruption: %v", got)
+					}
+				}()
+				_ = steps.ApplyPolicies(ctx, folder, h)
+				t.Fatal("write was not interrupted")
+			}()
+			after := h.selection()
+			if atWrite.AppliedRevision != nil || after.AppliedRevision != nil || after.ApplyFailure != nil || after.Revision != revision {
+				t.Fatalf("interrupted write still applied: at write %+v, after %+v", atWrite, after)
+			}
+			if len(h.bindings) != 1 {
+				t.Fatalf("pending bindings: %+v", h.bindings)
+			}
+			for _, binding := range h.bindings {
+				if binding.Applied {
+					t.Fatal("interruption did not leave a pending binding")
+				}
+			}
+			// The next apply can finish the saved mutation at the same revision.
+			if err := h.steps().ApplyPolicies(ctx, folder, h); err != nil {
+				t.Fatal(err)
+			}
+			repaired := h.selection()
+			if repaired.AppliedRevision == nil || *repaired.AppliedRevision != revision {
+				t.Fatalf("retry did not repair selection: %+v", repaired)
+			}
+		})
+	}
+}

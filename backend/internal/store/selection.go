@@ -226,6 +226,16 @@ func (s *Store) Applied(ctx context.Context, name string, revision int64) error 
 	})
 }
 
+// Applying clears an observation at this revision before a binding mutation.
+// A crash before the confirming read must leave the selection retryable. An
+// older attempt cannot clear a newer successful revision.
+func (s *Store) Applying(ctx context.Context, name string, revision int64) error {
+	return s.Update(ctx, func(t *Tx) error {
+		_, err := t.exec(`UPDATE workspaces SET applied_revision = CASE WHEN applied_revision = ? THEN NULL ELSE applied_revision END WHERE name = ?`, revision, name)
+		return err
+	})
+}
+
 // ApplyFailed invalidates application of the failed revision and retains its
 // failure only while that selection is current. Newer successful attempts stay.
 func (s *Store) ApplyFailed(ctx context.Context, name string, revision int64, failure ApplyFailure) error {

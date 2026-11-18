@@ -185,3 +185,39 @@ func TestFailedApplyClearsOnlyItsOwnAppliedRevision(t *testing.T) {
 		t.Fatalf("%+v %v", after, err)
 	}
 }
+
+func TestApplyingClearsOnlyItsOwnAppliedRevision(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if err := s.BeginCreate(ctx, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Selection(ctx, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Applied(ctx, "alpha", before.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Applying(ctx, "alpha", before.Revision); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Selection(ctx, "alpha")
+	if err != nil || after.AppliedRevision != nil || after.ApplyFailure != nil {
+		t.Fatalf("%+v %v", after, err)
+	}
+	next, err := s.SaveSelection(ctx, "alpha", []string{"ssh"}, before.Revision, []string{"ssh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Applied(ctx, "alpha", next.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Applying(ctx, "alpha", before.Revision); err != nil {
+		t.Fatal(err)
+	}
+	after, err = s.Selection(ctx, "alpha")
+	if err != nil || after.AppliedRevision == nil || *after.AppliedRevision != next.Revision || after.ApplyFailure != nil {
+		t.Fatalf("%+v %v", after, err)
+	}
+}
