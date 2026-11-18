@@ -154,6 +154,9 @@ func (s *Server) savePolicySettings(w http.ResponseWriter, r *http.Request) {
 	}
 	for name, selection := range selections {
 		if selection.Revision != before[name].Revision {
+			if _, err := ExistingFolder(s.opts.Root, name); err != nil {
+				continue
+			}
 			if _, err = s.queuePolicies(name); err != nil {
 				s.writeRequestError(w, err)
 				return

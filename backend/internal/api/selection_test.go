@@ -215,3 +215,32 @@ func TestStartupRetriesARevisionWhoseLaterBindingAttemptFailed(t *testing.T) {
 	}
 	t.Fatal("startup skipped the failed revision")
 }
+
+func TestSettingsApplySkipsWorkspacesWithNoFolder(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx := context.Background()
+	_ = policyCall(f.server, "GET", "/api/workspaces", "")
+	if err := f.data.HoldName(ctx, "gone", "container-gone", "host", true); err != nil {
+		t.Fatal(err)
+	}
+	f.server.opts.Policies = &policyFixture{policies: []operator.Policy{{Name: "one"}}}
+	f.server.opts.PolicyApplication = &selectionApplication{data: f.data}
+	response := policyCall(f.server, "PUT", "/api/policies/settings", `{"required":["one"],"groups":[],"revision":0}`)
+	if response.Code != 200 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	f.manager.Wait()
+	jobs := f.manager.List()
+	if len(jobs) != 3 {
+		t.Fatalf("want three folder workspaces only, got %+v", jobs)
+	}
+	for _, job := range jobs {
+		if job.Workspace == "gone" || job.State != "succeeded" || job.Operation != OperationApplyPolicies {
+			t.Fatalf("unnecessary or failed apply: %+v", job)
+		}
+	}
+	gone, err := f.data.Selection(ctx, "gone")
+	if err != nil || len(gone.Policies) != 1 || gone.Policies[0] != "one" || gone.AppliedRevision != nil {
+		t.Fatalf("no-folder selection: %+v %v", gone, err)
+	}
+}
