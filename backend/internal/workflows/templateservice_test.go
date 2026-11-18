@@ -914,7 +914,21 @@ func (a *accept) send(t *testing.T, method, path, body string) (int, string) {
 func TestRegisterCreateTagAndUpgradeThroughTheTemplateService(t *testing.T) {
 	a := newAccept(t, &fakeRuntime{})
 	kit := a.kitRepository(t, "kit", "1.0.0", false)
-	status, body := a.post(t, "/api/templates", `{"name":"Kit","address":"`+kit+`"}`)
+	// The served host has a port, so its address takes no ref: a
+	// registration takes the newest version, and an upgrade names its
+	// version beside the address. A check runs the checks and stores
+	// nothing.
+	status, body := a.post(t, "/api/templates", `{"name":"Kit","address":"`+kit+`","check":true}`)
+	if status != http.StatusOK || !strings.Contains(body, `"currentVersion":"1.0.0"`) {
+		t.Fatalf("register's check: %d %s", status, body)
+	}
+	if status, body := a.post(t, "/api/templates", `{"name":"Kit","address":"`+kit+`@1.0.0","check":true}`); status != http.StatusUnprocessableEntity || !strings.Contains(body, `"check":"address"`) {
+		t.Fatalf("a port and a ref: %d %s", status, body)
+	}
+	if status, body := a.send(t, http.MethodGet, "/api/templates", ""); status != http.StatusOK || strings.Contains(body, `"id":"kit"`) {
+		t.Fatalf("the check stored the template: %d %s", status, body)
+	}
+	status, body = a.post(t, "/api/templates", `{"name":"Kit","address":"`+kit+`"}`)
 	if status != http.StatusCreated || !strings.Contains(body, `"id":"kit"`) || !strings.Contains(body, `"currentVersion":"1.0.0"`) {
 		t.Fatalf("register: %d %s", status, body)
 	}
@@ -945,6 +959,13 @@ func TestRegisterCreateTagAndUpgradeThroughTheTemplateService(t *testing.T) {
 	gitCLI(t, repo, "tag", "v1.1.0")
 	if status, body := a.post(t, "/api/templates/kit/upgrades", `{"version":"1.0.0"}`); status != http.StatusConflict || !strings.Contains(body, "version-not-newer") {
 		t.Fatalf("upgrade to the current version: %d %s", status, body)
+	}
+	status, body = a.post(t, "/api/templates/kit/upgrades", `{"version":"1.1.0","check":true}`)
+	if status != http.StatusOK || !strings.Contains(body, `"currentVersion":"1.1.0"`) {
+		t.Fatalf("template upgrade's check: %d %s", status, body)
+	}
+	if status, body := a.send(t, http.MethodGet, "/api/templates", ""); status != http.StatusOK || !strings.Contains(body, `"currentVersion":"1.0.0"`) {
+		t.Fatalf("the check moved the template: %d %s", status, body)
 	}
 	status, body = a.post(t, "/api/templates/kit/upgrades", `{"version":"1.1.0"}`)
 	if status != http.StatusOK || !strings.Contains(body, `"currentVersion":"1.1.0"`) {
@@ -999,11 +1020,14 @@ func TestRegistrationChecksAgainstTheTemplateService(t *testing.T) {
 		{password, "address"},
 		{a.origin + "/missing", "fetch"},
 		{untagged, "version"},
-		{tagged + "@next", "version"},
-		{tagged + "@main", "version"},
-		// After the port of an address with no user name, a ref's @ could
-		// end a password: only a version's tag is admitted there.
+		// After the port, a ref's @ could end a password: an address whose
+		// host has a port takes no ref, with a user name or without, and a
+		// version's tag or not.
+		{tagged + "@next", "address"},
+		{tagged + "@main", "address"},
+		{tagged + "@1.0.0", "address"},
 		{strings.Replace(tagged, "sample@", "", 1) + "@main", "address"},
+		{strings.Replace(tagged, "sample@", "", 1) + "@1.0.0", "address"},
 		{unreadable, "read"},
 		{linked, "read"},
 		{bare, "definition"},
@@ -1018,7 +1042,7 @@ func TestRegistrationChecksAgainstTheTemplateService(t *testing.T) {
 			}
 		}
 	}
-	if status, body := a.post(t, "/api/templates", `{"name":"Kit","address":"`+tagged+`@1.0.0"}`); status != http.StatusCreated {
+	if status, body := a.post(t, "/api/templates", `{"name":"Kit","address":"`+tagged+`"}`); status != http.StatusCreated || !strings.Contains(body, `"currentVersion":"1.0.0"`) {
 		t.Fatalf("%d %s", status, body)
 	}
 	if status, body := a.post(t, "/api/templates", `{"name":"Again","address":"`+tagged+`"}`); status != http.StatusConflict || !strings.Contains(body, "template-exists") {
@@ -1030,7 +1054,9 @@ func TestRegistrationChecksAgainstTheTemplateService(t *testing.T) {
 // that a user name's escapes hide, is refused at registration and skipped
 // at the first-start import, named by its id, and reaches no channel: no
 // reply, which is all the interface shows, nor the data of either service,
-// the logs of either, or a request to the Git host.
+// the logs of either, or a request to the Git host. An import entry on a
+// host with a port and a ref is skipped the same way, and one at an example
+// address with no port is imported.
 func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
 	a := newAccept(t, &fakeRuntime{})
 	kept := a.kitRepository(t, "kept", "1.0.0", false)
@@ -1069,9 +1095,18 @@ func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
 		"gh-nopath":    "gh:sample-user:12/" + marker + "@" + host,
 		"hash-x":       "https://sample-user:12#x/" + marker + "@" + host + "/REPO",
 		"hash-folder":  "https://sample-user:12/REPO@1.0.0#/" + marker + "@" + host,
+		// A user name before the host's port, then a path that holds the
+		// rest; and a password before a host that reads as a version's tag.
+		"user-port-path":       "https://sample-user@127.0.0.1:" + port + "/" + marker + "@git.example.invalid/REPO@1.0.0",
+		"user-port-path-noref": "https://sample-user@127.0.0.1:" + port + "/" + marker + "@git.example.invalid/REPO",
+		"version-host":         "https://sample-user:" + marker + "@1.0.0",
+		"ssh-version-host":     "ssh://git:" + marker + "@1.0.0",
 	}
 	var replies []string
-	entries := []registry.Entry{{ID: "kept", Name: "Kept", Address: kept + "@1.0.0"}}
+	entries := []registry.Entry{
+		{ID: "kept", Name: "Kept", Address: "https://git.example.invalid/example-org/kept@1.0.0"},
+		{ID: "kept-port", Name: "Kept, port", Address: kept + "@1.0.0"},
+	}
 	for id, form := range hidden {
 		entries = append(entries, registry.Entry{ID: id, Name: "Hidden", Address: strings.ReplaceAll(form, "REPO", "imported-"+id)})
 		if strings.HasPrefix(form, "gh:") {
@@ -1112,8 +1147,11 @@ func TestAHiddenPasswordReachesNoChannel(t *testing.T) {
 			t.Errorf("the import does not name %s as refused:\n%s", id, logged.String())
 		}
 	}
+	if !strings.Contains(logged.String(), "entry kept-port is not imported: the template service refuses its address (invalid-address)") || strings.Contains(logged.String(), kept) {
+		t.Errorf("the import does not skip the entry with a port and a ref by its id alone:\n%s", logged.String())
+	}
 	status, list := a.send(t, http.MethodGet, "/api/templates", "")
-	if status != http.StatusOK || !strings.Contains(list, `"id":"kept"`) {
+	if status != http.StatusOK || !strings.Contains(list, `"id":"kept"`) || strings.Contains(list, "kept-port") {
 		t.Errorf("the template list: %d %s", status, list)
 	}
 	channels := map[string]string{
