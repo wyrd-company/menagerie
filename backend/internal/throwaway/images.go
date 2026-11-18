@@ -21,14 +21,15 @@ type Inspector interface {
 	ContainerInspect(ctx context.Context, id string) (container.InspectResponse, error)
 }
 
-// Images chooses the runner image of a throwaway container: a template's
-// own runner image, else the configured default, else the image of the
-// container Menagerie itself runs in.
+// Images chooses the runner image of a throwaway container: a registered
+// template's own runner image, else the configured default, else the image
+// of the container Menagerie itself runs in.
 type Images struct {
 	// Default is the configured runner-image; empty for Menagerie's own.
 	Default string
-	// Templates maps a template id to its runner-image.
-	Templates map[string]string
+	// Template reads a registered template's runner image, "" for none.
+	// Nil gives every template none.
+	Template func(ctx context.Context, id string) (string, error)
 	// Docker reads Menagerie's own container.
 	Docker Inspector
 	// Hostname and MountInfo locate Menagerie's own container; they
@@ -51,8 +52,14 @@ type ownSearch struct {
 
 // ForTemplate is the runner image of a template's hooks.
 func (i *Images) ForTemplate(ctx context.Context, id string) (string, error) {
-	if image := i.Templates[id]; image != "" {
-		return image, nil
+	if i.Template != nil {
+		image, err := i.Template(ctx, id)
+		if err != nil {
+			return "", &ImageError{Err: Reason("the template's runner image could not be read from Menagerie's data")}
+		}
+		if image != "" {
+			return image, nil
+		}
 	}
 	return i.ForWorkspace(ctx)
 }

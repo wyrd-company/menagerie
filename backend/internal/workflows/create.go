@@ -26,7 +26,8 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
-// creation is one create job.
+// creation is one create job of a registered template, whose current
+// version and commit the job pins for its whole run.
 type creation struct {
 	w        *Workflows
 	name     string
@@ -43,7 +44,14 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 	if _, err := os.Lstat(c.folder); !errors.Is(err, os.ErrNotExist) {
 		return &jobs.Failure{Kind: KindWorkspaceExists, Err: fmt.Errorf("workspace %s was created before the job started; nothing was written", c.name)}
 	}
-	if err := c.w.opts.Data.BeginCreate(ctx, c.name); err != nil {
+	tpl, err := c.w.opts.Data.Template(ctx, c.template)
+	if errors.Is(err, store.ErrNoTemplate) {
+		return &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("template %s is no longer registered; nothing was written", c.template)}
+	}
+	if err != nil {
+		return err
+	}
+	if err := c.w.opts.Data.BeginCreateFrom(ctx, c.name, tpl.ID); err != nil {
 		if errors.Is(err, store.ErrExists) {
 			return &jobs.Failure{Kind: KindWorkspaceExists, Err: fmt.Errorf("workspace %s already exists in Menagerie's data; nothing was written", c.name)}
 		}
@@ -73,8 +81,9 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 		return err
 	}
 
+	fmt.Fprintf(run.Log(""), "creating from template %s, version %s\n", tpl.ID, tpl.CurrentVersion)
 	t := c.w.opts.Templates
-	sel := c.w.selector(c.name, c.folder, c.template)
+	sel := c.w.selector(c.name, c.folder, tpl)
 	reply, err := c.w.interview(ctx, run, interviewSteps{
 		start: func(ctx context.Context) (*templates.Reply, error) { return t.StartInterview(ctx, sel) },
 		answer: func(ctx context.Context, session, submission json.RawMessage) (*templates.Reply, error) {
@@ -123,7 +132,7 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 
 	saving := &saving{w: c.w, name: c.name, folder: c.folder,
 		output:  output(applied),
-		message: fmt.Sprintf("Create workspace %s from %s", c.name, c.template),
+		message: fmt.Sprintf("Create workspace %s from %s %s", c.name, tpl.ID, tpl.CurrentVersion),
 	}
 	return saving.finish(ctx, run, "nothing was committed or started; the workspace folder "+c.folder+" holds the generated files; start the workspace when this is fixed, or inspect the folder and remove it before creating workspace "+c.name+" again")
 }

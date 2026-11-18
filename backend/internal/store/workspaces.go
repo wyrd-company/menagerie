@@ -331,6 +331,13 @@ func (s *Store) Claimed(ctx context.Context, name string) (claimed bool, err err
 // claims, being created or holding a name or a key, is ErrExists; the caller
 // has found no folder, so any other data of that name is replaced.
 func (s *Store) BeginCreate(ctx context.Context, name string) error {
+	return s.BeginCreateFrom(ctx, name, "")
+}
+
+// BeginCreateFrom begins a create, as BeginCreate does, of a workspace of
+// the registered template id, so that the template cannot be removed while
+// the create runs; "" names none.
+func (s *Store) BeginCreateFrom(ctx context.Context, name, template string) error {
 	return s.Update(ctx, func(t *Tx) error {
 		claimed, err := t.Claimed(name)
 		if err != nil {
@@ -344,9 +351,28 @@ func (s *Store) BeginCreate(ctx context.Context, name string) error {
 		if _, err := t.exec(`DELETE FROM workspaces WHERE name = ?`, name); err != nil {
 			return err
 		}
-		_, err = t.exec(`INSERT INTO workspaces (name, creating) VALUES (?, 1)`, name)
+		_, err = t.exec(`INSERT INTO workspaces (name, creating, template) VALUES (?, 1, ?)`, name, nullable(template))
 		return err
 	})
+}
+
+// Unknown lists the names of folders that have no workspace in the data yet,
+// in the order given: the folders a discovery lists for the first time.
+func (s *Store) Unknown(ctx context.Context, folders []string) (unknown []string, err error) {
+	err = s.Update(ctx, func(t *Tx) error {
+		unknown = nil
+		for _, name := range folders {
+			exists, err := t.Exists(name)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				unknown = append(unknown, name)
+			}
+		}
+		return nil
+	})
+	return unknown, err
 }
 
 // Created ends a workspace's being-created mark, once its create made the

@@ -3,9 +3,11 @@
 package workflows
 
 // Create and upgrade against the real template service binary, named by
-// MENAGERIE_TEMPLATE_SERVICE, with backups pushed through an isolated SSH
-// Git host and agent. Git subprocesses here only prepare the test's
-// template repositories; the workflows themselves use go-git.
+// MENAGERIE_TEMPLATE_SERVICE, with templates fetched from an anonymous
+// HTTPS Git host on loopback, which the template service trusts through
+// GIT_SSL_CAINFO, and backups pushed through an isolated SSH Git host and
+// agent. Git subprocesses here only prepare and serve the test's template
+// repositories; the workflows themselves use go-git.
 
 import (
 	"bufio"
@@ -16,6 +18,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cgi"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -35,6 +38,8 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registry"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
@@ -64,11 +69,11 @@ const definition = `{
 }
 `
 
-// sampleTemplate writes version 1 or 2 of a generic template. Version 2
+// sampleKit writes version 1 or 2 of a generic template. Version 2
 // adds one question. Its hook writes its version into a tracked marker,
 // leaves an ignored marker named by its version where it ran, and clones a
 // nested repository that the template's .gitignore excludes.
-func sampleTemplate(t *testing.T, dir string, version int) {
+func sampleKit(t *testing.T, dir string, version int) {
 	extra, extraLine := "", ""
 	if version == 2 {
 		extra = "  - {id: extra, type: text, prompt: Extra, required: true}\n"
@@ -117,9 +122,12 @@ var leakKinds = map[string]string{
 }
 
 // accept is a workspace root served by the real template service and the
-// workflows composed as the workspace service composes them.
+// workflows composed as the workspace service composes them. origin is the
+// HTTPS host that serves the repositories under templates.
 type accept struct {
 	root, repo, remote string
+	templates, origin  string
+	data               *store.Store
 	host               *backuptest.Host
 	manager            *jobs.Manager
 	http               *httptest.Server
@@ -152,16 +160,115 @@ func newAccept(t *testing.T, runtime Runtime) *accept {
 }
 
 // acceptOptions run the template's hooks through containers in image,
-// under limits. templates adds approved templates by id; credentials,
-// when set, serves the hook runner socket's credential route; env is added
-// to the template service's environment.
+// under limits. templates registers templates by id at an address with a
+// ref, such as a private host's; local serves a clone of each repository
+// folder by id and registers it at main; credentials, when set, serves the
+// hook runner socket's credential route; authorities are certificate files
+// the template service trusts beside the fixture host's; env is added to
+// the template service's environment.
 type acceptOptions struct {
 	containers  throwaway.Containers
 	image       string
 	limits      jobs.Limits
 	templates   map[string]string
+	local       map[string]string
 	credentials http.Handler
+	authorities []string
 	env         []string
+}
+
+// servedTemplates serves the repositories under dir, anonymously, as a Git
+// host over HTTPS on loopback, and returns its origin and a certificate
+// bundle of its authority and the extra authorities.
+func servedTemplates(t *testing.T, dir string, extra []string) (origin, bundle string) {
+	t.Helper()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal("the template host needs git on PATH")
+	}
+	backend := &cgi.Handler{Path: gitPath, Args: []string{"http-backend"}, Stderr: io.Discard, Env: []string{
+		"GIT_PROJECT_ROOT=" + dir, "GIT_HTTP_EXPORT_ALL=1", "GIT_CONFIG_NOSYSTEM=1", "HOME=" + t.TempDir(),
+	}}
+	origin, authority := templateTLSHost(t, backend)
+	pems, err := os.ReadFile(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range extra {
+		more, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pems = append(pems, more...)
+	}
+	bundle = filepath.Join(t.TempDir(), "authorities.pem")
+	if err := os.WriteFile(bundle, pems, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return origin, bundle
+}
+
+// register records a template in the fixture's data at the version ref
+// names: address is its address without a ref, and its own source.
+func (a *accept) register(t *testing.T, id, address, version, ref string) {
+	t.Helper()
+	commit := ""
+	if strings.HasPrefix(address, a.origin+"/") {
+		commit = gitCLI(t, filepath.Join(a.templates, strings.TrimPrefix(address, a.origin+"/")), "rev-parse", ref+"^{commit}")
+	}
+	_, err := a.data.RegisterTemplate(context.Background(), store.Template{ID: id, Name: id, Address: address, Source: address,
+		CurrentVersion: version, CurrentTag: ref, CurrentCommit: commit}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// sampleFor is the template of workspace name's creates from the sample
+// at its first version: a copy of the sample repository registered for
+// that workspace alone at 1.0.0, so each workspace's template moves on its
+// own in a fixture its subtests share.
+func (a *accept) sampleFor(t *testing.T, name string) string {
+	t.Helper()
+	id := "sample-" + name
+	if _, err := a.data.Template(context.Background(), id); err == nil {
+		return id
+	}
+	gitCLI(t, a.templates, "clone", "-q", a.repo, filepath.Join(a.templates, id))
+	a.register(t, id, a.origin+"/"+id, "1.0.0", "1.0.0")
+	return id
+}
+
+// newVersion makes the sample's second version, 2.0.0, the current one of
+// workspace name's template, as a manager's upgrade of the template does.
+func (a *accept) newVersion(t *testing.T, name string) {
+	t.Helper()
+	ctx := context.Background()
+	id, err := a.data.WorkspaceTemplate(ctx, name)
+	if err != nil || id == "" {
+		t.Fatalf("workspace %s has no template: %v", name, err)
+	}
+	commit := gitCLI(t, a.repo, "rev-parse", "2.0.0^{commit}")
+	if _, err := a.data.AdvanceTemplate(ctx, id, "2.0.0", "2.0.0", commit, registry.Newer); err != nil && !errors.Is(err, store.ErrNotNewer) {
+		t.Fatal(err)
+	}
+}
+
+// request is a job's body: a create of template, where "sample-v1" names
+// the sample at its first version, and an upgrade, which takes no
+// template and applies its workspace's template's current version, where
+// "sample-v2" first makes that the sample's second.
+func (a *accept) request(t *testing.T, operation, name, template string) string {
+	t.Helper()
+	if operation == "upgrade" {
+		if template == "sample-v2" {
+			a.newVersion(t, name)
+		}
+		return fmt.Sprintf(`{"operation":%q,"workspace":%q}`, operation, name)
+	}
+	if template == "sample-v1" {
+		template = a.sampleFor(t, name)
+	}
+	return fmt.Sprintf(`{"operation":%q,"workspace":%q,"templateId":%q}`, operation, name, template)
 }
 
 func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
@@ -171,21 +278,21 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 		t.Fatal("MENAGERIE_TEMPLATE_SERVICE must name the template service binary")
 	}
 	base := t.TempDir()
-	a := &accept{root: filepath.Join(base, "workspaces"), repo: filepath.Join(base, "templates", "sample"), runtime: runtime}
+	a := &accept{root: filepath.Join(base, "workspaces"), templates: filepath.Join(base, "templates"), repo: filepath.Join(base, "templates", "sample"), runtime: runtime}
 	for _, d := range []string{a.root, a.repo} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	gitCLI(t, a.repo, "init", "-q", "-b", "main")
-	sampleTemplate(t, a.repo, 1)
+	sampleKit(t, a.repo, 1)
 	gitCLI(t, a.repo, "add", "-A")
 	gitCLI(t, a.repo, "commit", "-q", "-m", "v1")
-	gitCLI(t, a.repo, "tag", "v1")
-	sampleTemplate(t, a.repo, 2)
+	gitCLI(t, a.repo, "tag", "1.0.0")
+	sampleKit(t, a.repo, 2)
 	gitCLI(t, a.repo, "add", "-A")
 	gitCLI(t, a.repo, "commit", "-q", "-m", "v2")
-	gitCLI(t, a.repo, "tag", "v2")
+	gitCLI(t, a.repo, "tag", "2.0.0")
 	fixtures := map[string]string{
 		"broken": "name: broken\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - run: [sh, -c, 'exit 3']\n",
 		"hangs":  "name: hangs\ninterview:\n  - {id: label, type: text, prompt: Label, required: true}\nhooks:\n  - run: [sh, -c, 'while :; do date >> ticks.txt; sleep 0.1; done']\n",
@@ -208,6 +315,12 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 		gitCLI(t, dir, "add", "-A")
 		gitCLI(t, dir, "commit", "-q", "-m", name)
 	}
+	for id, source := range opts.local {
+		gitCLI(t, base, "clone", "-q", source, filepath.Join(a.templates, id))
+		fixtures[id] = ""
+	}
+	var bundle string
+	a.origin, bundle = servedTemplates(t, a.templates, opts.authorities)
 
 	a.host = backuptest.New(t)
 	if _, err := git.PlainInit(filepath.Join(a.host.Dir, "backups.git"), true); err != nil {
@@ -243,24 +356,12 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	hookServer := &http.Server{Handler: hookHandler}
 	go func() { _ = hookServer.Serve(hookListener) }()
 	t.Cleanup(func() { _ = hookServer.Close() })
-	t2 := filepath.Join(base, "templates")
-	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s, hook-runner-socket: %s, candidate-folder: %s}\ntemplates:\n"+
-		"  - {id: sample-v1, name: Sample, address: 'file://%s@v1'}\n  - {id: sample-v2, name: Sample, address: 'file://%s@v2'}\n"+
-		"  - {id: broken, name: Broken, address: 'file://%s/broken'}\n  - {id: flows, name: Flows, address: 'file://%s/flows'}\n  - {id: hangs, name: Hangs, address: 'file://%s/hangs'}\n"+
-		"  - {id: leaks, name: Leaks, address: 'file://%s/leaks'}\n",
-		a.root, a.host.URL("backups.git"), socket, hookSocket, candidates, a.repo, a.repo, t2, t2, t2, t2)
-	approved := map[string]bool{"sample-v1": true, "sample-v2": true, "broken": true, "flows": true, "hangs": true, "leaks": true, "named": true}
-	config += fmt.Sprintf("  - {id: named, name: Named, address: 'file://%s/named'}\n", t2)
-	for name := range leakTemplates {
-		config += fmt.Sprintf("  - {id: %s, name: Leaks, address: 'file://%s/%s'}\n", name, t2, name)
-		approved[name] = true
-	}
-	for id, address := range opts.templates {
-		config += fmt.Sprintf("  - {id: %s, name: %s, address: '%s'}\n", id, id, address)
-		approved[id] = true
-	}
+	// The template service reads nothing of the templates key, which a
+	// file of an earlier release still has.
+	config := fmt.Sprintf("workspace-root: %s\nworkspace-repository: %s\nwyrwood-directory: /run/sample\noidc: {issuer: 'https://issuer.example.invalid', client-id: sample}\ntemplate-service: {socket: %s, hook-runner-socket: %s, candidate-folder: %s}\ntemplates:\n  - {id: sample, name: Sample, address: 'file:///absent'}\n",
+		a.root, a.host.URL("backups.git"), socket, hookSocket, candidates)
 	writeFile(t, base, "config.yml", config)
-	startService(t, bin, filepath.Join(base, "config.yml"), filepath.Join(base, "data"), socket, opts.env...)
+	startService(t, bin, filepath.Join(base, "config.yml"), filepath.Join(base, "data"), socket, append([]string{"GIT_SSL_CAINFO=" + bundle}, opts.env...)...)
 
 	root, err := workspace.NewRoot(a.root)
 	if err != nil {
@@ -269,11 +370,20 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.manager = jobs.NewManager(ctx, jobs.Options{Limits: opts.limits})
 	data := testData(t)
+	a.data = data
+	a.register(t, "sample", a.origin+"/sample", "1.0.0", "1.0.0")
+	for name := range fixtures {
+		a.register(t, name, a.origin+"/"+name, "0.0.0", "main")
+	}
+	for id, address := range opts.templates {
+		at := strings.LastIndex(address, "@")
+		a.register(t, id, address[:at], "0.0.0", address[at+1:])
+	}
+	service := templates.New(socket)
 	flows := New(Options{
 		Root:      root,
 		Data:      data,
-		Templates: templates.New(socket),
-		Approved:  approved,
+		Templates: service,
 		Remote:    &backup.Remote{URL: a.host.URL("backups.git"), Auth: backup.AgentAuth(a.host.AgentPath)},
 		Runtime:   runtime,
 		Hooks:     hooks,
@@ -282,7 +392,8 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 		},
 	})
 	a.flows = flows
-	a.http = httptest.NewServer(api.New(api.Options{Root: root, Data: data, Jobs: a.manager, Operations: flows.Operations(), Interviews: flows}))
+	a.http = httptest.NewServer(api.New(api.Options{Root: root, Data: data, Status: runtime, Jobs: a.manager, Operations: flows.Operations(), Interviews: flows,
+		Registry: &registry.Registry{Data: data, Templates: service, Root: root}, AppliedSource: registry.Source}))
 	t.Cleanup(a.http.Close)
 	t.Cleanup(a.manager.Wait)
 	t.Cleanup(cancel)
@@ -358,7 +469,7 @@ func (a *accept) post(t *testing.T, path, body string) (int, string) {
 // the ended job and the question ids each batch asked.
 func (a *accept) drive(t *testing.T, operation, name, template string, answers map[string]any) (*jobs.Job, [][]string) {
 	t.Helper()
-	status, body := a.post(t, "/api/jobs", fmt.Sprintf(`{"operation":%q,"workspace":%q,"templateId":%q}`, operation, name, template))
+	status, body := a.post(t, "/api/jobs", a.request(t, operation, name, template))
 	if status != http.StatusAccepted {
 		t.Fatalf("start %s %s: %d %s", operation, name, status, body)
 	}
@@ -535,7 +646,7 @@ func acceptCreateAndUpgrade(t *testing.T, a *accept, afterCreate func(folder str
 	if got := fileAt(t, upgraded, "result.txt"); got != "label: first\nextra: added\n" {
 		t.Fatalf("upgraded result.txt %q", got)
 	}
-	v2 := gitCLI(t, a.repo, "rev-parse", "v2")
+	v2 := gitCLI(t, a.repo, "rev-parse", "2.0.0")
 	if !strings.Contains(fileAt(t, upgraded, ".toha.json"), v2) {
 		t.Fatal("the applied record does not name the new template version")
 	}
@@ -694,7 +805,7 @@ func TestTemplateServiceFailuresAreVisibleJobs(t *testing.T) {
 	})
 
 	t.Run("same workspace is exclusive", func(t *testing.T) {
-		status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"zeta","templateId":"sample-v1"}`)
+		status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"zeta","templateId":"sample"}`)
 		if status != 202 {
 			t.Fatalf("%d %s", status, body)
 		}
@@ -707,8 +818,143 @@ func TestTemplateServiceFailuresAreVisibleJobs(t *testing.T) {
 		if active, ok := a.manager.Active("zeta"); !ok || active.ID() != job.ID() {
 			t.Fatalf("the slot is not held by %s", job.ID())
 		}
-		if status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"zeta","templateId":"sample-v1"}`); status != 409 || !strings.Contains(body, "workspace-exists") {
+		if status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"zeta","templateId":"sample"}`); status != 409 || !strings.Contains(body, "workspace-exists") {
 			t.Fatalf("%d %s", status, body)
 		}
 	})
+}
+
+// kitRepository writes a repository under the fixture's templates folder:
+// the sample kit at version 1, tagged tag unless tag is "", or with no
+// devcontainer definition when bare.
+func (a *accept) kitRepository(t *testing.T, name, tag string, bare bool) string {
+	t.Helper()
+	dir := filepath.Join(a.templates, name)
+	sampleKit(t, dir, 1)
+	if bare {
+		if err := os.RemoveAll(filepath.Join(dir, "template/.devcontainer")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitCLI(t, dir, "init", "-q", "-b", "main")
+	gitCLI(t, dir, "add", "-A")
+	gitCLI(t, dir, "commit", "-q", "-m", "v1")
+	if tag != "" {
+		gitCLI(t, dir, "tag", tag)
+	}
+	return a.origin + "/" + name
+}
+
+func (a *accept) send(t *testing.T, method, path, body string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(method, a.http.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(data)
+}
+
+// A manager registers a template from its address, creates a workspace
+// from it, the repository gets a newer tag, the manager upgrades the
+// template to it and then the workspace, with no configuration change and
+// no restart; every step goes through the API and the real template
+// service.
+func TestRegisterCreateTagAndUpgradeThroughTheTemplateService(t *testing.T) {
+	a := newAccept(t, &fakeRuntime{})
+	kit := a.kitRepository(t, "kit", "1.0.0", false)
+	status, body := a.post(t, "/api/templates", `{"name":"Kit","address":"`+kit+`"}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"id":"kit"`) || !strings.Contains(body, `"currentVersion":"1.0.0"`) {
+		t.Fatalf("register: %d %s", status, body)
+	}
+	job, _ := a.drive(t, "create", "alpha", "kit", map[string]any{"label": "first"})
+	if snap := job.Snapshot(); snap.State != jobs.Succeeded {
+		evidence(t, job)
+		t.Fatalf("create %+v %+v", snap, snap.Error)
+	}
+	folder := filepath.Join(a.root, "alpha")
+	if applied, err := registry.ReadApplied(folder); err != nil || applied.Ref != "1.0.0" || applied.Source != kit {
+		t.Fatalf("applied %+v %v", applied, err)
+	}
+	if status, body := a.send(t, http.MethodGet, "/api/workspaces", ""); status != 200 || !strings.Contains(body, `"template":{"id":"kit","name":"Kit"},"name":"alpha"`) {
+		t.Fatalf("list: %d %s", status, body)
+	}
+	if status, body := a.post(t, "/api/jobs", `{"operation":"upgrade","workspace":"alpha"}`); status != http.StatusConflict || !strings.Contains(body, "upgrade-not-needed") {
+		t.Fatalf("upgrade at the current version: %d %s", status, body)
+	}
+
+	// The repository gets a newer tag.
+	repo := filepath.Join(a.templates, "kit")
+	sampleKit(t, repo, 2)
+	gitCLI(t, repo, "add", "-A")
+	gitCLI(t, repo, "commit", "-q", "-m", "v2")
+	gitCLI(t, repo, "tag", "v1.1.0")
+	if status, body := a.post(t, "/api/templates/kit/upgrades", `{"version":"1.0.0"}`); status != http.StatusConflict || !strings.Contains(body, "version-not-newer") {
+		t.Fatalf("upgrade to the current version: %d %s", status, body)
+	}
+	status, body = a.post(t, "/api/templates/kit/upgrades", `{"version":"1.1.0"}`)
+	if status != http.StatusOK || !strings.Contains(body, `"currentVersion":"1.1.0"`) {
+		t.Fatalf("template upgrade: %d %s", status, body)
+	}
+	job, asked := a.drive(t, "upgrade", "alpha", "", map[string]any{"extra": "added"})
+	if snap := job.Snapshot(); snap.State != jobs.Succeeded {
+		evidence(t, job)
+		t.Fatalf("upgrade %+v %+v", snap, snap.Error)
+	}
+	if !reflect.DeepEqual(asked, [][]string{{"extra"}}) {
+		t.Fatalf("asked %v", asked)
+	}
+	v110 := gitCLI(t, repo, "rev-parse", "v1.1.0")
+	if applied, err := registry.ReadApplied(folder); err != nil || applied.Ref != "v1.1.0" || applied.Commit != v110 {
+		t.Fatalf("applied %+v %v", applied, err)
+	}
+	if status, body := a.post(t, "/api/jobs", `{"operation":"upgrade","workspace":"alpha"}`); status != http.StatusConflict || !strings.Contains(body, "upgrade-not-needed") {
+		t.Fatalf("second upgrade: %d %s", status, body)
+	}
+	if status, body := a.send(t, http.MethodDelete, "/api/templates/kit", ""); status != http.StatusConflict || !strings.Contains(body, "template-in-use") || !strings.Contains(body, "alpha") {
+		t.Fatalf("remove: %d %s", status, body)
+	}
+}
+
+// Each registration check refuses a template the real template service
+// reads, naming the check and never the address.
+func TestRegistrationChecksAgainstTheTemplateService(t *testing.T) {
+	a := newAccept(t, &fakeRuntime{})
+	bare := a.kitRepository(t, "bare", "1.0.0", true)
+	untagged := a.kitRepository(t, "untagged", "", false)
+	tagged := a.kitRepository(t, "tagged", "1.0.0", false)
+	gitCLI(t, filepath.Join(a.templates, "tagged"), "tag", "next")
+	password := strings.Replace(tagged, "https://", "https://sample-user:sample-password@", 1)
+	for _, c := range []struct{ address, check string }{
+		{filepath.Join(a.templates, "tagged"), "address"},
+		{"file://" + filepath.Join(a.templates, "tagged"), "address"},
+		{"sample-kit", "address"},
+		{password, "address"},
+		{a.origin + "/missing", "fetch"},
+		{untagged, "version"},
+		{tagged + "@next", "version"},
+		{tagged + "@main", "version"},
+		{bare, "definition"},
+	} {
+		status, body := a.post(t, "/api/templates", `{"name":"Kit","address":"`+c.address+`"}`)
+		if status != http.StatusUnprocessableEntity || !strings.Contains(body, `"check":"`+c.check+`"`) {
+			t.Errorf("%s: %d %s", c.address, status, body)
+		}
+		for _, quoted := range []string{"sample-password", "127.0.0.1", a.templates} {
+			if strings.Contains(body, quoted) {
+				t.Errorf("%s: the refusal quotes the address: %s", c.address, body)
+			}
+		}
+	}
+	if status, body := a.post(t, "/api/templates", `{"name":"Kit","address":"`+tagged+`@1.0.0"}`); status != http.StatusCreated {
+		t.Fatalf("%d %s", status, body)
+	}
+	if status, body := a.post(t, "/api/templates", `{"name":"Again","address":"`+tagged+`"}`); status != http.StatusConflict || !strings.Contains(body, "template-exists") {
+		t.Fatalf("%d %s", status, body)
+	}
 }

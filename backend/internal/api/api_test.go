@@ -118,7 +118,6 @@ func newFixture(t *testing.T, ui fsFS) *fixture {
 		Jobs:          manager,
 		Operations:    ContainerOperations(root, rt),
 		PairingTokens: tokens,
-		Templates:     []Template{{ID: "sample-template", Name: "Sample template"}},
 	}
 	if ui != nil {
 		opts.UI = ui
@@ -179,9 +178,9 @@ func TestListWorkspacesJoinsFoldersOnly(t *testing.T) {
 		t.Fatalf("%d %s", resp.StatusCode, data)
 	}
 	want := `{"workspaces":[` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"alpha","state":"running","containerId":"c-alpha","activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"beta","state":"stopped","containerId":"c-beta","activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"gamma","state":"no-container","containerId":null,"activeJob":null}]}`
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"template":null,"name":"alpha","state":"running","containerId":"c-alpha","activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"template":null,"name":"beta","state":"stopped","containerId":"c-beta","activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"template":null,"name":"gamma","state":"no-container","containerId":null,"activeJob":null}]}`
 	if strings.TrimSpace(string(data)) != want {
 		t.Fatalf("got %s", data)
 	}
@@ -211,11 +210,11 @@ func TestListWorkspacesShowsAWorkspaceWithNoFolderThatHoldsSomething(t *testing.
 		t.Fatalf("%d %s", resp.StatusCode, data)
 	}
 	want := `{"workspaces":[` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"alpha","state":"running","containerId":"c-alpha","activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"beta","state":"stopped","containerId":"c-beta","activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"bound","state":"no-folder","containerId":null,"activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"gamma","state":"no-container","containerId":null,"activeJob":null},` +
-		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"name":"keyed","state":"no-folder","containerId":null,"activeJob":null}]}`
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"template":null,"name":"alpha","state":"running","containerId":"c-alpha","activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"template":null,"name":"beta","state":"stopped","containerId":"c-beta","activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"template":null,"name":"bound","state":"no-folder","containerId":null,"activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":0,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"template":null,"name":"gamma","state":"no-container","containerId":null,"activeJob":null},` +
+		`{"policies":[],"selectionRevision":0,"appliedRevision":null,"applyFailure":null,"selectionImported":true,"xolotlKey":null,"needsChoice":[],"template":null,"name":"keyed","state":"no-folder","containerId":null,"activeJob":null}]}`
 	if strings.TrimSpace(string(data)) != want {
 		t.Fatalf("got %s", data)
 	}
@@ -238,14 +237,6 @@ func TestListWorkspacesReportsDockerFailure(t *testing.T) {
 	body := decode[errorBody](t, data)
 	if resp.StatusCode != 503 || body.Error.Kind != "docker-unavailable" {
 		t.Fatalf("%d %s", resp.StatusCode, data)
-	}
-}
-
-func TestTemplates(t *testing.T) {
-	f := newFixture(t, nil)
-	_, data := f.do(t, "GET", "/api/templates", "")
-	if strings.TrimSpace(string(data)) != `{"templates":[{"id":"sample-template","name":"Sample template"}]}` {
-		t.Fatalf("got %s", data)
 	}
 }
 

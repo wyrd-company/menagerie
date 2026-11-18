@@ -42,7 +42,8 @@ func ours(hostname, image string) container.InspectResponse {
 
 func TestATemplatesImageThenTheDefaultThenOurOwn(t *testing.T) {
 	docker := &inspector{containers: map[string]container.InspectResponse{"host-1": ours("host-1", "sha256:own")}}
-	images := &Images{Templates: map[string]string{"sample": "runner:template"}, Docker: docker, Hostname: func() (string, error) { return "host-1", nil }, MountInfo: "/absent"}
+	byTemplate := map[string]string{"sample": "runner:template"}
+	images := &Images{Template: func(_ context.Context, id string) (string, error) { return byTemplate[id], nil }, Docker: docker, Hostname: func() (string, error) { return "host-1", nil }, MountInfo: "/absent"}
 	ctx := context.Background()
 	for id, want := range map[string]string{"sample": "runner:template", "other": "sha256:own"} {
 		if got, err := images.ForTemplate(ctx, id); err != nil || got != want {

@@ -24,6 +24,9 @@ import (
 
 // Template service routes.
 const (
+	pathAddresses        = "/v1/templates/addresses"
+	pathVersions         = "/v1/templates/versions"
+	pathChecks           = "/v1/templates/checks"
 	pathInterviews       = "/v1/interviews"
 	pathInterviewAnswers = "/v1/interviews/answers"
 	pathGenerate         = "/v1/workspaces/generate"
@@ -32,16 +35,59 @@ const (
 	pathUpgradeApply     = "/v1/upgrades/apply"
 )
 
-// Selector names the workspace, its folder and the approved template every
-// request carries.
+// Selector names the workspace, its folder and the template version every
+// interview request carries. The workspace service admits the template
+// before it names it: a registered template's address with the tag and
+// commit of its current version, which the job holds.
 type Selector struct {
 	// Workspace is the workspace folder name.
 	Workspace string `json:"workspace"`
 	// Target is the workspace folder: the workspace root joined with
 	// Workspace.
 	Target string `json:"target"`
-	// TemplateID is an approved template's id.
-	TemplateID string `json:"templateId"`
+	// Address is the template's address without a ref.
+	Address string `json:"address"`
+	// Ref is the version's tag.
+	Ref string `json:"ref"`
+	// Commit is the commit recorded for Ref, or "" when none is recorded
+	// yet. A ref that resolves to another commit is refused as
+	// template-stale-revision.
+	Commit string `json:"commit,omitempty"`
+}
+
+// Address is what the template service's reading of an address gives,
+// reaching no network.
+type Address struct {
+	// Source is Toha's formal name of the repository and folder without a
+	// ref, the source an applied record names.
+	Source string `json:"source"`
+	// Reference is the ref the address names, or nil.
+	Reference *string `json:"reference"`
+	// Base is the address as given without its ref; an https address also
+	// loses its user information.
+	Base string `json:"base"`
+}
+
+// Version is one version of a repository: its numbers, its tag and the
+// commit the tag names.
+type Version struct {
+	Version string `json:"version"`
+	Tag     string `json:"tag"`
+	Commit  string `json:"commit"`
+}
+
+// Versions is a repository's versions in ascending order.
+type Versions struct {
+	Source   string    `json:"source"`
+	Versions []Version `json:"versions"`
+}
+
+// Checked is one checked version: the commit its ref resolved to, and
+// whether the template's content folder holds the devcontainer definition.
+type Checked struct {
+	Source     string `json:"source"`
+	Commit     string `json:"commit"`
+	Definition bool   `json:"definition"`
 }
 
 // InterviewState is the step an interview reply reports.
@@ -145,6 +191,55 @@ func New(socket string) *Client {
 	return &Client{http: &http.Client{Transport: transport}}
 }
 
+// ReadAddress reads an address with Toha's grammar, reaching no network.
+func (c *Client) ReadAddress(ctx context.Context, address string) (*Address, error) {
+	var out Address
+	if err := c.call(ctx, pathAddresses, map[string]string{"address": address}, &out); err != nil {
+		return nil, err
+	}
+	if out.Source == "" || out.Base == "" {
+		return nil, &UnavailableError{Err: errors.New("address reply names no source or base")}
+	}
+	return &out, nil
+}
+
+// ListVersions lists the versions of the repository address, which names
+// no ref, names.
+func (c *Client) ListVersions(ctx context.Context, address string) (*Versions, error) {
+	var out Versions
+	if err := c.call(ctx, pathVersions, map[string]string{"address": address}, &out); err != nil {
+		return nil, err
+	}
+	if out.Source == "" || out.Versions == nil {
+		return nil, &UnavailableError{Err: errors.New("versions reply names no source or versions")}
+	}
+	return &out, nil
+}
+
+// Check fetches address at ref and reads it, running nothing of it.
+func (c *Client) Check(ctx context.Context, address, ref string) (*Checked, error) {
+	var out Checked
+	if err := c.call(ctx, pathChecks, map[string]string{"address": address, "ref": ref}, &out); err != nil {
+		return nil, err
+	}
+	if out.Source == "" || out.Commit == "" {
+		return nil, &UnavailableError{Err: errors.New("check reply names no source or commit")}
+	}
+	return &out, nil
+}
+
+// call posts body and strictly decodes a 200 reply into out.
+func (c *Client) call(ctx context.Context, path string, body, out any) error {
+	raw, err := c.post(ctx, path, body)
+	if err != nil {
+		return err
+	}
+	if err := strictDecode(raw, out); err != nil {
+		return &UnavailableError{Err: fmt.Errorf("%s reply: %w", path, err)}
+	}
+	return nil
+}
+
 // StartInterview starts a create interview for a workspace folder that
 // does not exist yet.
 func (c *Client) StartInterview(ctx context.Context, s Selector) (*Reply, error) {
@@ -165,7 +260,8 @@ func (c *Client) Generate(ctx context.Context, s Selector, session json.RawMessa
 	return c.apply(ctx, pathGenerate, applyRequest{s, session, hookToken})
 }
 
-// StartUpgrade starts an upgrade of an existing workspace to s.TemplateID.
+// StartUpgrade starts an upgrade of an existing workspace to the version s
+// names.
 // With reanswer it asks every question again, with the workspace's recorded
 // answers as the defaults; without it, only what they do not settle.
 func (c *Client) StartUpgrade(ctx context.Context, s Selector, reanswer bool) (*Reply, error) {

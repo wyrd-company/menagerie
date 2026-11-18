@@ -33,12 +33,6 @@ type StatusSource interface {
 	Status(ctx context.Context, folder string) (devcontainer.Status, error)
 }
 
-// Template is an approved template as the browser sees it.
-type Template struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
 // Options compose a Server.
 type Options struct {
 	Root *workspace.Root
@@ -54,7 +48,12 @@ type Options struct {
 	Policies          PolicySource
 	PolicyApplication PolicyApplication
 	Provisioned       bool
-	Templates         []Template
+	// Registry registers and changes templates.
+	Registry Registry
+	// AppliedSource is the source a workspace folder's applied record
+	// names, or ""; a folder listed for the first time joins the
+	// registered template of that source. Nil joins none.
+	AppliedSource func(folder string) string
 	// UI holds the built web UI (index.html and assets/). Nil serves no UI.
 	UI fs.FS
 }
@@ -86,6 +85,10 @@ func (s *Server) routes() []struct {
 		{Route{http.MethodPut, "/api/policies/settings"}, s.savePolicySettings},
 		{Route{http.MethodPut, "/api/workspaces/{name}/policies"}, s.saveWorkspacePolicies},
 		{Route{http.MethodGet, "/api/templates"}, s.listTemplates},
+		{Route{http.MethodPost, "/api/templates"}, s.registerTemplate},
+		{Route{http.MethodPatch, "/api/templates/{id}"}, s.editTemplate},
+		{Route{http.MethodDelete, "/api/templates/{id}"}, s.removeTemplate},
+		{Route{http.MethodPost, "/api/templates/{id}/upgrades"}, s.upgradeTemplate},
 		{Route{http.MethodGet, "/api/jobs"}, s.listJobs},
 		{Route{http.MethodPost, "/api/jobs"}, s.startJob},
 		{Route{http.MethodGet, "/api/jobs/{id}"}, s.getJob},
@@ -138,6 +141,7 @@ func (s *Server) mountUI(ui fs.FS) {
 	s.mux.HandleFunc("GET /{$}", index)
 	s.mux.HandleFunc("GET /create", index)
 	s.mux.HandleFunc("GET /policies", index)
+	s.mux.HandleFunc("GET /templates", index)
 	s.mux.HandleFunc("GET /workspaces/{name}/upgrade", index)
 }
 
@@ -145,6 +149,9 @@ type apiError struct {
 	Kind        string `json:"kind"`
 	Message     string `json:"message"`
 	ActiveJobID string `json:"activeJobId,omitempty"`
+	// Check names the registration check a template-check-failed refusal
+	// failed.
+	Check string `json:"check,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -156,14 +163,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, e apiError) {
 	writeJSON(w, status, map[string]apiError{"error": e})
-}
-
-func (s *Server) listTemplates(w http.ResponseWriter, _ *http.Request) {
-	templates := s.opts.Templates
-	if templates == nil {
-		templates = []Template{}
-	}
-	writeJSON(w, http.StatusOK, map[string][]Template{"templates": templates})
 }
 
 type activeJob struct {
@@ -180,6 +179,7 @@ type workspaceRow struct {
 	SelectionImported bool                `json:"selectionImported"`
 	XolotlKey         *string             `json:"xolotlKey"`
 	NeedsChoice       []string            `json:"needsChoice"`
+	Template          *templateRef        `json:"template"`
 	Name              string              `json:"name"`
 	State             string              `json:"state"`
 	ContainerID       *string             `json:"containerId"`
@@ -195,10 +195,30 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, apiError{Kind: "workspace-root-unreadable", Message: err.Error()})
 		return
 	}
+	unknown, err := s.opts.Data.Unknown(r.Context(), names)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, apiError{Kind: "internal-error", Message: err.Error()})
+		return
+	}
 	noFolder, err := s.opts.Data.Discover(r.Context(), names)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, apiError{Kind: "internal-error", Message: err.Error()})
 		return
+	}
+	// A folder listed for the first time joins the registered template
+	// its applied record's source names.
+	if s.opts.AppliedSource != nil && len(unknown) > 0 {
+		_, err := s.opts.Data.JoinTemplates(r.Context(), unknown, func(name string) string {
+			folder, err := s.opts.Root.Folder(name)
+			if err != nil {
+				return ""
+			}
+			return s.opts.AppliedSource(folder)
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, apiError{Kind: "internal-error", Message: err.Error()})
+			return
+		}
 	}
 	rows := make([]workspaceRow, 0, len(names)+len(noFolder))
 	for _, name := range names {
@@ -226,7 +246,15 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, apiError{Kind: "internal-error", Message: err.Error()})
 		return
 	}
+	used, err := s.opts.Data.WorkspaceTemplates(r.Context())
+	if err != nil {
+		writeError(w, 500, apiError{Kind: "internal-error", Message: err.Error()})
+		return
+	}
 	for i := range rows {
+		if t, ok := used[rows[i].Name]; ok {
+			rows[i].Template = &templateRef{ID: t.ID, Name: t.Name}
+		}
 		selection := selections[rows[i].Name]
 		rows[i].Policies = selection.Policies
 		if rows[i].Policies == nil {

@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -165,7 +166,7 @@ func defaultTemplates(t *testing.T) *fakeTemplates {
 	f.generate = func(s templates.Selector) (*templates.Applied, error) {
 		writeFile(t, s.Target, "result.txt", "label: first\n")
 		writeFile(t, s.Target, "local.txt", "first: template\n")
-		writeFile(t, s.Target, ".toha.json", `{"applications":[{"v":1}]}`)
+		writeFile(t, s.Target, ".toha.json", appliedRecord(s))
 		writeFile(t, s.Target, "hook-marker.txt", "ran\n")
 		return appliedReply(templates.Written, []templates.File{{Path: "result.txt", Action: "create"}, {Path: "local.txt", Action: "create"}}, nil), nil
 	}
@@ -175,10 +176,33 @@ func defaultTemplates(t *testing.T) *fakeTemplates {
 	f.answerUpgrade = f.answerInterview
 	f.applyUpgrade = func(s templates.Selector) (*templates.Applied, error) {
 		writeFile(t, s.Target, "added.txt", "new in v2\n")
-		writeFile(t, s.Target, ".toha.json", `{"applications":[{"v":2}]}`)
+		writeFile(t, s.Target, ".toha.json", appliedRecord(s))
 		return appliedReply(templates.Written, []templates.File{{Path: "added.txt", Action: "added"}}, nil), nil
 	}
 	return f
+}
+
+// appliedRecord is the applied record Toha writes for the version s names:
+// the template's source, here its address, at s's ref.
+func appliedRecord(s templates.Selector) string {
+	return fmt.Sprintf(`{"applications":[{"target":".","template":%q,"source":%q,"commit":null}]}`, s.Address+"@"+s.Ref, s.Address)
+}
+
+// sampleTemplate is the registered template the tests create from, at its
+// first version; newVersion moves it to its second.
+var sampleTemplate = store.Template{ID: "sample", Name: "Sample", Address: "https://git.example.invalid/example-org/sample",
+	Source: "https://git.example.invalid/example-org/sample", CurrentVersion: "1.0.0", CurrentTag: "1.0.0",
+	CurrentCommit: "1000000000000000000000000000000000000001"}
+
+// newVersion makes 2.0.0 the sample template's current version, as a
+// manager's upgrade of the template does.
+func (w *world) newVersion(t *testing.T) {
+	t.Helper()
+	_, err := w.data.AdvanceTemplate(context.Background(), "sample", "2.0.0", "v2.0.0", "2000000000000000000000000000000000000002",
+		func(a, b string) bool { return a != b })
+	if err != nil && !errors.Is(err, store.ErrNotNewer) {
+		t.Fatal(err)
+	}
 }
 
 // fakeRuntime records starts, stops and rebuilds. fail fails every
@@ -364,12 +388,14 @@ func newWorldWith(t *testing.T, opts jobs.Options) *world {
 	w.cancel = cancel
 	w.manager = jobs.NewManager(ctx, opts)
 	w.data = testData(t)
+	if _, err := w.data.RegisterTemplate(context.Background(), sampleTemplate, nil); err != nil {
+		t.Fatal(err)
+	}
 	w.rt.data = w.data
 	w.flows = New(Options{
 		Root:      root,
 		Data:      w.data,
 		Templates: w.tmpl,
-		Approved:  map[string]bool{"sample-v1": true, "sample-v2": true},
 		Remote:    &backup.Remote{URL: w.remote},
 		Runtime:   w.rt,
 	})
@@ -397,10 +423,18 @@ func (w *world) do(t *testing.T, method, path, body string) (int, string) {
 	return resp.StatusCode, string(data)
 }
 
-// startJob posts a job and returns it.
+// startJob posts a job and returns it: a create of template, and an upgrade
+// to the sample template's second version, which takes no template.
 func (w *world) startJob(t *testing.T, operation, name, template string) *jobs.Job {
 	t.Helper()
-	status, body := w.do(t, http.MethodPost, "/api/jobs", fmt.Sprintf(`{"operation":%q,"workspace":%q,"templateId":%q}`, operation, name, template))
+	request := fmt.Sprintf(`{"operation":%q,"workspace":%q,"templateId":%q}`, operation, name, template)
+	if template == "" {
+		if operation == "upgrade" {
+			w.newVersion(t)
+		}
+		request = fmt.Sprintf(`{"operation":%q,"workspace":%q}`, operation, name)
+	}
+	status, body := w.do(t, http.MethodPost, "/api/jobs", request)
 	if status != http.StatusAccepted {
 		t.Fatalf("start %s: %d %s", operation, status, body)
 	}
@@ -533,7 +567,7 @@ func treeNames(t *testing.T, c *object.Commit) []string {
 // createWorkspace runs a complete create of name.
 func (w *world) createWorkspace(t *testing.T, name string) {
 	t.Helper()
-	job := w.startJob(t, "create", name, "sample-v1")
+	job := w.startJob(t, "create", name, "sample")
 	waitWaiting(t, job, 0)
 	if status, body := w.answer(t, job, sessionAsking); status != http.StatusOK {
 		t.Fatalf("answer %d %s", status, body)

@@ -72,7 +72,7 @@ func TestHooksRunOnlyWhileTheirGenerateOrApplyRuns(t *testing.T) {
 	}
 	w.createWorkspace(t, "alpha")
 	folder := filepath.Join(w.root, "alpha")
-	if marker, err := os.ReadFile(filepath.Join(folder, "container-marker.txt")); err != nil || string(marker) != "runner:sample-v1\n" {
+	if marker, err := os.ReadFile(filepath.Join(folder, "container-marker.txt")); err != nil || string(marker) != "runner:sample\n" {
 		t.Fatalf("marker %q %v", marker, err)
 	}
 	generated := w.tmpl.token("generate")
@@ -102,7 +102,7 @@ func TestHooksRunOnlyWhileTheirGenerateOrApplyRuns(t *testing.T) {
 	if status, _ := postHook(t, runner, applied, folder); status != http.StatusForbidden {
 		t.Fatalf("after apply: %d", status)
 	}
-	if len(containers.commands) != 2 || containers.commands[1].Image != "runner:sample-v2" || containers.commands[0].Job == containers.commands[1].Job ||
+	if len(containers.commands) != 2 || containers.commands[1].Image != "runner:sample" || containers.commands[0].Job == containers.commands[1].Job ||
 		containers.commands[0].Folder != folder || containers.commands[1].Folder != "" || containers.commands[1].Target != candidate {
 		t.Fatalf("commands %+v", containers.commands)
 	}
@@ -122,7 +122,7 @@ func TestAHookWithoutARunnerImageFailsAsRunnerImageUnavailable(t *testing.T) {
 		status, kind := postHook(t, runner, w.tmpl.token("generate"), s.Target)
 		return nil, &templates.Error{Status: 500, Kind: "hook-io-failed", Message: "hook 0 failed: the workspace service refused the hook (" + kind + ") " + http.StatusText(status)}
 	}
-	job := w.startJob(t, "create", "alpha", "sample-v1")
+	job := w.startJob(t, "create", "alpha", "sample")
 	waitWaiting(t, job, 0)
 	w.answer(t, job, sessionAsking)
 	snap := waitEnded(t, job)

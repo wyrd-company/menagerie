@@ -69,12 +69,11 @@ func TestSignedInManagersAnswerInterviewsOfAnySize(t *testing.T) {
 	issuer.User = authtest.User{Subject: "subject-manager", Name: "Sample Manager", Groups: []string{auth.ManagersGroup}}
 	cfg := &config.Config{
 		WorkspaceRoot:   dir,
-		Templates:       []config.Template{{ID: "sample", Name: "Sample", Address: "file:///absent"}},
 		TemplateService: config.TemplateService{Socket: socket},
 		OIDC:            config.OIDC{Issuer: issuer.URL(), ClientID: clientID, RedirectURL: srv.URL + auth.CallbackPath},
 	}
 	// The composition run serves.
-	h, err = newHandler(cfg, root, testData(t), backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, manager, nil, nil)
+	h, err = newHandler(cfg, root, sampleData(t), backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, manager, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

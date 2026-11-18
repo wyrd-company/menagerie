@@ -61,7 +61,7 @@ func (f *fakeService) last() (string, string) {
 	return f.paths[len(f.paths)-1], f.bodies[len(f.bodies)-1]
 }
 
-var sel = Selector{Workspace: "alpha", Target: "/srv/workspaces/alpha", TemplateID: "sample"}
+var sel = Selector{Workspace: "alpha", Target: "/srv/workspaces/alpha", Address: "gh:example-org/kit", Ref: "1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567"}
 
 // session holds values a lossy decode would change: a 20-digit integer,
 // an exponent, an escaped character, HTML-significant text and member order.
@@ -88,7 +88,7 @@ func TestAnswersForwardTheSessionAndSubmissionText(t *testing.T) {
 			t.Fatal(err)
 		}
 		path, body := f.last()
-		want := `{"workspace":"alpha","target":"/srv/workspaces/alpha","templateId":"sample","session":` + session + `,"submission":` + submission + "}\n"
+		want := `{"workspace":"alpha","target":"/srv/workspaces/alpha","address":"gh:example-org/kit","ref":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","session":` + session + `,"submission":` + submission + "}\n"
 		if path != call.path || body != want {
 			t.Fatalf("request %s %s\nwant %s", path, body, want)
 		}
@@ -118,7 +118,7 @@ func TestStartRoutesCarryOnlyTheSelector(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, body := f.last()
-		if got != path || body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","templateId":"sample"}`+"\n" {
+		if got != path || body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","address":"gh:example-org/kit","ref":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567"}`+"\n" {
 			t.Fatalf("%s %s", got, body)
 		}
 		if reply.State != Completed || string(reply.Document) != "null" || reply.Warnings[0] != "w" {
@@ -134,7 +134,7 @@ func TestAReansweredUpgradeStartSaysSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, body := f.last()
-	if got != "/v1/upgrades" || body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","templateId":"sample","reanswer":true}`+"\n" {
+	if got != "/v1/upgrades" || body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","address":"gh:example-org/kit","ref":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","reanswer":true}`+"\n" {
 		t.Fatalf("%s %s", got, body)
 	}
 }
@@ -164,13 +164,13 @@ func TestApplyOutcomesAreTyped(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, body := f.last()
-			if got != path || body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","templateId":"sample","session":`+session+"}\n" {
+			if got != path || body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","address":"gh:example-org/kit","ref":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","session":`+session+"}\n" {
 				t.Fatalf("%s %s", got, body)
 			}
 			if _, err := apply(context.Background(), sel, json.RawMessage(session), "0a1b"); err != nil {
 				t.Fatal(err)
 			}
-			if _, body := f.last(); body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","templateId":"sample","session":`+session+`,"hookToken":"0a1b"}`+"\n" {
+			if _, body := f.last(); body != `{"workspace":"alpha","target":"/srv/workspaces/alpha","address":"gh:example-org/kit","ref":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","session":`+session+`,"hookToken":"0a1b"}`+"\n" {
 				t.Fatalf("with a hook token: %s", body)
 			}
 			if applied.Outcome != tc.outcome || applied.Outcome.Wrote() != tc.wrote || string(applied.Raw) != tc.reply {
@@ -251,5 +251,56 @@ func TestRepliesOfAnySizeAreReadWhole(t *testing.T) {
 	}
 	if len(reply.Session) != len(`{"big":""}`)+len(big) {
 		t.Fatalf("session of %d bytes", len(reply.Session))
+	}
+}
+
+func TestTemplateRoutesNameTheAddressAndDecodeStrictly(t *testing.T) {
+	f := newFake(t)
+	c := New(f.socket)
+	ctx := context.Background()
+
+	f.answer(200, `{"source":"gh:example-org/kit","reference":"1.0.0","base":"gh:example-org/kit"}`)
+	address, err := c.ReadAddress(ctx, "gh:example-org/kit@1.0.0")
+	if err != nil || address.Source != "gh:example-org/kit" || *address.Reference != "1.0.0" || address.Base != "gh:example-org/kit" {
+		t.Fatalf("address %+v, %v", address, err)
+	}
+	if path, body := f.last(); path != "/v1/templates/addresses" || body != `{"address":"gh:example-org/kit@1.0.0"}`+"\n" {
+		t.Fatalf("request %s %s", path, body)
+	}
+
+	f.answer(200, `{"source":"gh:example-org/kit","versions":[{"version":"1.0.0","tag":"v1.0.0","commit":"c1"}]}`)
+	versions, err := c.ListVersions(ctx, "gh:example-org/kit")
+	if err != nil || len(versions.Versions) != 1 || versions.Versions[0].Tag != "v1.0.0" {
+		t.Fatalf("versions %+v, %v", versions, err)
+	}
+	if path, body := f.last(); path != "/v1/templates/versions" || body != `{"address":"gh:example-org/kit"}`+"\n" {
+		t.Fatalf("request %s %s", path, body)
+	}
+
+	f.answer(200, `{"source":"gh:example-org/kit","commit":"c1","definition":true}`)
+	checked, err := c.Check(ctx, "gh:example-org/kit", "v1.0.0")
+	if err != nil || checked.Commit != "c1" || !checked.Definition {
+		t.Fatalf("check %+v, %v", checked, err)
+	}
+	if path, body := f.last(); path != "/v1/templates/checks" || body != `{"address":"gh:example-org/kit","ref":"v1.0.0"}`+"\n" {
+		t.Fatalf("request %s %s", path, body)
+	}
+
+	// A reply with a member this client does not know, or without the
+	// members it needs, is no answer.
+	for _, reply := range []string{
+		`{"source":"s","commit":"c","definition":true,"extra":1}`,
+		`{"source":"","commit":"c","definition":true}`,
+	} {
+		f.answer(200, reply)
+		var unavailable *UnavailableError
+		if _, err := c.Check(ctx, "gh:example-org/kit", "v1.0.0"); !errors.As(err, &unavailable) {
+			t.Fatalf("%s: %v", reply, err)
+		}
+	}
+	f.answer(400, `{"error":{"kind":"invalid-address","message":"the address is not a remote Git address"}}`)
+	var refusal *Error
+	if _, err := c.ReadAddress(ctx, "/srv/kit"); !errors.As(err, &refusal) || refusal.Kind != "invalid-address" || refusal.Status != 400 {
+		t.Fatalf("refusal %v", err)
 	}
 }

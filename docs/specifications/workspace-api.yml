@@ -35,6 +35,12 @@ description: >-
   key is listed too, in name order with the folders, with `state` `no-folder`
   and `containerId` null, so that a `delete` can remove what it holds; one
   that holds neither and that no create is making leaves the data.
+  `template` is the workspace's registered template, `{id, name}`, or null.
+  A folder listed for the first time joins the registered template whose
+  source its applied record `.toha.json` names for the workspace's root; a
+  workspace whose record names a source no registered template has keeps
+  working, with `template` null, and joins its template when a manager
+  registers that source.
   `activeJob` names the workspace's unfinished job. When Docker cannot
   answer, the request fails with `docker-unavailable` (503).
 
@@ -162,15 +168,68 @@ description: >-
   next apply or provisioning job.
 
 
-  `GET /api/templates` returns the approved templates' `id` and `name`.
+  Templates. Only registered templates can be used, and registering,
+  upgrading, editing or removing one needs no configuration change and no
+  restart. `GET /api/templates` lists them sorted by name, then by `id`,
+  each with `id`, `name`, `address`, the address without a ref,
+  `currentVersion`, `runnerImage`, null for the default, and `workspaces`,
+  the names of the workspaces that use it. A version is a release tag of the
+  template's repository, `MAJOR.MINOR.PATCH` with an optional leading `v`,
+  as the template service lists them.
+
+
+  `POST /api/templates` takes `{"name","address","runnerImage"}`,
+  `runnerImage` optional, and no other member. `name` is one line of 1 to
+  100 characters, `runnerImage` a Docker image reference, else 400
+  `invalid-request`; a body that is not that one object is 400
+  `invalid-request` too, and no refusal quotes a value. The address takes
+  the forms and credentials the user documentation lists, `#folder`
+  included, with no ref or a version's tag. Registration runs the minimum
+  checks in this order and refuses the template at the first that fails as
+  422 `template-check-failed`, with `check` naming it and a message that
+  names what failed and never quotes the address: `address`, the template
+  service reads and admits the address, so a folder, `file://`, a registry
+  name, `git://`, `http://` or a password is refused before any fetch;
+  `fetch`, the repository's versions can be listed; `version`, the list
+  holds at least one version and an address's ref is a version's tag;
+  `fetch` again, the current version can be fetched; `read`, Toha loads
+  the template's manifest and its folder holds no link outside its
+  checkout; `definition`, the template's content folder holds
+  `.devcontainer/devcontainer.json`, which the message names. A template
+  whose source is registered is refused 409 `template-exists`, naming that
+  registration, before any fetch. An unreachable template service answers
+  503 `template-service-unavailable`. The current version is the address's
+  tag, else the newest version, with the commit its check fetched.
+  Menagerie stores the address without its ref, and an `https` address
+  without user information. It answers 201 with the template and `Location:
+  /api/templates/{id}`. The `id` is permanent: the lower-case letters and
+  digits of the name, separated by single dashes, or `template` when the
+  name has none, with `-2`, `-3` and on added while it is taken.
+  Registering a template joins it to each workspace that has no template and
+  whose applied record names its source.
+
+
+  `POST /api/templates/{id}/upgrades` takes `{"version"}`. The template
+  service lists the repository's versions, and the version must be one of
+  them newer than the current one, else 409 `version-not-newer`; it then
+  passes the `fetch`, `read` and `definition` checks, else 422
+  `template-check-failed`, and becomes the current version with the commit
+  those checks fetched: 200 with the template. So a template's current
+  version moves only forward. `PATCH /api/templates/{id}` takes `name`,
+  `runnerImage` or both, `runnerImage` null for the default, under the
+  rules above, and answers 200 with the template; its address and source
+  do not change. `DELETE /api/templates/{id}` answers 204, and 409
+  `template-in-use` while a workspace uses the template, naming those
+  workspaces. Each answers 404 `unknown-template` for an id no template
+  has.
 
 
   `POST /api/jobs` starts an operation on a workspace. The operations are
   `start`, `stop`, `rebuild`, `commit` and `apply-policies` on an existing workspace folder,
   `apply-branch` on an existing workspace folder, which also names a
-  `branch`, and the interview operations `create` and `upgrade`, which also
-  name an approved template's `templateId`; `upgrade` also takes an optional
-  boolean `reanswer`. Any other operation is refused as
+  `branch`, and the interview operations `create`, which also names a
+  registered template's `templateId`, and `upgrade`, which takes no
+  `templateId` and an optional boolean `reanswer`. Any other operation is refused as
   `unknown-operation`. The service acquires the workspace's job slot before
   any work begins. A workspace has at most one unfinished job; another
   request for it gets 409 `workspace-busy` with the holder's id, while other
@@ -269,9 +328,21 @@ description: >-
   Interview operations. A create names a workspace that is a legal Git
   branch name, whose folder does not exist and that Menagerie's data does not
   hold, one being created or listed as `no-folder` included; otherwise it is
-  refused 409 `workspace-exists`. An upgrade names an existing workspace
-  folder. Both refuse an unapproved template as 404
-  `unknown-template`, before any job exists. The job asks the template
+  refused 409 `workspace-exists`; a `templateId` no template has is 404
+  `unknown-template`. Its job pins the template's current version and its
+  commit when it starts, and writes the workspace's data with that
+  template, so the template cannot be removed while the create runs. An
+  upgrade names an existing workspace folder and applies the current
+  version of the workspace's registered template, which its job pins when
+  it starts; a `templateId` given is 400 `invalid-request`. It is refused,
+  before any job exists, 409 `template-not-registered` when the workspace
+  has no registered template, and 409 `upgrade-not-needed` when its applied
+  record's ref is that version or a newer one, so no upgrade applies an
+  older version; a job whose workspace's applied record cannot be read, or
+  names a ref that is not a version, fails as `template-refused` before the
+  interview. The template service is named the template's address with
+  the pinned version's tag and commit, and refuses a tag that resolves to
+  another commit as `template-stale-revision`. The job asks the template
   service, over its Unix socket, for each interview reply and appends it as
   an `interview` event whose data is the reply's exact text:
   `{"session","state","document","warnings"}`. While questions remain the
@@ -315,8 +386,8 @@ description: >-
   prefixed `hook: `; captured streams go back to Toha only. A hook that
   found no runner image, or whose container failed, adds a console line
   that names the runner image, the stage that failed and the Engine
-  error's class. The runner image is the template entry's `runner-image`,
-  else the global `runner-image`, else Menagerie's own image. When none
+  error's class. The runner image is the registered template's runner
+  image, else the global `runner-image`, else Menagerie's own image. When none
   can be found or pulled, the job fails as `runner-image-unavailable`, or
   as `registry-credentials-unavailable` when the pull's credentials could
   not be read.
@@ -721,7 +792,15 @@ description: >-
 validation-criteria: >-
   `go test ./backend/internal/api/` checks that the routes the server
   registers equal the OpenAPI paths and methods, and exercises each response
-  and error contract with a held runtime. `go test ./backend/internal/jobs/`
+  and error contract with a held runtime, the template routes with a held
+  template service: registration, its refusals by check without quoting
+  the address, the order of the list, editing, upgrading only to a newer
+  version, removal and its refusal while a workspace uses the template, and
+  a folder listed for the first time joining its template. `go test
+  ./backend/internal/registry/` runs each registration check, template ids,
+  forward-only upgrades, the version rules case for case with the template
+  service's, the applied record's source and ref, and the `templates`
+  import. `go test ./backend/internal/jobs/`
   drives time limits with a manual clock: job, operation and phase limits,
   the pause while waiting, the slot held until cancelled work returns,
   timers that run late against a phase change, a wait or the job's end,
@@ -730,7 +809,10 @@ validation-criteria: >-
   the composed server and receives its `job-failed` alert. `go test
   ./backend/internal/workflows/` runs create and upgrade through the API
   with a held template service and a real local workspace repository,
-  covering waiting, single answers, flow ends, failures and slot release;
+  covering waiting, single answers, flow ends, failures and slot release,
+  the version a create and an upgrade pin, `upgrade-not-needed`,
+  `template-not-registered` and an applied record whose ref is not a
+  version;
   `go test ./backend/internal/backup/` pushes through an isolated SSH server
   and agent, and pushes and fetches through an isolated HTTPS Git host
   with a token, whose every failure names neither the URL nor the token;

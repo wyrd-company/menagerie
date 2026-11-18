@@ -21,7 +21,7 @@ import (
 
 func (w *world) create(t *testing.T, name string) (*jobs.Job, jobs.Snapshot) {
 	t.Helper()
-	job := w.startJob(t, "create", name, "sample-v1")
+	job := w.startJob(t, "create", name, "sample")
 	waitWaiting(t, job, 0)
 	w.answer(t, job, sessionAsking)
 	return job, waitEnded(t, job)
@@ -192,7 +192,7 @@ func TestAFailedArchiveIsNotLostToALaterPush(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(w.root, "alpha")); err != nil {
 		t.Fatal(err)
 	}
-	job := w.startJob(t, "create", "alpha", "sample-v1")
+	job := w.startJob(t, "create", "alpha", "sample")
 	waitWaiting(t, job, 0)
 	repair := w.breakRemote(t)
 	w.answer(t, job, sessionAsking)

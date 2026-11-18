@@ -37,6 +37,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/openbaokv"
 	"github.com/wyrd-company/menagerie/backend/internal/provisioning"
+	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/t3code"
@@ -138,7 +139,7 @@ func run(configPath string) error {
 	if sockets != nil {
 		defer sockets.Close()
 	}
-	parts := throwawayContainers(ctx, cfg, root, docker, &opts)
+	parts := throwawayContainers(ctx, cfg, root, docker, data, &opts)
 	runtime := devcontainer.New(docker, opts)
 	if err := prepareData(ctx, cfg, root, data, runtime, provisioning.Records{Folder: provisioning.DefaultRecords}); err != nil {
 		return err
@@ -313,8 +314,8 @@ type containers struct {
 // services' user, with the configured runner images, removes the ones a
 // previous run left, and gives the devcontainer runtime options their
 // initializeCommand runner.
-func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspace.Root, docker *dockerclient.Client, opts *devcontainer.Options) containers {
-	images := runnerImages(cfg, docker)
+func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspace.Root, docker *dockerclient.Client, data *store.Store, opts *devcontainer.Options) containers {
+	images := runnerImages(cfg, docker, data)
 	runner := throwaway.NewDocker(docker, throwaway.DockerOptions{
 		Root:        root.Path(),
 		User:        throwaway.ServiceUser(),
@@ -389,12 +390,7 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 // container runs through the provisioning steps, which keep what they provision
 // in data.
 func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) *api.Server {
-	approved := make([]api.Template, 0, len(cfg.Templates))
-	ids := make(map[string]bool, len(cfg.Templates))
-	for _, t := range cfg.Templates {
-		approved = append(approved, api.Template{ID: t.ID, Name: t.Name})
-		ids[t.ID] = true
-	}
+	service := templates.New(cfg.TemplateService.Socket)
 	var image func(context.Context, string) (string, error)
 	if images != nil {
 		image = images.ForTemplate
@@ -413,8 +409,7 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 		Policies:     policySource,
 		Root:         root,
 		Data:         data,
-		Templates:    templates.New(cfg.TemplateService.Socket),
-		Approved:     ids,
+		Templates:    service,
 		Remote:       remote,
 		Runtime:      steps,
 		Hooks:        hooks,
@@ -446,7 +441,8 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 		// Runs in the workspace's own container, as the t3code-server
 		// Feature's service user.
 		PairingTokens: t3code.NewMinter(runtime.Docker()),
-		Templates:     approved,
+		Registry:      &registry.Registry{Data: data, Templates: service, Root: root},
+		AppliedSource: registry.Source,
 		UI:            web.FS,
 	})
 	return server
@@ -551,16 +547,21 @@ func jobOptions(cfg *config.Config) (jobs.Options, *alerts.Webhook, error) {
 	return opts, webhook, nil
 }
 
-// runnerImages chooses the throwaway containers' images: each template's
-// runner-image, else the global one, else Menagerie's own image.
-func runnerImages(cfg *config.Config, docker throwaway.Inspector) *throwaway.Images {
-	byTemplate := map[string]string{}
-	for _, t := range cfg.Templates {
-		if t.RunnerImage != "" {
-			byTemplate[t.ID] = t.RunnerImage
+// runnerImages chooses the throwaway containers' images: each registered
+// template's runner image in data, else the global one, else Menagerie's own
+// image.
+func runnerImages(cfg *config.Config, docker throwaway.Inspector, data *store.Store) *throwaway.Images {
+	images := &throwaway.Images{Default: cfg.RunnerImage, Docker: docker}
+	if data != nil {
+		images.Template = func(ctx context.Context, id string) (string, error) {
+			tpl, err := data.Template(ctx, id)
+			if errors.Is(err, store.ErrNoTemplate) {
+				return "", nil
+			}
+			return tpl.RunnerImage, err
 		}
 	}
-	return &throwaway.Images{Default: cfg.RunnerImage, Templates: byTemplate, Docker: docker}
+	return images
 }
 
 // pullCredentials gives runner image pulls the credential source of the

@@ -30,6 +30,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/registrycreds"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
@@ -67,20 +68,18 @@ type Runtime interface {
 // Options compose the workflows.
 type Options struct {
 	Root *workspace.Root
-	// Data is Menagerie's data, which holds a workspace from the start of its
-	// create.
+	// Data is Menagerie's data, which holds the registered templates and a
+	// workspace from the start of its create.
 	Data      *store.Store
 	Policies  api.PolicySource
 	Templates Templates
-	// Approved holds the approved template ids.
-	Approved map[string]bool
 	// Remote is the workspace repository backups are pushed to.
 	Remote  *backup.Remote
 	Runtime Runtime
 	// Hooks runs the template service's hooks in throwaway containers.
 	// Nil refuses every hook.
 	Hooks *throwaway.HookRunner
-	// RunnerImage returns the runner image of a template's hooks.
+	// RunnerImage returns the runner image of a registered template's hooks.
 	RunnerImage func(ctx context.Context, templateID string) (string, error)
 	// RestartLimit bounds the start of a devcontainer an apply refused
 	// after stopping it; zero is DefaultRestartLimit.
@@ -113,6 +112,12 @@ func (w *Workflows) Operations() api.Operations {
 	}
 }
 
+// Request kinds of the create and upgrade operations.
+const (
+	KindTemplateNotRegistered = "template-not-registered"
+	KindUpgradeNotNeeded      = "upgrade-not-needed"
+)
+
 // Job error kinds of the create and upgrade operations, beside the
 // container operations' kinds.
 const (
@@ -126,7 +131,8 @@ const (
 	KindBackupFailed        = "backup-failed"
 )
 
-// request checks the members both operations share. It changes nothing.
+// request checks the workspace name both operations share. It changes
+// nothing.
 func (w *Workflows) request(req api.JobRequest) (string, error) {
 	if err := workspace.ValidName(req.Workspace); err != nil {
 		return "", &api.RequestError{Status: http.StatusBadRequest, Kind: "invalid-workspace-name", Message: err.Error()}
@@ -134,20 +140,23 @@ func (w *Workflows) request(req api.JobRequest) (string, error) {
 	if _, err := backup.Branch(req.Workspace); err != nil {
 		return "", &api.RequestError{Status: http.StatusBadRequest, Kind: "invalid-workspace-name", Message: err.Error()}
 	}
-	if req.TemplateID == "" {
-		return "", &api.RequestError{Status: http.StatusBadRequest, Kind: "invalid-request", Message: "templateId is required"}
-	}
-	if !w.opts.Approved[req.TemplateID] {
-		return "", &api.RequestError{Status: http.StatusNotFound, Kind: "unknown-template", Message: fmt.Sprintf("template %q is not approved", req.TemplateID)}
-	}
 	return w.opts.Root.FolderPath(req.Workspace)
 }
 
-// create refuses a workspace whose folder exists, and one Menagerie's data
+// create names a registered template, whose current version its job pins.
+// It refuses a workspace whose folder exists, and one Menagerie's data
 // holds: being created, or listed with no folder.
 func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 	folder, err := w.request(req)
 	if err != nil {
+		return nil, err
+	}
+	if req.TemplateID == "" {
+		return nil, &api.RequestError{Status: http.StatusBadRequest, Kind: "invalid-request", Message: "templateId is required"}
+	}
+	if _, err := w.opts.Data.Template(context.Background(), req.TemplateID); errors.Is(err, store.ErrNoTemplate) {
+		return nil, &api.RequestError{Status: http.StatusNotFound, Kind: api.KindUnknownTemplate, Message: fmt.Sprintf("no registered template has the id %q", req.TemplateID)}
+	} else if err != nil {
 		return nil, err
 	}
 	if _, err := os.Lstat(folder); !errors.Is(err, os.ErrNotExist) {
@@ -163,9 +172,16 @@ func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 	return (&creation{w: w, name: req.Workspace, folder: folder, template: req.TemplateID, policies: req.Policies}).run, nil
 }
 
+// upgrade applies the current version of the workspace's registered
+// template. It takes no templateId, and it is refused when the workspace has
+// no registered template and when its applied record's ref is that version
+// or a newer one, so no upgrade applies an older version.
 func (w *Workflows) upgrade(req api.JobRequest) (jobsRunner, error) {
 	if _, err := w.request(req); err != nil {
 		return nil, err
+	}
+	if req.TemplateID != "" {
+		return nil, &api.RequestError{Status: http.StatusBadRequest, Kind: "invalid-request", Message: "an upgrade takes no templateId: it applies the current version of the workspace's template"}
 	}
 	folder, err := w.opts.Root.Folder(req.Workspace)
 	if errors.Is(err, workspace.ErrNotFound) {
@@ -174,7 +190,24 @@ func (w *Workflows) upgrade(req api.JobRequest) (jobsRunner, error) {
 	if err != nil {
 		return nil, err
 	}
-	return (&upgrading{w: w, name: req.Workspace, folder: folder, template: req.TemplateID, reanswer: req.Reanswer}).run, nil
+	ctx := context.Background()
+	id, err := w.opts.Data.WorkspaceTemplate(ctx, req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindTemplateNotRegistered, Message: fmt.Sprintf("workspace %s has no registered template; register the template its applied record names, which joins it", req.Workspace)}
+	}
+	tpl, err := w.opts.Data.Template(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if applied, err := registry.ReadApplied(folder); err == nil {
+		if _, ok := registry.ParseVersion(applied.Ref); ok && !registry.Newer(tpl.CurrentVersion, applied.Ref) {
+			return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindUpgradeNotNeeded, Message: fmt.Sprintf("workspace %s already has version %s of template %s, whose current version is %s", req.Workspace, applied.Ref, tpl.ID, tpl.CurrentVersion)}
+		}
+	}
+	return (&upgrading{w: w, name: req.Workspace, folder: folder, template: id, reanswer: req.Reanswer}).run, nil
 }
 
 // start starts a workspace, and finishes a create that failed after
@@ -201,8 +234,10 @@ func (w *Workflows) start(req api.JobRequest) (jobsRunner, error) {
 	}, nil
 }
 
-func (w *Workflows) selector(name, folder, template string) templates.Selector {
-	return templates.Selector{Workspace: name, Target: folder, TemplateID: template}
+// selector names the workspace and the template version a job pinned: its
+// registered template's address with the current version's tag and commit.
+func (w *Workflows) selector(name, folder string, tpl store.Template) templates.Selector {
+	return templates.Selector{Workspace: name, Target: folder, Address: tpl.Address, Ref: tpl.CurrentTag, Commit: tpl.CurrentCommit}
 }
 
 // hooks is the hook grant of one generate or apply request. Its zero

@@ -103,7 +103,6 @@ func newMenagerie(t *testing.T) *menagerie {
 		Status:     m.runtime,
 		Jobs:       m.jobs,
 		Operations: api.ContainerOperations(root, m.runtime),
-		Templates:  []api.Template{{ID: "sample-template", Name: "Sample"}},
 		UI: fstest.MapFS{
 			"index.html":    {Data: []byte("<!doctype html><title>ui-index</title>")},
 			"assets/app.js": {Data: []byte("ui-asset")},

@@ -5,11 +5,13 @@
 // ---
 
 // Package store keeps Menagerie's own data in one SQLite database that only
-// the workspace service opens: the workspaces, each container name Menagerie
-// bound and each Xolotl key it issued, and the marks of the first-start
-// imports. Every change is one transaction and foreign keys are enforced, so
-// a constraint, not a scan of files, keeps a container name or a key with one
-// workspace at a time. The schema's version is the database's user_version: an
+// the workspace service opens: the registered templates, the workspaces and
+// their templates, each container name Menagerie bound and each Xolotl key it
+// issued, the policy settings and selections, and the marks of the
+// first-start imports. Every change is one transaction and foreign keys are
+// enforced, so a constraint, not a scan of files, keeps a container name or a
+// key with one workspace at a time, one registration per template source, and
+// a template that a workspace uses in place. The schema's version is the database's user_version: an
 // open upgrades an older schema in one transaction and refuses a newer one. The
 // database holds no secret.
 package store
@@ -89,6 +91,22 @@ var migrations = []string{
 	ALTER TABLE workspaces ADD COLUMN policy_values TEXT NOT NULL DEFAULT '{}';
 	ALTER TABLE workspaces ADD COLUMN xolotl_identity TEXT;
 	ALTER TABLE workspaces ADD COLUMN selection_import_fallback TEXT NOT NULL DEFAULT '{}';`,
+	// 4: the registered templates, each with its current version, the tag
+	// that gives it and its commit, null for an imported template until a
+	// check records it; and each workspace's template, which a template
+	// that a workspace uses cannot be removed from under.
+	`CREATE TABLE templates (
+		id TEXT PRIMARY KEY CHECK (id != ''),
+		name TEXT NOT NULL CHECK (name != ''),
+		address TEXT NOT NULL CHECK (address != ''),
+		source TEXT NOT NULL UNIQUE CHECK (source != ''),
+		runner_image TEXT CHECK (runner_image != ''),
+		current_version TEXT NOT NULL CHECK (current_version != ''),
+		current_tag TEXT NOT NULL CHECK (current_tag != ''),
+		current_commit TEXT CHECK (current_commit != '')
+	);
+	ALTER TABLE workspaces ADD COLUMN template TEXT REFERENCES templates(id);
+	CREATE INDEX workspaces_template ON workspaces(template);`,
 }
 
 // SchemaVersion is the version of the schema this Menagerie reads and writes.
@@ -267,6 +285,19 @@ func (s *Store) Import(ctx context.Context, id int, fn func(*Tx) error) (bool, e
 		return err
 	})
 	return ran && err == nil, err
+}
+
+// Imported says that the import's mark is in the data.
+func (s *Store) Imported(ctx context.Context, id int) (done bool, err error) {
+	err = s.Update(ctx, func(t *Tx) error {
+		var n int
+		if err := t.tx.QueryRowContext(ctx, `SELECT count(*) FROM imports WHERE id = ?`, id).Scan(&n); err != nil {
+			return fmt.Errorf("Menagerie's data: %w", err)
+		}
+		done = n > 0
+		return nil
+	})
+	return done, err
 }
 
 // nullable stores "" as NULL.

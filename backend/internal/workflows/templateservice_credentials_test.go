@@ -54,8 +54,7 @@ func TestAJobLimitEndsTheTemplateServicesCredentialRequest(t *testing.T) {
 		limits:      jobs.Limits{Phases: map[string]time.Duration{"interview": 2 * time.Second}},
 		templates:   map[string]string{"private": host + "/example-org/sample-kit.git@v1"},
 		credentials: route,
-		// Both of curl's TLS backends read it.
-		env: []string{"GIT_SSL_CAINFO=" + authority},
+		authorities: []string{authority},
 	})
 	t.Cleanup(func() { close(release) })
 	job, _ := a.drive(t, "create", "alpha", "private", nil)
@@ -157,9 +156,9 @@ func TestAJobLimitStopsAStalledTemplateSchemaLoad(t *testing.T) {
 	gitCLI(t, source, "commit", "-q", "-m", "schema")
 	a := newAcceptWith(t, &fakeRuntime{}, acceptOptions{
 		containers: localContainers{}, image: "runner:local",
-		limits:    jobs.Limits{Phases: map[string]time.Duration{"interview": 2 * time.Second}},
-		templates: map[string]string{"schema": "file://" + source},
-		env:       []string{"GIT_SSL_CAINFO=" + authority},
+		limits:      jobs.Limits{Phases: map[string]time.Duration{"interview": 2 * time.Second}},
+		local:       map[string]string{"schema": source},
+		authorities: []string{authority},
 	})
 	for range 2 {
 		status, body := a.post(t, "/api/jobs", `{"operation":"create","workspace":"alpha","templateId":"schema"}`)

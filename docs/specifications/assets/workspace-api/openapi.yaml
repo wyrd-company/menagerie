@@ -173,10 +173,10 @@ paths:
   /api/templates:
     get:
       operationId: listTemplates
-      summary: The approved template list.
+      summary: The registered templates.
       responses:
         "200":
-          description: Approved templates in configuration order.
+          description: Registered templates, sorted by name, then by id.
           content:
             application/json:
               schema:
@@ -188,6 +188,121 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Template"
+        "500":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: registerTemplate
+      summary: Register a template from its address, once it passes the minimum checks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemplateRegistration"
+      responses:
+        "201":
+          description: The registered template.
+          headers:
+            Location:
+              description: /api/templates/{id}
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/templates/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      operationId: editTemplate
+      summary: Rename a template or change its runner image.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemplateEdit"
+      responses:
+        "200":
+          description: The template as edited.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: removeTemplate
+      summary: Remove a template no workspace uses.
+      responses:
+        "204":
+          description: Removed.
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/templates/{id}/upgrades:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: upgradeTemplate
+      summary: Make a newer version of the template's repository its current version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              additionalProperties: false
+              properties:
+                version:
+                  type: string
+                  description: A version of the repository newer than the current one, such as 1.1.0.
+      responses:
+        "200":
+          description: The template at its new current version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/jobs:
     get:
       operationId: listJobs
@@ -438,7 +553,7 @@ components:
           $ref: "#/components/schemas/PolicySettings"
     Workspace:
       type: object
-      required: [name, state, containerId, activeJob, policies, needsChoice, selectionRevision, appliedRevision, applyFailure, selectionImported, xolotlKey]
+      required: [name, state, containerId, activeJob, policies, needsChoice, selectionRevision, appliedRevision, applyFailure, selectionImported, xolotlKey, template]
       additionalProperties: false
       properties:
         policies:
@@ -462,6 +577,20 @@ components:
           type: array
           items:
             type: string
+        template:
+          description: >-
+            The workspace's registered template, or null: a workspace whose
+            applied record names a source no registered template has.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [id, name]
+              additionalProperties: false
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
         name:
           type: string
         state:
@@ -499,13 +628,61 @@ components:
           format: date-time
     Template:
       type: object
-      required: [id, name]
+      required: [id, name, address, currentVersion, runnerImage, workspaces]
       additionalProperties: false
       properties:
         id:
           type: string
+          pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+          description: Permanent, made from the name when the template is registered.
         name:
           type: string
+        address:
+          type: string
+          description: >-
+            The template's address without a ref; an https address has no
+            user information.
+        currentVersion:
+          type: string
+          description: The version a create generates and an upgrade applies, such as 1.2.0.
+        runnerImage:
+          type: [string, "null"]
+          description: The image of the throwaway containers that run its hooks; null for the default.
+        workspaces:
+          type: array
+          description: The names of the workspaces that use it.
+          items:
+            type: string
+    TemplateRegistration:
+      type: object
+      required: [name, address]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: One line of 1 to 100 characters.
+        address:
+          type: string
+          description: >-
+            gh:owner/repository, git@host:path, ssh:// or https://, with an
+            optional #folder, and no ref or a version's tag; never a
+            password.
+        runnerImage:
+          type: string
+          description: A Docker image reference.
+    TemplateEdit:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        runnerImage:
+          type: [string, "null"]
+          description: A Docker image reference, or null for the default.
     JobRequest:
       type: object
       required: [operation, workspace]
@@ -522,8 +699,10 @@ components:
         templateId:
           type: string
           description: >-
-            Required by create and upgrade: an approved template's id. For
-            an upgrade it names the template version to upgrade to.
+            Required by create, and refused on upgrade: a registered
+            template's id, whose current version and commit the create's job
+            pins. An upgrade applies the current version of the workspace's
+            own template.
         branch:
           type: string
           description: >-
@@ -771,6 +950,12 @@ components:
                 - workspace-busy
                 - workspace-exists
                 - unknown-template
+                - template-check-failed
+                - template-exists
+                - template-in-use
+                - template-not-registered
+                - version-not-newer
+                - upgrade-not-needed
                 - job-not-found
                 - job-not-waiting
                 - template-service-unavailable
@@ -783,3 +968,9 @@ components:
             activeJobId:
               type: string
               description: Present with workspace-busy.
+            check:
+              type: string
+              description: >-
+                Present with template-check-failed: the first registration
+                check that failed.
+              enum: [address, fetch, version, read, definition]

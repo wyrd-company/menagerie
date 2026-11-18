@@ -30,7 +30,7 @@ func TestARejectedOrRefusedAnswerKeepsTheJobWaiting(t *testing.T) {
 		}
 		return reply(templates.Completed, sessionDone, "null"), nil
 	}
-	job := w.startJob(t, "create", "alpha", "sample-v1")
+	job := w.startJob(t, "create", "alpha", "sample")
 	last := waitWaiting(t, job, 0)
 	if status, body := w.answer(t, job, sessionAsking); status != 200 || !strings.Contains(body, `"errors":{"label":"required"}`) {
 		t.Fatalf("rejected %d %s", status, body)
@@ -67,7 +67,7 @@ func TestOnlyOneAnswerAtATimeAndTheSlotIsHeldThroughout(t *testing.T) {
 		<-hold
 		return reply(templates.Completed, sessionDone, "null"), nil
 	}
-	job := w.startJob(t, "create", "alpha", "sample-v1")
+	job := w.startJob(t, "create", "alpha", "sample")
 	waitWaiting(t, job, 0)
 
 	// The waiting job holds the workspace's slot, and its data refuses a second
@@ -75,10 +75,10 @@ func TestOnlyOneAnswerAtATimeAndTheSlotIsHeldThroughout(t *testing.T) {
 	if active, ok := w.manager.Active("alpha"); !ok || active.ID() != job.ID() {
 		t.Fatalf("the slot is not held by %s", job.ID())
 	}
-	if status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"alpha","templateId":"sample-v1"}`); status != 409 || !strings.Contains(body, `"kind":"workspace-exists"`) {
+	if status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"alpha","templateId":"sample"}`); status != 409 || !strings.Contains(body, `"kind":"workspace-exists"`) {
 		t.Fatalf("second create %d %s", status, body)
 	}
-	other := w.startJob(t, "create", "beta", "sample-v1")
+	other := w.startJob(t, "create", "beta", "sample")
 	waitWaiting(t, other, 0)
 
 	first := make(chan string, 1)
@@ -119,7 +119,7 @@ func TestAnswersRouteChecksTheJobAndBody(t *testing.T) {
 	if status, body := w.do(t, http.MethodPost, "/api/jobs/absent/answers", `{"session":{},"submission":{}}`); status != 404 || !strings.Contains(body, "job-not-found") {
 		t.Fatalf("unknown job %d %s", status, body)
 	}
-	job := w.startJob(t, "create", "alpha", "sample-v1")
+	job := w.startJob(t, "create", "alpha", "sample")
 	waitWaiting(t, job, 0)
 	for _, body := range []string{
 		``, `{}`, `{"session":{}}`, `{"session":null,"submission":{}}`, `{"session":{},"submission":[]}`,
@@ -143,7 +143,7 @@ func TestAFlowEndEndsTheJobWithoutWriting(t *testing.T) {
 	w.tmpl.answerInterview = func(templates.Selector, json.RawMessage, json.RawMessage) (*templates.Reply, error) {
 		return reply(templates.Ended, sessionDone, `{"status":"stopped"}`), nil
 	}
-	job := w.startJob(t, "create", "alpha", "sample-v1")
+	job := w.startJob(t, "create", "alpha", "sample")
 	waitWaiting(t, job, 0)
 	if status, body := w.answer(t, job, sessionAsking); status != 200 || !strings.Contains(body, `"state":"ended"`) {
 		t.Fatalf("%d %s", status, body)
@@ -158,7 +158,7 @@ func TestAFlowEndEndsTheJobWithoutWriting(t *testing.T) {
 	w.tmpl.startInterview = func(templates.Selector) (*templates.Reply, error) {
 		return reply(templates.Ended, sessionDone, `{"status":"aborted"}`), nil
 	}
-	again := w.startJob(t, "create", "alpha", "sample-v1")
+	again := w.startJob(t, "create", "alpha", "sample")
 	if snap := waitEnded(t, again); snap.State != jobs.Ended {
 		t.Fatalf("immediate end %+v", snap)
 	}
@@ -206,7 +206,7 @@ func TestAnAnswerCarriesASessionOfAnySize(t *testing.T) {
 		gotSession, gotSubmission = string(session), string(submission)
 		return &templates.Reply{Raw: json.RawMessage(reply), Session: json.RawMessage(`{"grown":"` + big + big + `","n":1.50}`), State: templates.Completed, Document: json.RawMessage("null")}, nil
 	}
-	job := w.startJob(t, "create", "alpha", "sample-v1")
+	job := w.startJob(t, "create", "alpha", "sample")
 	waitWaiting(t, job, 0)
 	submission := `{"template":"sample@1","answers":{"label":"` + big + `"}}`
 	body := `{"session":` + session + `,"submission":` + submission + `}`

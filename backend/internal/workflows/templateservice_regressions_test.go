@@ -36,7 +36,7 @@ type interviewReply struct {
 // answers, with its first reply.
 func (a *accept) startWaiting(t *testing.T, operation, name, template string) (*jobs.Job, interviewReply) {
 	t.Helper()
-	status, body := a.post(t, "/api/jobs", fmt.Sprintf(`{"operation":%q,"workspace":%q,"templateId":%q}`, operation, name, template))
+	status, body := a.post(t, "/api/jobs", a.request(t, operation, name, template))
 	if status != 202 {
 		t.Fatalf("start: %d %s", status, body)
 	}

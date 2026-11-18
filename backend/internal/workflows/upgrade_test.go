@@ -19,7 +19,7 @@ import (
 // returns the job when it ends.
 func (w *world) upgraded(t *testing.T) (*jobs.Job, jobs.Snapshot) {
 	t.Helper()
-	job := w.startJob(t, "upgrade", "alpha", "sample-v2")
+	job := w.startJob(t, "upgrade", "alpha", "")
 	waitWaiting(t, job, 0)
 	if status, body := w.answer(t, job, sessionAsking); status != http.StatusOK {
 		t.Fatalf("answer %d %s", status, body)
@@ -61,7 +61,7 @@ func TestUpgradeBacksUpLocalChangesBeforeTheInterview(t *testing.T) {
 		t.Fatalf("apply session %s", w.tmpl.session("apply-upgrade"))
 	}
 	history := w.remoteHistory(t, "alpha")
-	if len(history) != 3 || fileAt(t, history[0], "added.txt") != "new in v2\n" || fileAt(t, history[0], ".toha.json") != `{"applications":[{"v":2}]}` || fileAt(t, history[0], "local.txt") != "first: operator\n" {
+	if len(history) != 3 || fileAt(t, history[0], "added.txt") != "new in v2\n" || !strings.Contains(fileAt(t, history[0], ".toha.json"), `@v2.0.0"`) || fileAt(t, history[0], "local.txt") != "first: operator\n" {
 		t.Fatalf("upgraded backup %v", history)
 	}
 	if history[2].NumParents() != 0 {
@@ -79,7 +79,7 @@ func TestAnUpgradeWithoutLocalChangesStillPushes(t *testing.T) {
 	w := newWorld(t)
 	// The create's backup fails: the remote branch is missing.
 	w.flows.opts.Remote.URL = filepath.Join(t.TempDir(), "absent.git")
-	job := w.startJob(t, "create", "alpha", "sample-v1")
+	job := w.startJob(t, "create", "alpha", "sample")
 	waitWaiting(t, job, 0)
 	w.answer(t, job, sessionAsking)
 	if snap := waitEnded(t, job); snap.Error == nil || snap.Error.Kind != KindBackupFailed {
@@ -150,7 +150,7 @@ func TestAnAlreadyCurrentUpgradeChangesNothing(t *testing.T) {
 	w.tmpl.applyUpgrade = func(templates.Selector) (*templates.Applied, error) {
 		return appliedReply(templates.AlreadyCurrent, nil, nil), nil
 	}
-	job := w.startJob(t, "upgrade", "alpha", "sample-v1")
+	job := w.startJob(t, "upgrade", "alpha", "")
 	snap := waitEnded(t, job)
 	if snap.State != jobs.Succeeded || !strings.Contains(logText(job), "already current") {
 		t.Fatalf("%+v %+v", snap, snap.Error)
@@ -169,9 +169,10 @@ func TestAReansweredUpgradeAsksTheTemplateServiceToReanswer(t *testing.T) {
 	w.tmpl.applyUpgrade = func(templates.Selector) (*templates.Applied, error) {
 		return appliedReply(templates.AlreadyCurrent, nil, nil), nil
 	}
+	w.newVersion(t)
 	for _, body := range []string{
-		`{"operation":"upgrade","workspace":"alpha","templateId":"sample-v1","reanswer":true}`,
-		`{"operation":"upgrade","workspace":"alpha","templateId":"sample-v1"}`,
+		`{"operation":"upgrade","workspace":"alpha","reanswer":true}`,
+		`{"operation":"upgrade","workspace":"alpha"}`,
 	} {
 		status, reply := w.do(t, http.MethodPost, "/api/jobs", body)
 		if status != http.StatusAccepted {
@@ -239,7 +240,7 @@ func TestUpgradeFailuresAreVisibleAndReleaseTheSlot(t *testing.T) {
 			w := newWorld(t)
 			w.createWorkspace(t, "alpha")
 			tc.prepare(t, w)
-			job := w.startJob(t, "upgrade", "alpha", "sample-v2")
+			job := w.startJob(t, "upgrade", "alpha", "")
 			var snap jobs.Snapshot
 			if tc.before {
 				snap = waitEnded(t, job)
@@ -270,14 +271,64 @@ func TestUpgradeFailuresAreVisibleAndReleaseTheSlot(t *testing.T) {
 func TestAnUpgradeWaitingForAnswersHoldsOnlyItsWorkspace(t *testing.T) {
 	w := newWorld(t)
 	w.createWorkspace(t, "alpha")
-	job := w.startJob(t, "upgrade", "alpha", "sample-v2")
+	job := w.startJob(t, "upgrade", "alpha", "")
 	waitWaiting(t, job, 0)
-	if status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"upgrade","workspace":"alpha","templateId":"sample-v2"}`); status != 409 || !strings.Contains(body, "workspace-busy") {
+	if status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"upgrade","workspace":"alpha"}`); status != 409 || !strings.Contains(body, "workspace-busy") {
 		t.Fatalf("%d %s", status, body)
 	}
 	w.createWorkspace(t, "beta")
 	submission := json.RawMessage(`{"template":"sample@1","answers":{}}`)
 	if _, err := w.flows.Answer(t.Context(), "absent", json.RawMessage(`{}`), submission); err == nil {
 		t.Fatal("answer to an unknown interview accepted")
+	}
+}
+
+func TestAnUpgradeAppliesItsTemplatesCurrentVersionAndMovesOnlyForward(t *testing.T) {
+	w := newWorld(t)
+	var created, upgraded templates.Selector
+	generate := w.tmpl.generate
+	w.tmpl.generate = func(s templates.Selector) (*templates.Applied, error) {
+		created = s
+		return generate(s)
+	}
+	w.createWorkspace(t, "alpha")
+	if created.Address != sampleTemplate.Address || created.Ref != "1.0.0" || created.Commit != sampleTemplate.CurrentCommit {
+		t.Fatalf("create pinned %+v", created)
+	}
+	// The workspace has the template's current version.
+	status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"upgrade","workspace":"alpha"}`)
+	if status != http.StatusConflict || !strings.Contains(body, `"kind":"`+KindUpgradeNotNeeded+`"`) || !strings.Contains(body, "1.0.0") {
+		t.Fatalf("%d %s", status, body)
+	}
+	apply := w.tmpl.applyUpgrade
+	w.tmpl.applyUpgrade = func(s templates.Selector) (*templates.Applied, error) {
+		upgraded = s
+		return apply(s)
+	}
+	if _, snap := w.upgraded(t); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if upgraded.Address != sampleTemplate.Address || upgraded.Ref != "v2.0.0" || upgraded.Commit != "2000000000000000000000000000000000000002" {
+		t.Fatalf("upgrade pinned %+v", upgraded)
+	}
+	// Its record now names the current version, so a second upgrade is not needed.
+	status, body = w.do(t, http.MethodPost, "/api/jobs", `{"operation":"upgrade","workspace":"alpha"}`)
+	if status != http.StatusConflict || !strings.Contains(body, KindUpgradeNotNeeded) {
+		t.Fatalf("%d %s", status, body)
+	}
+}
+
+func TestAnUpgradeOfARecordWhoseRefIsNoVersionIsRefusedBeforeTheInterview(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	folder := filepath.Join(w.root, "alpha")
+	writeFile(t, folder, ".toha.json", appliedRecord(templates.Selector{Address: sampleTemplate.Address, Ref: "main"}))
+	job := w.startJob(t, "upgrade", "alpha", "")
+	snap := waitEnded(t, job)
+	if snap.State != jobs.Failed || snap.Error.Kind != KindTemplateRefused || !strings.Contains(snap.Error.Message, `"main"`) {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if got := w.tmpl.seen(); len(got) != 3 {
+		t.Fatalf("the template service was asked %v", got)
 	}
 }

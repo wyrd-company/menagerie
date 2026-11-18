@@ -16,11 +16,13 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
-// upgrading is one upgrade job.
+// upgrading is one upgrade job: it applies the current version of the
+// workspace's registered template, which it pins when it starts.
 type upgrading struct {
 	w        *Workflows
 	name     string
@@ -32,8 +34,26 @@ type upgrading struct {
 }
 
 func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
+	tpl, err := u.w.opts.Data.Template(ctx, u.template)
+	if err != nil {
+		return &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace's template %s could not be read: %w; nothing was upgraded", u.template, err)}
+	}
+	// The upgrade moves forward only: the version applied to the workspace
+	// must be a version older than the template's current one.
+	applied, err := registry.ReadApplied(u.folder)
+	if err != nil {
+		return &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace's applied record could not be read: %w; nothing was upgraded", err)}
+	}
+	if _, ok := registry.ParseVersion(applied.Ref); !ok {
+		return &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace's applied record names ref %q, which is not a version, so the upgrade cannot tell that version %s is newer; nothing was upgraded", applied.Ref, tpl.CurrentVersion)}
+	}
+	if !registry.Newer(tpl.CurrentVersion, applied.Ref) {
+		return &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace already has version %s, and template %s's current version is %s; nothing was upgraded", applied.Ref, tpl.ID, tpl.CurrentVersion)}
+	}
+	fmt.Fprintf(run.Log(""), "upgrading from version %s to template %s, version %s\n", applied.Ref, tpl.ID, tpl.CurrentVersion)
+	target := tpl.ID + " " + tpl.CurrentVersion
 	run.Phase("backup-local-changes")
-	before, err := backup.CommitTracked(u.folder, u.name, fmt.Sprintf("Back up local changes before upgrading to %s", u.template))
+	before, err := backup.CommitTracked(u.folder, u.name, fmt.Sprintf("Back up local changes before upgrading to %s", target))
 	if err != nil {
 		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("committing local changes failed: %w; nothing was upgraded", err)}
 	}
@@ -48,7 +68,7 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	t := u.w.opts.Templates
-	sel := u.w.selector(u.name, u.folder, u.template)
+	sel := u.w.selector(u.name, u.folder, tpl)
 	if u.reanswer {
 		fmt.Fprintln(run.Log(""), "asking every question again, with the recorded answers as the defaults")
 	}
@@ -67,25 +87,25 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	if err != nil {
 		return fmt.Errorf("%w; nothing was upgraded", err)
 	}
-	applied, err := t.ApplyUpgrade(ctx, sel, reply.Session, grant.token())
+	result, err := t.ApplyUpgrade(ctx, sel, reply.Session, grant.token())
 	grant.revoke()
 	if err != nil {
 		return &jobs.Failure{Kind: grant.kind(KindUpgradeFailed), Err: fmt.Errorf("%s; files written before the failure remain in %s; the state before the upgrade is backed up as %s; recovery is manual", applyError(err), u.folder, before.Hash)}
 	}
-	if err := run.SetApply(applied.Raw); err != nil {
+	if err := run.SetApply(result.Raw); err != nil {
 		return err
 	}
-	reportApplied(run.Log(""), applied)
-	switch applied.Outcome {
+	reportApplied(run.Log(""), result)
+	switch result.Outcome {
 	case templates.AlreadyCurrent:
 		fmt.Fprintln(run.Log(""), "the workspace is already current; nothing was written and the devcontainer was not rebuilt")
 		return nil
 	case templates.NeedsTrust, templates.Planned:
-		return &jobs.Failure{Kind: KindNotApplied, Err: fmt.Errorf("the upgrade reported %s and wrote nothing; the workspace is unchanged", applied.Outcome)}
+		return &jobs.Failure{Kind: KindNotApplied, Err: fmt.Errorf("the upgrade reported %s and wrote nothing; the workspace is unchanged", result.Outcome)}
 	}
 
 	run.Phase("commit")
-	commit, err := backup.CommitUpgrade(u.folder, u.name, output(applied), fmt.Sprintf("Upgrade workspace %s to %s", u.name, u.template), run.Log("commit: "))
+	commit, err := backup.CommitUpgrade(u.folder, u.name, output(result), fmt.Sprintf("Upgrade workspace %s to %s", u.name, target), run.Log("commit: "))
 	if err != nil {
 		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("the upgrade was written, but committing it failed: %w; the devcontainer was not rebuilt", err)}
 	}
@@ -100,8 +120,8 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("the upgrade was written and committed as %s, but its backup failed: %w; the devcontainer was not rebuilt", commit.Hash, err)}
 	}
 
-	if applied.Outcome == templates.Conflicted {
-		return &jobs.Failure{Kind: KindMergeConflicted, Err: fmt.Errorf("the upgrade is not complete: it wrote merge conflict markers into %s, which need manual resolution; the conflicted files are committed and backed up as %s, and the state before the upgrade as %s; the devcontainer was not rebuilt: resolve the conflicts, then rebuild", strings.Join(applied.Conflicts, ", "), commit.Hash, before.Hash)}
+	if result.Outcome == templates.Conflicted {
+		return &jobs.Failure{Kind: KindMergeConflicted, Err: fmt.Errorf("the upgrade is not complete: it wrote merge conflict markers into %s, which need manual resolution; the conflicted files are committed and backed up as %s, and the state before the upgrade as %s; the devcontainer was not rebuilt: resolve the conflicts, then rebuild", strings.Join(result.Conflicts, ", "), commit.Hash, before.Hash)}
 	}
 	if err := u.w.opts.Runtime.Rebuild(ctx, u.folder, run); err != nil {
 		if started(err) {
