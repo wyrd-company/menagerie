@@ -539,3 +539,21 @@ func TestXolotlKeyPolicyValidation(t *testing.T) {
 		}
 	}
 }
+
+// The templates key keeps its rules and still parses, and a start can tell
+// a document that has it, even empty, from one that has none.
+func TestTheTemplatesKeyIsFoundAndStillParses(t *testing.T) {
+	without := strings.Split(valid, "templates:\n")[0]
+	for doc, given := range map[string]bool{valid: true, without: false, without + "templates: []\n": true} {
+		cfg, err := Parse([]byte(doc))
+		if err != nil {
+			t.Fatalf("%s: %v", doc, err)
+		}
+		if cfg.TemplatesGiven() != given {
+			t.Errorf("%s: templates given %t", doc, cfg.TemplatesGiven())
+		}
+	}
+	if _, err := Parse([]byte(without + "templates:\n  - {id: Bad, name: n, address: a}\n")); err == nil || !strings.Contains(err.Error(), "templates[0].id") {
+		t.Errorf("an invalid entry parsed: %v", err)
+	}
+}

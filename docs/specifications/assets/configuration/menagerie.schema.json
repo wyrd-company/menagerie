@@ -32,7 +32,8 @@
     },
     "templates": {
       "type": "array",
-      "description": "Approved templates. Ids are unique.",
+      "deprecated": true,
+      "description": "The approved templates of earlier releases, read only by the workspace service's first-start import, which registers them once in Menagerie's data; templates are registered in the interface. Ids are unique.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -57,7 +58,7 @@
           },
           "runner-image": {
             "type": "string",
-            "description": "Image of the throwaway containers that run the template's hooks. Absent, the global runner-image."
+            "description": "The runner image the imported template takes; read only by the import."
           }
         }
       }

@@ -46,6 +46,10 @@ func schemaKeys(prefix string, n *schemaNode, out map[string]bool) {
 func structKeys(prefix string, t reflect.Type, out map[string]bool) {
 	for i := range t.NumField() {
 		f := t.Field(i)
+		// The YAML decoder never sets an unexported field.
+		if !f.IsExported() {
+			continue
+		}
 		name := f.Tag.Get("yaml")
 		out[prefix+name] = true
 		ft := f.Type

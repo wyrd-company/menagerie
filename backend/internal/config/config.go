@@ -46,6 +46,9 @@ const (
 
 // Config is the Menagerie configuration document.
 type Config struct {
+	// templatesGiven says that the document has the templates key.
+	templatesGiven bool
+
 	// Listen is the HTTP listen address of the workspace service.
 	Listen string `yaml:"listen"`
 	// WorkspaceRoot is the folder whose direct child folders are the
@@ -58,7 +61,9 @@ type Config struct {
 	// WyrwoodDirectory is the Wyrwood consumer directory that holds the
 	// SSH agent socket.
 	WyrwoodDirectory string `yaml:"wyrwood-directory"`
-	// Templates is the approved template list.
+	// Templates is the list of approved templates of earlier releases. It is
+	// read only by the first-start templates import, which takes it over
+	// once; templates are registered in the interface.
 	Templates []Template `yaml:"templates"`
 	// OIDC names the identity provider and client.
 	OIDC OIDC `yaml:"oidc"`
@@ -271,16 +276,16 @@ func (w *WebhookURL) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// Template is one approved template.
+// Template is one entry of the templates key of earlier releases: an
+// approved template version, read only by the first-start import.
 type Template struct {
-	// ID selects the template in API requests.
+	// ID is the entry's id, which an imported template keeps.
 	ID string `yaml:"id"`
 	// Name is shown in the UI.
 	Name string `yaml:"name"`
 	// Address is the Toha template address.
 	Address string `yaml:"address"`
-	// RunnerImage is the image of the throwaway containers that run the
-	// template's hooks. Absent, the global runner-image.
+	// RunnerImage is the runner image an imported template takes.
 	RunnerImage string `yaml:"runner-image"`
 }
 
@@ -368,8 +373,18 @@ func Parse(data []byte) (*Config, error) {
 	if err := errors.Join(append(givenEmpty(data), cfg.validate())...); err != nil {
 		return nil, err
 	}
+	var keys struct {
+		Templates yaml.Node `yaml:"templates"`
+	}
+	if err := yaml.Unmarshal(data, &keys); err == nil {
+		cfg.templatesGiven = keys.Templates.Kind != 0
+	}
 	return &cfg, nil
 }
+
+// TemplatesGiven says that the document has the templates key, which only
+// the first-start import reads; each start that finds it warns.
+func (c *Config) TemplatesGiven() bool { return c.templatesGiven }
 
 // durationNodes holds the node given for each duration field, with merge
 // keys applied by the decoder. A node of kind zero is a field not given.

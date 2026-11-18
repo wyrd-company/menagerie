@@ -11,15 +11,14 @@ description: >-
 
 
   It names the workspace root, the workspace repository, the Wyrwood
-  consumer directory, the approved template list, the OIDC issuer and client,
-  the HTTP listen address, the template service socket, the hook runner
-  socket and the candidate folder. `workspace-root`
+  consumer directory, the OIDC issuer and client, the HTTP listen address,
+  the template service socket, the hook runner socket and the candidate
+  folder. Templates are Menagerie's data, registered in the interface,
+  never configuration. `workspace-root`
   and `wyrwood-directory` are absolute paths; the workspace root is used as
   written (cleaned, not symlink-resolved) because container labels carry
-  the path the host daemon sees, and it is never `/`. Each template has a
-  unique `id` of lower-case letters and digits separated by single dashes, a
-  display `name`, a Toha `address` and an optional `runner-image`; the list
-  can be empty. Defaults: listen `:8080`, template service socket
+  the path the host daemon sees, and it is never `/`. Defaults: listen
+  `:8080`, template service socket
   `/run/menagerie/template.sock`, hook runner socket
   `template-service.hook-runner-socket` `/run/menagerie/hook-runner.sock`,
   an absolute path other than the template service socket, on which the
@@ -31,16 +30,43 @@ description: >-
   which the workspace service runs an upgrade's hooks.
 
 
-  Optional `runner-image`, at the top level and on a template, is a Docker
-  image reference such as `alpine:3.22`. Template hooks and
-  `initializeCommand` run in throwaway containers of a runner image: a
-  template's hooks in its own `runner-image`, else the top-level one;
+  Optional `runner-image`, at the top level, is a Docker image reference
+  such as `alpine:3.22`. Template hooks and `initializeCommand` run in
+  throwaway containers of a runner image: a registered template's hooks in
+  its own runner image, which is Menagerie's data, set when the template
+  is registered and edited in the interface, else the top-level one;
   `initializeCommand` in the top-level one. Absent, both use Menagerie's
   own image, which the workspace service finds by inspecting its own
   container: the container its mounts name, else, only when they name
   none, the container its hostname names when that container carries the
   hostname. A missing image is pulled with `registry-credentials`. The
   template service ignores `runner-image`.
+
+
+  `templates`, the list of approved templates of earlier releases, keeps
+  its shape and its rules in the schema, where it is deprecated, and in the
+  workspace service's parser, so a file that still has it parses: each
+  entry has a unique `id` of lower-case letters and digits separated by
+  single dashes, a display `name`, a Toha `address` and an optional
+  `runner-image`, and the list can be empty. The workspace service reads
+  it only for its first-start import, which takes it over once, at the
+  first start whose Menagerie data has no templates import, and records
+  that it did, so a later edit of the key imports nothing. The import asks
+  the template service to read each entry's address, waiting up to one
+  minute for it, and a start that does not reach it fails, so the next
+  start imports. An entry whose address the template service refuses, a
+  password in it included, is skipped, and the start log names its `id`
+  and the refusal's kind, never its address. The entries that have one
+  source are one template: the newest entry whose ref is a version gives
+  its current version, `id`, name and runner image, and its address is
+  that entry's without the ref. A source with no entry whose ref is a
+  version, such as one pinned to a branch, a commit or a tag like `v1`, is
+  not imported, and the start log names its entries' `id`s; a manager
+  registers that template in the interface once its repository has a
+  version tag, which joins its workspaces. An entry's `runner-image` is
+  read only by the import. Every start that finds the key logs one warning
+  that names it and says that templates are registered in the interface.
+  The template service reads nothing of `templates`.
 
 
   `oidc` names the identity provider and Menagerie's public client, which
@@ -222,7 +248,8 @@ description: >-
   field and the rule. The template service ignores this section.
 validation-criteria: >-
   `go test ./backend/internal/config/` parses a valid document, applies the
-  defaults, rejects each invalid field, and checks that the schema's keys
+  defaults, rejects each invalid field, tells a document with the
+  `templates` key, even empty, from one without, and checks that the schema's keys
   equal the keys the parser accepts and that its default scopes equal the
   scopes the workspace service requests, that the schema's phase keys and
   the phase names above equal the phases the jobs package names, that its
@@ -239,6 +266,12 @@ validation-criteria: >-
   `commit` limit, and check that no error of those fields quotes the
   value given. They parse `github-app` with its default server and check
   that no error of the section quotes the value given.
+  `go test ./backend/internal/registry/` imports the `templates` key once
+  as one template per source at its newest version, skips and names by
+  `id` alone each refused entry and each source with no version, joins the
+  workspaces of an imported source, fails a start that cannot reach the
+  template service and imports at the next one, and marks a host with no
+  key without asking the template service.
   `go test ./backend/cmd/menagerie/` checks that `local-env` reaches the
   devcontainer runtime, that `job-limits` and `alerts` reach the jobs
   manager, and that `github-app` gives backups on its server a write token

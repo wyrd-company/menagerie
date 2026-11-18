@@ -144,6 +144,9 @@ func run(configPath string) error {
 	if err := prepareData(ctx, cfg, root, data, runtime, provisioning.Records{Folder: provisioning.DefaultRecords}); err != nil {
 		return err
 	}
+	if err := importTemplates(ctx, cfg, root, data, templates.New(cfg.TemplateService.Socket)); err != nil {
+		return err
+	}
 	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, app)
 	if err != nil {
 		return err
@@ -240,6 +243,22 @@ func prepareData(ctx context.Context, cfg *config.Config, root *workspace.Root, 
 	}
 	return provisioning.Import(ctx, provisioning.ImportOptions{
 		Data: data, Runtime: runtime, Workspaces: root, Records: records, Agent: agent, Logf: log.Printf,
+	})
+}
+
+// importTemplates takes over the configuration's templates key once, after
+// the workspace import, and warns at each start that finds the key that it
+// is no longer read.
+func importTemplates(ctx context.Context, cfg *config.Config, root *workspace.Root, data *store.Store, service registry.TemplateService) error {
+	if cfg.TemplatesGiven() {
+		log.Print("menagerie: the configuration's templates key is no longer read: templates are registered in the interface; the first start of this release imported its entries once, and a later edit imports nothing")
+	}
+	entries := make([]registry.Entry, 0, len(cfg.Templates))
+	for _, t := range cfg.Templates {
+		entries = append(entries, registry.Entry{ID: t.ID, Name: t.Name, Address: t.Address, RunnerImage: t.RunnerImage})
+	}
+	return registry.Import(ctx, registry.ImportOptions{
+		Data: data, Templates: service, Root: root, Entries: entries, Logf: log.Printf,
 	})
 }
 
