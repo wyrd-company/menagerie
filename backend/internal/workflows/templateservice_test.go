@@ -944,7 +944,9 @@ func TestRegisterCreateTagAndUpgradeThroughTheTemplateService(t *testing.T) {
 	if applied, err := registry.ReadApplied(folder); err != nil || applied.Ref != "1.0.0" || applied.Source != source {
 		t.Fatalf("applied %+v %v", applied, err)
 	}
-	if status, body := a.send(t, http.MethodGet, "/api/workspaces", ""); status != 200 || !strings.Contains(body, `"template":{"id":"kit","name":"Kit"},"name":"alpha"`) {
+	v100 := gitCLI(t, filepath.Join(a.templates, "kit"), "rev-parse", "1.0.0")
+	if status, body := a.send(t, http.MethodGet, "/api/workspaces", ""); status != 200 ||
+		!strings.Contains(body, `"template":{"id":"kit","name":"Kit"},"appliedVersion":"1.0.0","appliedCommit":"`+v100+`","needsUpgrade":false,"name":"alpha"`) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 	if status, body := a.post(t, "/api/jobs", `{"operation":"upgrade","workspace":"alpha"}`); status != http.StatusConflict || !strings.Contains(body, "upgrade-not-needed") {
@@ -959,6 +961,14 @@ func TestRegisterCreateTagAndUpgradeThroughTheTemplateService(t *testing.T) {
 	gitCLI(t, repo, "tag", "v1.1.0")
 	if status, body := a.post(t, "/api/templates/kit/upgrades", `{"version":"1.0.0"}`); status != http.StatusConflict || !strings.Contains(body, "version-not-newer") {
 		t.Fatalf("upgrade to the current version: %d %s", status, body)
+	}
+	// Until a check finds it, the new version is no found version.
+	if status, body := a.post(t, "/api/templates/kit/upgrades", `{"version":"1.1.0","check":true}`); status != http.StatusConflict || !strings.Contains(body, "version-not-newer") {
+		t.Fatalf("upgrade to an unfound version: %d %s", status, body)
+	}
+	status, body = a.post(t, "/api/templates/kit/version-checks", "")
+	if status != http.StatusOK || !strings.Contains(body, `"newestVersion":"1.1.0"`) || !strings.Contains(body, `"tag":"v1.1.0"`) || !strings.Contains(body, `"failure":null`) {
+		t.Fatalf("version check: %d %s", status, body)
 	}
 	status, body = a.post(t, "/api/templates/kit/upgrades", `{"version":"1.1.0","check":true}`)
 	if status != http.StatusOK || !strings.Contains(body, `"currentVersion":"1.1.0"`) {
@@ -982,6 +992,10 @@ func TestRegisterCreateTagAndUpgradeThroughTheTemplateService(t *testing.T) {
 	v110 := gitCLI(t, repo, "rev-parse", "v1.1.0")
 	if applied, err := registry.ReadApplied(folder); err != nil || applied.Ref != "v1.1.0" || applied.Commit != v110 {
 		t.Fatalf("applied %+v %v", applied, err)
+	}
+	if status, body := a.send(t, http.MethodGet, "/api/workspaces", ""); status != 200 ||
+		!strings.Contains(body, `"appliedVersion":"1.1.0","appliedCommit":"`+v110+`","needsUpgrade":false,"name":"alpha"`) {
+		t.Fatalf("list after the upgrade: %d %s", status, body)
 	}
 	if status, body := a.post(t, "/api/jobs", `{"operation":"upgrade","workspace":"alpha"}`); status != http.StatusConflict || !strings.Contains(body, "upgrade-not-needed") {
 		t.Fatalf("second upgrade: %d %s", status, body)
