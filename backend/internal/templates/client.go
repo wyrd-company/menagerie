@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -222,12 +223,45 @@ func (c *Client) ListVersions(ctx context.Context, address string) (*Versions, e
 	if out.Source == "" || out.Versions == nil {
 		return nil, &UnavailableError{Err: errors.New("versions reply names no source or versions")}
 	}
-	for _, v := range out.Versions {
+	var last [3]uint64
+	for i, v := range out.Versions {
 		if !listedVersion.MatchString(v.Version) || v.Tag == "" || !fullCommit.MatchString(v.Commit) {
 			return nil, &UnavailableError{Err: errors.New("versions reply lists a version that is not a version, a tag and a full commit id")}
 		}
+		numbers, ok := versionNumbers(v.Version)
+		if !ok {
+			return nil, &UnavailableError{Err: errors.New("versions reply lists a version number above 2^64-1")}
+		}
+		if i > 0 && !after(numbers, last) {
+			return nil, &UnavailableError{Err: errors.New("versions reply lists its versions out of ascending order or more than once")}
+		}
+		last = numbers
 	}
 	return &out, nil
+}
+
+// versionNumbers reads a listed version's three numbers, each at most
+// 2^64-1 as the template service orders them.
+func versionNumbers(version string) ([3]uint64, bool) {
+	var out [3]uint64
+	for i, part := range strings.Split(version, ".") {
+		n, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
+}
+
+// after says whether version numbers a come after b.
+func after(a, b [3]uint64) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return false
 }
 
 // listedVersion is a listed version's form, MAJOR.MINOR.PATCH, and
@@ -243,8 +277,8 @@ func (c *Client) Check(ctx context.Context, address, ref string) (*Checked, erro
 	if err := c.call(ctx, pathChecks, map[string]string{"address": address, "ref": ref}, &out); err != nil {
 		return nil, err
 	}
-	if out.Source == "" || out.Commit == "" {
-		return nil, &UnavailableError{Err: errors.New("check reply names no source or commit")}
+	if out.Source == "" || !fullCommit.MatchString(out.Commit) {
+		return nil, &UnavailableError{Err: errors.New("check reply names no source or full commit id")}
 	}
 	return &out, nil
 }
@@ -256,8 +290,8 @@ func (c *Client) CheckSince(ctx context.Context, address, ref, since string) (*C
 	if err := c.call(ctx, pathChecks, map[string]string{"address": address, "ref": ref, "since": since}, &out); err != nil {
 		return nil, err
 	}
-	if out.Source == "" || out.Commit == "" || out.Descends == nil {
-		return nil, &UnavailableError{Err: errors.New("check reply names no source, commit or descent")}
+	if out.Source == "" || !fullCommit.MatchString(out.Commit) || out.Descends == nil {
+		return nil, &UnavailableError{Err: errors.New("check reply names no source, full commit id or descent")}
 	}
 	return &out, nil
 }
