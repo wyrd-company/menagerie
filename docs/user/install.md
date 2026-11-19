@@ -395,6 +395,36 @@ needs the backup. A start that finds no data takes back what the workspaces,
 their definitions, their containers and Wyrwood still hold, as the first start
 after an upgrade does.
 
+### Upgrading from 0.4.2
+
+Release 0.5.0 changes what a 0.4.2 install relies on. Before you pull the
+image:
+
+1. Upgrade the Wyrwood controller and agents to 0.7.1 first, in Wyrwood's
+   upgrade order; from 0.6.1 that is a [stopped
+   rollout](configuration.md#upgrading-wyrwood).
+2. Back up the `/var/lib/menagerie` volume. Going back needs it.
+3. Repair every workspace whose definition no longer parses, as
+   the section below says.
+4. Set [`provisioning.xolotl.key-policy`](configuration.md#xolotl). A template's
+   declaration no longer names the policy of a workspace's client key, and a
+   create that needs a new key fails as `provisioning-unavailable` without it.
+5. Mark as required, or put in groups, the
+   [policies](usage.md#policies) your templates used to declare. Menagerie no
+   longer reads `policies`, `values` or `xolotl` from a template's
+   `customizations.menagerie`, and a new workspace gets only the policies a
+   manager chose or marked required.
+6. Make each entry of the `templates` key name a `MAJOR.MINOR.PATCH` tag. The
+   first start imports the entries once, and skips a repository with no such
+   tag and an address Menagerie now refuses.
+
+After the first start, read the start log for each skipped entry and register
+that template in the interface, then remove the `templates` key. Stop sending
+`templateId` on an upgrade: Menagerie refuses it with `invalid-request`, and
+upgrades the workspace to the current version of its template. On a host with
+provisioning, a new workspace name is 1 to 63 lower case letters, digits, `_`
+or `-`, starting with a letter or digit.
+
 ### The first start that keeps Menagerie's data
 
 The first start of a release that keeps Menagerie's data, after a release that
@@ -446,8 +476,9 @@ network. Keep these limits in place:
   end their session at once.
 - Publish the UI on a private address behind your HTTPS reverse proxy, never
   on the public internet.
-- Approve only templates you trust; Menagerie uses only the templates its
-  configuration lists.
+- Register only templates you trust: any manager can register a template from a
+  Git address in the interface, and its hooks and `initializeCommand` run in
+  throwaway containers on the host.
 - Without `job-limits`, a job has no time limit, and a hook or build that
   never ends keeps its workspace busy until Menagerie restarts. Set
   [job time limits](configuration.md#job-time-limits) and an alert webhook

@@ -119,7 +119,7 @@ with the URL and the token replaced by `[redacted]`.
 | --- | --- |
 | `workspace-busy` | The workspace already runs a job; the answer names it. |
 | `unknown-template` | The template id is not in the configuration's list. |
-| `invalid-workspace-name` | The name cannot be a workspace's folder directly in the workspace root; for example, it starts with a dot. |
+| `invalid-workspace-name` | The name cannot be a workspace's folder directly in the workspace root; for example, it starts with a dot. On a host with provisioning, a name is also 1 to 63 lower case letters, digits, `_` or `-`, starting with a letter or digit. |
 | `workspace-not-found` | No such folder. |
 | `docker-unavailable` | The Docker daemon did not answer. |
 | `workspace-root-unreadable` | The workspace root cannot be listed. |
