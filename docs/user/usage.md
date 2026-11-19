@@ -28,7 +28,17 @@ again.
 
 Each row names its [template](#templates), or **Unregistered template** for a
 workspace whose template is not registered; such a workspace keeps working and
-joins its template when a manager registers it.
+joins its template when a manager registers it. Beside it is the version last
+applied to the workspace, the one its create generated, its last upgrade
+applied or a [reviewed branch](#apply-a-reviewed-branch) brought in, as
+**1.0.0 applied**. **Unknown version** means the workspace's applied record,
+`.toha.json`, names a commit that no version tag is at, as for a workspace
+created from a branch; hold the pointer over it to see that commit. A
+[version check](#check-for-new-versions) of its template that finds a version
+tag at that commit names the version. While the template's current version is
+newer than the applied version, the row shows **Needs upgrade** with the
+current version, and [**Upgrade**](#upgrade-a-workspace) is available; it is
+available too while the version is unknown, and otherwise unavailable.
 
 Each row lists its selected policies, or **No policies** for an empty selection.
 **Needs choice** names any policy group without a valid choice: exactly one
@@ -56,9 +66,10 @@ tries each workspace whose binding does not have its stored policy selection.
 ## Templates
 
 Workspaces come from registered templates. Choose **Templates** to see each
-one, its address and its current version, the version a new workspace gets
-and an upgrade applies. Registering, upgrading and removing a template needs
-no configuration change and no restart.
+one, its address, its current version, the version a new workspace gets and
+an upgrade applies, the newest version Menagerie has found, and when its last
+version check ran. Registering a template, finding its new versions,
+upgrading it and removing it need no configuration change and no restart.
 
 A version is a release tag of the template's repository: `MAJOR.MINOR.PATCH`,
 with an optional leading `v`, such as `1.2.0` or `v1.2.0`. A tag with a
@@ -95,15 +106,44 @@ A template whose repository and folder are registered already is refused,
 naming that registration. Registering a template joins the workspaces whose
 applied record, `.toha.json`, names it.
 
+### Check for new versions
+
+Menagerie lists each template's versions by itself: when it starts, then every
+hour, or as often as [`template-versions`](configuration.md#version-checks)
+sets. **Check versions** on a template's row checks it now. Neither needs a
+restart. While a check runs, the row shows **Checking versions…**; afterwards
+it shows when the last check ran, such as **Checked 12 minutes ago**, the
+**Newest** version found, and **New version** while that is newer than the
+current version.
+
+A failed check keeps the versions found before and says why, such as **Check
+failed just now: template service is unavailable. Previously found versions
+are kept.** A check fails when the template service cannot be reached or does
+not answer within two minutes, when the Git host has no such repository or
+refuses or fails the listing, and when the template service refuses the
+address. Menagerie's log names each failed check by the template's id and the
+reason, never by its address.
+
+A tag can move: someone can point the current version's tag at another commit.
+A check that finds the current version's tag at another commit than the one
+Menagerie recorded marks the template **Tag moved** and says that its current
+tag moved. Until a manager takes that version again, creating a workspace from
+the template and upgrading a workspace are refused with
+`template-version-moved`, so no workspace gets content no check saw. Choose
+**Update version**, then **Validate** and **Save** the current version: its
+checks run again, and Menagerie records the tag's new commit.
+
 ### Upgrade a template
 
-When the template's repository has a newer version, choose **Upgrade template**
-on its row, enter that version, **Validate** it and **Save** it. The version
-passes the `fetch`, `read` and `definition` checks, at Validate and again at
-Save, before it becomes the current version. A
-version that is not one of the repository's versions newer than the current
-one is refused: a template moves only forward. Workspaces keep the version
-they have until you [upgrade them](#upgrade-a-workspace).
+When a check has found a newer version, choose **Upgrade template** on the
+template's row, pick the version, newest first, then **Validate** it and
+**Save** it. The version passes the `fetch`, `read` and `definition` checks,
+at Validate and again at Save, before it becomes the current version. The list
+offers only the versions found that are newer than the current one, and any
+other version is refused: a template moves only forward, and a tag pushed
+since the last check is offered once a [check](#check-for-new-versions) finds
+it. Workspaces keep the version they have until you
+[upgrade them](#upgrade-a-workspace).
 
 ![The Templates screen with version 2.0.0 validated in a template's upgrade form](assets/template-upgrade.png)
 
@@ -282,11 +322,19 @@ is a volume, not a bind, and a space around a field or a value is refused.
 
 ## Upgrade a workspace
 
-**Upgrade** applies the current version of the workspace's template, which
-the screen names, so [upgrade the template](#upgrade-a-template) first to take
-a newer version. Choose **Begin upgrade**. An upgrade is refused when the
-workspace already has that version or a newer one, and when its template is
-not registered. Menagerie first commits any local changes and backs the
+**Upgrade** applies the current version of the workspace's template, so
+[upgrade the template](#upgrade-a-template) first to take a newer version. The
+screen shows the version **Applied** to the workspace and the template's
+current version. Choose **Begin upgrade**. An upgrade is refused when the
+workspace already has that version or a newer one, when its template is not
+registered, and while the current version's tag has moved (see
+[Check for new versions](#check-for-new-versions)): take the version again on
+**Templates** first. A workspace whose applied version is unknown is upgraded
+only when the template service answers that the current version descends from
+the workspace's applied commit, so the upgrade still moves it forward;
+otherwise the job fails as `template-refused` before it asks anything, naming
+both commits. After the upgrade, the workspace shows the new version applied.
+Menagerie first commits any local changes and backs the
 workspace up, so the state before the upgrade is on its branch. Then it asks
 only the questions the new version adds; earlier answers come from
 `.toha.json`. Toha applies the new version to a separate checkout of the
@@ -370,16 +418,29 @@ The job fails, with nothing applied, when:
 | --- | --- |
 | `branch-not-found` | The workspace repository has no branch of that name. Nothing changed, local changes included. |
 | `fetch-failed` | The workspace repository could not be reached. Nothing changed. |
-| `not-applicable` | The branch cannot be applied cleanly. The console lists the paths, one `not applicable:` line each, and the message says why: both sides changed the same file, the branch and the workspace share no history (or more than one merge base), an untracked or ignored file, folder or link, or a nested repository, is where the branch writes, the change has a submodule or a path Menagerie does not write (a `.git` part in any spelling, `git~1`, an absolute path, a tab or a newline), a file changed while the job ran (the change is kept), another running container mounts the workspace folder, the workspace repository is shallow, or part of the branch's history is missing. Local changes are committed, and backed up unless the branch is the workspace's own. Rebase the branch on the workspace's branch, or move the files in the way, and apply again. |
+| `not-applicable` | The branch cannot be applied cleanly. The console lists the paths, one `not applicable:` line each, and the message says why: its applied record would move the workspace backward (see below), both sides changed the same file, the branch and the workspace share no history (or more than one merge base), an untracked or ignored file, folder or link, or a nested repository, is where the branch writes, the change has a submodule or a path Menagerie does not write (a `.git` part in any spelling, `git~1`, an absolute path, a tab or a newline), a file changed while the job ran (the change is kept), another running container mounts the workspace folder, the workspace repository is shallow, or part of the branch's history is missing. Local changes are committed, and backed up unless the branch is the workspace's own. Rebase the branch on the workspace's branch, or move the files in the way, and apply again. |
+| `template-service-unavailable` | The template service could not say whether the branch's applied record moves a workspace whose applied version is unknown forward. Nothing was applied. |
 | `backup-failed` | The backup before or after the apply failed. The message says which; a failed backup after the apply leaves the applied files and does not rebuild. |
 | `apply-failed` | Writing the files failed partway. The branch did not move; the message names the commit to recover from by hand. |
 
 A merge never writes conflict markers: a file both sides changed is
-`not-applicable`. The applied record `.toha.json` is merged like any other
-file. Prefer a branch that is not the workspace's own. When an apply of
-the workspace's own branch is refused, the workspace repository keeps the
-pushed commits, and the message names the fetched commit, until the next
-backup of the workspace replaces them.
+`not-applicable`.
+
+A branch that changes the applied record, `.toha.json`, is checked in `plan`,
+before anything is written, so that no apply moves a workspace backward. The
+apply is `not-applicable`, naming both versions or commits, when the record
+would name a version older than the workspace's applied version, another
+template, or a ref that is no version at a commit no version tag is at; when
+the branch removes the record or leaves one Toha cannot read; when the
+workspace has no registered template; and, for a workspace whose applied
+version is unknown, when the record's commit does not descend from the applied
+commit. After an apply that changes the record, the workspace shows the
+record's version as applied.
+
+Prefer a branch that is not the workspace's own. When an apply of the
+workspace's own branch is refused, the workspace repository keeps the pushed
+commits, and the message names the fetched commit, until the next backup of
+the workspace replaces them.
 
 ## Backups
 
