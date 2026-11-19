@@ -629,10 +629,10 @@ func TestAnUpgradePinsTheCommitItsDescentCheckApproved(t *testing.T) {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
 	if !reflect.DeepEqual(*commits, []string{approved, approved}) {
-		t.Fatalf("the start and apply named %q", *commits)
+		t.Fatalf("the start and apply named the commits %q, not the approved %s", *commits, approved)
 	}
 	if got, _ := w.data.AppliedVersion(ctx, "alpha"); got != (store.AppliedVersion{Version: "2.0.0", Commit: approved}) {
-		t.Fatalf("%+v", got)
+		t.Fatalf("the workspace recorded %+v, not version 2.0.0 at the approved commit", got)
 	}
 }
 
@@ -657,10 +657,10 @@ func TestAnUpgradeOfAnUncheckedTemplateRecordsTheRecordsCommit(t *testing.T) {
 				t.Fatalf("%+v %+v", snap, snap.Error)
 			}
 			if !reflect.DeepEqual(*commits, []string{"", ""}) {
-				t.Fatalf("the start and apply named %q", *commits)
+				t.Fatalf("the start and apply named the commits %q, with none recorded", *commits)
 			}
 			if got, _ := w.data.AppliedVersion(context.Background(), "alpha"); got != (store.AppliedVersion{Version: "2.0.0", Commit: want}) {
-				t.Fatalf("%+v", got)
+				t.Fatalf("the workspace recorded %+v, not version 2.0.0 at commit %q", got, want)
 			}
 		})
 	}

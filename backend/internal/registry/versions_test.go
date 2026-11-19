@@ -356,16 +356,16 @@ func TestOneRuleGivesTheVersionOfARecord(t *testing.T) {
 			joined := JoinVersion(rec, tpl)
 			if tc.version != "" {
 				if err != nil || found.Version != tc.version || found.Commit != tc.commit {
-					t.Fatalf("%+v %v", found, err)
+					t.Fatalf("the rule gave %+v %v, want version %s at the record's commit", found, err, tc.version)
 				}
 				if joined != (store.AppliedVersion{Version: tc.version, Commit: tc.commit}) {
-					t.Fatalf("join %+v", joined)
+					t.Fatalf("a join took %+v, want version %s at the record's commit", joined, tc.version)
 				}
 				return
 			}
 			var refused *VersionError
 			if !errors.As(err, &refused) {
-				t.Fatalf("%+v %v", found, err)
+				t.Fatalf("the rule gave %+v %v, want no version", found, err)
 			}
 			for _, named := range tc.names {
 				if !strings.Contains(err.Error(), named) {

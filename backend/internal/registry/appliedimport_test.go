@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,7 +23,8 @@ const (
 // toha is an applied record of source at ref and commit; commit "null"
 // writes a record with no commit.
 func toha(source, ref, commit string) string {
-	c := `"` + commit + `"`
+	quoted, _ := json.Marshal(commit)
+	c := string(quoted)
 	if commit == "null" {
 		c = "null"
 	}
@@ -74,6 +76,7 @@ func TestTheFirstStartImportsEachWorkspacesAppliedVersionOnce(t *testing.T) {
 		// A ref that names a version at another version's commit.
 		"eight": toha(kit, "8.0.0", at100),
 		"forge": toha(kit, "1.0.0", "not-a-commit\nfake console line"),
+		"short": toha(kit, "1.0.0", at100[:12]),
 		"other": toha(other, "2.0.0", "e200000000000000000000000000000000000000"),
 		"plain": "not Toha's JSON",
 		"known": toha(kit, "1.0.0", at100),
@@ -82,7 +85,7 @@ func TestTheFirstStartImportsEachWorkspacesAppliedVersionOnce(t *testing.T) {
 	// An imported template, which the import of the templates key joined to
 	// its workspaces and no check has fetched yet.
 	joined := map[string]store.AppliedVersion{}
-	for _, name := range []string{"alpha", "beta", "gamma", "delta", "drift", "eight", "forge", "known"} {
+	for _, name := range []string{"alpha", "beta", "gamma", "delta", "drift", "eight", "forge", "short", "known"} {
 		joined[name] = store.AppliedVersion{}
 	}
 	if _, err := r.Data.RegisterTemplate(ctx, store.Template{ID: "kit", Name: "Kit", Address: kit, Source: kit,
@@ -105,6 +108,7 @@ func TestTheFirstStartImportsEachWorkspacesAppliedVersionOnce(t *testing.T) {
 		"drift": {},
 		"eight": {Commit: at100},
 		"forge": {},
+		"short": {},
 		"other": {},
 		"plain": {},
 		"empty": {},

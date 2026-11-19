@@ -203,7 +203,7 @@ func TestApplyBranchMovesTheAppliedRecordOnlyForward(t *testing.T) {
 			now, _ := os.ReadFile(filepath.Join(folder, ".toha.json"))
 			if tc.refused == nil {
 				if snap.State != jobs.Succeeded {
-					t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+					t.Fatalf("a forward record was not applied: the job %s: %+v\n%s", snap.State, snap.Error, logText(job))
 				}
 				if after != tc.want {
 					t.Fatalf("applied %+v, want %+v", after, tc.want)
@@ -214,7 +214,7 @@ func TestApplyBranchMovesTheAppliedRecordOnlyForward(t *testing.T) {
 				return
 			}
 			if snap.State != jobs.Failed || snap.Error.Kind != KindNotApplicable {
-				t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+				t.Fatalf("the record was not refused as not-applicable: the job %s: %+v\n%s", snap.State, snap.Error, logText(job))
 			}
 			for _, named := range tc.refused {
 				if !strings.Contains(snap.Error.Message, named) {
