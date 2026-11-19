@@ -44,6 +44,9 @@ func (r *Registry) CheckVersions(ctx context.Context, id string) (store.Template
 		r.running = map[string]*checkRun{}
 	}
 	run, ok := r.running[id]
+	if ok && r.shared != nil {
+		r.shared(id)
+	}
 	if !ok {
 		run = &checkRun{done: make(chan struct{})}
 		r.running[id] = run

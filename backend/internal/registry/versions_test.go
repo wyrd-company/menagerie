@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -387,11 +388,13 @@ func TestOneRuleGivesTheVersionOfARecord(t *testing.T) {
 type heldService struct {
 	TemplateService
 	listings atomic.Int32
+	started  chan struct{}
 	release  chan struct{}
 }
 
 func (h *heldService) ListVersions(ctx context.Context, address string) (*templates.Versions, error) {
 	h.listings.Add(1)
+	h.started <- struct{}{}
 	select {
 	case <-h.release:
 	case <-ctx.Done():
@@ -401,35 +404,49 @@ func (h *heldService) ListVersions(ctx context.Context, address string) (*templa
 }
 
 // Two checks of one template at once share one run, and a caller that
-// leaves does not end it for the other.
+// leaves does not end it for the other: the first caller's listing is
+// held until the second has joined its run and the first has left.
 func TestChecksOfOneTemplateAtOnceShareOneRun(t *testing.T) {
 	r, f, _ := world(t)
 	registered(t, r, "")
 	f.released("1.3.0", "1.3.0", "c130000000000000000000000000000000000000")
-	held := &heldService{TemplateService: r.Templates, release: make(chan struct{})}
+	held := &heldService{TemplateService: r.Templates, started: make(chan struct{}, 2), release: make(chan struct{})}
 	r.Templates = held
+	var release sync.Once
+	free := func() { release.Do(func() { close(held.release) }) }
+	t.Cleanup(free)
+	joined := make(chan struct{}, 1)
+	r.shared = func(string) { joined <- struct{}{} }
+	const within = 10 * time.Second
+	await := func(c <-chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-c:
+		case <-time.After(within):
+			t.Fatalf("%s within %s", what, within)
+		}
+	}
 	leaving, leave := context.WithCancel(context.Background())
 	results := make(chan error, 2)
 	go func() { _, err := r.CheckVersions(leaving, "sample-kit"); results <- err }()
-	for held.listings.Load() == 0 {
-		time.Sleep(time.Millisecond)
-	}
+	await(held.started, "the first check started no listing")
 	var second store.Template
 	go func() {
 		var err error
 		second, err = r.CheckVersions(context.Background(), "sample-kit")
 		results <- err
 	}()
+	await(joined, "the second check did not join the first one's run")
 	leave()
 	if err := <-results; !errors.Is(err, context.Canceled) {
-		t.Fatalf("the leaving caller: %v", err)
+		t.Fatalf("the leaving caller got %v, want context.Canceled", err)
 	}
-	close(held.release)
+	free()
 	if err := <-results; err != nil {
-		t.Fatal(err)
+		t.Fatalf("the staying caller: %v", err)
 	}
-	if n := held.listings.Load(); n != 1 || second.Newest() != "1.3.0" {
-		t.Fatalf("%d listings, %+v", n, second)
+	if n := held.listings.Load(); n != 1 || second.Newest() != "1.3.0" || second.CheckFailure != "" {
+		t.Fatalf("the staying caller got newest %q, failure %q, from %d listings; want 1.3.0 found by the one listing the leaving caller started", second.Newest(), second.CheckFailure, n)
 	}
 }
 

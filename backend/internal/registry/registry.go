@@ -84,6 +84,9 @@ type Registry struct {
 
 	mu      sync.Mutex
 	running map[string]*checkRun
+	// shared, when set, is told under mu of each check that shares a
+	// template's running check: a test's hook, nil otherwise.
+	shared func(id string)
 }
 
 // ValidName checks a template's display name: one line of 1 to 100
