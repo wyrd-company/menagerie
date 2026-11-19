@@ -355,13 +355,13 @@ describe("the templates screen", () => {
       Response.json({
         ...kit,
         newestVersion: "1.4.0",
-        versions: found("1.0.0", "1.4.0"),
+        versions: found("1.0.0", "1.3.0", "1.4.0"),
         lastCheck: { at: new Date().toISOString(), failure: null },
       }),
     );
     expect(await within(entry).findByText("Checked just now")).toBeInTheDocument();
     const select = within(entry).getByLabelText<HTMLSelectElement>("Current version");
-    expect([...select.options].map((o) => o.value)).toEqual(["1.4.0"]);
+    expect([...select.options].map((o) => o.value)).toEqual(["1.4.0", "1.3.0"]);
     expect(select.value).toBe("1.4.0");
     await userEvent.click(within(entry).getByRole("button", { name: "Validate" }));
     expect(bodies[1]).toEqual({ version: "1.4.0", check: true });
