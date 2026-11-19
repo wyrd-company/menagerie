@@ -135,7 +135,6 @@ test.describe("as a manager", () => {
     const before = await backup(page.request, "kept-space");
     await control(page.request, "POST", "/backup/break");
     try {
-      await page.goto("/");
       // The fixture released 2.0.0 after the registration: a version check
       // finds it, the next current version.
       const checked = await page.request.post(
@@ -149,6 +148,8 @@ test.describe("as a manager", () => {
         headers: { Origin: info.site, "Sec-Fetch-Site": "same-origin" },
       });
       expect(upgraded.status()).toBe(200);
+      // The list read after the template's upgrade offers the workspace's.
+      await page.goto("/");
       await entry(page, "kept-space").getByRole("link", { name: "Upgrade" }).click();
       // The upgrade backs the workspace up before it asks anything.
       await page.getByRole("button", { name: "Begin upgrade" }).click();

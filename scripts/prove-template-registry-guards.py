@@ -112,7 +112,7 @@ MUTANTS = [
      "ORDER BY name COLLATE NOCASE, name, id", "ORDER BY name COLLATE NOCASE, id", ["list-order"]),
     ("upgrade-refuses-before-checks", REGISTRY,
      "\tif !ok || !again && !Newer(target.Version, tpl.CurrentVersion) {\n",
-     "\tif !ok {\n", ["upgrade-refuses-first"]),
+     "\t_ = again\n\tif !ok {\n", ["upgrade-refuses-first"]),
     ("foreign-key-keeps-used", STORE,
      "\tALTER TABLE workspaces ADD COLUMN template TEXT REFERENCES templates(id);\n",
      "\tALTER TABLE workspaces ADD COLUMN template TEXT;\n", ["foreign-key"]),
