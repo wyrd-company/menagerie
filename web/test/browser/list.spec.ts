@@ -117,7 +117,7 @@ test("allows one job per workspace while other workspaces stay usable", async ({
   for (const name of ["Start", "Stop", "Rebuild"]) {
     await expect(slow.getByRole("button", { name })).toBeDisabled();
   }
-  await expect(slow.getByText("Upgrade")).toHaveAttribute("aria-disabled", "true");
+  await expect(slow.getByText("Upgrade", { exact: true })).toHaveAttribute("aria-disabled", "true");
 
   // The service refuses a second job for the same workspace.
   const refused = await request.post("/api/jobs", {

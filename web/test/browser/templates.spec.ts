@@ -37,7 +37,7 @@ test("registers a template from its address and creates from it", async ({ page 
   await save.click();
   const entry = page.getByRole("listitem").filter({ hasText: "Sample tools" });
   await expect(entry.getByText("example-org/sample-tools")).toBeVisible();
-  await expect(entry.getByText("1.0.0")).toBeVisible();
+  await expect(entry.locator(".template-versions")).toContainText("Current 1.0.0");
   await expect(page.getByLabel("Address")).toHaveCount(0);
 
   await page.getByRole("link", { name: "New workspace" }).click();
@@ -77,7 +77,7 @@ test("upgrades a template to a newer found version, edits it and refuses its rem
   await expect(entry).toContainText("Checked 1 hour ago");
   await expect(entry.locator(".template-versions")).toContainText("Current 1.1.0");
   await expect(entry.locator(".template-versions")).toContainText("Newest 1.2.0");
-  await expect(entry.getByText("New version")).toBeVisible();
+  await expect(entry.getByText("New version", { exact: true })).toBeVisible();
   await entry.getByRole("button", { name: "Upgrade template" }).click();
   await expect(entry.getByRole("button", { name: "Save" })).toBeDisabled();
   // Only the found versions newer than the current one are offered.
@@ -92,7 +92,7 @@ test("upgrades a template to a newer found version, edits it and refuses its rem
   await expect(entry.getByLabel("Current version")).toHaveCount(0);
   // No newer version is found: no template upgrade is offered.
   await expect(entry.getByRole("button", { name: "Upgrade template" })).toHaveCount(0);
-  await expect(entry.getByText("New version")).toHaveCount(0);
+  await expect(entry.getByText("New version", { exact: true })).toHaveCount(0);
 
   await entry.getByRole("button", { name: "Edit" }).click();
   await entry.getByLabel("Display name").fill("Sample kit, renamed");
@@ -125,7 +125,7 @@ test("finds a new version on request, shows a failed check and takes a moved tag
   await control(request, "hold-checks", { hold: false });
   await expect(entry).toContainText("Checked just now");
   await expect(entry.locator(".template-versions")).toContainText("Newest 2.1.0");
-  await expect(entry.getByText("New version")).toBeVisible();
+  await expect(entry.getByText("New version", { exact: true })).toBeVisible();
   await shot(page, "templates-newer");
   // A check while the template service is down keeps what was found.
   await control(request, "template-service", { available: false });
@@ -146,7 +146,7 @@ test("finds a new version on request, shows a failed check and takes a moved tag
   await expect(entry).toContainText(
     "Current tag moved. Validate and save this version again before using it.",
   );
-  await expect(entry.getByText("Tag moved")).toBeVisible();
+  await expect(entry.getByText("Tag moved", { exact: true })).toBeVisible();
   await expect(entry.getByRole("button", { name: "Upgrade template" })).toHaveCount(0);
   await entry.getByRole("button", { name: "Update version" }).click();
   await expect(entry.getByLabel("Current version").locator("option")).toHaveText(["2.1.0"]);
@@ -154,7 +154,7 @@ test("finds a new version on request, shows a failed check and takes a moved tag
   await entry.getByRole("button", { name: "Validate" }).click();
   await expect(entry.getByRole("status")).toHaveText("Checks passed · 2.1.0");
   await entry.getByRole("button", { name: "Save" }).click();
-  await expect(entry.getByText("Tag moved")).toHaveCount(0);
+  await expect(entry.getByText("Tag moved", { exact: true })).toHaveCount(0);
   await expect(entry.getByRole("button", { name: "Update version" })).toHaveCount(0);
 });
 

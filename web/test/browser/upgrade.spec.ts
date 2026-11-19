@@ -16,7 +16,7 @@ test("renders the whole producer batch it receives and completes the upgrade job
   request,
 }) => {
   await page.goto("/workspaces/sample-alpha/upgrade");
-  await expect(page.locator(".upgrade-current .status")).toHaveText("Running");
+  await expect(page.locator(".upgrade-current strong").first()).toHaveText("1.0.0");
   await shot(page, "upgrade-start");
   await page.getByRole("button", { name: "Begin upgrade" }).click();
   await expect(page.getByText("Question batch 1")).toBeVisible();

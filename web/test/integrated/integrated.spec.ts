@@ -66,7 +66,7 @@ test.describe("as a manager", () => {
     const template = page
       .getByRole("listitem")
       .filter({ has: page.getByRole("heading", { name: "Sample kit", exact: true }) });
-    await expect(template.getByText("1.0.0")).toBeVisible();
+    await expect(template.locator(".template-versions")).toContainText("Current 1.0.0");
     await shot(page, "03-template-registered");
   });
 
