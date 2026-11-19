@@ -139,21 +139,21 @@ func Import(ctx context.Context, opts ImportOptions) error {
 	}
 	type record struct {
 		source  string
-		applied store.AppliedVersion
+		version func(store.Template) store.AppliedVersion
 	}
 	records := map[string]record{}
 	for _, name := range names {
 		if folder, err := opts.Root.Folder(name); err == nil {
-			source, applied := Record(folder)
-			records[name] = record{source, applied}
+			source, version := Join(folder)
+			records[name] = record{source, version}
 		}
 	}
 	_, err = opts.Data.Import(ctx, ImportID, func(tx *store.Tx) error {
 		for _, tpl := range imported {
 			joins := map[string]store.AppliedVersion{}
 			for _, name := range names {
-				if r := records[name]; r.source == tpl.Source {
-					joins[name] = r.applied
+				if r := records[name]; r.source != "" && r.source == tpl.Source {
+					joins[name] = r.version(tpl)
 				}
 			}
 			recorded, err := tx.RegisterTemplate(tpl, joins)

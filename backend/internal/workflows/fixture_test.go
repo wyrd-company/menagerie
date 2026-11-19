@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -204,6 +205,15 @@ func appliedRecord(s templates.Selector) string {
 var sampleTemplate = store.Template{ID: "sample", Name: "Sample", Address: "https://git.example.invalid/example-org/sample",
 	Source: "https://git.example.invalid/example-org/sample", CurrentVersion: "1.0.0", CurrentTag: "1.0.0",
 	CurrentCommit: "1000000000000000000000000000000000000001"}
+
+// sampleVersions are the sample template's found versions: 0.9.0, its
+// current 1.0.0, 1.1.0 and 2.0.0, which newVersion makes current.
+var sampleVersions = []store.Version{
+	{Version: "0.9.0", Tag: "0.9.0", Commit: "0900000000000000000000000000000000000009"},
+	{Version: "1.0.0", Tag: "1.0.0", Commit: "1000000000000000000000000000000000000001"},
+	{Version: "1.1.0", Tag: "1.1.0", Commit: "1100000000000000000000000000000000000011"},
+	{Version: "2.0.0", Tag: "v2.0.0", Commit: "2000000000000000000000000000000000000002"},
+}
 
 // newVersion makes 2.0.0 the sample template's current version, as a
 // manager's upgrade of the template does.
@@ -400,6 +410,10 @@ func newWorldWith(t *testing.T, opts jobs.Options) *world {
 	w.manager = jobs.NewManager(ctx, opts)
 	w.data = testData(t)
 	if _, err := w.data.RegisterTemplate(context.Background(), sampleTemplate, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The sample's versions, as its last check found them.
+	if _, err := w.data.RecordCheck(context.Background(), "sample", sampleVersions, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w.rt.data = w.data

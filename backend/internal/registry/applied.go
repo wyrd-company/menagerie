@@ -9,6 +9,7 @@ package registry
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -120,23 +121,84 @@ func Source(folder string) string {
 	return applied.Source
 }
 
-// Version is what the applied record gives Menagerie of the version last
-// applied: its ref when that is a version, else unknown, which a version
-// check of the workspace's template completes from the commit.
-func (a Applied) Version() store.AppliedVersion {
-	out := store.AppliedVersion{Commit: a.Commit}
-	if v, ok := ParseVersion(a.Ref); ok {
-		out.Version = v.String()
+// IsCommit says that commit is a full Git object id: 40 or 64 lower-case
+// hexadecimal digits.
+func IsCommit(commit string) bool {
+	if len(commit) != 40 && len(commit) != 64 {
+		return false
 	}
-	return out
+	for _, c := range commit {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
-// Record is the source and the applied version a workspace folder's applied
-// record names, or "" for a folder with no readable record.
-func Record(folder string) (string, store.AppliedVersion) {
+// VersionError says why an applied record gives a template no version.
+type VersionError struct{ Reason string }
+
+func (e *VersionError) Error() string { return e.Reason }
+
+// RecordVersion is the version an applied record gives tpl, by the one rule
+// every path that takes an applied version from a record follows: the
+// record's source must be the template's source and its commit a full Git
+// object id, and the version is the template's found version whose tag is
+// at that commit; when the record's ref is a version it must be that
+// version, and when it is not and several tags share the commit, the
+// version is the newest of them. A record that gives none is a
+// *VersionError naming why, with the ref and commit quoted.
+func RecordVersion(rec Applied, tpl store.Template) (store.Version, error) {
+	if rec.Source != tpl.Source {
+		return store.Version{}, &VersionError{Reason: fmt.Sprintf("the record names another template than template %s", tpl.ID)}
+	}
+	if !IsCommit(rec.Commit) {
+		return store.Version{}, &VersionError{Reason: fmt.Sprintf("the record's commit %q is not a full Git object id", rec.Commit)}
+	}
+	var at []store.Version
+	for _, found := range tpl.Versions {
+		if found.Commit == rec.Commit {
+			at = append(at, found)
+		}
+	}
+	named, isVersion := ParseVersion(rec.Ref)
+	switch {
+	case len(at) == 0:
+		return store.Version{}, &VersionError{Reason: fmt.Sprintf("no version tag of template %s that its checks found is at the record's commit %q (ref %q)", tpl.ID, rec.Commit, rec.Ref)}
+	case !isVersion:
+		// Found versions are in ascending order: the last is the newest.
+		return at[len(at)-1], nil
+	}
+	for _, found := range at {
+		if found.Version == named.String() {
+			return found, nil
+		}
+	}
+	return store.Version{}, &VersionError{Reason: fmt.Sprintf("the record's ref %q names version %s, but the version tag of template %s at its commit %q gives %s", rec.Ref, named, tpl.ID, rec.Commit, at[len(at)-1].Version)}
+}
+
+// JoinVersion is the applied version a join, or the first start's import,
+// takes from an applied record of tpl: RecordVersion's, at the record's
+// commit; else an unknown version with the record's commit, kept only
+// when the record names the template's source and a full object id, which
+// the template's next version check completes.
+func JoinVersion(rec Applied, tpl store.Template) store.AppliedVersion {
+	if found, err := RecordVersion(rec, tpl); err == nil {
+		return store.AppliedVersion{Version: found.Version, Commit: rec.Commit}
+	}
+	if rec.Source == tpl.Source && IsCommit(rec.Commit) {
+		return store.AppliedVersion{Commit: rec.Commit}
+	}
+	return store.AppliedVersion{}
+}
+
+// Join reads a workspace folder's applied record for a join: the source it
+// names, "" for a folder with no readable record, and the applied version
+// it gives a template of that source.
+func Join(folder string) (string, func(store.Template) store.AppliedVersion) {
 	applied, err := ReadApplied(folder)
 	if err != nil {
-		return "", store.AppliedVersion{}
+		return "", nil
 	}
-	return applied.Source, applied.Version()
+	return applied.Source, func(tpl store.Template) store.AppliedVersion { return JoinVersion(applied, tpl) }
 }

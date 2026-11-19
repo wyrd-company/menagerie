@@ -297,9 +297,6 @@ func (t *Tx) RegisterTemplate(tpl Template, joins map[string]AppliedVersion) (Te
 			}
 		}
 	}
-	if err := t.completeApplied(tpl.ID); err != nil {
-		return Template{}, err
-	}
 	return t.Template(tpl.ID)
 }
 
@@ -333,22 +330,6 @@ func (t *Tx) completeApplied(id string) error {
 	return err
 }
 
-// CompleteApplied gives each workspace whose applied version is unknown the
-// newest found version of its template whose tag is at its applied commit,
-// when one is.
-func (t *Tx) CompleteApplied() error {
-	ids, err := t.names(`SELECT id FROM templates ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if err := t.completeApplied(id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Workspaces lists the workspaces Menagerie's data holds, in name order.
 func (t *Tx) Workspaces() ([]string, error) {
 	return t.names(`SELECT name FROM workspaces ORDER BY name`)
@@ -376,20 +357,11 @@ func (t *Tx) AppliedVersion(workspace string) (AppliedVersion, error) {
 	return AppliedVersion{Version: version.String, Commit: commit.String}, nil
 }
 
-// SetAppliedVersion records the version and commit last applied to a workspace;
-// see Tx.SetAppliedVersion. A version "" leaves it unknown, and a version check of
-// its template then completes it from the commit.
+// SetAppliedVersion records the version and commit last applied to a
+// workspace; see Tx.SetAppliedVersion. A version "" leaves it unknown, and
+// the next version check of its template completes it from the commit.
 func (s *Store) SetAppliedVersion(ctx context.Context, workspace string, applied AppliedVersion) error {
-	return s.Update(ctx, func(t *Tx) error {
-		if err := t.SetAppliedVersion(workspace, applied); err != nil {
-			return err
-		}
-		id, err := t.WorkspaceTemplate(workspace)
-		if err != nil || id == "" {
-			return err
-		}
-		return t.completeApplied(id)
-	})
+	return s.Update(ctx, func(t *Tx) error { return t.SetAppliedVersion(workspace, applied) })
 }
 
 // AppliedVersion reads what Menagerie knows of the version last applied to a
@@ -619,18 +591,18 @@ func (s *Store) Untemplated(ctx context.Context) (names []string, err error) {
 
 // JoinTemplates joins each workspace that has no template to the
 // registered template whose source read gives it, with the applied version
-// and commit read gives it, completed from the template's found versions
-// while the version is unknown, and returns how many it joined. read
-// answers "" for a workspace it cannot read.
-func (s *Store) JoinTemplates(ctx context.Context, names []string, read func(name string) (source string, applied AppliedVersion)) (joined int, err error) {
+// read's version gives against that template, read in the same
+// transaction, and returns how many it joined. read answers "" for a
+// workspace it cannot read.
+func (s *Store) JoinTemplates(ctx context.Context, names []string, read func(name string) (source string, version func(Template) AppliedVersion)) (joined int, err error) {
 	type record struct {
 		source  string
-		applied AppliedVersion
+		version func(Template) AppliedVersion
 	}
 	records := map[string]record{}
 	for _, name := range names {
-		if source, applied := read(name); source != "" {
-			records[name] = record{source, applied}
+		if source, version := read(name); source != "" {
+			records[name] = record{source, version}
 		}
 	}
 	err = s.Update(ctx, func(t *Tx) error {
@@ -649,14 +621,15 @@ func (s *Store) JoinTemplates(ctx context.Context, names []string, read func(nam
 				continue
 			}
 			joined++
-			if err := t.SetAppliedVersion(name, r.applied); err != nil {
-				return err
-			}
 			id, err := t.WorkspaceTemplate(name)
 			if err != nil {
 				return err
 			}
-			if err := t.completeApplied(id); err != nil {
+			tpl, err := t.Template(id)
+			if err != nil {
+				return err
+			}
+			if err := t.SetAppliedVersion(name, r.version(tpl)); err != nil {
 				return err
 			}
 		}

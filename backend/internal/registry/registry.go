@@ -164,11 +164,16 @@ func (r *Registry) Register(ctx context.Context, name, address, runnerImage stri
 			return store.Template{}, &CheckError{Check: CheckVersion, Message: "the address's ref is not a version's tag: a version is a tag MAJOR.MINOR.PATCH, with an optional leading v"}
 		}
 	}
-	checked, err := r.checkVersion(ctx, read.Base, current)
+	checked, err := r.checkVersion(ctx, read.Base, current, "register the template again")
 	if err != nil {
 		return store.Template{}, err
 	}
-	joins, err := r.joins(ctx, read.Source)
+	tpl := store.Template{
+		Name: name, Address: read.Base, Source: read.Source, RunnerImage: runnerImage,
+		CurrentVersion: current.Version, CurrentTag: current.Tag, CurrentCommit: checked.Commit,
+		Versions: found(versions.Versions), CheckedAt: r.now(),
+	}
+	joins, err := r.joins(ctx, tpl)
 	if err != nil {
 		return store.Template{}, err
 	}
@@ -176,11 +181,7 @@ func (r *Registry) Register(ctx context.Context, name, address, runnerImage stri
 	if check {
 		record = r.Data.TryRegisterTemplate
 	}
-	return record(ctx, store.Template{
-		Name: name, Address: read.Base, Source: read.Source, RunnerImage: runnerImage,
-		CurrentVersion: current.Version, CurrentTag: current.Tag, CurrentCommit: checked.Commit,
-		Versions: found(versions.Versions), CheckedAt: r.now(),
-	}, joins)
+	return record(ctx, tpl, joins)
 }
 
 // found is the template service's versions as Menagerie's data keeps them.
@@ -199,11 +200,17 @@ func (r *Registry) now() time.Time {
 	return time.Now()
 }
 
-// checkVersion runs the fetch, read and definition checks of a version.
-func (r *Registry) checkVersion(ctx context.Context, address string, v templates.Version) (*templates.Checked, error) {
+// checkVersion runs the fetch, read and definition checks of a version, at
+// the commit its listing found: a fetch that resolves the tag to another
+// commit means the tag moved since, which fails version, and again says
+// what to do then.
+func (r *Registry) checkVersion(ctx context.Context, address string, v templates.Version, again string) (*templates.Checked, error) {
 	checked, err := r.Templates.Check(ctx, address, v.Tag)
 	if err != nil {
 		return nil, refusal(CheckFetch, err)
+	}
+	if checked.Commit != v.Commit {
+		return nil, &CheckError{Check: CheckVersion, Message: fmt.Sprintf("the tag of version %s moved after its versions were listed: it was at commit %s and is now at %s; %s", v.Version, v.Commit, checked.Commit, again)}
 	}
 	if !checked.Definition {
 		return nil, &CheckError{Check: CheckDefinition, Message: fmt.Sprintf("the template's files at version %s have no %s", v.Version, Definition)}
@@ -212,8 +219,8 @@ func (r *Registry) checkVersion(ctx context.Context, address string, v templates
 }
 
 // joins maps the workspaces with no template whose applied record names
-// source to the applied version their record gives them.
-func (r *Registry) joins(ctx context.Context, source string) (map[string]store.AppliedVersion, error) {
+// tpl's source to the applied version their record gives tpl.
+func (r *Registry) joins(ctx context.Context, tpl store.Template) (map[string]store.AppliedVersion, error) {
 	names, err := r.Data.Untemplated(ctx)
 	if err != nil {
 		return nil, err
@@ -224,8 +231,8 @@ func (r *Registry) joins(ctx context.Context, source string) (map[string]store.A
 		if err != nil {
 			continue
 		}
-		if named, applied := Record(folder); named == source {
-			out[name] = applied
+		if source, version := Join(folder); source == tpl.Source {
+			out[name] = version(tpl)
 		}
 	}
 	return out, nil
@@ -248,7 +255,8 @@ func (r *Registry) Upgrade(ctx context.Context, id, version string, check bool) 
 	if !ok || !again && !Newer(target.Version, tpl.CurrentVersion) {
 		return store.Template{}, ErrNotNewer
 	}
-	checked, err := r.checkVersion(ctx, tpl.Address, templates.Version{Version: target.Version, Tag: target.Tag, Commit: target.Commit})
+	checked, err := r.checkVersion(ctx, tpl.Address, templates.Version{Version: target.Version, Tag: target.Tag, Commit: target.Commit},
+		"check the template's versions, then upgrade it again")
 	if err != nil {
 		return store.Template{}, err
 	}

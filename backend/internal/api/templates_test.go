@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -44,20 +46,23 @@ func (s *templateService) ReadAddress(_ context.Context, address string) (*templ
 
 func (s *templateService) ListVersions(context.Context, string) (*templates.Versions, error) {
 	return &templates.Versions{Source: kitAddress, Versions: []templates.Version{
-		{Version: "1.0.0", Tag: "1.0.0", Commit: "c1.0.0"}, {Version: "1.1.0", Tag: "1.1.0", Commit: "c1.1.0"},
+		{Version: "1.0.0", Tag: "1.0.0", Commit: commitOf("1.0.0")}, {Version: "1.1.0", Tag: "1.1.0", Commit: commitOf("1.1.0")},
 	}}, nil
 }
 
 func (s *templateService) Check(_ context.Context, _, ref string) (*templates.Checked, error) {
-	return &templates.Checked{Source: kitAddress, Commit: "c" + ref, Definition: s.definition[ref]}, nil
+	return &templates.Checked{Source: kitAddress, Commit: commitOf(ref), Definition: s.definition[ref]}, nil
 }
+
+// commitOf is the fixture's commit of a ref: a full object id.
+func commitOf(ref string) string { return fmt.Sprintf("%x", sha1.Sum([]byte(ref))) }
 
 func templateFixture(t *testing.T) (*fixture, *templateService) {
 	t.Helper()
 	f := newFixture(t, nil)
 	service := &templateService{definition: map[string]bool{"1.0.0": true, "1.1.0": true}}
 	f.server.opts.Registry = &registry.Registry{Data: f.data, Templates: service, Root: f.server.opts.Root}
-	f.server.opts.AppliedRecord = registry.Record
+	f.server.opts.AppliedRecord = registry.Join
 	return f, service
 }
 
@@ -197,7 +202,7 @@ func TestATemplateUpgradesOnlyToANewerVersionItsChecksPass(t *testing.T) {
 	if upgraded := decode[templateBody](t, data); resp.StatusCode != 200 || upgraded.CurrentVersion != "1.1.0" {
 		t.Fatalf("%d %s", resp.StatusCode, data)
 	}
-	if tpl, _ := f.data.Template(context.Background(), "kit"); tpl.CurrentCommit != "c1.1.0" || tpl.CurrentTag != "1.1.0" {
+	if tpl, _ := f.data.Template(context.Background(), "kit"); tpl.CurrentCommit != commitOf("1.1.0") || tpl.CurrentTag != "1.1.0" {
 		t.Fatalf("%+v", tpl)
 	}
 	resp, data = f.do(t, "POST", "/api/templates/kit/upgrades", `{}`)
@@ -215,12 +220,12 @@ func TestAWorkspaceListedForTheFirstTimeJoinsItsTemplateWhichItsUseKeeps(t *test
 	if err := os.MkdirAll(folder, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	record := `{"applications":[{"target":".","template":"` + kitAddress + `@1.0.0","source":"` + kitAddress + `","commit":null}]}`
+	record := `{"applications":[{"target":".","template":"` + kitAddress + `@1.0.0","source":"` + kitAddress + `","commit":"` + commitOf("1.0.0") + `"}]}`
 	if err := os.WriteFile(filepath.Join(folder, registry.RecordName), []byte(record), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, data := f.do(t, "GET", "/api/workspaces", "")
-	if !strings.Contains(string(data), `"template":{"id":"kit","name":"Kit"},"appliedVersion":"1.0.0","appliedCommit":null,"needsUpgrade":true,"name":"delta"`) || !strings.Contains(string(data), `"template":null,"appliedVersion":null,"appliedCommit":null,"needsUpgrade":false,"name":"alpha"`) {
+	if !strings.Contains(string(data), `"template":{"id":"kit","name":"Kit"},"appliedVersion":"1.0.0","appliedCommit":"`+commitOf("1.0.0")+`","needsUpgrade":true,"name":"delta"`) || !strings.Contains(string(data), `"template":null,"appliedVersion":null,"appliedCommit":null,"needsUpgrade":false,"name":"alpha"`) {
 		t.Fatalf("%s", data)
 	}
 	resp, data := f.do(t, "DELETE", "/api/templates/kit", "")
@@ -339,16 +344,22 @@ func TestACheckOnRequestAnswersTheTemplateWhateverTheOutcome(t *testing.T) {
 
 // Each workspace shows its applied version and commit, and that it needs an
 // upgrade while its template's current version is newer; an unknown
-// version never needs one.
+// version never needs one. A folder listed for the first time takes the
+// version whose tag is at its record's commit, whatever the record's ref
+// says, else an unknown version with the commit.
 func TestTheWorkspaceListShowsAppliedVersionsAndUpgrades(t *testing.T) {
 	f, _ := templateFixture(t)
 	ctx := context.Background()
-	for name, ref := range map[string]string{"delta": "1.0.0", "echo": "main"} {
+	for name, at := range map[string][2]string{
+		"delta":   {"1.0.0", commitOf("1.0.0")},
+		"echo":    {"main", commitOf("echo")},
+		"foxtrot": {"8.0.0", commitOf("1.0.0")},
+	} {
 		folder := filepath.Join(f.root, name)
 		if err := os.MkdirAll(folder, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		record := `{"applications":[{"target":".","template":"` + kitAddress + `@` + ref + `","source":"` + kitAddress + `","commit":"c-` + name + `"}]}`
+		record := `{"applications":[{"target":".","template":"` + kitAddress + `@` + at[0] + `","source":"` + kitAddress + `","commit":"` + at[1] + `"}]}`
 		if err := os.WriteFile(filepath.Join(folder, registry.RecordName), []byte(record), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -375,11 +386,14 @@ func TestTheWorkspaceListShowsAppliedVersionsAndUpgrades(t *testing.T) {
 		return out
 	}
 	rows := list()
-	if r := rows["delta"]; r.AppliedVersion == nil || *r.AppliedVersion != "1.0.0" || *r.AppliedCommit != "c-delta" || r.NeedsUpgrade {
+	if r := rows["delta"]; r.AppliedVersion == nil || *r.AppliedVersion != "1.0.0" || *r.AppliedCommit != commitOf("1.0.0") || r.NeedsUpgrade {
 		t.Fatalf("%+v", r)
 	}
-	if r := rows["echo"]; r.AppliedVersion != nil || r.AppliedCommit == nil || *r.AppliedCommit != "c-echo" || r.NeedsUpgrade {
-		t.Fatalf("%+v", r)
+	for _, name := range []string{"echo", "foxtrot"} {
+		want := map[string]string{"echo": commitOf("echo"), "foxtrot": commitOf("1.0.0")}[name]
+		if r := rows[name]; r.AppliedVersion != nil || r.AppliedCommit == nil || *r.AppliedCommit != want || r.NeedsUpgrade {
+			t.Fatalf("%s: %+v", name, r)
+		}
 	}
 	if r := rows["alpha"]; r.AppliedVersion != nil || r.AppliedCommit != nil || r.NeedsUpgrade {
 		t.Fatalf("%+v", r)
@@ -391,7 +405,7 @@ func TestTheWorkspaceListShowsAppliedVersionsAndUpgrades(t *testing.T) {
 	if !rows["delta"].NeedsUpgrade || rows["echo"].NeedsUpgrade {
 		t.Fatalf("%+v", rows)
 	}
-	if err := f.data.SetAppliedVersion(ctx, "delta", store.AppliedVersion{Version: "1.1.0", Commit: "c1.1.0"}); err != nil {
+	if err := f.data.SetAppliedVersion(ctx, "delta", store.AppliedVersion{Version: "1.1.0", Commit: commitOf("1.1.0")}); err != nil {
 		t.Fatal(err)
 	}
 	if r := list()["delta"]; r.NeedsUpgrade || *r.AppliedVersion != "1.1.0" {

@@ -206,8 +206,8 @@ func TestAnImportedTemplateTakesItsCommitFromItsFirstCheck(t *testing.T) {
 }
 
 // A workspace's applied version is recorded with its commit; an unknown
-// one takes the newest found version whose tag is at its commit, from a
-// check or when it is recorded.
+// one takes the newest found version whose tag is at its commit at the
+// template's next check.
 func TestAnUnknownAppliedVersionIsCompletedFromItsCommit(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
@@ -234,8 +234,14 @@ func TestAnUnknownAppliedVersionIsCompletedFromItsCommit(t *testing.T) {
 	if got, _ := s.AppliedVersion(ctx, "alpha"); got.Version != "1.0.1" {
 		t.Fatalf("%+v", got)
 	}
-	// Recorded unknown again, the found versions complete it at once.
+	// Recorded unknown again, it stays unknown until the next check.
 	if err := s.SetAppliedVersion(ctx, "alpha", AppliedVersion{Commit: "c100"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.AppliedVersion(ctx, "alpha"); got != (AppliedVersion{Commit: "c100"}) {
+		t.Fatalf("%+v", got)
+	}
+	if _, err := s.RecordCheck(ctx, "kit", []Version{{"2.0.0", "2.0.0", "c100"}}, time.Unix(3, 0)); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.AppliedVersion(ctx, "alpha"); got != (AppliedVersion{Version: "2.0.0", Commit: "c100"}) {

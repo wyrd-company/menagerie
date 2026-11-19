@@ -76,9 +76,9 @@ var testNow = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 
 // kitVersions are the kit repository's versions, as a check finds them.
 var kitVersions = []store.Version{
-	{Version: "1.0.0", Tag: "1.0.0", Commit: "c100"},
-	{Version: "1.1.0", Tag: "v1.1.0", Commit: "c110"},
-	{Version: "1.2.0", Tag: "1.2.0", Commit: "c120"},
+	{Version: "1.0.0", Tag: "1.0.0", Commit: "c100000000000000000000000000000000000000"},
+	{Version: "1.1.0", Tag: "v1.1.0", Commit: "c110000000000000000000000000000000000000"},
+	{Version: "1.2.0", Tag: "1.2.0", Commit: "c120000000000000000000000000000000000000"},
 }
 
 func ref(s string) *string { return &s }
@@ -106,14 +106,14 @@ func world(t *testing.T) (*Registry, *fakeService, string) {
 			kit + "@main":   {Source: kit, Reference: ref("main"), Base: kit},
 		},
 		versions: map[string][]templates.Version{kit: {
-			{Version: "1.0.0", Tag: "1.0.0", Commit: "c100"},
-			{Version: "1.1.0", Tag: "v1.1.0", Commit: "c110"},
-			{Version: "1.2.0", Tag: "1.2.0", Commit: "c120"},
+			{Version: "1.0.0", Tag: "1.0.0", Commit: "c100000000000000000000000000000000000000"},
+			{Version: "1.1.0", Tag: "v1.1.0", Commit: "c110000000000000000000000000000000000000"},
+			{Version: "1.2.0", Tag: "1.2.0", Commit: "c120000000000000000000000000000000000000"},
 		}},
 		checked: map[string]templates.Checked{
-			kit + "@1.0.0":  {Source: kit, Commit: "c100", Definition: true},
-			kit + "@v1.1.0": {Source: kit, Commit: "c110", Definition: true},
-			kit + "@1.2.0":  {Source: kit, Commit: "c120", Definition: true},
+			kit + "@1.0.0":  {Source: kit, Commit: "c100000000000000000000000000000000000000", Definition: true},
+			kit + "@v1.1.0": {Source: kit, Commit: "c110000000000000000000000000000000000000", Definition: true},
+			kit + "@1.2.0":  {Source: kit, Commit: "c120000000000000000000000000000000000000", Definition: true},
 		},
 		refuse: map[string]error{},
 	}
@@ -140,7 +140,7 @@ func TestRegistrationTakesTheNewestVersionOrTheAddressTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := store.Template{ID: "sample-kit", Name: "Sample kit", Address: kit, Source: kit,
-		CurrentVersion: "1.2.0", CurrentTag: "1.2.0", CurrentCommit: "c120", Workspaces: []string{},
+		CurrentVersion: "1.2.0", CurrentTag: "1.2.0", CurrentCommit: "c120000000000000000000000000000000000000", Workspaces: []string{},
 		Versions: kitVersions, CheckedAt: testNow}
 	if !reflect.DeepEqual(newest, want) {
 		t.Fatalf("%+v", newest)
@@ -157,7 +157,7 @@ func TestRegistrationTakesTheNewestVersionOrTheAddressTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tagged.CurrentVersion != "1.1.0" || tagged.CurrentTag != "v1.1.0" || tagged.CurrentCommit != "c110" || tagged.RunnerImage != "alpine:3.22" || tagged.Address != kit {
+	if tagged.CurrentVersion != "1.1.0" || tagged.CurrentTag != "v1.1.0" || tagged.CurrentCommit != "c110000000000000000000000000000000000000" || tagged.RunnerImage != "alpine:3.22" || tagged.Address != kit {
 		t.Fatalf("%+v", tagged)
 	}
 }
@@ -188,7 +188,7 @@ func TestEachCheckRefusesInOrderAndNamesItself(t *testing.T) {
 			f.refuse["check "+kit+"@1.2.0"] = &templates.Error{Kind: "unsafe-template-link", Message: "link"}
 		}, CheckRead, "outside its repository"},
 		{"definition", kit, func(f *fakeService) {
-			f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120"}
+			f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120000000000000000000000000000000000000"}
 		}, CheckDefinition, ".devcontainer/devcontainer.json"},
 	} {
 		// A check alone refuses exactly as a registration does.
@@ -234,7 +234,7 @@ func TestACheckAloneStoresNothingAndARegistrationChecksAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := store.Template{ID: "sample-kit", Name: "Sample kit", Address: kit, Source: kit, RunnerImage: "alpine:3.22",
-		CurrentVersion: "1.2.0", CurrentTag: "1.2.0", CurrentCommit: "c120", Workspaces: []string{"alpha"},
+		CurrentVersion: "1.2.0", CurrentTag: "1.2.0", CurrentCommit: "c120000000000000000000000000000000000000", Workspaces: []string{"alpha"},
 		Versions: kitVersions, CheckedAt: testNow}
 	if !reflect.DeepEqual(checked, want) {
 		t.Fatalf("%+v", checked)
@@ -247,7 +247,7 @@ func TestACheckAloneStoresNothingAndARegistrationChecksAgain(t *testing.T) {
 	}
 	// A registration trusts no earlier check: the definition is gone now.
 	calls := len(f.calls)
-	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120"}
+	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120000000000000000000000000000000000000"}
 	if check := checkOf(t, errOf(r.Register(ctx, "Sample kit", kit, "alpine:3.22", false))); check.Check != CheckDefinition {
 		t.Fatalf("%+v", check)
 	}
@@ -256,7 +256,7 @@ func TestACheckAloneStoresNothingAndARegistrationChecksAgain(t *testing.T) {
 			t.Errorf("the registration did not ask %s again: %v", route, f.calls[calls:])
 		}
 	}
-	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120", Definition: true}
+	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120000000000000000000000000000000000000", Definition: true}
 	if _, err := r.Register(ctx, "Sample kit", kit, "alpine:3.22", false); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestACheckAloneStoresNothingAndARegistrationChecksAgain(t *testing.T) {
 	other := "https://git.example.invalid/example-org/other"
 	f.read[other] = templates.Address{Source: other, Base: other}
 	f.versions[other] = f.versions[kit]
-	f.checked[other+"@1.2.0"] = templates.Checked{Source: other, Commit: "c120", Definition: true}
+	f.checked[other+"@1.2.0"] = templates.Checked{Source: other, Commit: "c120000000000000000000000000000000000000", Definition: true}
 	if second, err := r.Register(ctx, "Sample kit", other, "", true); err != nil || second.ID != "sample-kit-2" || len(second.Workspaces) != 0 {
 		t.Fatalf("%+v %v", second, err)
 	}
@@ -400,16 +400,16 @@ func TestATemplateMovesOnlyForwardToACheckedVersion(t *testing.T) {
 			t.Errorf("%s: %v", version, err)
 		}
 	}
-	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120"}
+	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120000000000000000000000000000000000000"}
 	if check := checkOf(t, errOf(r.Upgrade(ctx, "kit", "1.2.0", false))); check.Check != CheckDefinition {
 		t.Fatalf("%+v", check)
 	}
 	if tpl, _ := r.Data.Template(ctx, "kit"); tpl.CurrentVersion != "1.1.0" {
 		t.Fatalf("a refused upgrade moved the template: %+v", tpl)
 	}
-	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120", Definition: true}
+	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120000000000000000000000000000000000000", Definition: true}
 	upgraded, err := r.Upgrade(ctx, "kit", "1.2.0", false)
-	if err != nil || upgraded.CurrentVersion != "1.2.0" || upgraded.CurrentTag != "1.2.0" || upgraded.CurrentCommit != "c120" {
+	if err != nil || upgraded.CurrentVersion != "1.2.0" || upgraded.CurrentTag != "1.2.0" || upgraded.CurrentCommit != "c120000000000000000000000000000000000000" {
 		t.Fatalf("%+v %v", upgraded, err)
 	}
 	if _, err := r.Upgrade(ctx, "nothing", "1.2.0", false); !errors.Is(err, store.ErrNoTemplate) {
@@ -437,14 +437,14 @@ func TestACheckOfAnUpgradeStoresNothingAndTheUpgradeChecksAgain(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 	checked, err := r.Upgrade(ctx, "kit", "1.2.0", true)
-	if err != nil || checked.CurrentVersion != "1.2.0" || checked.CurrentTag != "1.2.0" || checked.CurrentCommit != "c120" {
+	if err != nil || checked.CurrentVersion != "1.2.0" || checked.CurrentTag != "1.2.0" || checked.CurrentCommit != "c120000000000000000000000000000000000000" {
 		t.Fatalf("%+v %v", checked, err)
 	}
-	if tpl, _ := r.Data.Template(ctx, "kit"); tpl.CurrentVersion != "1.1.0" || tpl.CurrentCommit != "c110" {
+	if tpl, _ := r.Data.Template(ctx, "kit"); tpl.CurrentVersion != "1.1.0" || tpl.CurrentCommit != "c110000000000000000000000000000000000000" {
 		t.Fatalf("a check stored %+v", tpl)
 	}
 	calls := len(f.calls)
-	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120"}
+	f.checked[kit+"@1.2.0"] = templates.Checked{Source: kit, Commit: "c120000000000000000000000000000000000000"}
 	for _, checkOnly := range []bool{true, false} {
 		if check := checkOf(t, errOf(r.Upgrade(ctx, "kit", "1.2.0", checkOnly))); check.Check != CheckDefinition {
 			t.Fatalf("check=%t: %+v", checkOnly, check)

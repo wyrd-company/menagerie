@@ -171,7 +171,7 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 		if err := a.w.opts.Data.SetAppliedVersion(context.WithoutCancel(ctx), a.name, *a.record); err != nil {
 			fmt.Fprintf(run.Log(""), "recording version %s as the workspace's applied version failed: %v\n", a.record.Version, err)
 		} else {
-			fmt.Fprintf(run.Log(""), "the workspace's applied version is now %s, at commit %s\n", a.record.Version, a.record.Commit)
+			fmt.Fprintf(run.Log(""), "the workspace's applied version is now %s, at commit %q\n", a.record.Version, a.record.Commit)
 		}
 	}
 
@@ -278,7 +278,7 @@ func (a *applying) plan(ctx context.Context, run *jobs.Run, fetched, head plumbi
 // both versions or commits. It returns the applied version the record
 // gives, or nil when the merge leaves the record as it is.
 func (a *applying) forward(ctx context.Context, plan *backup.Plan) (*store.AppliedVersion, error) {
-	change, err := plan.Change(a.folder, registry.RecordName, registry.MaxRecord)
+	change, err := plan.Change(a.folder, registry.RecordName, recordLimit)
 	if err != nil {
 		return nil, &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("reading the applied record branch %s would write failed: %w; nothing was applied", a.branch, err)}
 	}
@@ -305,71 +305,59 @@ func (a *applying) forward(ctx context.Context, plan *backup.Plan) (*store.Appli
 	}
 	was := "version " + applied.Version
 	if applied.Version == "" {
-		was = "an unknown version at commit " + orNone(applied.Commit)
+		was = fmt.Sprintf("an unknown version at commit %q", applied.Commit)
 	}
-	if !change.After.Present {
-		return nil, refuse("the branch removes the applied record, which names %s", was)
-	}
-	if !change.After.Regular {
+	switch {
+	case !change.After.Present:
+		return nil, refuse("the branch removes the applied record, where the workspace has %s", was)
+	case !change.After.Regular:
 		return nil, refuse("the branch leaves an applied record that is not a file, where the workspace has %s", was)
+	case change.After.TooLarge:
+		return nil, refuse("the branch leaves an applied record larger than %d bytes, where the workspace has %s", recordLimit, was)
 	}
 	record, err := registry.ParseApplied(change.After.Data)
 	if err != nil {
 		return nil, refuse("the branch leaves an applied record Toha cannot read (%v), where the workspace has %s", err, was)
 	}
-	if record.Source != tpl.Source {
-		return nil, refuse("the branch's applied record names another template than template %s, whose source the workspace has", tpl.ID)
+	// One rule gives every applied version taken from a record: the found
+	// version whose tag is at the record's commit, the ref's when the ref
+	// is a version.
+	found, err := registry.RecordVersion(record, tpl)
+	if err != nil {
+		return nil, refuse("the branch's applied record gives no version: %v; the workspace has %s", err, was)
 	}
-	version, tag := "", ""
-	if v, ok := registry.ParseVersion(record.Ref); ok {
-		version, tag = v.String(), record.Ref
-	} else {
-		for _, found := range tpl.Versions {
-			if record.Commit != "" && found.Commit == record.Commit {
-				version, tag = found.Version, found.Tag
-			}
-		}
+	if found.Version == tpl.CurrentVersion && tpl.CurrentMoved() {
+		return nil, refuse("the branch's applied record names version %s, whose tag has moved since Menagerie recorded it; upgrade the template to that version again first", found.Version)
 	}
-	if version == "" {
-		return nil, refuse("the branch's applied record names ref %q at commit %s, which no version tag of template %s gives, where the workspace has %s", record.Ref, orNone(record.Commit), tpl.ID, was)
-	}
-	out := &store.AppliedVersion{Version: version, Commit: record.Commit}
+	out := &store.AppliedVersion{Version: found.Version, Commit: record.Commit}
 	if applied.Version != "" {
-		if registry.Newer(applied.Version, version) {
-			return nil, refuse("the branch's applied record names version %s, older than the workspace's version %s", version, applied.Version)
+		if registry.Newer(applied.Version, found.Version) {
+			return nil, refuse("the branch's applied record names version %s, older than the workspace's version %s", found.Version, applied.Version)
 		}
 		return out, nil
 	}
 	// An unknown applied version moves only to a record whose commit
 	// descends from the applied commit.
-	if applied.Commit == "" || record.Commit == "" {
-		return nil, refuse("the branch's applied record names version %s at commit %s, and the workspace's applied version and commit are not known, so it cannot be told to move forward", version, orNone(record.Commit))
+	if applied.Commit == "" {
+		return nil, refuse("the branch's applied record names version %s at commit %q, and the workspace's applied version and commit are not known, so it cannot be told to move forward", found.Version, record.Commit)
 	}
-	if found, ok := tpl.Found(version); ok {
-		tag = found.Tag
-	}
-	checked, err := a.w.opts.Templates.CheckSince(ctx, tpl.Address, tag, applied.Commit)
+	checked, err := a.w.opts.Templates.CheckSince(ctx, tpl.Address, found.Tag, applied.Commit)
 	var unavailable *templates.UnavailableError
 	switch {
 	case errors.As(err, &unavailable):
-		return nil, &jobs.Failure{Kind: KindTemplateUnavailable, Err: fmt.Errorf("the template service could not say whether version %s descends from the applied commit %s: %w; nothing was applied", version, applied.Commit, err)}
+		return nil, &jobs.Failure{Kind: KindTemplateUnavailable, Err: fmt.Errorf("the template service could not say whether version %s descends from the applied commit %q: %w; nothing was applied", found.Version, applied.Commit, err)}
 	case err != nil:
-		return nil, refuse("the template service refused to check version %s against the applied commit %s (%s)", version, applied.Commit, refusalKind(err))
+		return nil, refuse("the template service refused to check version %s against the applied commit %q (%s)", found.Version, applied.Commit, refusalKind(err))
 	case checked.Commit != record.Commit:
-		return nil, refuse("the branch's applied record names version %s at commit %s, but its tag is at commit %s", version, record.Commit, checked.Commit)
+		return nil, refuse("the branch's applied record names version %s at commit %q, but its tag is now at commit %q", found.Version, record.Commit, checked.Commit)
 	case !*checked.Descends:
-		return nil, refuse("the branch's applied record names version %s at commit %s, which does not descend from the workspace's applied commit %s", version, record.Commit, applied.Commit)
+		return nil, refuse("the branch's applied record names version %s at commit %q, which does not descend from the workspace's applied commit %q", found.Version, record.Commit, applied.Commit)
 	}
 	return out, nil
 }
 
-// orNone is a commit, or "none".
-func orNone(commit string) string {
-	if commit == "" {
-		return "none"
-	}
-	return commit
-}
+// recordLimit bounds the applied record Apply branch reads.
+var recordLimit int64 = registry.MaxRecord
 
 // refusal lists a refused apply's paths in the console and is its job
 // failure.

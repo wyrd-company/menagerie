@@ -80,6 +80,7 @@ func toha(source, ref, commit string) *string {
 const (
 	appliedCommit = "1000000000000000000000000000000000000001"
 	laterCommit   = "1100000000000000000000000000000000000011"
+	untagged      = "7770000000000000000000000000000000000777"
 )
 
 // Apply branch refuses, as not-applicable with nothing changed, each
@@ -100,8 +101,8 @@ func TestApplyBranchMovesTheAppliedRecordOnlyForward(t *testing.T) {
 	}{
 		{name: "older version", record: toha(src, "0.9.0", "0900000000000000000000000000000000000009"),
 			refused: []string{"version 0.9.0", "version 1.0.0", "older"}},
-		{name: "older v-prefixed version", record: toha(src, "v0.9.1", ""),
-			refused: []string{"version 0.9.1", "version 1.0.0"}},
+		{name: "older v-prefixed version", record: toha(src, "v0.9.0", "0900000000000000000000000000000000000009"),
+			refused: []string{"version 0.9.0", "version 1.0.0", "older"}},
 		{name: "removed record", record: nil, refused: []string{"removes the applied record", "version 1.0.0"}},
 		{name: "unreadable record", record: ptr(`{"applications": not json`), refused: []string{"Toha cannot read", "version 1.0.0"}},
 		{name: "no application at the root", record: ptr(`{"applications":[]}`), refused: []string{"Toha cannot read"}},
@@ -130,7 +131,32 @@ func TestApplyBranchMovesTheAppliedRecordOnlyForward(t *testing.T) {
 			}
 		}, record: toha(src, "1.1.0", laterCommit), refused: []string{"not known"}},
 		{name: "unknown version, record with no commit", prepare: func(t *testing.T, w *world) { w.unknown(t, "alpha") },
-			record: toha(src, "1.1.0", ""), refused: []string{"not known"}},
+			record: toha(src, "1.1.0", ""), refused: []string{`commit ""`, "not a full Git object id"}},
+		{name: "a version no tag gives", record: toha(src, "v9.9.9", untagged),
+			refused: []string{`"v9.9.9"`, untagged, "no version tag"}},
+		{name: "a version-like ref at an untagged commit", record: toha(src, "1.1.0", untagged),
+			refused: []string{`"1.1.0"`, untagged, "no version tag"}},
+		{name: "a branch at an untagged commit while versions are found", record: toha(src, "main", untagged),
+			refused: []string{`"main"`, untagged, "no version tag"}},
+		{name: "a found version at another version's commit", record: toha(src, "1.1.0", "0900000000000000000000000000000000000009"),
+			refused: []string{`"1.1.0"`, "version 1.1.0", "gives 0.9.0"}},
+		{name: "a found version at the current version's commit", record: toha(src, "1.1.0", appliedCommit),
+			refused: []string{`"1.1.0"`, "gives 1.0.0"}},
+		{name: "a commit that writes a line", record: toha(src, "1.1.0", "not-a-commit\nfake console line"),
+			refused: []string{`"not-a-commit\nfake console line"`, "not a full Git object id"}},
+		{name: "a moved current version", prepare: func(t *testing.T, w *world) {
+			moved := sampleVersions[:]
+			moved = append([]store.Version{}, moved...)
+			moved[1].Commit = "1b00000000000000000000000000000000000001"
+			if _, err := w.data.RecordCheck(context.Background(), "sample", moved, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+		}, record: toha(src, "1.0.0", "1b00000000000000000000000000000000000001"), refused: []string{"version 1.0.0", "moved"}},
+		{name: "a record larger than the bound", prepare: func(t *testing.T, w *world) {
+			before := recordLimit
+			recordLimit = 64
+			t.Cleanup(func() { recordLimit = before })
+		}, record: toha(src, "1.1.0", laterCommit), refused: []string{"larger than 64 bytes"}},
 		{name: "same version", record: toha(src, "1.0.0", appliedCommit), want: store.AppliedVersion{Version: "1.0.0", Commit: appliedCommit}},
 		{name: "newer version", record: toha(src, "1.1.0", laterCommit), want: store.AppliedVersion{Version: "1.1.0", Commit: laterCommit}},
 		{name: "version at its commit", prepare: func(t *testing.T, w *world) {
@@ -149,6 +175,16 @@ func TestApplyBranchMovesTheAppliedRecordOnlyForward(t *testing.T) {
 				return &templates.Checked{Source: src, Commit: laterCommit, Definition: true, Descends: ptr(true)}, nil
 			}
 		}, record: toha(src, "1.1.0", laterCommit), want: store.AppliedVersion{Version: "1.1.0", Commit: laterCommit}},
+		{name: "unknown version, a branch at a tagged commit asks by the tag", prepare: func(t *testing.T, w *world) {
+			w.unknown(t, "alpha")
+			w.tmpl.checkSince = func(_, ref, since string) (*templates.Checked, error) {
+				if ref != "v2.0.0" || since != appliedCommit {
+					return nil, errors.New("asked " + ref + " since " + since)
+				}
+				return &templates.Checked{Source: src, Commit: "2000000000000000000000000000000000000002", Definition: true, Descends: ptr(true)}, nil
+			}
+		}, record: toha(src, "main", "2000000000000000000000000000000000000002"),
+			want: store.AppliedVersion{Version: "2.0.0", Commit: "2000000000000000000000000000000000000002"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,6 +219,11 @@ func TestApplyBranchMovesTheAppliedRecordOnlyForward(t *testing.T) {
 			for _, named := range tc.refused {
 				if !strings.Contains(snap.Error.Message, named) {
 					t.Errorf("the refusal does not name %s: %s", named, snap.Error.Message)
+				}
+			}
+			for _, line := range strings.Split(logText(job), "\n") {
+				if strings.TrimSpace(line) == "fake console line" {
+					t.Errorf("a record's value wrote a console line")
 				}
 			}
 			if !strings.Contains(snap.Error.Message, "[paths: .toha.json]") {

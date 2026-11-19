@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"io"
+	"net"
+	"net/http"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -77,14 +79,14 @@ func TestACheckFindsANewVersionThatTheTemplateCanTake(t *testing.T) {
 	r, f, _ := world(t)
 	ctx := context.Background()
 	registered(t, r, "")
-	f.released("1.3.0", "1.3.0", "c130")
+	f.released("1.3.0", "1.3.0", "c130000000000000000000000000000000000000")
 	later := testNow.Add(time.Hour)
 	r.Now = func() time.Time { return later }
 	tpl, err := r.CheckVersions(ctx, "sample-kit")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := append(slices.Clone(kitVersions), store.Version{Version: "1.3.0", Tag: "1.3.0", Commit: "c130"})
+	want := append(slices.Clone(kitVersions), store.Version{Version: "1.3.0", Tag: "1.3.0", Commit: "c130000000000000000000000000000000000000"})
 	if !reflect.DeepEqual(tpl.Versions, want) || tpl.Newest() != "1.3.0" || tpl.CurrentVersion != "1.2.0" ||
 		!tpl.CheckedAt.Equal(later) || tpl.CheckFailure != "" || tpl.CurrentMoved() {
 		t.Fatalf("%+v", tpl)
@@ -94,7 +96,7 @@ func TestACheckFindsANewVersionThatTheTemplateCanTake(t *testing.T) {
 		t.Fatalf("%+v %v", stored, err)
 	}
 	upgraded, err := r.Upgrade(ctx, "sample-kit", "1.3.0", false)
-	if err != nil || upgraded.CurrentVersion != "1.3.0" || upgraded.CurrentTag != "1.3.0" || upgraded.CurrentCommit != "c130" {
+	if err != nil || upgraded.CurrentVersion != "1.3.0" || upgraded.CurrentTag != "1.3.0" || upgraded.CurrentCommit != "c130000000000000000000000000000000000000" {
 		t.Fatalf("%+v %v", upgraded, err)
 	}
 }
@@ -106,7 +108,7 @@ func TestAnUpgradeTakesOnlyAFoundVersion(t *testing.T) {
 	r, f, _ := world(t)
 	ctx := context.Background()
 	registered(t, r, "v1.1.0")
-	f.released("1.3.0", "1.3.0", "c130")
+	f.released("1.3.0", "1.3.0", "c130000000000000000000000000000000000000")
 	for _, version := range []string{"1.3.0", "1.1.0", "1.0.0", "0.9.0", "v1.2.0", ""} {
 		if _, err := r.Upgrade(ctx, "sample-kit", version, false); !errors.Is(err, ErrNotNewer) {
 			t.Fatalf("%q: %v", version, err)
@@ -169,7 +171,14 @@ func TestACheckThatGetsNoAnswerFailsWithinItsWait(t *testing.T) {
 	registered(t, r, "")
 	r.Templates = stalled{r.Templates}
 	r.CheckWait = 50 * time.Millisecond
-	tpl, err := r.CheckVersions(context.Background(), "sample-kit")
+	// The test's own deadline: a check its wait does not end fails here,
+	// by name, not at the test binary's limit.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tpl, err := r.CheckVersions(ctx, "sample-kit")
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("the check did not end within its wait of 50ms: it was still running after 5s")
+	}
 	if err != nil || tpl.CheckFailure != store.CheckServiceUnavailable {
 		t.Fatalf("%+v %v", tpl, err)
 	}
@@ -196,20 +205,20 @@ func TestAMovedTagIsTakenAgainOnlyByUpgradingToIt(t *testing.T) {
 	if f.called("check "+kit+"@1.2.0") != checks {
 		t.Fatal("the current version was checked again while its tag had not moved")
 	}
-	f.moved("1.2.0", "c12b")
+	f.moved("1.2.0", "c12b000000000000000000000000000000000000")
 	tpl, err := r.CheckVersions(ctx, "sample-kit")
-	if err != nil || !tpl.CurrentMoved() || tpl.CurrentCommit != "c120" {
+	if err != nil || !tpl.CurrentMoved() || tpl.CurrentCommit != "c120000000000000000000000000000000000000" {
 		t.Fatalf("%+v %v", tpl, err)
 	}
-	if checked, err := r.Upgrade(ctx, "sample-kit", "1.2.0", true); err != nil || checked.CurrentCommit != "c12b" || checked.CurrentMoved() {
+	if checked, err := r.Upgrade(ctx, "sample-kit", "1.2.0", true); err != nil || checked.CurrentCommit != "c12b000000000000000000000000000000000000" || checked.CurrentMoved() {
 		t.Fatalf("check: %+v %v", checked, err)
 	}
-	if stored, _ := r.Data.Template(ctx, "sample-kit"); stored.CurrentCommit != "c120" || !stored.CurrentMoved() {
+	if stored, _ := r.Data.Template(ctx, "sample-kit"); stored.CurrentCommit != "c120000000000000000000000000000000000000" || !stored.CurrentMoved() {
 		t.Fatalf("a check alone recorded the commit: %+v", stored)
 	}
 	before := f.called("check " + kit + "@1.2.0")
 	tpl, err = r.Upgrade(ctx, "sample-kit", "1.2.0", false)
-	if err != nil || tpl.CurrentVersion != "1.2.0" || tpl.CurrentCommit != "c12b" || tpl.CurrentMoved() {
+	if err != nil || tpl.CurrentVersion != "1.2.0" || tpl.CurrentCommit != "c12b000000000000000000000000000000000000" || tpl.CurrentMoved() {
 		t.Fatalf("%+v %v", tpl, err)
 	}
 	if f.called("check "+kit+"@1.2.0") != before+1 {
@@ -226,7 +235,7 @@ func TestAMovedTagTakesNoOlderVersion(t *testing.T) {
 	r, f, _ := world(t)
 	ctx := context.Background()
 	registered(t, r, "")
-	f.moved("1.2.0", "c12b")
+	f.moved("1.2.0", "c12b000000000000000000000000000000000000")
 	if _, err := r.CheckVersions(ctx, "sample-kit"); err != nil {
 		t.Fatal(err)
 	}
@@ -252,49 +261,125 @@ func TestTheFirstCheckOfAnImportedTemplateRecordsItsCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	tpl, err := r.CheckVersions(ctx, "kit")
-	if err != nil || tpl.CurrentCommit != "c110" || tpl.CurrentTag != "v1.1.0" || tpl.CurrentMoved() {
+	if err != nil || tpl.CurrentCommit != "c110000000000000000000000000000000000000" || tpl.CurrentTag != "v1.1.0" || tpl.CurrentMoved() {
 		t.Fatalf("%+v %v", tpl, err)
 	}
 }
 
-// A workspace whose applied record's ref is no version takes the version
-// whose tag is at its applied commit, from the template's checks.
-func TestACheckGivesAnUnknownAppliedVersionTheVersionAtItsCommit(t *testing.T) {
+// A registration joins each workspace by the one rule: the version whose
+// tag is at the record's commit, the ref's when that is a version; any
+// other record leaves the version unknown with its commit, as a ref naming
+// a version no tag gives at that commit does, until a check finds a tag at
+// that commit.
+func TestARegistrationAndACheckGiveTheVersionAtTheRecordsCommit(t *testing.T) {
 	r, f, rootDir := world(t)
 	ctx := context.Background()
-	for name, record := range map[string]string{
-		"alpha": `{"applications":[{"target":".","template":"` + kit + `@main","source":"` + kit + `","commit":"c110"}]}`,
-		"beta":  `{"applications":[{"target":".","template":"` + kit + `@main","source":"` + kit + `","commit":"c130"}]}`,
-		"gamma": `{"applications":[{"target":".","template":"` + kit + `@v1.0.0","source":"` + kit + `","commit":"c999"}]}`,
-	} {
-		if err := os.MkdirAll(filepath.Join(rootDir, name), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(rootDir, name, RecordName), []byte(record), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := r.Data.Discover(ctx, []string{"alpha", "beta", "gamma"}); err != nil {
-		t.Fatal(err)
-	}
+	folders(t, r, rootDir, map[string]string{
+		"alpha": toha(kit, "main", at110),
+		"beta":  toha(kit, "main", "c130000000000000000000000000000000000000"),
+		"gamma": toha(kit, "v1.0.0", untaged),
+		// kit@8.0.0 at 1.0.0's commit.
+		"eight": toha(kit, "8.0.0", at100),
+		// A found tag at another commit.
+		"moved": toha(kit, "1.2.0", at110),
+		"other": toha("gh:example-org/other", "1.0.0", at100),
+	})
 	registered(t, r, "")
 	want := map[string]store.AppliedVersion{
-		// The registration's listing already holds c110's version.
-		"alpha": {Version: "1.1.0", Commit: "c110"},
-		"beta":  {Commit: "c130"},
-		// A ref that is a version is the applied version.
-		"gamma": {Version: "1.0.0", Commit: "c999"},
+		"alpha": {Version: "1.1.0", Commit: at110},
+		"beta":  {Commit: "c130000000000000000000000000000000000000"},
+		"gamma": {Commit: untaged},
+		"eight": {Commit: at100},
+		"moved": {Commit: at110},
+		"other": {},
 	}
 	if got, err := r.Data.AppliedVersions(ctx); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v %v", got, err)
 	}
-	f.released("1.3.0", "1.3.0", "c130")
+	f.released("1.3.0", "1.3.0", "c130000000000000000000000000000000000000")
 	if _, err := r.CheckVersions(ctx, "sample-kit"); err != nil {
 		t.Fatal(err)
 	}
-	want["beta"] = store.AppliedVersion{Version: "1.3.0", Commit: "c130"}
+	want["beta"] = store.AppliedVersion{Version: "1.3.0", Commit: "c130000000000000000000000000000000000000"}
+	want["eight"] = store.AppliedVersion{Version: "1.0.0", Commit: at100}
+	want["moved"] = store.AppliedVersion{Version: "1.1.0", Commit: at110}
 	if got, err := r.Data.AppliedVersions(ctx); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// One rule gives the version of a record: of the template's source, at a
+// full commit id, the found version whose tag is at that commit, the ref's
+// when the ref is a version, else the newest of the tags there.
+func TestOneRuleGivesTheVersionOfARecord(t *testing.T) {
+	a, b, c := "a000000000000000000000000000000000000000", "b000000000000000000000000000000000000000", "c000000000000000000000000000000000000000"
+	sha256 := strings.Repeat("ab", 32)
+	tpl := store.Template{ID: "kit", Source: kit, Versions: []store.Version{
+		{Version: "1.0.0", Tag: "1.0.0", Commit: a}, {Version: "1.0.1", Tag: "1.0.1", Commit: a},
+		{Version: "1.1.0", Tag: "v1.1.0", Commit: b}, {Version: "2.0.0", Tag: "2.0.0", Commit: sha256},
+	}}
+	for _, tc := range []struct {
+		name, source, ref, commit string
+		version                   string
+		// join is what a join takes when the rule gives no version.
+		join  store.AppliedVersion
+		names []string
+	}{
+		{name: "the ref's version", ref: "1.0.0", commit: a, version: "1.0.0"},
+		{name: "the other tag at that commit", ref: "1.0.1", commit: a, version: "1.0.1"},
+		{name: "a branch takes the newest tag there", ref: "main", commit: a, version: "1.0.1"},
+		{name: "a v-prefixed tag", ref: "v1.1.0", commit: b, version: "1.1.0"},
+		{name: "a plain ref of a v-prefixed tag", ref: "1.1.0", commit: b, version: "1.1.0"},
+		{name: "a SHA-256 commit", ref: "2.0.0", commit: sha256, version: "2.0.0"},
+		{name: "a version no tag gives at that commit", ref: "8.0.0", commit: a,
+			join: store.AppliedVersion{Commit: a}, names: []string{`"8.0.0"`, "version 8.0.0", "gives 1.0.1"}},
+		{name: "a found tag at another commit", ref: "1.1.0", commit: a,
+			join: store.AppliedVersion{Commit: a}, names: []string{`"1.1.0"`, a}},
+		{name: "a branch at an untagged commit", ref: "main", commit: c,
+			join: store.AppliedVersion{Commit: c}, names: []string{"no version tag", c, `"main"`}},
+		{name: "a version at an untagged commit", ref: "v9.9.9", commit: c,
+			join: store.AppliedVersion{Commit: c}, names: []string{"no version tag", c}},
+		{name: "another source", source: "gh:example-org/other", ref: "1.0.0", commit: a,
+			names: []string{"another template"}},
+		{name: "no commit", ref: "1.0.0", commit: "", names: []string{`""`, "full Git object id"}},
+		{name: "a short commit", ref: "1.0.0", commit: a[:12], names: []string{"full Git object id"}},
+		{name: "an upper-case commit", ref: "1.0.0", commit: strings.ToUpper(a), names: []string{"full Git object id"}},
+		{name: "a commit holding a line", ref: "1.0.0", commit: "not-a-commit\nfake console line", names: []string{`"not-a-commit\nfake console line"`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := kit
+			if tc.source != "" {
+				source = tc.source
+			}
+			rec := Applied{Source: source, Ref: tc.ref, Commit: tc.commit}
+			found, err := RecordVersion(rec, tpl)
+			joined := JoinVersion(rec, tpl)
+			if tc.version != "" {
+				if err != nil || found.Version != tc.version || found.Commit != tc.commit {
+					t.Fatalf("%+v %v", found, err)
+				}
+				if joined != (store.AppliedVersion{Version: tc.version, Commit: tc.commit}) {
+					t.Fatalf("join %+v", joined)
+				}
+				return
+			}
+			var refused *VersionError
+			if !errors.As(err, &refused) {
+				t.Fatalf("%+v %v", found, err)
+			}
+			for _, named := range tc.names {
+				if !strings.Contains(err.Error(), named) {
+					t.Errorf("the refusal does not name %s: %v", named, err)
+				}
+			}
+			// The ref and commit are quoted: no value writes a line.
+			if strings.ContainsRune(err.Error(), '\n') {
+				t.Errorf("the refusal holds a line break: %q", err.Error())
+			}
+			if joined != tc.join {
+				t.Fatalf("join %+v, want %+v", joined, tc.join)
+			}
+		})
 	}
 }
 
@@ -320,7 +405,7 @@ func (h *heldService) ListVersions(ctx context.Context, address string) (*templa
 func TestChecksOfOneTemplateAtOnceShareOneRun(t *testing.T) {
 	r, f, _ := world(t)
 	registered(t, r, "")
-	f.released("1.3.0", "1.3.0", "c130")
+	f.released("1.3.0", "1.3.0", "c130000000000000000000000000000000000000")
 	held := &heldService{TemplateService: r.Templates, release: make(chan struct{})}
 	r.Templates = held
 	leaving, leave := context.WithCancel(context.Background())
@@ -372,10 +457,10 @@ func TestTheScheduleChecksEveryTemplateAtStartAndEachTick(t *testing.T) {
 		}
 		return tpl.Newest()
 	}
-	f.released("1.3.0", "1.3.0", "c130")
+	f.released("1.3.0", "1.3.0", "c130000000000000000000000000000000000000")
 	// The check at start finds it.
 	waitFor(t, "the check at start to find 1.3.0", func() bool { return newest() == "1.3.0" })
-	f.released("1.4.0", "1.4.0", "c140")
+	f.released("1.4.0", "1.4.0", "c140000000000000000000000000000000000000")
 	ticks <- testNow
 	waitFor(t, "the check at the tick to find 1.4.0", func() bool { return newest() == "1.4.0" })
 	f.refusing("versions "+kit, &templates.Error{Status: 422, Kind: "template-not-found", Message: "https://git.example.invalid/secret"})
@@ -397,5 +482,112 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// staleCheck points the fetch of a tag at commit while the listing keeps
+// the commit it had, as a tag moved after the versions were listed.
+func (f *fakeService) staleCheck(tag, commit string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checked[kit+"@"+tag] = templates.Checked{Source: kit, Commit: commit, Definition: true}
+}
+
+// A template takes a version only at the commit its listing found: a tag
+// moved between the listing and the fetch refuses the registration, the
+// upgrade and Update version under version, a check alone or not, storing
+// nothing; after a check lists the new commit, the upgrade takes it.
+func TestATemplateTakesAVersionOnlyAtTheCommitItsListingFound(t *testing.T) {
+	ctx := context.Background()
+	moved := "c12b000000000000000000000000000000000000"
+	again := "c12c000000000000000000000000000000000000"
+	refusedVersion := func(t *testing.T, err error, from, to string) {
+		t.Helper()
+		check := checkOf(t, err)
+		if check.Check != CheckVersion || !strings.Contains(check.Message, "moved") || !strings.Contains(check.Message, from) || !strings.Contains(check.Message, to) {
+			t.Fatalf("%+v", check)
+		}
+	}
+	t.Run("registration", func(t *testing.T) {
+		r, f, _ := world(t)
+		f.staleCheck("1.2.0", moved)
+		for _, checkOnly := range []bool{true, false} {
+			_, err := r.Register(ctx, "Sample kit", kit, "", checkOnly)
+			refusedVersion(t, err, at120, moved)
+		}
+		if list, _ := r.Data.Templates(ctx); len(list) != 0 {
+			t.Fatalf("stored %+v", list)
+		}
+	})
+	t.Run("upgrade", func(t *testing.T) {
+		r, f, _ := world(t)
+		registered(t, r, "v1.1.0")
+		f.staleCheck("1.2.0", moved)
+		for _, checkOnly := range []bool{true, false} {
+			_, err := r.Upgrade(ctx, "sample-kit", "1.2.0", checkOnly)
+			refusedVersion(t, err, at120, moved)
+		}
+		if tpl, _ := r.Data.Template(ctx, "sample-kit"); tpl.CurrentVersion != "1.1.0" {
+			t.Fatalf("stored %+v", tpl)
+		}
+		f.moved("1.2.0", moved)
+		if _, err := r.CheckVersions(ctx, "sample-kit"); err != nil {
+			t.Fatal(err)
+		}
+		if tpl, err := r.Upgrade(ctx, "sample-kit", "1.2.0", false); err != nil || tpl.CurrentCommit != moved || tpl.CurrentMoved() {
+			t.Fatalf("%+v %v", tpl, err)
+		}
+	})
+	t.Run("update version", func(t *testing.T) {
+		r, f, _ := world(t)
+		registered(t, r, "")
+		f.moved("1.2.0", moved)
+		if tpl, err := r.CheckVersions(ctx, "sample-kit"); err != nil || !tpl.CurrentMoved() {
+			t.Fatalf("%+v %v", tpl, err)
+		}
+		f.staleCheck("1.2.0", again)
+		for _, checkOnly := range []bool{true, false} {
+			_, err := r.Upgrade(ctx, "sample-kit", "1.2.0", checkOnly)
+			refusedVersion(t, err, moved, again)
+		}
+		if tpl, _ := r.Data.Template(ctx, "sample-kit"); tpl.CurrentCommit != at120 || !tpl.CurrentMoved() {
+			t.Fatalf("stored %+v", tpl)
+		}
+		f.moved("1.2.0", again)
+		if _, err := r.CheckVersions(ctx, "sample-kit"); err != nil {
+			t.Fatal(err)
+		}
+		if tpl, err := r.Upgrade(ctx, "sample-kit", "1.2.0", false); err != nil || tpl.CurrentCommit != again || tpl.CurrentMoved() {
+			t.Fatalf("%+v %v", tpl, err)
+		}
+	})
+}
+
+// A template service whose listing names a version with no commit is no
+// answer: the check records template-service-unavailable, with its time,
+// and keeps the versions found before.
+func TestAMalformedListingIsRecordedAsUnavailable(t *testing.T) {
+	r, _, _ := world(t)
+	registered(t, r, "")
+	socket := filepath.Join(t.TempDir(), "template.sock")
+	l, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"source":"`+kit+`","versions":[{"version":"1.3.0","tag":"1.3.0","commit":""}]}`)
+	})}
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	r.Templates = templates.New(socket)
+	later := testNow.Add(time.Hour)
+	r.Now = func() time.Time { return later }
+	tpl, err := r.CheckVersions(context.Background(), "sample-kit")
+	if err != nil {
+		t.Fatalf("the check failed instead of recording the failure: %v", err)
+	}
+	if tpl.CheckFailure != store.CheckServiceUnavailable || !tpl.CheckedAt.Equal(later) || !reflect.DeepEqual(tpl.Versions, kitVersions) {
+		t.Fatalf("%+v", tpl)
 	}
 }
