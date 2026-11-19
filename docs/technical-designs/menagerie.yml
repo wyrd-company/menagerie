@@ -498,10 +498,11 @@ proposed-design:
     before any write, the planned record alone, bounded in size: the record
     it would write must give a version by the rule of template-versions,
     the found version whose tag is at the record's commit and, when the
-    record's ref is a version, that version; that version's tag must not
-    have moved; and the version must be no older than the workspace's
-    applied version. A workspace
-    with no registered template takes no change to its record, and one
+    record's ref is a version, that version; that version must not be the
+    template's current version while the current version's tag has moved;
+    and the version must be no older than the workspace's applied
+    version. A workspace with no registered template takes no change to
+    its record, and one
     whose applied version is unknown takes a record whose version is known
     and whose commit descends from its applied commit, as an upgrade
     checks. A merge that removes the applied record, or leaves one Toha
@@ -1325,8 +1326,10 @@ proposed-design:
     remaining entries that have one source are one template. The newest
     entry whose ref is a version gives the template's current version,
     `id`, name and runner image, and its address is that entry's without the
-    ref. Its current version's commit is the one the
-    first version check finds at its tag. A source with no entry whose ref
+    ref. Its current version's tag and commit are the ones the first
+    version check lists for that version: when the repository has both a
+    `v`-prefixed and a plain tag of the version, the listed one, which may
+    not be the tag of the entry's ref. A source with no entry whose ref
     is a version, such as one pinned to a branch, a commit or a tag like
     `v1`, is not imported; the start log names its entries' `id`s and says
     that a manager registers the template once its repository has a

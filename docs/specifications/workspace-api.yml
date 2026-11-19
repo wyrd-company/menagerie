@@ -219,8 +219,9 @@ description: >-
   records the outcome, whatever it is, so it has no 503; an id no template
   has is 404 `unknown-template`. A registration records the versions it
   listed as its first check. An imported template's current commit, which
-  is unknown, is the one its first check finds at its current version's
-  tag. A check gives each workspace of the template whose `appliedVersion`
+  is unknown, and its current tag are the ones its first check lists for
+  its current version: the listed tag of that version, which may be the
+  plain tag where the imported ref was `v`-prefixed. A check gives each workspace of the template whose `appliedVersion`
   is null the newest found version whose tag is at its `appliedCommit`,
   and never replaces a known one. A check that finds the current version's
   tag at another commit makes `currentMoved` true: a `create` or an

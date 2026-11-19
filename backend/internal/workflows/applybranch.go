@@ -268,15 +268,19 @@ func (a *applying) plan(ctx context.Context, run *jobs.Run, fetched, head plumbi
 	return plan, nil
 }
 
-// forward reads, before anything is written, the applied record a planned
-// merge would leave, when it changes the record: the workspace must have a
-// registered template, and the record must be one Toha can read, name that
-// template's source, and give a version, its ref's or the one whose tag is
-// at its commit, no older than the workspace's applied version; while that
-// version is unknown, the record's commit must descend from the applied
-// commit, as an upgrade checks. Anything else refuses the apply, naming
-// both versions or commits. It returns the applied version the record
-// gives, or nil when the merge leaves the record as it is.
+// forward reads, before anything is written, only the applied record a
+// planned merge would leave, when it changes the record. The workspace
+// must have a registered template; the record must be a file of at most
+// recordLimit bytes that Toha can read; the one rule (registry.RecordVersion)
+// must give it a version: of the template's source, at a full object id,
+// the found version whose tag is at that commit, the ref's when the ref is
+// a version; that version must not be the current version while its tag
+// has moved; and it must be no older than the workspace's applied version,
+// or, while that version is unknown, its found tag's commit must be the
+// record's and descend from the applied commit, as an upgrade checks.
+// Anything else refuses the apply as not-applicable, naming both versions
+// or commits, quoted. It returns the applied version the record gives, or
+// nil when the merge leaves the record as it is.
 func (a *applying) forward(ctx context.Context, plan *backup.Plan) (*store.AppliedVersion, error) {
 	change, err := plan.Change(a.folder, registry.RecordName, recordLimit)
 	if err != nil {
