@@ -507,8 +507,8 @@ proposed-design:
     and whose commit descends from its applied commit, as an upgrade
     checks. A merge that removes the applied record, or leaves one Toha
     cannot read, a record larger than the bound, and anything else refuses
-    the apply as `not-applicable`, naming both versions or commits, quoted,
-    with nothing changed. After an apply that
+    the apply as `not-applicable`, naming both versions or commits, quoted
+    and shortened, with nothing changed. After an apply that
     changed the record, the workspace's applied version and commit are the
     record's. Only the API and the UI start Apply branch, never the
     workspace socket.

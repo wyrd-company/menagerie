@@ -384,7 +384,38 @@ func TestOneRuleGivesTheVersionOfARecord(t *testing.T) {
 	}
 }
 
-// heldService holds each listing until released, counting them.
+// A refusal quotes a record's ref and commit as Go string literals of at
+// most QuoteLimit bytes each, cut at a rune's start: a record of any size
+// gives a short message that writes no line.
+func TestARecordsValuesAreQuotedShort(t *testing.T) {
+	if got := Quoted(strings.Repeat("a", QuoteLimit)); got != `"`+strings.Repeat("a", QuoteLimit)+`"` {
+		t.Errorf("a value of the bound is cut: %s", got)
+	}
+	if got := Quoted(strings.Repeat("a", QuoteLimit+1)); got != `"`+strings.Repeat("a", QuoteLimit)+`"…` {
+		t.Errorf("a value over the bound is not cut at it: %s", got)
+	}
+	// A two-byte rune across the bound is left out whole.
+	if got := Quoted(strings.Repeat("a", QuoteLimit-1) + "é"); got != `"`+strings.Repeat("a", QuoteLimit-1)+`"…` {
+		t.Errorf("a rune across the bound is cut in two: %s", got)
+	}
+	untagged := "c000000000000000000000000000000000000000"
+	tpl := store.Template{ID: "kit", Source: kit, Versions: []store.Version{{Version: "1.0.0", Tag: "1.0.0", Commit: "a000000000000000000000000000000000000000"}}}
+	for name, rec := range map[string]Applied{
+		"a long commit": {Source: kit, Ref: "1.0.0", Commit: strings.Repeat("\x1b\n", 1<<19)},
+		"a long ref":    {Source: kit, Ref: strings.Repeat("\x1b\n", 1<<19), Commit: untagged},
+	} {
+		_, err := RecordVersion(rec, tpl)
+		if err == nil {
+			t.Fatalf("%s: the rule gave a version", name)
+		}
+		if n := len(err.Error()); n > 4*QuoteLimit+300 || !strings.Contains(err.Error(), "…") || strings.ContainsRune(err.Error(), '\n') {
+			t.Errorf("%s: the refusal is %d bytes, not cut short: %.200q", name, n, err.Error())
+		}
+	}
+}
+
+// heldService holds each listing until released, counting them and
+// telling started of each.
 type heldService struct {
 	TemplateService
 	listings atomic.Int32

@@ -13,7 +13,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 )
@@ -135,6 +137,24 @@ func IsCommit(commit string) bool {
 	return true
 }
 
+// QuoteLimit bounds the bytes of a record's value a message quotes.
+const QuoteLimit = 100
+
+// Quoted quotes a value an applied record names for a message, as a Go
+// string literal: its first QuoteLimit bytes, cut at a rune's start, with
+// "…" after the closing quote when the value is longer. No value writes a
+// line, and none makes a message larger than the bound.
+func Quoted(value string) string {
+	if len(value) <= QuoteLimit {
+		return strconv.Quote(value)
+	}
+	cut := QuoteLimit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return strconv.Quote(value[:cut]) + "…"
+}
+
 // VersionError says why an applied record gives a template no version.
 type VersionError struct{ Reason string }
 
@@ -153,7 +173,7 @@ func RecordVersion(rec Applied, tpl store.Template) (store.Version, error) {
 		return store.Version{}, &VersionError{Reason: fmt.Sprintf("the record names another template than template %s", tpl.ID)}
 	}
 	if !IsCommit(rec.Commit) {
-		return store.Version{}, &VersionError{Reason: fmt.Sprintf("the record's commit %q is not a full Git object id", rec.Commit)}
+		return store.Version{}, &VersionError{Reason: fmt.Sprintf("the record's commit %s is not a full Git object id", Quoted(rec.Commit))}
 	}
 	var at []store.Version
 	for _, found := range tpl.Versions {
@@ -164,7 +184,7 @@ func RecordVersion(rec Applied, tpl store.Template) (store.Version, error) {
 	named, isVersion := ParseVersion(rec.Ref)
 	switch {
 	case len(at) == 0:
-		return store.Version{}, &VersionError{Reason: fmt.Sprintf("no version tag of template %s that its checks found is at the record's commit %q (ref %q)", tpl.ID, rec.Commit, rec.Ref)}
+		return store.Version{}, &VersionError{Reason: fmt.Sprintf("no version tag of template %s that its checks found is at the record's commit %s (ref %s)", tpl.ID, Quoted(rec.Commit), Quoted(rec.Ref))}
 	case !isVersion:
 		// Found versions are in ascending order: the last is the newest.
 		return at[len(at)-1], nil
@@ -174,7 +194,7 @@ func RecordVersion(rec Applied, tpl store.Template) (store.Version, error) {
 			return found, nil
 		}
 	}
-	return store.Version{}, &VersionError{Reason: fmt.Sprintf("the record's ref %q names version %s, but the version tag of template %s at its commit %q gives %s", rec.Ref, named, tpl.ID, rec.Commit, at[len(at)-1].Version)}
+	return store.Version{}, &VersionError{Reason: fmt.Sprintf("the record's ref %s names version %s, but the version tag of template %s at its commit %s gives %s", Quoted(rec.Ref), named, tpl.ID, Quoted(rec.Commit), at[len(at)-1].Version)}
 }
 
 // JoinVersion is the applied version a join, or the first start's import,

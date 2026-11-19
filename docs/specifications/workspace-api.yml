@@ -673,8 +673,10 @@ description: >-
   workspace's `appliedVersion`; and, while `appliedVersion` is null, when
   `appliedCommit` is not known, or the template service does not answer
   that the version's tag is at the record's commit and that commit
-  descends from `appliedCommit`. Refusals quote the ref and the commit as
-  JSON strings. Only the planned record is read. An unreachable template service then fails the job as
+  descends from `appliedCommit`. Refusals quote the record's ref and commit
+  as Go string literals (`strconv.Quote`), each cut to its first 100 bytes
+  with `…` after the closing quote when it is longer. Only the planned
+  record is read. An unreachable template service then fails the job as
   `template-service-unavailable`, with nothing applied. After an apply
   that changed the record, the record's version and commit are the
   workspace's `appliedVersion` and `appliedCommit`; a plan that leaves the
