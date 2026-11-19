@@ -14,6 +14,7 @@ import { extname, join, normalize } from "node:path";
 import { finish, log, send, summary } from "./events.ts";
 import { answer, run } from "./scenarios.ts";
 import {
+  commitOf,
   initialTemplates,
   initialWorkspaces,
   newer,
@@ -32,6 +33,11 @@ export function createFixture(options: { distDir: string }) {
   let jobs = new Map<string, FixtureJob>();
   let signedIn = true;
   let dockerAvailable = true;
+  // Whether version checks reach the template service.
+  let templateServiceAvailable = true;
+  // A version check on request waits for this to be released, when set.
+  let holdChecks: Promise<void> | null = null;
+  let releaseChecks: (() => void) | null = null;
   let sequence = 0;
   let policySettings: PolicySettings = { required: [], groups: [], revision: 0 };
   let nextGroupID = 1;
@@ -48,6 +54,10 @@ export function createFixture(options: { distDir: string }) {
     jobs = new Map();
     signedIn = true;
     dockerAvailable = true;
+    templateServiceAvailable = true;
+    releaseChecks?.();
+    holdChecks = null;
+    releaseChecks = null;
     sequence = 0;
     policySettings = { required: [], groups: [], revision: 0 };
     nextGroupID = 1;
@@ -118,7 +128,39 @@ export function createFixture(options: { distDir: string }) {
       if (pathname === "/__fixture/reset") reset();
       else if (pathname === "/__fixture/auth") signedIn = input.signedIn === true;
       else if (pathname === "/__fixture/docker") dockerAvailable = input.available === true;
-      else if (pathname === "/__fixture/options")
+      else if (pathname === "/__fixture/template-service")
+        templateServiceAvailable = input.available === true;
+      else if (pathname === "/__fixture/hold-checks") {
+        if (input.hold === true && !holdChecks)
+          holdChecks = new Promise<void>((resolve) => (releaseChecks = resolve));
+        if (input.hold !== true) {
+          releaseChecks?.();
+          holdChecks = null;
+          releaseChecks = null;
+        }
+      } else if (pathname === "/__fixture/release-version") {
+        // The template's repository gets a version tag, which a check finds.
+        const t = world.templates.find((x) => x.id === input.template);
+        if (!t) return fail(res, 404, "unknown-template", String(input.template));
+        if (!t.versions.includes(input.version as string)) t.versions.push(input.version as string);
+        t.versions.sort((a, b) => (newer(a, b) ? 1 : newer(b, a) ? -1 : 0));
+      } else if (pathname === "/__fixture/move-tag") {
+        // The template's current version's tag moves to another commit.
+        const t = world.templates.find((x) => x.id === input.template);
+        if (!t) return fail(res, 404, "unknown-template", String(input.template));
+        t.tagMoved = true;
+      } else if (pathname === "/__fixture/template") {
+        // Sets a template's found versions, last check and moved tag directly.
+        const t = world.templates.find((x) => x.id === input.template);
+        if (!t) return fail(res, 404, "unknown-template", String(input.template));
+        Object.assign(t, input.set as object);
+      } else if (pathname === "/__fixture/applied") {
+        // Sets a workspace's applied version, null for unknown, and commit.
+        const w = world.workspaces.find((x) => x.name === input.workspace);
+        if (!w) return fail(res, 404, "workspace-not-found", String(input.workspace));
+        w.applied = (input.version as string | null) ?? null;
+        w.appliedCommit = (input.commit as string | null | undefined) ?? w.appliedCommit ?? null;
+      } else if (pathname === "/__fixture/options")
         world.options = { ...world.options, ...(input as Partial<FixtureOptions>) };
       else if (pathname === "/__fixture/restart") jobs = new Map();
       else if (pathname.startsWith("/__fixture/release/")) {
@@ -240,6 +282,12 @@ export function createFixture(options: { distDir: string }) {
             state: w.state,
             containerId: w.containerId,
             template: template ? { id: template.id, name: template.name } : null,
+            appliedVersion: w.applied,
+            appliedCommit: w.appliedCommit ?? null,
+            needsUpgrade:
+              template !== undefined &&
+              w.applied !== null &&
+              newer(template.currentVersion, w.applied),
             policies: selections.get(w.name) ?? [],
             selectionRevision: revisions.get(w.name) ?? 0,
             appliedRevision: applied.get(w.name) ?? 0,
@@ -303,6 +351,7 @@ export function createFixture(options: { distDir: string }) {
         expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
       });
     }
+    const found = (t: FixtureTemplate) => t.found ?? t.versions;
     const templateBody = (t: FixtureTemplate) => ({
       id: t.id,
       name: t.name,
@@ -310,6 +359,17 @@ export function createFixture(options: { distDir: string }) {
       currentVersion: t.currentVersion,
       runnerImage: t.runnerImage,
       workspaces: world.workspaces.filter((w) => w.template === t.id).map((w) => w.name),
+      newestVersion: found(t).at(-1) ?? null,
+      versions: found(t).map((v) => ({
+        version: v,
+        tag: v,
+        commit: commitOf(t.id, v, v === t.currentVersion && t.currentMoved === true),
+      })),
+      currentMoved: t.currentMoved === true,
+      lastCheck:
+        t.lastCheck === undefined
+          ? { at: new Date(Date.now() - 3_600_000).toISOString(), failure: null }
+          : t.lastCheck,
     });
     const validName = (name: unknown) =>
       typeof name === "string" &&
@@ -384,39 +444,62 @@ export function createFixture(options: { distDir: string }) {
         address: base,
         currentVersion: "1.0.0",
         runnerImage: typeof input.runnerImage === "string" ? input.runnerImage : null,
-        versions: ["1.0.0", "1.1.0"],
+        versions: ["1.0.0"],
+        found: ["1.0.0"],
+        lastCheck: { at: new Date().toISOString(), failure: null },
       };
       // A check alone answers the template a registration would store.
       if (input.check === true) return json(res, 200, templateBody(template));
       world.templates.push(template);
       return json(res, 201, templateBody(template), { Location: `/api/templates/${id}` });
     }
-    const templateMatch = /^\/api\/templates\/([^/]+)(\/upgrades)?$/.exec(pathname);
+    const templateMatch = /^\/api\/templates\/([^/]+)(\/upgrades|\/version-checks)?$/.exec(
+      pathname,
+    );
     if (templateMatch) {
       const template = world.templates.find((t) => t.id === decodeURIComponent(templateMatch[1]!));
       if (!template)
         return fail(res, 404, "unknown-template", "no registered template has this id");
-      if (templateMatch[2] && method === "POST") {
+      if (templateMatch[2] === "/version-checks" && method === "POST") {
+        if (holdChecks) await holdChecks;
+        const at = new Date().toISOString();
+        if (!templateServiceAvailable) {
+          template.lastCheck = { at, failure: "template-service-unavailable" };
+          return json(res, 200, templateBody(template));
+        }
+        template.found = [...template.versions];
+        template.currentMoved = template.tagMoved === true;
+        template.lastCheck = { at, failure: null };
+        return json(res, 200, templateBody(template));
+      }
+      if (templateMatch[2] === "/upgrades" && method === "POST") {
         const { version, check } = JSON.parse(await readBody(req)) as {
           version?: string;
           check?: unknown;
         };
         if (check !== undefined && typeof check !== "boolean")
           return fail(res, 400, "invalid-request", "member check has the wrong type");
+        const again = version === template.currentVersion && template.currentMoved === true;
         if (
           !version ||
-          !template.versions.includes(version) ||
-          !newer(version, template.currentVersion)
+          !found(template).includes(version) ||
+          (!again && !newer(version, template.currentVersion))
         )
           return fail(
             res,
             409,
             "version-not-newer",
-            "the version is not a version of the template's repository newer than its current version",
+            "the version is not a found version of the template newer than its current one, nor its current version while that version's tag has moved; check the template's versions to find new ones",
           );
         if (check === true)
-          return json(res, 200, templateBody({ ...template, currentVersion: version }));
+          return json(
+            res,
+            200,
+            templateBody({ ...template, currentVersion: version, currentMoved: false }),
+          );
         template.currentVersion = version;
+        template.currentMoved = false;
+        template.tagMoved = false;
         return json(res, 200, templateBody(template));
       }
       if (!templateMatch[2] && method === "PATCH") {
@@ -477,6 +560,16 @@ export function createFixture(options: { distDir: string }) {
       if (operation === "create" && !world.templates.some((t) => t.id === input.templateId)) {
         return fail(res, 404, "unknown-template", `no registered template ${input.templateId}`);
       }
+      const refuseMoved = (t: FixtureTemplate) =>
+        fail(
+          res,
+          409,
+          "template-version-moved",
+          `the tag of version ${t.currentVersion}, template ${t.id}'s current version, has moved to another commit than the one Menagerie recorded; creates and upgrades from it are refused until a manager upgrades the template to version ${t.currentVersion} again, which checks it and records the new commit`,
+        );
+      const createdFrom = world.templates.find((t) => t.id === input.templateId);
+      if (operation === "create" && createdFrom?.currentMoved === true)
+        return refuseMoved(createdFrom);
       if (operation === "upgrade" && input.templateId !== undefined) {
         return fail(res, 400, "invalid-request", "an upgrade takes no templateId");
       }
@@ -510,6 +603,7 @@ export function createFixture(options: { distDir: string }) {
             "upgrade-not-needed",
             `workspace ${name} already has version ${ws.applied} of template ${template.id}, whose current version is ${template.currentVersion}`,
           );
+        if (template.currentMoved === true) return refuseMoved(template);
       }
       if (operation === "create" && ws)
         return fail(res, 409, "workspace-exists", `workspace ${name} already exists`);

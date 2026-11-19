@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
@@ -219,7 +220,7 @@ func TestAWorkspaceListedForTheFirstTimeJoinsItsTemplateWhichItsUseKeeps(t *test
 		t.Fatal(err)
 	}
 	_, data := f.do(t, "GET", "/api/workspaces", "")
-	if !strings.Contains(string(data), `"template":{"id":"kit","name":"Kit"},"name":"delta"`) || !strings.Contains(string(data), `"template":null,"name":"alpha"`) {
+	if !strings.Contains(string(data), `"template":{"id":"kit","name":"Kit"},"appliedVersion":"1.0.0","appliedCommit":null,"needsUpgrade":true,"name":"delta"`) || !strings.Contains(string(data), `"template":null,"appliedVersion":null,"appliedCommit":null,"needsUpgrade":false,"name":"alpha"`) {
 		t.Fatalf("%s", data)
 	}
 	resp, data := f.do(t, "DELETE", "/api/templates/kit", "")
@@ -283,5 +284,117 @@ func TestACheckRegistersAndUpgradesNothing(t *testing.T) {
 	}
 	if resp, data := f.do(t, "POST", "/api/templates/kit/upgrades", `{"version":"1.1.0","check":1}`); resp.StatusCode != 400 {
 		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+}
+
+type versionsBody struct {
+	templateBody
+	NewestVersion *string `json:"newestVersion"`
+	Versions      []struct {
+		Version, Tag, Commit string
+	} `json:"versions"`
+	CurrentMoved bool `json:"currentMoved"`
+	LastCheck    *struct {
+		At      time.Time `json:"at"`
+		Failure *string   `json:"failure"`
+	} `json:"lastCheck"`
+}
+
+// A check on request answers the template with its check's record: the
+// versions found, the newest, and the time with no failure; while the
+// template service is down it answers 200 too, with the failure recorded
+// and the found versions kept. An unknown template is 404.
+func TestACheckOnRequestAnswersTheTemplateWhateverTheOutcome(t *testing.T) {
+	f, _ := templateFixture(t)
+	if resp, data := f.do(t, "POST", "/api/templates", `{"name":"Kit","address":"`+kitAddress+`@1.0.0"}`); resp.StatusCode != 201 {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	resp, data := f.do(t, "POST", "/api/templates/kit/version-checks", "")
+	checked := decode[versionsBody](t, data)
+	if resp.StatusCode != 200 || checked.NewestVersion == nil || *checked.NewestVersion != "1.1.0" || len(checked.Versions) != 2 ||
+		checked.Versions[1].Tag != "1.1.0" || checked.CurrentVersion != "1.0.0" || checked.CurrentMoved ||
+		checked.LastCheck == nil || checked.LastCheck.Failure != nil || time.Since(checked.LastCheck.At) > time.Minute {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	// The template service is down: no socket answers.
+	f.server.opts.Registry = &registry.Registry{Data: f.data, Templates: templates.New(filepath.Join(t.TempDir(), "absent.sock")), Root: f.server.opts.Root}
+	resp, data = f.do(t, "POST", "/api/templates/kit/version-checks", "")
+	down := decode[versionsBody](t, data)
+	if resp.StatusCode != 200 || down.LastCheck == nil || down.LastCheck.Failure == nil || *down.LastCheck.Failure != "template-service-unavailable" ||
+		len(down.Versions) != 2 || *down.NewestVersion != "1.1.0" || down.LastCheck.At.Before(checked.LastCheck.At) {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	if strings.Contains(string(data), "absent.sock") {
+		t.Fatalf("the answer names the socket: %s", data)
+	}
+	_, data = f.do(t, "GET", "/api/templates", "")
+	if !strings.Contains(string(data), `"failure":"template-service-unavailable"`) {
+		t.Fatalf("the list does not show the failure: %s", data)
+	}
+	resp, data = f.do(t, "POST", "/api/templates/absent/version-checks", "")
+	if body := decode[checkBody](t, data); resp.StatusCode != 404 || body.Error.Kind != KindUnknownTemplate {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+}
+
+// Each workspace shows its applied version and commit, and that it needs an
+// upgrade while its template's current version is newer; an unknown
+// version never needs one.
+func TestTheWorkspaceListShowsAppliedVersionsAndUpgrades(t *testing.T) {
+	f, _ := templateFixture(t)
+	ctx := context.Background()
+	for name, ref := range map[string]string{"delta": "1.0.0", "echo": "main"} {
+		folder := filepath.Join(f.root, name)
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		record := `{"applications":[{"target":".","template":"` + kitAddress + `@` + ref + `","source":"` + kitAddress + `","commit":"c-` + name + `"}]}`
+		if err := os.WriteFile(filepath.Join(folder, registry.RecordName), []byte(record), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if resp, data := f.do(t, "POST", "/api/templates", `{"name":"Kit","address":"`+kitAddress+`@1.0.0"}`); resp.StatusCode != 201 {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	type row struct {
+		Name           string  `json:"name"`
+		AppliedVersion *string `json:"appliedVersion"`
+		AppliedCommit  *string `json:"appliedCommit"`
+		NeedsUpgrade   bool    `json:"needsUpgrade"`
+	}
+	list := func() map[string]row {
+		_, data := f.do(t, "GET", "/api/workspaces", "")
+		var body struct{ Workspaces []row }
+		if err := json.Unmarshal(data, &body); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]row{}
+		for _, r := range body.Workspaces {
+			out[r.Name] = r
+		}
+		return out
+	}
+	rows := list()
+	if r := rows["delta"]; r.AppliedVersion == nil || *r.AppliedVersion != "1.0.0" || *r.AppliedCommit != "c-delta" || r.NeedsUpgrade {
+		t.Fatalf("%+v", r)
+	}
+	if r := rows["echo"]; r.AppliedVersion != nil || r.AppliedCommit == nil || *r.AppliedCommit != "c-echo" || r.NeedsUpgrade {
+		t.Fatalf("%+v", r)
+	}
+	if r := rows["alpha"]; r.AppliedVersion != nil || r.AppliedCommit != nil || r.NeedsUpgrade {
+		t.Fatalf("%+v", r)
+	}
+	if resp, data := f.do(t, "POST", "/api/templates/kit/upgrades", `{"version":"1.1.0"}`); resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	rows = list()
+	if !rows["delta"].NeedsUpgrade || rows["echo"].NeedsUpgrade {
+		t.Fatalf("%+v", rows)
+	}
+	if err := f.data.SetAppliedVersion(ctx, "delta", store.AppliedVersion{Version: "1.1.0", Commit: "c1.1.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := list()["delta"]; r.NeedsUpgrade || *r.AppliedVersion != "1.1.0" {
+		t.Fatalf("%+v", r)
 	}
 }

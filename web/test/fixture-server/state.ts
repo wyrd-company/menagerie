@@ -1,4 +1,5 @@
 // Fixture state: workspaces, jobs and the options browser tests can set.
+import { createHash } from "node:crypto";
 import type { ServerResponse } from "node:http";
 
 export interface FixtureWorkspace {
@@ -7,19 +8,36 @@ export interface FixtureWorkspace {
   containerId: string | null;
   /** The registered template's id, or null. */
   template: string | null;
-  /** The version last applied, which an upgrade must be older than. */
+  /** The version last applied, which an upgrade must be older than; null while unknown. */
   applied: string | null;
+  /** The commit last applied, or null. */
+  appliedCommit?: string | null;
 }
 
-/** A registered template, and the versions its repository has. */
+/** A registered template, the versions its repository has and those its checks found. */
 export interface FixtureTemplate {
   id: string;
   name: string;
   address: string;
   currentVersion: string;
   runnerImage: string | null;
+  /** The versions its repository has: what a version check finds. */
   versions: string[];
+  /** The versions its last successful check found; absent, versions. */
+  found?: string[];
+  /** When its last check ended, and why it failed; absent, a check an hour ago succeeded. */
+  lastCheck?: { at: string; failure: string | null } | null;
+  /** Its repository's current tag is at another commit than the recorded one. */
+  tagMoved?: boolean;
+  /** A check found the current version's tag moved. */
+  currentMoved?: boolean;
 }
+
+/** The fixture's commit of a template's version; a moved tag's is another. */
+export const commitOf = (template: string, version: string, moved = false) =>
+  createHash("sha1")
+    .update(`${template} ${version}${moved ? " moved" : ""}`)
+    .digest("hex");
 
 export interface StoredEvent {
   id: number;
@@ -71,7 +89,11 @@ export const containerId = (seed: string) =>
   ).join("");
 
 export function initialWorkspaces(): FixtureWorkspace[] {
-  const kit = { template: "sample-kit", applied: "1.0.0" };
+  const kit = {
+    template: "sample-kit",
+    applied: "1.0.0",
+    appliedCommit: commitOf("sample-kit", "1.0.0"),
+  };
   return [
     { name: "sample-alpha", state: "running", containerId: containerId("alpha"), ...kit },
     { name: "sample-beta", state: "stopped", containerId: containerId("beta"), ...kit },

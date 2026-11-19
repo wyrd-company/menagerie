@@ -1,17 +1,22 @@
 package workflows
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registry"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 )
 
@@ -174,6 +179,11 @@ func TestAReansweredUpgradeAsksTheTemplateServiceToReanswer(t *testing.T) {
 		`{"operation":"upgrade","workspace":"alpha","reanswer":true}`,
 		`{"operation":"upgrade","workspace":"alpha"}`,
 	} {
+		// Toha's already-current records the pinned version; the next
+		// upgrade starts from the first version again.
+		if err := w.data.SetAppliedVersion(context.Background(), "alpha", store.AppliedVersion{Version: "1.0.0", Commit: sampleTemplate.CurrentCommit}); err != nil {
+			t.Fatal(err)
+		}
 		status, reply := w.do(t, http.MethodPost, "/api/jobs", body)
 		if status != http.StatusAccepted {
 			t.Fatalf("start: %d %s", status, reply)
@@ -318,17 +328,193 @@ func TestAnUpgradeAppliesItsTemplatesCurrentVersionAndMovesOnlyForward(t *testin
 	}
 }
 
-func TestAnUpgradeOfARecordWhoseRefIsNoVersionIsRefusedBeforeTheInterview(t *testing.T) {
+// An upgrade compares the applied version Menagerie keeps, not the
+// record's ref: a record edited to name a branch changes nothing.
+func TestAnUpgradeComparesTheStoredAppliedVersion(t *testing.T) {
 	w := newWorld(t)
 	w.createWorkspace(t, "alpha")
 	folder := filepath.Join(w.root, "alpha")
 	writeFile(t, folder, ".toha.json", appliedRecord(templates.Selector{Address: sampleTemplate.Address, Ref: "main"}))
-	job := w.startJob(t, "upgrade", "alpha", "")
-	snap := waitEnded(t, job)
-	if snap.State != jobs.Failed || snap.Error.Kind != KindTemplateRefused || !strings.Contains(snap.Error.Message, `"main"`) {
-		t.Fatalf("%+v %+v", snap, snap.Error)
+	status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"upgrade","workspace":"alpha"}`)
+	if status != http.StatusConflict || !strings.Contains(body, `"kind":"`+KindUpgradeNotNeeded+`"`) || !strings.Contains(body, "version 1.0.0") {
+		t.Fatalf("%d %s", status, body)
+	}
+}
+
+// An upgrade of a workspace whose applied version is unknown goes on only
+// when the template service answers that the current version's commit
+// descends from the applied commit; otherwise it fails as template-refused
+// before the interview, naming both commits.
+func TestAnUnknownAppliedVersionIsUpgradedOnlyByDescent(t *testing.T) {
+	const applied = "0000000000000000000000000000000000000abc"
+	current := "2000000000000000000000000000000000000002"
+	cases := []struct {
+		name    string
+		applied store.AppliedVersion
+		answer  func(address, ref, since string) (*templates.Checked, error)
+		kind    string
+		names   []string
+	}{
+		{"off the history", store.AppliedVersion{Commit: applied}, func(_, _, _ string) (*templates.Checked, error) {
+			return &templates.Checked{Source: sampleTemplate.Source, Commit: current, Definition: true, Descends: ptr(false)}, nil
+		}, KindTemplateRefused, []string{applied, current, "does not descend"}},
+		{"tag elsewhere", store.AppliedVersion{Commit: applied}, func(_, _, _ string) (*templates.Checked, error) {
+			return &templates.Checked{Source: sampleTemplate.Source, Commit: "3000000000000000000000000000000000000003", Definition: true, Descends: ptr(true)}, nil
+		}, KindTemplateRefused, []string{"3000000000000000000000000000000000000003", current}},
+		{"refused", store.AppliedVersion{Commit: applied}, func(_, _, _ string) (*templates.Checked, error) {
+			return nil, &templates.Error{Status: 422, Kind: "template-resolve-failed", Message: "https://git.example.invalid/secret"}
+		}, KindTemplateRefused, []string{applied, "template-resolve-failed"}},
+		{"unavailable", store.AppliedVersion{Commit: applied}, func(_, _, _ string) (*templates.Checked, error) {
+			return nil, &templates.UnavailableError{Err: errors.New("no socket")}
+		}, KindTemplateUnavailable, []string{applied}},
+		{"nothing known", store.AppliedVersion{}, nil, KindTemplateRefused, []string{"neither"}},
+		{"descends", store.AppliedVersion{Commit: applied}, func(_, ref, since string) (*templates.Checked, error) {
+			if ref != "v2.0.0" || since != applied {
+				return nil, fmt.Errorf("asked %s since %s", ref, since)
+			}
+			return &templates.Checked{Source: sampleTemplate.Source, Commit: current, Definition: true, Descends: ptr(true)}, nil
+		}, "", []string{"descends from its applied commit"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.createWorkspace(t, "alpha")
+			if err := w.data.SetAppliedVersion(context.Background(), "alpha", tc.applied); err != nil {
+				t.Fatal(err)
+			}
+			w.tmpl.checkSince = tc.answer
+			before := len(w.tmpl.seen())
+			job := w.startJob(t, "upgrade", "alpha", "")
+			if tc.kind == "" {
+				waitWaiting(t, job, 0)
+				w.answer(t, job, sessionAsking)
+				if snap := waitEnded(t, job); snap.State != jobs.Succeeded {
+					t.Fatalf("%+v %+v", snap, snap.Error)
+				}
+				if got, _ := w.data.AppliedVersion(context.Background(), "alpha"); got.Version != "2.0.0" || got.Commit != current {
+					t.Fatalf("%+v", got)
+				}
+				return
+			}
+			snap := waitEnded(t, job)
+			if snap.State != jobs.Failed || snap.Error.Kind != tc.kind {
+				t.Fatalf("%+v %+v", snap, snap.Error)
+			}
+			for _, named := range tc.names {
+				if !strings.Contains(snap.Error.Message, named) {
+					t.Errorf("the error does not name %s: %s", named, snap.Error.Message)
+				}
+			}
+			if strings.Contains(snap.Error.Message, "example.invalid") {
+				t.Errorf("the error quotes the template service's message: %s", snap.Error.Message)
+			}
+			// Nothing was backed up or asked: at most the descent check.
+			for _, call := range w.tmpl.seen()[before:] {
+				if !strings.HasPrefix(call, "check-since ") {
+					t.Errorf("the template service was asked %s", call)
+				}
+			}
+			if got, _ := w.data.AppliedVersion(context.Background(), "alpha"); got != tc.applied {
+				t.Errorf("the applied version changed: %+v", got)
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// A written upgrade, a conflicted one and Toha's already-current each record
+// the pinned version and commit as the workspace's applied version; a plan
+// that writes nothing records nothing.
+func TestAnAppliedUpgradeRecordsThePinnedVersion(t *testing.T) {
+	for outcome, records := range map[templates.Outcome]bool{
+		templates.Written: true, templates.Conflicted: true, templates.AlreadyCurrent: true, templates.Planned: false,
+	} {
+		t.Run(string(outcome), func(t *testing.T) {
+			w := newWorld(t)
+			w.createWorkspace(t, "alpha")
+			w.tmpl.applyUpgrade = func(s templates.Selector) (*templates.Applied, error) {
+				var conflicts []string
+				if outcome == templates.Conflicted {
+					writeFile(t, s.Target, "local.txt", "<<<<<<< conflict\n")
+					conflicts = []string{"local.txt"}
+				}
+				if outcome != templates.Planned {
+					writeFile(t, s.Target, ".toha.json", appliedRecord(s))
+				}
+				return appliedReply(outcome, nil, conflicts), nil
+			}
+			job := w.startJob(t, "upgrade", "alpha", "")
+			waitWaiting(t, job, 0)
+			w.answer(t, job, sessionAsking)
+			waitEnded(t, job)
+			got, _ := w.data.AppliedVersion(context.Background(), "alpha")
+			want := store.AppliedVersion{Version: "1.0.0", Commit: sampleTemplate.CurrentCommit}
+			if records {
+				want = store.AppliedVersion{Version: "2.0.0", Commit: "2000000000000000000000000000000000000002"}
+			}
+			if got != want {
+				t.Fatalf("%+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+// While a check has found the current version's tag at another commit, a
+// create and an upgrade from the template are refused 409
+// template-version-moved before any job; once the template is upgraded to
+// that version again, with the new commit, both go on.
+func TestAMovedTagRefusesCreatesAndUpgradesUntilTakenAgain(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.createWorkspace(t, "alpha")
+	w.newVersion(t)
+	moved := "2b00000000000000000000000000000000000002"
+	tpl, err := w.data.RecordCheck(ctx, "sample", []store.Version{
+		{Version: "1.0.0", Tag: "1.0.0", Commit: sampleTemplate.CurrentCommit},
+		{Version: "2.0.0", Tag: "v2.0.0", Commit: moved},
+	}, time.Now())
+	if err != nil || !tpl.CurrentMoved() {
+		t.Fatalf("%+v %v", tpl, err)
+	}
+	for _, body := range []string{
+		`{"operation":"create","workspace":"beta","templateId":"sample"}`,
+		`{"operation":"upgrade","workspace":"alpha"}`,
+	} {
+		status, reply := w.do(t, http.MethodPost, "/api/jobs", body)
+		if status != http.StatusConflict || !strings.Contains(reply, `"kind":"`+KindTemplateVersionMoved+`"`) || !strings.Contains(reply, "2.0.0") {
+			t.Fatalf("%s: %d %s", body, status, reply)
+		}
 	}
 	if got := w.tmpl.seen(); len(got) != 3 {
 		t.Fatalf("the template service was asked %v", got)
 	}
+	if _, err := w.data.AdvanceTemplate(ctx, "sample", "2.0.0", "v2.0.0", moved, registry.Newer); err != nil {
+		t.Fatal(err)
+	}
+	job := w.startJobBody(t, `{"operation":"upgrade","workspace":"alpha"}`)
+	waitWaiting(t, job, 0)
+	w.answer(t, job, sessionAsking)
+	if snap := waitEnded(t, job); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if got, _ := w.data.AppliedVersion(ctx, "alpha"); got != (store.AppliedVersion{Version: "2.0.0", Commit: moved}) {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// startJobBody posts a job request as given and returns its job.
+func (w *world) startJobBody(t *testing.T, body string) *jobs.Job {
+	t.Helper()
+	status, reply := w.do(t, http.MethodPost, "/api/jobs", body)
+	if status != http.StatusAccepted {
+		t.Fatalf("start: %d %s", status, reply)
+	}
+	var snap jobs.Snapshot
+	_ = json.Unmarshal([]byte(reply), &snap)
+	job, ok := w.manager.Get(snap.JobID)
+	if !ok {
+		t.Fatalf("job %s not found", snap.JobID)
+	}
+	return job
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
@@ -38,19 +39,13 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	if err != nil {
 		return &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace's template %s could not be read: %w; nothing was upgraded", u.template, err)}
 	}
-	// The upgrade moves forward only: the version applied to the workspace
-	// must be a version older than the template's current one.
-	applied, err := registry.ReadApplied(u.folder)
-	if err != nil {
-		return &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace's applied record could not be read: %w; nothing was upgraded", err)}
+	// A tag that moved after the request was checked is the template
+	// service's template-stale-revision: the job names the recorded commit.
+	from, failure := u.forward(ctx, run, tpl)
+	if failure != nil {
+		return failure
 	}
-	if _, ok := registry.ParseVersion(applied.Ref); !ok {
-		return &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace's applied record names ref %q, which is not a version, so the upgrade cannot tell that version %s is newer; nothing was upgraded", applied.Ref, tpl.CurrentVersion)}
-	}
-	if !registry.Newer(tpl.CurrentVersion, applied.Ref) {
-		return &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace already has version %s, and template %s's current version is %s; nothing was upgraded", applied.Ref, tpl.ID, tpl.CurrentVersion)}
-	}
-	fmt.Fprintf(run.Log(""), "upgrading from version %s to template %s, version %s\n", applied.Ref, tpl.ID, tpl.CurrentVersion)
+	fmt.Fprintf(run.Log(""), "upgrading from %s to template %s, version %s\n", from, tpl.ID, tpl.CurrentVersion)
 	target := tpl.ID + " " + tpl.CurrentVersion
 	run.Phase("backup-local-changes")
 	before, err := backup.CommitTracked(u.folder, u.name, fmt.Sprintf("Back up local changes before upgrading to %s", target))
@@ -97,6 +92,11 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	}
 	reportApplied(run.Log(""), result)
 	switch result.Outcome {
+	case templates.Written, templates.Conflicted, templates.AlreadyCurrent:
+		// The applied record now names the pinned version, as the data does.
+		u.w.recordApplied(ctx, run, u.name, u.folder, tpl)
+	}
+	switch result.Outcome {
 	case templates.AlreadyCurrent:
 		fmt.Fprintln(run.Log(""), "the workspace is already current; nothing was written and the devcontainer was not rebuilt")
 		return nil
@@ -130,6 +130,66 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 		return api.ContainerFailure(fmt.Errorf("the workspace was upgraded and backed up as %s, but its devcontainer did not rebuild: %w", commit.Hash, err))
 	}
 	return nil
+}
+
+// forward checks that the upgrade moves the workspace forward, before
+// anything is backed up or asked: a known applied version must be older
+// than the template's current version; an unknown one, whose applied
+// commit has no version tag, goes on only when the template service
+// answers that the current version's commit descends from that commit. It
+// says what the workspace is upgraded from.
+func (u *upgrading) forward(ctx context.Context, run *jobs.Run, tpl store.Template) (string, error) {
+	applied, err := u.w.opts.Data.AppliedVersion(ctx, u.name)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case applied.Version != "":
+		if !registry.Newer(tpl.CurrentVersion, applied.Version) {
+			return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace already has version %s, and template %s's current version is %s; nothing was upgraded", applied.Version, tpl.ID, tpl.CurrentVersion)}
+		}
+		return "version " + applied.Version, nil
+	case applied.Commit == "":
+		return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("neither the version nor the commit last applied to the workspace is known, so the upgrade cannot tell that version %s moves it forward; nothing was upgraded", tpl.CurrentVersion)}
+	}
+	fmt.Fprintf(run.Log(""), "the workspace's applied version is unknown; asking whether version %s's commit descends from its applied commit %s\n", tpl.CurrentVersion, applied.Commit)
+	checked, err := u.w.opts.Templates.CheckSince(ctx, tpl.Address, tpl.CurrentTag, applied.Commit)
+	var unavailable *templates.UnavailableError
+	switch {
+	case errors.As(err, &unavailable):
+		return "", &jobs.Failure{Kind: KindTemplateUnavailable, Err: fmt.Errorf("the template service could not say whether version %s descends from the applied commit %s: %w; nothing was upgraded", tpl.CurrentVersion, applied.Commit, err)}
+	case err != nil:
+		return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the template service refused to check version %s against the applied commit %s (%s); nothing was upgraded", tpl.CurrentVersion, applied.Commit, refusalKind(err))}
+	case tpl.CurrentCommit != "" && checked.Commit != tpl.CurrentCommit:
+		return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("version %s's tag is at commit %s, not the recorded %s; nothing was upgraded", tpl.CurrentVersion, checked.Commit, tpl.CurrentCommit)}
+	case !*checked.Descends:
+		return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("version %s's commit %s does not descend from the workspace's applied commit %s, so the upgrade would not move it forward; nothing was upgraded", tpl.CurrentVersion, checked.Commit, applied.Commit)}
+	}
+	return "commit " + applied.Commit, nil
+}
+
+// refusalKind names a template service refusal by its kind alone.
+func refusalKind(err error) string {
+	var refused *templates.Error
+	if errors.As(err, &refused) {
+		return refused.Kind
+	}
+	return "no reply"
+}
+
+// recordApplied records tpl's current version, which the job pinned, as
+// the version last applied to the workspace, with its commit, or the one
+// the applied record names when the template's is not known yet.
+func (w *Workflows) recordApplied(ctx context.Context, run *jobs.Run, name, folder string, tpl store.Template) {
+	commit := tpl.CurrentCommit
+	if commit == "" {
+		if applied, err := registry.ReadApplied(folder); err == nil {
+			commit = applied.Commit
+		}
+	}
+	if err := w.opts.Data.SetAppliedVersion(context.WithoutCancel(ctx), name, store.AppliedVersion{Version: tpl.CurrentVersion, Commit: commit}); err != nil {
+		fmt.Fprintf(run.Log(""), "recording version %s as the workspace's applied version failed: %v\n", tpl.CurrentVersion, err)
+	}
 }
 
 // applyError describes a failed upgrade apply.

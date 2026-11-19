@@ -265,7 +265,7 @@ func TestACreateWhoseInterviewWaitsStaysInMenageriesData(t *testing.T) {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
 	status, body = w.do(t, http.MethodGet, "/api/workspaces", "")
-	if status != http.StatusOK || !strings.Contains(body, `"needsChoice":[],"template":{"id":"sample","name":"Sample"},"name":"alpha","state":"running"`) {
+	if status != http.StatusOK || !strings.Contains(body, `"needsChoice":[],"template":{"id":"sample","name":"Sample"},"appliedVersion":"1.0.0","appliedCommit":"`+sampleTemplate.CurrentCommit+`","needsUpgrade":false,"name":"alpha","state":"running"`) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 }
@@ -278,7 +278,7 @@ func TestAWorkspaceWithNoFolderIsRefusedACreateAndTakesADelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, body := w.do(t, http.MethodGet, "/api/workspaces", "")
-	if status != http.StatusOK || !strings.Contains(body, `"needsChoice":[],"template":null,"name":"gone","state":"no-folder","containerId":null,"activeJob":null}`) {
+	if status != http.StatusOK || !strings.Contains(body, `"needsChoice":[],"template":null,"appliedVersion":null,"appliedCommit":null,"needsUpgrade":false,"name":"gone","state":"no-folder","containerId":null,"activeJob":null}`) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 	status, body = w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"gone","templateId":"sample"}`)

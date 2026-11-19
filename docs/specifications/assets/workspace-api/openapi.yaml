@@ -277,7 +277,7 @@ paths:
           type: string
     post:
       operationId: upgradeTemplate
-      summary: Make a newer version of the template's repository its current version.
+      summary: Make a newer found version its current version, or take the current one again while its tag has moved.
       requestBody:
         required: true
         content:
@@ -289,7 +289,10 @@ paths:
               properties:
                 version:
                   type: string
-                  description: A version of the repository newer than the current one, such as 1.1.0.
+                  description: >-
+                    A found version newer than the current one, such as
+                    1.1.0, or the current version while currentMoved is
+                    true, which records its tag's new commit.
                 check:
                   type: boolean
                   default: false
@@ -312,6 +315,32 @@ paths:
         "500":
           $ref: "#/components/responses/Error"
         "503":
+          $ref: "#/components/responses/Error"
+  /api/templates/{id}/version-checks:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: checkTemplateVersions
+      summary: Check a template for new versions now.
+      description: >-
+        Lists the versions of the template's repository, which replace its
+        found versions. A failed check, an unreachable template service
+        included, keeps them and is recorded in lastCheck; the answer is
+        200 either way.
+      responses:
+        "200":
+          description: The template, with its check's record in lastCheck.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
   /api/jobs:
     get:
@@ -563,7 +592,7 @@ components:
           $ref: "#/components/schemas/PolicySettings"
     Workspace:
       type: object
-      required: [name, state, containerId, activeJob, policies, needsChoice, selectionRevision, appliedRevision, applyFailure, selectionImported, xolotlKey, template]
+      required: [name, state, containerId, activeJob, policies, needsChoice, selectionRevision, appliedRevision, applyFailure, selectionImported, xolotlKey, template, appliedVersion, appliedCommit, needsUpgrade]
       additionalProperties: false
       properties:
         policies:
@@ -601,6 +630,20 @@ components:
                   type: string
                 name:
                   type: string
+        appliedVersion:
+          type: [string, "null"]
+          description: >-
+            The template version last applied, such as 1.2.0; null while it
+            is unknown, as for a record whose ref is no version until a
+            version check finds a version whose tag is at its commit.
+        appliedCommit:
+          type: [string, "null"]
+          description: The commit of the version last applied, or null when none is known.
+        needsUpgrade:
+          type: boolean
+          description: >-
+            True while the workspace's template's current version is newer
+            than appliedVersion; false while appliedVersion is null.
         name:
           type: string
         state:
@@ -638,7 +681,7 @@ components:
           format: date-time
     Template:
       type: object
-      required: [id, name, address, currentVersion, runnerImage, workspaces]
+      required: [id, name, address, currentVersion, runnerImage, workspaces, newestVersion, versions, currentMoved, lastCheck]
       additionalProperties: false
       properties:
         id:
@@ -663,6 +706,50 @@ components:
           description: The names of the workspaces that use it.
           items:
             type: string
+        newestVersion:
+          type: [string, "null"]
+          description: The newest found version, or null when none is found.
+        versions:
+          type: array
+          description: The found versions, in ascending order.
+          items:
+            type: object
+            required: [version, tag, commit]
+            additionalProperties: false
+            properties:
+              version:
+                type: string
+                description: MAJOR.MINOR.PATCH.
+              tag:
+                type: string
+                description: The tag that gives it, with or without a leading v.
+              commit:
+                type: string
+                description: The tag's commit.
+        currentMoved:
+          type: boolean
+          description: >-
+            The last check found the current version's tag at another
+            commit than the recorded one; creates and upgrades are refused
+            until the template is upgraded to that version again.
+        lastCheck:
+          description: The last version check, or null before the first.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [at, failure]
+              additionalProperties: false
+              properties:
+                at:
+                  type: string
+                  format: date-time
+                  description: When it ended.
+                failure:
+                  description: Null when it succeeded, else why it failed.
+                  oneOf:
+                    - type: "null"
+                    - type: string
+                      enum: [template-not-found, template-resolve-failed, invalid-address, template-service-unavailable]
     TemplateRegistration:
       type: object
       required: [name, address]
@@ -970,6 +1057,7 @@ components:
                 - template-not-registered
                 - version-not-newer
                 - upgrade-not-needed
+                - template-version-moved
                 - job-not-found
                 - job-not-waiting
                 - template-service-unavailable

@@ -40,7 +40,16 @@ description: >-
   source its applied record `.toha.json` names for the workspace's root; a
   workspace whose record names a source no registered template has keeps
   working, with `template` null, and joins its template when a manager
-  registers that source.
+  registers that source. `appliedVersion` is the template version last
+  applied to the workspace: the version its create generated, its last
+  upgrade applied or its last Apply branch's record names. A workspace that
+  joins a template takes its record's ref as `appliedVersion` when that is
+  a version, and null otherwise: the version is unknown until a version
+  check of its template finds a version whose tag is at the record's
+  commit. `appliedCommit` is that version's commit, or the record's, or
+  null when neither is known. `needsUpgrade` is true while the workspace
+  has a template whose current version is newer than its `appliedVersion`,
+  and false while `appliedVersion` is null.
   `activeJob` names the workspace's unfinished job. When Docker cannot
   answer, the request fails with `docker-unavailable` (503).
 
@@ -173,10 +182,44 @@ description: >-
   restart. `GET /api/templates` lists them sorted by name, as letters
   without regard to case, then by name and `id`,
   each with `id`, `name`, `address`, the address without a ref,
-  `currentVersion`, `runnerImage`, null for the default, and `workspaces`,
-  the names of the workspaces that use it. A version is a release tag of the
+  `currentVersion`, `runnerImage`, null for the default, `workspaces`,
+  the names of the workspaces that use it, `versions`, the found versions,
+  each `{version, tag, commit}`, in ascending order, `newestVersion`, the
+  last of them or null when none is found, `currentMoved`, whether the last
+  successful version check found the current version's tag at another
+  commit than the recorded one, and `lastCheck`, null before the first
+  check, else `{at, failure}`: when the last check ended, and null for a
+  check that succeeded or the reason one failed, `template-not-found`,
+  `template-resolve-failed`, `invalid-address` or
+  `template-service-unavailable`. A version is a release tag of the
   template's repository, `MAJOR.MINOR.PATCH` with an optional leading `v`,
   as the template service lists them.
+
+
+  Version checks. The workspace service checks every registered template
+  for new versions when it starts, then every `template-versions.every`
+  (see the configuration specification), and `POST
+  /api/templates/{id}/version-checks`, with no body, checks one on
+  request, with no restart. Two checks of one template at once share one
+  run. A check lists the repository's versions through the template
+  service, and they replace the template's found versions. A failed check
+  keeps the found versions and records its time and reason: the template
+  service's refusal kind, or `template-service-unavailable` when the
+  service cannot be reached, answers a fault or does not answer within two
+  minutes. The route answers 200 with the template, whose `lastCheck`
+  records the outcome, whatever it is, so it has no 503; an id no template
+  has is 404 `unknown-template`. A registration records the versions it
+  listed as its first check. An imported template's current commit, which
+  is unknown, is the one its first check finds at its current version's
+  tag. A check gives each workspace of the template whose `appliedVersion`
+  is null the newest found version whose tag is at its `appliedCommit`,
+  and never replaces a known one. A check that finds the current version's
+  tag at another commit makes `currentMoved` true: a `create` or an
+  `upgrade` from the template is then refused 409
+  `template-version-moved`, and a job that pinned it fails as
+  `template-refused`, until a manager upgrades the template to that version
+  again. A start logs each failed check by the template's `id` and the
+  failure's kind, and each moved tag, never an address.
 
 
   `POST /api/templates` takes `{"name","address","runnerImage","check"}`,
@@ -227,13 +270,14 @@ description: >-
 
 
   `POST /api/templates/{id}/upgrades` takes `{"version","check"}`, `check`
-  optional (see below). The template
-  service lists the repository's versions, and the version must be one of
-  them newer than the current one, else 409 `version-not-newer`; it then
-  passes the `fetch`, `read` and `definition` checks, else 422
+  optional (see below). The version must be one of the template's found
+  versions newer than the current one, or the current version itself while
+  `currentMoved` is true, else 409 `version-not-newer` before any check; it
+  then passes the `fetch`, `read` and `definition` checks, else 422
   `template-check-failed`, and becomes the current version with the commit
   those checks fetched: 200 with the template. So a template's current
-  version moves only forward. `PATCH /api/templates/{id}` takes `name`,
+  version moves only forward, and upgrading it to its moved current version
+  records the tag's new commit and ends `currentMoved`. `PATCH /api/templates/{id}` takes `name`,
   `runnerImage` or both, `runnerImage` null for the default, under the
   rules above, and answers 200 with the template; its address and source
   do not change. `DELETE /api/templates/{id}` answers 204, and 409
@@ -276,7 +320,7 @@ description: >-
   or `backup-failed`, for `start` of a workspace whose create it finishes
   `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
   for `apply-branch` `branch-not-found`, `fetch-failed`, `backup-failed`,
-  `not-applicable` or `apply-failed`. Its message says what was written and
+  `not-applicable`, `template-service-unavailable` or `apply-failed`. Its message says what was written and
   what recovery is needed.
 
 
@@ -347,18 +391,29 @@ description: >-
   branch name, whose folder does not exist and that Menagerie's data does not
   hold, one being created or listed as `no-folder` included; otherwise it is
   refused 409 `workspace-exists`; a `templateId` no template has is 404
-  `unknown-template`. Its job pins the template's current version and its
+  `unknown-template`, and a template whose `currentMoved` is true 409
+  `template-version-moved`. Its job pins the template's current version and its
   commit when it starts, and writes the workspace's data with that
-  template, so the template cannot be removed while the create runs. An
+  template, so the template cannot be removed while the create runs; once
+  generation has written the applied record, the pinned version and commit
+  are the workspace's `appliedVersion` and `appliedCommit`. An
   upgrade names an existing workspace folder and applies the current
   version of the workspace's registered template, which its job pins when
   it starts; a `templateId` given is 400 `invalid-request`. It is refused,
   before any job exists, 409 `template-not-registered` when the workspace
-  has no registered template, and 409 `upgrade-not-needed` when its applied
-  record's ref is that version or a newer one, so no upgrade applies an
-  older version; a job whose workspace's applied record cannot be read, or
-  names a ref that is not a version, fails as `template-refused` before the
-  interview. The template service is named the template's address with
+  has no registered template, 409 `upgrade-not-needed` when its stored
+  `appliedVersion` is that version or a newer one, so no upgrade applies an
+  older version, and 409 `template-version-moved` while the template's
+  `currentMoved` is true. A workspace whose `appliedVersion` is null is
+  upgraded only when the template service answers that the current
+  version's commit descends from its `appliedCommit`: the job asks before
+  the interview, and fails as `template-refused`, naming both commits,
+  when it does not, when the tag is at another commit than the recorded
+  one, or when the applied commit is not known either; an unreachable
+  template service fails it as `template-service-unavailable`. A written
+  or conflicted merge, and Toha's `already-current`, record the pinned
+  version and commit as the workspace's `appliedVersion` and
+  `appliedCommit`. The template service is named the template's address with
   the pinned version's tag and commit, and refuses a tag that resolves to
   another commit as `template-stale-revision`. The job asks the template
   service, over its Unix socket, for each interview reply and appends it as
@@ -584,6 +639,26 @@ description: >-
   longer matches H. The console has one `not applicable: <path>` line per
   path and the message names the reason and the paths; nothing is
   applied.
+
+  A plan that changes the applied record `.toha.json` is read in `plan`,
+  before anything is written, so that no apply moves a workspace backward.
+  It is refused as `not-applicable`, naming `.toha.json` and both versions
+  or commits, with nothing changed, when the workspace has no registered
+  template; when the plan removes the record, or leaves one that is not a
+  file or that Toha cannot read, one with no application at the
+  workspace's root included; when the record names another source than
+  the workspace's template's; when the record's version, its ref's when
+  that is a version, else the found version whose tag is at its commit, is
+  none, as for a branch or a commit no version tag gives; when that version
+  is older than the workspace's `appliedVersion`; and, while
+  `appliedVersion` is null, when the record's commit or `appliedCommit` is
+  not known, or the template service does not answer that the record's
+  version's tag is at the record's commit and that commit descends from
+  `appliedCommit`. An unreachable template service then fails the job as
+  `template-service-unavailable`, with nothing applied. After an apply
+  that changed the record, the record's version and commit are the
+  workspace's `appliedVersion` and `appliedCommit`; a plan that leaves the
+  record as it was changes neither.
 
   A plan refused in `plan` leaves the devcontainer as it was. Otherwise,
   so that nothing in the devcontainer writes to the folder while the
@@ -815,13 +890,25 @@ validation-criteria: >-
   the address, the order of the list, editing, upgrading only to a newer
   version, removal and its refusal while a workspace uses the template, a
   check alone of a registration and of an upgrade, answering 200 with no
-  `Location` and storing nothing, and a folder listed for the first time
-  joining its template. `go test ./backend/internal/registry/` runs each
+  `Location` and storing nothing, a folder listed for the first time
+  joining its template with its applied version, a version check on
+  request answering the template with its record, also 200 with
+  `template-service-unavailable` recorded while the template service is
+  down, and each workspace's applied version, commit and `needsUpgrade`.
+  `go test ./backend/internal/registry/` runs each
   registration check, with and without `check`, which refuses alike,
   stores nothing and is checked again by a save, template ids,
-  forward-only upgrades and their checks alone, the version rules case for
-  case with the template service's, the applied record's source and ref,
-  and the `templates` import. `go test ./backend/internal/jobs/`
+  forward-only upgrades to found versions only and their checks alone, the
+  version rules case for case with the template service's, the applied
+  record's source and ref, version checks that find a new version, keep
+  the found versions with each failure's kind, end within their wait and
+  share one run, a moved tag taken again only by upgrading to it, an
+  imported template's first check, an unknown applied version completed
+  from its commit, the schedule's check at start and at each tick, and the
+  `templates` import. `go test -tags templateservice
+  ./backend/internal/workflows/` also finds a version tagged in a local
+  Git repository served over HTTPS, on the schedule and on request, with
+  no restart. `go test ./backend/internal/jobs/`
   drives time limits with a manual clock: job, operation and phase limits,
   the pause while waiting, the slot held until cancelled work returns,
   timers that run late against a phase change, a wait or the job's end,
@@ -831,9 +918,12 @@ validation-criteria: >-
   ./backend/internal/workflows/` runs create and upgrade through the API
   with a held template service and a real local workspace repository,
   covering waiting, single answers, flow ends, failures and slot release,
-  the version a create and an upgrade pin, `upgrade-not-needed`,
-  `template-not-registered` and an applied record whose ref is not a
-  version;
+  the version a create and an upgrade pin and record as applied,
+  `upgrade-not-needed` from the stored applied version,
+  `template-not-registered`, and the descent exit: an unknown applied
+  version upgraded only when the current version's commit descends from
+  its applied commit, else `template-refused` naming both commits, or
+  `template-service-unavailable`;
   `go test ./backend/internal/backup/` pushes through an isolated SSH server
   and agent, and pushes and fetches through an isolated HTTPS Git host
   with a token, whose every failure names neither the URL nor the token;
@@ -901,7 +991,11 @@ validation-criteria: >-
   workspace's branch is applied, rebuilt and kept by the next backup; a
   local change is backed up and merged; a refused apply of the workspace's
   own branch leaves the workspace repository as it was; refusals and
-  request checks; and
+  request checks; the forward-only check, which refuses an older, removed,
+  unreadable, other-source and untagged record, a record of a workspace
+  with no registered template, and one of an unknown applied version whose
+  commit does not descend, each with nothing changed, and records the
+  version of a record that moves forward; and
   every failure path, with a workspace repository address that carries a
   sentinel, has no event or error that names it. `go test -tags docker
   ./backend/internal/devcontainer/` also has a devcontainer commit a file

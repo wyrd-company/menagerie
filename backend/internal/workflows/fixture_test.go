@@ -73,6 +73,17 @@ type fakeTemplates struct {
 	startUpgrade    func(templates.Selector) (*templates.Reply, error)
 	answerUpgrade   func(templates.Selector, json.RawMessage, json.RawMessage) (*templates.Reply, error)
 	applyUpgrade    func(templates.Selector) (*templates.Applied, error)
+	// checkSince answers a check with since; nil refuses it, as no test
+	// expects one.
+	checkSince func(address, ref, since string) (*templates.Checked, error)
+}
+
+func (f *fakeTemplates) CheckSince(_ context.Context, address, ref, since string) (*templates.Checked, error) {
+	f.record("check-since "+ref+" "+since, nil)
+	if f.checkSince == nil {
+		return nil, &templates.Error{Status: 500, Kind: "internal-error", Message: "no check was expected"}
+	}
+	return f.checkSince(address, ref, since)
 }
 
 func (f *fakeTemplates) record(call string, session json.RawMessage) {

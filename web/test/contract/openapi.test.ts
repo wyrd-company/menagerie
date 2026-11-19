@@ -204,6 +204,7 @@ describe("the fixture server keeps the workspace API contract", () => {
       ),
     ).toMatchObject({ error: { kind: "template-exists" } });
     const path = "/api/templates/{id}/upgrades";
+    const checks = "/api/templates/{id}/version-checks";
     expect(
       await expectResponse(
         path,
@@ -211,6 +212,22 @@ describe("the fixture server keeps the workspace API contract", () => {
         await post("/api/templates/sample-tools/upgrades", { version: "1.0.0" }),
       ),
     ).toMatchObject({ error: { kind: "version-not-newer" } });
+    // A version tagged later is a found version once a check finds it.
+    await post("/__fixture/release-version", { template: "sample-tools", version: "1.1.0" });
+    expect(
+      await expectResponse(
+        path,
+        "post",
+        await post("/api/templates/sample-tools/upgrades", { version: "1.1.0" }),
+      ),
+    ).toMatchObject({ error: { kind: "version-not-newer" } });
+    expect(
+      await expectResponse(
+        checks,
+        "post",
+        await post("/api/templates/sample-tools/version-checks", {}),
+      ),
+    ).toMatchObject({ newestVersion: "1.1.0", currentMoved: false, lastCheck: { failure: null } });
     expect(
       await expectResponse(
         path,
@@ -218,6 +235,48 @@ describe("the fixture server keeps the workspace API contract", () => {
         await post("/api/templates/sample-tools/upgrades", { version: "1.1.0" }),
       ),
     ).toMatchObject({ currentVersion: "1.1.0" });
+    // A check while the template service is down answers 200 with the failure.
+    await post("/__fixture/template-service", { available: false });
+    expect(
+      await expectResponse(
+        checks,
+        "post",
+        await post("/api/templates/sample-tools/version-checks", {}),
+      ),
+    ).toMatchObject({
+      newestVersion: "1.1.0",
+      lastCheck: { failure: "template-service-unavailable" },
+    });
+    await post("/__fixture/template-service", { available: true });
+    expect(
+      await expectResponse(checks, "post", await post("/api/templates/absent/version-checks", {})),
+    ).toMatchObject({ error: { kind: "unknown-template" } });
+    // A moved tag refuses creates and upgrades until the template takes it again.
+    await post("/__fixture/move-tag", { template: "sample-kit" });
+    expect(
+      await expectResponse(
+        checks,
+        "post",
+        await post("/api/templates/sample-kit/version-checks", {}),
+      ),
+    ).toMatchObject({ currentMoved: true });
+    await post("/__fixture/applied", { workspace: "sample-beta", version: "1.0.0" });
+    for (const request of [
+      { operation: "create", workspace: "sample-new", templateId: "sample-kit" },
+      { operation: "upgrade", workspace: "sample-beta" },
+    ])
+      expect(
+        await expectResponse("/api/jobs", "post", await post("/api/jobs", request)),
+      ).toMatchObject({
+        error: { kind: "template-version-moved" },
+      });
+    expect(
+      await expectResponse(
+        path,
+        "post",
+        await post("/api/templates/sample-kit/upgrades", { version: "1.1.0" }),
+      ),
+    ).toMatchObject({ currentVersion: "1.1.0", currentMoved: false });
     const edited = await call("/api/templates/sample-tools", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

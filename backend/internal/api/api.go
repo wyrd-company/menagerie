@@ -20,6 +20,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
@@ -90,6 +91,7 @@ func (s *Server) routes() []struct {
 		{Route{http.MethodPatch, "/api/templates/{id}"}, s.editTemplate},
 		{Route{http.MethodDelete, "/api/templates/{id}"}, s.removeTemplate},
 		{Route{http.MethodPost, "/api/templates/{id}/upgrades"}, s.upgradeTemplate},
+		{Route{http.MethodPost, "/api/templates/{id}/version-checks"}, s.checkTemplateVersions},
 		{Route{http.MethodGet, "/api/jobs"}, s.listJobs},
 		{Route{http.MethodPost, "/api/jobs"}, s.startJob},
 		{Route{http.MethodGet, "/api/jobs/{id}"}, s.getJob},
@@ -181,10 +183,17 @@ type workspaceRow struct {
 	XolotlKey         *string             `json:"xolotlKey"`
 	NeedsChoice       []string            `json:"needsChoice"`
 	Template          *templateRef        `json:"template"`
-	Name              string              `json:"name"`
-	State             string              `json:"state"`
-	ContainerID       *string             `json:"containerId"`
-	ActiveJob         *activeJob          `json:"activeJob"`
+	// AppliedVersion is the template version last applied, or null while
+	// it is unknown; AppliedCommit is its commit, or null.
+	AppliedVersion *string `json:"appliedVersion"`
+	AppliedCommit  *string `json:"appliedCommit"`
+	// NeedsUpgrade says that the template's current version is newer than
+	// the applied version, which is known.
+	NeedsUpgrade bool       `json:"needsUpgrade"`
+	Name         string     `json:"name"`
+	State        string     `json:"state"`
+	ContainerID  *string    `json:"containerId"`
+	ActiveJob    *activeJob `json:"activeJob"`
 }
 
 // listWorkspaces lists the workspace folders, each joined to its container and
@@ -252,9 +261,24 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, apiError{Kind: "internal-error", Message: err.Error()})
 		return
 	}
+	applied, err := s.opts.Data.AppliedVersions(r.Context())
+	if err != nil {
+		writeError(w, 500, apiError{Kind: "internal-error", Message: err.Error()})
+		return
+	}
 	for i := range rows {
+		a := applied[rows[i].Name]
+		if a.Version != "" {
+			version := a.Version
+			rows[i].AppliedVersion = &version
+		}
+		if a.Commit != "" {
+			commit := a.Commit
+			rows[i].AppliedCommit = &commit
+		}
 		if t, ok := used[rows[i].Name]; ok {
 			rows[i].Template = &templateRef{ID: t.ID, Name: t.Name}
+			rows[i].NeedsUpgrade = a.Version != "" && registry.Newer(t.CurrentVersion, a.Version)
 		}
 		selection := selections[rows[i].Name]
 		rows[i].Policies = selection.Policies

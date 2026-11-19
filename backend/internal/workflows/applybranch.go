@@ -20,6 +20,9 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/registry"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
+	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
 )
 
@@ -66,6 +69,9 @@ type applying struct {
 	// running is whether the devcontainer ran before the apply stopped
 	// it; stopped is whether the apply has left it stopped.
 	running, stopped bool
+	// record is the applied version the planned merge's applied record
+	// gives the workspace, when the merge changes the record.
+	record *store.AppliedVersion
 }
 
 func (a *applying) run(ctx context.Context, run *jobs.Run) error {
@@ -92,7 +98,7 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	if failure != nil {
 		return failure
 	}
-	plan, failure := a.plan(run, fetched, before.Hash)
+	plan, failure := a.plan(ctx, run, fetched, before.Hash)
 	if failure != nil {
 		return failure
 	}
@@ -136,7 +142,7 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	}
 	if again.Changed {
 		before = again
-		if plan, failure = a.plan(run, fetched, before.Hash); failure != nil {
+		if plan, failure = a.plan(ctx, run, fetched, before.Hash); failure != nil {
 			return a.resume(ctx, run, failure)
 		}
 	}
@@ -161,6 +167,13 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 		return a.resume(ctx, run, &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; nothing was applied", a.branch, err)})
 	}
 	fmt.Fprintf(run.Log(""), "applied branch %s (%s): the workspace branch moved from %s to %s\n", a.branch, applied.Outcome, applied.Before, applied.Hash)
+	if a.record != nil {
+		if err := a.w.opts.Data.SetAppliedVersion(context.WithoutCancel(ctx), a.name, *a.record); err != nil {
+			fmt.Fprintf(run.Log(""), "recording version %s as the workspace's applied version failed: %v\n", a.record.Version, err)
+		} else {
+			fmt.Fprintf(run.Log(""), "the workspace's applied version is now %s, at commit %s\n", a.record.Version, a.record.Commit)
+		}
+	}
 
 	run.Phase("backup")
 	if err := push(ctx, a.w.opts.Remote, a.folder, a.name, run); err != nil {
@@ -232,8 +245,10 @@ func (a *applying) backUp(ctx context.Context, run *jobs.Run, onlyChanged bool) 
 	return c, nil
 }
 
-// plan works out the apply against the workspace branch at head.
-func (a *applying) plan(run *jobs.Run, fetched, head plumbing.Hash) (*backup.Plan, error) {
+// plan works out the apply against the workspace branch at head, and
+// refuses a merge that would move the workspace's applied record backward
+// (see forward).
+func (a *applying) plan(ctx context.Context, run *jobs.Run, fetched, head plumbing.Hash) (*backup.Plan, error) {
 	run.Phase("plan")
 	plan, err := backup.PlanApply(a.folder, a.name, a.branch, run.Log("apply: "))
 	var refused *backup.NotApplicableError
@@ -243,7 +258,117 @@ func (a *applying) plan(run *jobs.Run, fetched, head plumbing.Hash) (*backup.Pla
 	case err != nil:
 		return nil, &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("applying branch %s failed: %w; nothing was applied", a.branch, err)}
 	}
+	if a.record, err = a.forward(ctx, plan); err != nil {
+		var refused *backup.NotApplicableError
+		if errors.As(err, &refused) {
+			return nil, a.refusal(run, refused, fetched, head)
+		}
+		return nil, err
+	}
 	return plan, nil
+}
+
+// forward reads, before anything is written, the applied record a planned
+// merge would leave, when it changes the record: the workspace must have a
+// registered template, and the record must be one Toha can read, name that
+// template's source, and give a version, its ref's or the one whose tag is
+// at its commit, no older than the workspace's applied version; while that
+// version is unknown, the record's commit must descend from the applied
+// commit, as an upgrade checks. Anything else refuses the apply, naming
+// both versions or commits. It returns the applied version the record
+// gives, or nil when the merge leaves the record as it is.
+func (a *applying) forward(ctx context.Context, plan *backup.Plan) (*store.AppliedVersion, error) {
+	change, err := plan.Change(a.folder, registry.RecordName, registry.MaxRecord)
+	if err != nil {
+		return nil, &jobs.Failure{Kind: KindApplyFailed, Err: fmt.Errorf("reading the applied record branch %s would write failed: %w; nothing was applied", a.branch, err)}
+	}
+	if !change.Changed {
+		return nil, nil
+	}
+	refuse := func(format string, args ...any) error {
+		return &backup.NotApplicableError{Reason: fmt.Sprintf(format, args...), Paths: []string{registry.RecordName}}
+	}
+	id, err := a.w.opts.Data.WorkspaceTemplate(ctx, a.name)
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		return nil, refuse("the branch changes the applied record of workspace %s, which has no registered template to check it against", a.name)
+	}
+	tpl, err := a.w.opts.Data.Template(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	applied, err := a.w.opts.Data.AppliedVersion(ctx, a.name)
+	if err != nil {
+		return nil, err
+	}
+	was := "version " + applied.Version
+	if applied.Version == "" {
+		was = "an unknown version at commit " + orNone(applied.Commit)
+	}
+	if !change.After.Present {
+		return nil, refuse("the branch removes the applied record, which names %s", was)
+	}
+	if !change.After.Regular {
+		return nil, refuse("the branch leaves an applied record that is not a file, where the workspace has %s", was)
+	}
+	record, err := registry.ParseApplied(change.After.Data)
+	if err != nil {
+		return nil, refuse("the branch leaves an applied record Toha cannot read (%v), where the workspace has %s", err, was)
+	}
+	if record.Source != tpl.Source {
+		return nil, refuse("the branch's applied record names another template than template %s, whose source the workspace has", tpl.ID)
+	}
+	version, tag := "", ""
+	if v, ok := registry.ParseVersion(record.Ref); ok {
+		version, tag = v.String(), record.Ref
+	} else {
+		for _, found := range tpl.Versions {
+			if record.Commit != "" && found.Commit == record.Commit {
+				version, tag = found.Version, found.Tag
+			}
+		}
+	}
+	if version == "" {
+		return nil, refuse("the branch's applied record names ref %q at commit %s, which no version tag of template %s gives, where the workspace has %s", record.Ref, orNone(record.Commit), tpl.ID, was)
+	}
+	out := &store.AppliedVersion{Version: version, Commit: record.Commit}
+	if applied.Version != "" {
+		if registry.Newer(applied.Version, version) {
+			return nil, refuse("the branch's applied record names version %s, older than the workspace's version %s", version, applied.Version)
+		}
+		return out, nil
+	}
+	// An unknown applied version moves only to a record whose commit
+	// descends from the applied commit.
+	if applied.Commit == "" || record.Commit == "" {
+		return nil, refuse("the branch's applied record names version %s at commit %s, and the workspace's applied version and commit are not known, so it cannot be told to move forward", version, orNone(record.Commit))
+	}
+	if found, ok := tpl.Found(version); ok {
+		tag = found.Tag
+	}
+	checked, err := a.w.opts.Templates.CheckSince(ctx, tpl.Address, tag, applied.Commit)
+	var unavailable *templates.UnavailableError
+	switch {
+	case errors.As(err, &unavailable):
+		return nil, &jobs.Failure{Kind: KindTemplateUnavailable, Err: fmt.Errorf("the template service could not say whether version %s descends from the applied commit %s: %w; nothing was applied", version, applied.Commit, err)}
+	case err != nil:
+		return nil, refuse("the template service refused to check version %s against the applied commit %s (%s)", version, applied.Commit, refusalKind(err))
+	case checked.Commit != record.Commit:
+		return nil, refuse("the branch's applied record names version %s at commit %s, but its tag is at commit %s", version, record.Commit, checked.Commit)
+	case !*checked.Descends:
+		return nil, refuse("the branch's applied record names version %s at commit %s, which does not descend from the workspace's applied commit %s", version, record.Commit, applied.Commit)
+	}
+	return out, nil
+}
+
+// orNone is a commit, or "none".
+func orNone(commit string) string {
+	if commit == "" {
+		return "none"
+	}
+	return commit
 }
 
 // refusal lists a refused apply's paths in the console and is its job

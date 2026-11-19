@@ -33,6 +33,9 @@ type Applied struct {
 	Commit string
 }
 
+// MaxRecord bounds the applied record this service reads.
+const MaxRecord = maxRecord
+
 // ReadApplied reads the application at the root of the workspace folder from
 // its applied record. A record that is not a regular file of at most 16 MiB,
 // that is not Toha's JSON, or that holds no application at the root, is an
@@ -58,6 +61,13 @@ func ReadApplied(folder string) (Applied, error) {
 	if len(data) > maxRecord {
 		return Applied{}, errors.New("the applied record is larger than 16 MiB")
 	}
+	return ParseApplied(data)
+}
+
+// ParseApplied reads the application at the root of a workspace from the
+// content of its applied record. Content that is not Toha's JSON, or that
+// holds no application at the root, is an error.
+func ParseApplied(data []byte) (Applied, error) {
 	var record struct {
 		Applications []struct {
 			Target   string  `json:"target"`

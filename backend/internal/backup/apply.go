@@ -203,6 +203,69 @@ func PlanApply(folder, workspace, branch string, log io.Writer) (*Plan, error) {
 	return &Plan{Applied: out, workspace: workspace, head: headFiles, result: result}, nil
 }
 
+// PlannedFile is one path of a tree: whether it is there, whether it is a
+// file of content, regular or executable, and that content.
+type PlannedFile struct {
+	Present bool
+	// Regular says that it is a regular or executable file, not a link, a
+	// submodule or a folder; Data is then its content.
+	Regular bool
+	Data    []byte
+}
+
+// Change is how a plan changes one path of the workspace: whether it
+// changes its mode or content, and the path in the workspace branch's
+// commit and in the planned result.
+type Change struct {
+	Changed       bool
+	Before, After PlannedFile
+}
+
+// Change reads how the plan changes path, read from the workspace
+// repository in folder. A file larger than limit bytes is an error. A plan
+// that applies nothing changes no path.
+func (p *Plan) Change(folder, path string, limit int64) (Change, error) {
+	if p.Outcome == AlreadyApplied {
+		return Change{}, nil
+	}
+	before, after := p.head[path], p.result[path]
+	out := Change{Changed: before != after}
+	if !out.Changed {
+		return out, nil
+	}
+	repo, _, err := open(folder, p.workspace)
+	if err != nil {
+		return Change{}, err
+	}
+	for _, side := range []struct {
+		entry entry
+		file  *PlannedFile
+	}{{before, &out.Before}, {after, &out.After}} {
+		side.file.Present = side.entry.present()
+		if side.entry.mode != filemode.Regular && side.entry.mode != filemode.Executable {
+			continue
+		}
+		side.file.Regular = true
+		blob, err := repo.BlobObject(side.entry.hash)
+		if err != nil {
+			return Change{}, missingHistory(err)
+		}
+		if blob.Size > limit {
+			return Change{}, fmt.Errorf("%s is larger than %d bytes", path, limit)
+		}
+		r, err := blob.Reader()
+		if err != nil {
+			return Change{}, err
+		}
+		side.file.Data, err = io.ReadAll(io.LimitReader(r, limit))
+		_ = r.Close()
+		if err != nil {
+			return Change{}, err
+		}
+	}
+	return out, nil
+}
+
 // Write brings the plan into the workspace folder and branch. It refuses
 // with *NotApplicableError, before anything changes, when the workspace
 // branch is no longer at H, and as checkFolder and moveAside do. It

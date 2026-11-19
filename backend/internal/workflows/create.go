@@ -129,6 +129,7 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 	if applied.Outcome != templates.Written {
 		return &jobs.Failure{Kind: KindNotApplied, Err: fmt.Errorf("generation reported %s and wrote nothing; %s", applied.Outcome, c.recovery("holds only the initialized repository"))}
 	}
+	c.w.recordApplied(ctx, run, c.name, c.folder, tpl)
 
 	saving := &saving{w: c.w, name: c.name, folder: c.folder,
 		output:  output(applied),

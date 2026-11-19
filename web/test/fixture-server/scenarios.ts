@@ -2,7 +2,7 @@
 // replay the Toha-produced documents. Jobs on "sample-slow" wait at their
 // slowest step until a test releases them.
 import { document, finish, interview, log, setState } from "./events.ts";
-import { containerId, type FixtureJob, type World } from "./state.ts";
+import { commitOf, containerId, type FixtureJob, type World } from "./state.ts";
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const hold = (job: FixtureJob) =>
@@ -120,6 +120,7 @@ async function complete(world: World, job: FixtureJob) {
   if (template) {
     ws.template = template.id;
     ws.applied = template.currentVersion;
+    ws.appliedCommit = commitOf(template.id, template.currentVersion);
   }
   ws.state = "running";
   ws.containerId = containerId(job.workspace);

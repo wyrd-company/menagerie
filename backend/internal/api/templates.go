@@ -12,18 +12,23 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 )
 
-// Registry registers and changes templates. *registry.Registry satisfies it.
+// Registry registers and changes templates, and checks them for new
+// versions. *registry.Registry satisfies it.
 type Registry interface {
 	// With check, each runs its checks alone and stores nothing.
 	Register(ctx context.Context, name, address, runnerImage string, check bool) (store.Template, error)
 	Upgrade(ctx context.Context, id, version string, check bool) (store.Template, error)
 	Edit(ctx context.Context, id string, name, runnerImage *string) (store.Template, error)
+	// CheckVersions answers the template with its version check's record,
+	// whatever the check's outcome.
+	CheckVersions(ctx context.Context, id string) (store.Template, error)
 }
 
 // Template is a registered template as the browser sees it.
@@ -34,16 +39,53 @@ type Template struct {
 	CurrentVersion string   `json:"currentVersion"`
 	RunnerImage    *string  `json:"runnerImage"`
 	Workspaces     []string `json:"workspaces"`
+	// NewestVersion is the newest found version, or null when none is.
+	NewestVersion *string `json:"newestVersion"`
+	// Versions are the found versions, in ascending order.
+	Versions []TemplateVersion `json:"versions"`
+	// CurrentMoved says that a check found the current version's tag at
+	// another commit than the recorded one.
+	CurrentMoved bool `json:"currentMoved"`
+	// LastCheck is the last version check's end and failure, or null.
+	LastCheck *LastCheck `json:"lastCheck"`
+}
+
+// TemplateVersion is a found version of a template.
+type TemplateVersion struct {
+	Version string `json:"version"`
+	Tag     string `json:"tag"`
+	Commit  string `json:"commit"`
+}
+
+// LastCheck is when a template's last version check ended, and why it
+// failed, or null when it succeeded.
+type LastCheck struct {
+	At      time.Time `json:"at"`
+	Failure *string   `json:"failure"`
 }
 
 func templateOf(t store.Template) Template {
-	out := Template{ID: t.ID, Name: t.Name, Address: t.Address, CurrentVersion: t.CurrentVersion, Workspaces: t.Workspaces}
+	out := Template{ID: t.ID, Name: t.Name, Address: t.Address, CurrentVersion: t.CurrentVersion, Workspaces: t.Workspaces,
+		Versions: []TemplateVersion{}, CurrentMoved: t.CurrentMoved()}
 	if t.RunnerImage != "" {
 		image := t.RunnerImage
 		out.RunnerImage = &image
 	}
 	if out.Workspaces == nil {
 		out.Workspaces = []string{}
+	}
+	for _, v := range t.Versions {
+		out.Versions = append(out.Versions, TemplateVersion{Version: v.Version, Tag: v.Tag, Commit: v.Commit})
+	}
+	if newest := t.Newest(); newest != "" {
+		out.NewestVersion = &newest
+	}
+	if !t.CheckedAt.IsZero() {
+		out.LastCheck = &LastCheck{At: t.CheckedAt.UTC()}
+		if t.CheckFailure != "" {
+			failure := t.CheckFailure
+			out.LastCheck.Failure = &failure
+		}
 	}
 	return out
 }
@@ -152,6 +194,21 @@ func (s *Server) upgradeTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tpl, err := s.opts.Registry.Upgrade(r.Context(), r.PathValue("id"), *req.Version, req.Check)
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, templateOf(tpl))
+}
+
+// checkTemplateVersions checks a template for new versions on request and
+// answers it with the check's record: a failed check, an unreachable
+// template service included, is 200 with lastCheck's failure.
+func (s *Server) checkTemplateVersions(w http.ResponseWriter, r *http.Request) {
+	if !s.registering(w) {
+		return
+	}
+	tpl, err := s.opts.Registry.CheckVersions(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeRegistryError(w, err)
 		return

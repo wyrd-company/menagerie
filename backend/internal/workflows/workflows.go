@@ -46,6 +46,9 @@ type Templates interface {
 	StartUpgrade(ctx context.Context, s templates.Selector, reanswer bool) (*templates.Reply, error)
 	AnswerUpgrade(ctx context.Context, s templates.Selector, session, submission json.RawMessage) (*templates.Reply, error)
 	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
+	// CheckSince checks a version and says whether its commit is since or
+	// descends from it.
+	CheckSince(ctx context.Context, address, ref, since string) (*templates.Checked, error)
 }
 
 // Runtime starts, stops and rebuilds devcontainers with their provisioning,
@@ -116,7 +119,14 @@ func (w *Workflows) Operations() api.Operations {
 const (
 	KindTemplateNotRegistered = "template-not-registered"
 	KindUpgradeNotNeeded      = "upgrade-not-needed"
+	KindTemplateVersionMoved  = "template-version-moved"
 )
+
+// moved refuses a create or an upgrade of a template whose current
+// version's tag has moved.
+func moved(tpl store.Template) error {
+	return &api.RequestError{Status: http.StatusConflict, Kind: KindTemplateVersionMoved, Message: registry.MovedMessage(tpl)}
+}
 
 // Job error kinds of the create and upgrade operations, beside the
 // container operations' kinds.
@@ -144,8 +154,9 @@ func (w *Workflows) request(req api.JobRequest) (string, error) {
 }
 
 // create names a registered template, whose current version its job pins.
-// It refuses a workspace whose folder exists, and one Menagerie's data
-// holds: being created, or listed with no folder.
+// It refuses a workspace whose folder exists, one Menagerie's data holds,
+// being created or listed with no folder, and a template whose current
+// version's tag has moved.
 func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 	folder, err := w.request(req)
 	if err != nil {
@@ -154,10 +165,14 @@ func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 	if req.TemplateID == "" {
 		return nil, &api.RequestError{Status: http.StatusBadRequest, Kind: "invalid-request", Message: "templateId is required"}
 	}
-	if _, err := w.opts.Data.Template(context.Background(), req.TemplateID); errors.Is(err, store.ErrNoTemplate) {
+	tpl, err := w.opts.Data.Template(context.Background(), req.TemplateID)
+	if errors.Is(err, store.ErrNoTemplate) {
 		return nil, &api.RequestError{Status: http.StatusNotFound, Kind: api.KindUnknownTemplate, Message: fmt.Sprintf("no registered template has the id %q", req.TemplateID)}
 	} else if err != nil {
 		return nil, err
+	}
+	if tpl.CurrentMoved() {
+		return nil, moved(tpl)
 	}
 	if _, err := os.Lstat(folder); !errors.Is(err, os.ErrNotExist) {
 		return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindWorkspaceExists, Message: fmt.Sprintf("workspace %s already exists", req.Workspace)}
@@ -174,8 +189,9 @@ func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 
 // upgrade applies the current version of the workspace's registered
 // template. It takes no templateId, and it is refused when the workspace has
-// no registered template and when its applied record's ref is that version
-// or a newer one, so no upgrade applies an older version.
+// no registered template, when its applied version is that version or a
+// newer one, so no upgrade applies an older version, and while that
+// version's tag has moved.
 func (w *Workflows) upgrade(req api.JobRequest) (jobsRunner, error) {
 	if _, err := w.request(req); err != nil {
 		return nil, err
@@ -202,10 +218,15 @@ func (w *Workflows) upgrade(req api.JobRequest) (jobsRunner, error) {
 	if err != nil {
 		return nil, err
 	}
-	if applied, err := registry.ReadApplied(folder); err == nil {
-		if _, ok := registry.ParseVersion(applied.Ref); ok && !registry.Newer(tpl.CurrentVersion, applied.Ref) {
-			return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindUpgradeNotNeeded, Message: fmt.Sprintf("workspace %s already has version %s of template %s, whose current version is %s", req.Workspace, applied.Ref, tpl.ID, tpl.CurrentVersion)}
-		}
+	applied, err := w.opts.Data.AppliedVersion(ctx, req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	if applied.Version != "" && !registry.Newer(tpl.CurrentVersion, applied.Version) {
+		return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindUpgradeNotNeeded, Message: fmt.Sprintf("workspace %s already has version %s of template %s, whose current version is %s", req.Workspace, applied.Version, tpl.ID, tpl.CurrentVersion)}
+	}
+	if tpl.CurrentMoved() {
+		return nil, moved(tpl)
 	}
 	return (&upgrading{w: w, name: req.Workspace, folder: folder, template: id, reanswer: req.Reanswer}).run, nil
 }
