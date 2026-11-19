@@ -505,6 +505,8 @@ def self_test():
         ("another test's line", [out("TestB", "    b_test.go:5: other\n"), fail("TestA")], None),
         ("a subtest failing with no line of its own, under a parent's log",
          [out("TestA", "    a_test.go:10: setup\n"), fail("TestA/sub"), fail("TestA")], None),
+        ("a failure whose only output is the test's frames",
+         [out("TestA", "=== RUN   TestA\n"), out("TestA", "--- FAIL: TestA (0.00s)\n"), fail("TestA")], None),
         ("a pass", [out("TestA", "    a_test.go:10: note\n"), {"Action": "pass", "Test": "TestA"}], None),
     ]
     wrong = [(name, go_assertion("TestA", events), want) for name, events, want in cases
