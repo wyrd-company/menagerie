@@ -42,12 +42,20 @@ description: >-
   working, with `template` null, and joins its template when a manager
   registers that source. `appliedVersion` is the template version last
   applied to the workspace: the version its create generated, its last
-  upgrade applied or its last Apply branch's record names. A workspace that
-  joins a template takes its record's ref as `appliedVersion` when that is
-  a version, and null otherwise: the version is unknown until a version
-  check of its template finds a version whose tag is at the record's
-  commit. `appliedCommit` is that version's commit, or the record's, or
-  null when neither is known. `needsUpgrade` is true while the workspace
+  upgrade applied or its last Apply branch's record gives. Every path that
+  takes `appliedVersion` from a workspace's applied record, a join
+  (registration, a folder listed for the first time, the templates import),
+  the first start's import of applied versions and Apply branch, follows
+  one rule: the record's source must be the template's source and its
+  commit a full Git object id, and the version is the template's found
+  version whose tag is at that commit; when the record's ref is a version
+  it must be that version, and when it is not and several tags share the
+  commit, the version is the newest of them. A join and the import leave
+  `appliedVersion` null when the record gives no version, keeping the
+  record's commit only when its source is the template's and the commit is
+  well formed, and the template's next version check completes it.
+  `appliedCommit` is that version's commit, or the record's, or null when
+  neither is known. `needsUpgrade` is true while the workspace
   has a template whose current version is newer than its `appliedVersion`,
   and false while `appliedVersion` is null.
   `activeJob` names the workspace's unfinished job. When Docker cannot
@@ -205,8 +213,9 @@ description: >-
   service, and they replace the template's found versions. A failed check
   keeps the found versions and records its time and reason: the template
   service's refusal kind, or `template-service-unavailable` when the
-  service cannot be reached, answers a fault or does not answer within two
-  minutes. The route answers 200 with the template, whose `lastCheck`
+  service cannot be reached, answers a fault, answers a listing whose
+  versions are not each a version, a tag and a full commit id, or does not
+  answer within two minutes. The route answers 200 with the template, whose `lastCheck`
   records the outcome, whatever it is, so it has no 503; an id no template
   has is 404 `unknown-template`. A registration records the versions it
   listed as its first check. An imported template's current commit, which
@@ -239,7 +248,9 @@ description: >-
   fetch; such an address registers without its ref, at the newest version;
   `fetch`, the repository's versions can be listed; `version`, the list
   holds at least one version and an address's ref is a version's tag;
-  `fetch` again, the current version can be fetched; `read`, Toha loads
+  `fetch` again, the current version can be fetched, at the commit the
+  listing found, else the tag moved meanwhile and the registration is
+  refused under `version`, asking to try again; `read`, Toha loads
   the template's manifest and its folder holds no link outside its
   checkout; `definition`, the template's content folder holds
   `.devcontainer/devcontainer.json`, which the message names. A template
@@ -275,7 +286,11 @@ description: >-
   `currentMoved` is true, else 409 `version-not-newer` before any check; it
   then passes the `fetch`, `read` and `definition` checks, else 422
   `template-check-failed`, and becomes the current version with the commit
-  those checks fetched: 200 with the template. So a template's current
+  those checks fetched: 200 with the template. The fetch must resolve the
+  version's tag to the commit the template's last check listed for it:
+  when it does not, the tag moved since that check, and the upgrade, with
+  or without `check`, is refused 422 `template-check-failed` under
+  `version`, asking for a version check, with nothing stored. So a template's current
   version moves only forward, and upgrading it to its moved current version
   records the tag's new commit and ends `currentMoved`. `PATCH /api/templates/{id}` takes `name`,
   `runnerImage` or both, `runnerImage` null for the default, under the
@@ -645,16 +660,20 @@ description: >-
   It is refused as `not-applicable`, naming `.toha.json` and both versions
   or commits, with nothing changed, when the workspace has no registered
   template; when the plan removes the record, or leaves one that is not a
-  file or that Toha cannot read, one with no application at the
-  workspace's root included; when the record names another source than
-  the workspace's template's; when the record's version, its ref's when
-  that is a version, else the found version whose tag is at its commit, is
-  none, as for a branch or a commit no version tag gives; when that version
-  is older than the workspace's `appliedVersion`; and, while
-  `appliedVersion` is null, when the record's commit or `appliedCommit` is
-  not known, or the template service does not answer that the record's
-  version's tag is at the record's commit and that commit descends from
-  `appliedCommit`. An unreachable template service then fails the job as
+  file, that is larger than the bound the service reads (16 MiB) or that
+  Toha cannot read, one with no application at the workspace's root
+  included; when the record names another source than the workspace's
+  template's, or a commit that is not a full Git object id; when the record
+  gives no version by the rule above: no found tag is at its commit, or its
+  ref is a version that the tag at its commit does not give, as for a
+  branch, an untagged commit or a ref naming a version at another
+  version's commit; when that version is the template's current version
+  and `currentMoved` is true; when that version is older than the
+  workspace's `appliedVersion`; and, while `appliedVersion` is null, when
+  `appliedCommit` is not known, or the template service does not answer
+  that the version's tag is at the record's commit and that commit
+  descends from `appliedCommit`. Refusals quote the ref and the commit as
+  JSON strings. Only the planned record is read. An unreachable template service then fails the job as
   `template-service-unavailable`, with nothing applied. After an apply
   that changed the record, the record's version and commit are the
   workspace's `appliedVersion` and `appliedCommit`; a plan that leaves the

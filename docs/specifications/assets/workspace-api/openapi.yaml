@@ -633,9 +633,10 @@ components:
         appliedVersion:
           type: [string, "null"]
           description: >-
-            The template version last applied, such as 1.2.0; null while it
-            is unknown, as for a record whose ref is no version until a
-            version check finds a version whose tag is at its commit.
+            The template version last applied, such as 1.2.0: from an
+            applied record, the template's found version whose tag is at the
+            record's commit. Null while it is unknown, until a version check
+            finds a tag at the applied commit.
         appliedCommit:
           type: [string, "null"]
           description: The commit of the version last applied, or null when none is known.

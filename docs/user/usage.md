@@ -31,14 +31,17 @@ workspace whose template is not registered; such a workspace keeps working and
 joins its template when a manager registers it. Beside it is the version last
 applied to the workspace, the one its create generated, its last upgrade
 applied or a [reviewed branch](#apply-a-reviewed-branch) brought in, as
-**1.0.0 applied**. **Unknown version** means the workspace's applied record,
-`.toha.json`, names a commit that no version tag is at, as for a workspace
-created from a branch; hold the pointer over it to see that commit. A
-[version check](#check-for-new-versions) of its template that finds a version
-tag at that commit names the version. While the template's current version is
-newer than the applied version, the row shows **Needs upgrade** with the
-current version, and [**Upgrade**](#upgrade-a-workspace) is available; it is
-available too while the version is unknown, and otherwise unavailable.
+**1.0.0 applied**. A version taken from the workspace's applied record,
+`.toha.json`, is the template's version whose tag is at the record's commit,
+whatever the record's ref says. **Unknown version** means no version tag the
+template's checks found is at that commit, as for a workspace created from a
+branch, or that the template has not been checked yet; hold the pointer over
+it to see the commit. A [version check](#check-for-new-versions) of its
+template that finds a version tag at that commit names the version. While the
+template's current version is newer than the applied version, the row shows
+**Needs upgrade** with the current version, and
+[**Upgrade**](#upgrade-a-workspace) is available; it is available too while
+the version is unknown, and otherwise unavailable.
 
 Each row lists its selected policies, or **No policies** for an empty selection.
 **Needs choice** names any policy group without a valid choice: exactly one
@@ -97,7 +100,7 @@ check under the form. The message never repeats the address:
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `address`    | The address is not one of those forms: a folder, `file://`, a template name, `git://`, `http://`, or a password, even one holding `/`. Or it is not written plainly: in an `https://` or `ssh://` address a `:` before an `@`, as a port before a ref is (register it without the ref); a ref that holds `/` or `:`, or more than one `@` after the host; or a ref that holds a `.`, or follows `git@host:path`, but is not a version's tag |
 | `fetch`      | The repository's versions cannot be listed: it does not exist, or the Git host refuses the credentials                                                                                                                                                                                                                                                                                                                                      |
-| `version`    | The repository has no version, or the address's ref is not a version's tag, where the `address` check did not refuse it first                                                                                                                                                                                                                                                                                                               |
+| `version`    | The repository has no version, the address's ref is not a version's tag, where the `address` check did not refuse it first, or the version's tag moved between the listing and the fetch (register again)                                                                                                                                                                                                                                                                                                              |
 | `fetch`      | The current version cannot be fetched                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `read`       | Toha cannot load the template, or its folder or a link in it leads outside its repository                                                                                                                                                                                                                                                                                                                                                   |
 | `definition` | The template's files have no `.devcontainer/devcontainer.json`                                                                                                                                                                                                                                                                                                                                                                              |
@@ -142,8 +145,10 @@ at Validate and again at Save, before it becomes the current version. The list
 offers only the versions found that are newer than the current one, and any
 other version is refused: a template moves only forward, and a tag pushed
 since the last check is offered once a [check](#check-for-new-versions) finds
-it. Workspaces keep the version they have until you
-[upgrade them](#upgrade-a-workspace).
+it. A version is taken only at the commit the last check found for it: when
+its tag has moved since, Validate and Save are refused under `version`;
+choose **Check versions**, then upgrade again. Workspaces keep the version
+they have until you [upgrade them](#upgrade-a-workspace).
 
 ![The Templates screen with version 2.0.0 validated in a template's upgrade form](assets/template-upgrade.png)
 
@@ -429,13 +434,17 @@ A merge never writes conflict markers: a file both sides changed is
 A branch that changes the applied record, `.toha.json`, is checked in `plan`,
 before anything is written, so that no apply moves a workspace backward. The
 apply is `not-applicable`, naming both versions or commits, when the record
-would name a version older than the workspace's applied version, another
-template, or a ref that is no version at a commit no version tag is at; when
-the branch removes the record or leaves one Toha cannot read; when the
-workspace has no registered template; and, for a workspace whose applied
-version is unknown, when the record's commit does not descend from the applied
-commit. After an apply that changes the record, the workspace shows the
-record's version as applied.
+gives no version: its version is the template's version whose tag is at the
+record's commit, and a ref that names a version must be that one, so a branch,
+an untagged commit or a ref naming a version at another version's commit gives
+none. It is refused too when that version is older than the workspace's
+applied version, or is the current version while its tag has moved; when the
+record names another template or a commit that is not a full Git object id;
+when the branch removes the record or leaves one Toha cannot read, or larger
+than 16 MiB; when the workspace has no registered template; and, for a
+workspace whose applied version is unknown, when the record's commit does not
+descend from the applied commit. After an apply that changes the record, the
+workspace shows the record's version as applied.
 
 Prefer a branch that is not the workspace's own. When an apply of the
 workspace's own branch is refused, the workspace repository keeps the pushed

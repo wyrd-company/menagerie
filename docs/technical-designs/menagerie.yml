@@ -353,26 +353,45 @@ proposed-design:
     run. A check replaces the template's found versions with what it found.
     A failed check keeps the earlier versions and records the time and its
     reason: the template service's refusal kind, or
-    `template-service-unavailable`. A check on request answers the template
-    with that record, whatever the outcome, and the templates screen shows
-    it. A
+    `template-service-unavailable`, which a listing whose versions are not
+    each a version, a tag and a full commit id also gives. A check on
+    request answers the template with that record, whatever the outcome,
+    and the templates screen shows it. A
     template has a newer version while its newest found version is newer
     than its current version. A manager upgrades a template to a found
     version newer than its current one: the version passes the `fetch`,
     `read` and `definition` checks of a registration, then becomes the
-    current version with the commit those checks fetched. The current
-    version moves only forward. A check that finds the current version's tag
+    current version with the commit those checks fetched. A template takes
+    a version only at the commit its listing found: when the fetch resolves
+    the version's tag to another commit than the listing, of the last
+    check for an upgrade or of the registration's own `fetch` for a
+    registration, the tag moved since, and the registration or the upgrade
+    is refused under the `version` check, asking for a version check, with
+    nothing stored. The current version moves only forward. A check that finds the current version's tag
     at another commit than the recorded one shows the template's current
     version as moved, and jobs refuse it until a manager upgrades the
     template to that version again, which runs its checks and records the
     new commit. A workspace's applied version is the version its create
     generated or its last upgrade applied. It needs an upgrade while its
-    template's current version is newer than its applied version. A
-    workspace whose applied version is unknown, because its applied record's
-    commit has no version tag, shows so, with that commit, and is upgraded
-    only when the template service answers that the current version's
-    commit descends from it, so the upgrade still moves forward; a version
-    check gives it the version whose tag is at that commit. A workspace
+    template's current version is newer than its applied version. Every
+    path that takes an applied version from a workspace's applied record,
+    the joins (registration, discovery, the templates import),
+    first-start-import 4 and Apply branch, follows one rule: the record's
+    source must be the template's source and its commit a full Git object
+    id, and the version is the found version whose tag is at that commit;
+    when the record's ref is a version it must be that version, and when it
+    is not and several tags share the commit, the version is the newest of
+    them. A record that gives no version leaves a join's and import 4's
+    applied version unknown, keeping the record's commit only when its
+    source is the template's and the commit is well formed, so the next
+    version check completes it; Apply branch refuses it (see
+    apply-branch-flow). A workspace whose applied version is unknown,
+    because no found tag is at its applied commit, shows so, with that
+    commit, and is upgraded only when the template service answers that the
+    current version's commit descends from it, so the upgrade still moves
+    forward; when no commit is recorded for the current version, the job
+    pins the commit that answer approved. A version check gives it the
+    version whose tag is at that commit. A workspace
     whose applied record names a source that no registered template has
     keeps working and joins its template when a manager registers that
     source, once its repository has a version tag.
@@ -476,15 +495,19 @@ proposed-design:
     records the index with the stat data of what it wrote, moves the
     branch last, backs it up and rebuilds the devcontainer.
     A planned merge that changes the applied record `.toha.json` is read
-    before any write: the record it would write must name the workspace's
-    template's source, and a version, its ref's or the one whose tag is at
-    its commit, no older than the workspace's applied version. A workspace
+    before any write, the planned record alone, bounded in size: the record
+    it would write must give a version by the rule of template-versions,
+    the found version whose tag is at the record's commit and, when the
+    record's ref is a version, that version; that version's tag must not
+    have moved; and the version must be no older than the workspace's
+    applied version. A workspace
     with no registered template takes no change to its record, and one
     whose applied version is unknown takes a record whose version is known
     and whose commit descends from its applied commit, as an upgrade
     checks. A merge that removes the applied record, or leaves one Toha
-    cannot read, and anything else refuses the apply as `not-applicable`,
-    naming both versions or commits, with nothing changed. After an apply that
+    cannot read, a record larger than the bound, and anything else refuses
+    the apply as `not-applicable`, naming both versions or commits, quoted,
+    with nothing changed. After an apply that
     changed the record, the workspace's applied version and commit are the
     record's. Only the API and the UI start Apply branch, never the
     workspace socket.
@@ -1310,9 +1333,13 @@ proposed-design:
     version tag, which joins its workspaces (template-registry), and their
     applied commits then move forward by descent (template-versions). Each workspace
     whose applied record's source is a registered template's joins it.
-    4. Applied versions: a workspace's applied version is its applied
-    record's ref when that is a version of its template; otherwise
-    template-versions completes it from the record's commit.
+    4. Applied versions: each workspace with a registered template takes
+    its applied version from its applied record by the rule of
+    template-versions; a record that gives none leaves it unknown, with the
+    record's commit when the record names the template's source and a full
+    object id, and the template's next version check completes it. A
+    workspace with no registered template takes its applied version when it
+    joins one.
     5. Selections and keys: each workspace's Xolotl key identity is the key
     its declaration's `xolotl` member names, taken in one transaction with
     the import's mark, and each workspace whose declaration names a
