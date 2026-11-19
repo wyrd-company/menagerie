@@ -16,20 +16,21 @@ it defines.
 
 - **Register templates.** A manager registers a template from its Git
   address, and Menagerie checks that it can fetch and read it and that its
-  files include `.devcontainer/devcontainer.json`. A template's current
-  version moves forward to a newer release tag of its repository with no
-  configuration change or restart.
+  files include `.devcontainer/devcontainer.json`. Menagerie finds each
+  template's new release tags by itself, and a template's current version
+  moves forward to one of them with no configuration change or restart.
 - **Create.** A manager picks a registered template, names the workspace and
   answers the template's interview. Toha writes the folder, the template's
   hooks run in throwaway containers that see only that folder, and
   [devcontainer-builder](https://wyrd.foo/docs/dcb) starts the devcontainer.
 - **See the fleet.** The list shows every workspace folder in the workspace
-  root and the state of its container. Containers that belong to no workspace
-  do not appear.
+  root, the state of its container, the template version applied to it and
+  whether it needs an upgrade. Containers that belong to no workspace do not
+  appear.
 - **Operate.** Stop, start and rebuild a workspace's devcontainer. Each
   operation is a job whose console shows its phases and log.
-- **Upgrade.** Move a workspace to its template's current version. Menagerie
-  asks only the new questions, keeps local edits, and rebuilds the
+- **Upgrade.** Move a workspace forward to its template's current version.
+  Menagerie asks only the new questions, keeps local edits, and rebuilds the
   devcontainer.
 - **Apply a reviewed branch.** Bring a branch of the backup repository,
   such as a reviewed pull request's head, into a workspace. Menagerie backs
