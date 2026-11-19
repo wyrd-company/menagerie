@@ -344,6 +344,29 @@ describe("the templates screen", () => {
     expect(check).toBeEnabled();
   });
 
+  it("offers the newest version in place of a picked one a check no longer offers", async () => {
+    const { release, bodies } = holdReplies();
+    render(<TemplatesScreen />);
+    const entry = (await screen.findByRole("heading", { name: "Sample kit" })).closest("li")!;
+    await userEvent.click(within(entry).getByRole("button", { name: "Upgrade template" }));
+    await userEvent.selectOptions(within(entry).getByLabelText("Current version"), "1.1.0");
+    await userEvent.click(within(entry).getByRole("button", { name: "Check versions" }));
+    release(
+      Response.json({
+        ...kit,
+        newestVersion: "1.4.0",
+        versions: found("1.0.0", "1.4.0"),
+        lastCheck: { at: new Date().toISOString(), failure: null },
+      }),
+    );
+    expect(await within(entry).findByText("Checked just now")).toBeInTheDocument();
+    const select = within(entry).getByLabelText<HTMLSelectElement>("Current version");
+    expect([...select.options].map((o) => o.value)).toEqual(["1.4.0"]);
+    expect(select.value).toBe("1.4.0");
+    await userEvent.click(within(entry).getByRole("button", { name: "Validate" }));
+    expect(bodies[1]).toEqual({ version: "1.4.0", check: true });
+  });
+
   it("shows a failed check, keeping the versions found before", async () => {
     const { release } = holdReplies();
     render(<TemplatesScreen />);

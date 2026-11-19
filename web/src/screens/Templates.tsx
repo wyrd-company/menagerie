@@ -378,7 +378,10 @@ function VersionEditor({
   onSaved: (t: Template) => void;
 }) {
   const choices = upgradeChoices(t);
-  const [version, setVersion] = useState(choices[0] ?? "");
+  const [picked, setPicked] = useState(choices[0] ?? "");
+  // A check while the form is open can take the picked version off the
+  // offer; the newest offered one takes its place.
+  const version = choices.includes(picked) ? picked : (choices[0] ?? "");
   const { error, validated, busy, edited, run } = useValidated(version);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -400,7 +403,7 @@ function VersionEditor({
           value={version}
           aria-describedby={`version-error-${t.id}`}
           onChange={(e) => {
-            setVersion(e.target.value);
+            setPicked(e.target.value);
             edited();
           }}
         >

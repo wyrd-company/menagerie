@@ -1,15 +1,20 @@
 // Template versions as the workspace service orders them: MAJOR.MINOR.PATCH,
-// with an optional leading v, by their numbers.
+// with an optional leading v, by their numbers. A number is read whole, as
+// a BigInt: a Number rounds one above 2^53 to its neighbour.
 import { own } from "../own.ts";
 import type { Template } from "./types.ts";
 
-const numbers = (version: string) => version.replace(/^v/, "").split(".").map(Number);
+const numbers = (version: string) =>
+  version
+    .replace(/^v/, "")
+    .split(".")
+    .map((n) => (/^[0-9]+$/.test(n) ? BigInt(n) : 0n));
 
 /** Whether version a is newer than version b. */
 export function newer(a: string, b: string): boolean {
   const [x, y] = [numbers(a), numbers(b)];
   for (let i = 0; i < 3; i++) {
-    const [p, q] = [x[i] ?? 0, y[i] ?? 0];
+    const [p, q] = [x[i] ?? 0n, y[i] ?? 0n];
     if (p !== q) return p > q;
   }
   return false;
