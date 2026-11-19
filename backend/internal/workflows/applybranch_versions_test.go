@@ -229,3 +229,28 @@ func (w *world) untemplated(t *testing.T, name string) {
 		t.Fatal(err)
 	}
 }
+
+// While the template service cannot say whether a record moves an unknown
+// applied version forward, the apply fails as template-service-unavailable
+// with nothing applied.
+func TestApplyBranchWithNoAnswerOnDescentAppliesNothing(t *testing.T) {
+	w := newWorld(t)
+	w.createWorkspace(t, "alpha")
+	folder := filepath.Join(w.root, "alpha")
+	w.unknown(t, "alpha")
+	w.tmpl.checkSince = func(_, _, _ string) (*templates.Checked, error) {
+		return nil, &templates.UnavailableError{Err: errors.New("no socket")}
+	}
+	record, _ := os.ReadFile(filepath.Join(folder, ".toha.json"))
+	w.contributeRecord(t, "alpha", "review/record", toha(sampleTemplate.Source, "1.1.0", laterCommit))
+	job, snap := w.applyBranch(t, "alpha", "review/record")
+	if snap.State != jobs.Failed || snap.Error.Kind != KindTemplateUnavailable {
+		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
+	}
+	if now, _ := os.ReadFile(filepath.Join(folder, ".toha.json")); string(now) != string(record) {
+		t.Fatalf("the record changed to %s", now)
+	}
+	if got, _ := w.data.AppliedVersion(context.Background(), "alpha"); got != (store.AppliedVersion{Commit: appliedCommit}) {
+		t.Fatalf("%+v", got)
+	}
+}

@@ -518,3 +518,33 @@ func (w *world) startJobBody(t *testing.T, body string) *jobs.Job {
 	}
 	return job
 }
+
+// A job re-checks the stored applied version it starts from: one the
+// workspace took after the request was checked, the current version or a
+// newer one, refuses the upgrade as template-refused before anything runs.
+func TestAnUpgradeJobRefusesAnAppliedVersionNotOlderThanTheCurrent(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.createWorkspace(t, "alpha")
+	w.newVersion(t)
+	tpl, err := w.data.Template(ctx, "sample")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"2.0.0", "3.0.0"} {
+		if err := w.data.SetAppliedVersion(ctx, "alpha", store.AppliedVersion{Version: version, Commit: "3000000000000000000000000000000000000003"}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := (&upgrading{w: w.flows, name: "alpha"}).forward(ctx, nil, tpl)
+		var failure *jobs.Failure
+		if !errors.As(err, &failure) || failure.Kind != KindTemplateRefused || !strings.Contains(err.Error(), "already has version "+version) {
+			t.Fatalf("%s: %v", version, err)
+		}
+	}
+	if err := w.data.SetAppliedVersion(ctx, "alpha", store.AppliedVersion{Version: "1.0.0", Commit: sampleTemplate.CurrentCommit}); err != nil {
+		t.Fatal(err)
+	}
+	if from, err := (&upgrading{w: w.flows, name: "alpha"}).forward(ctx, nil, tpl); err != nil || from != "version 1.0.0" {
+		t.Fatalf("%q %v", from, err)
+	}
+}
