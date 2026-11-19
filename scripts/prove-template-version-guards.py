@@ -10,32 +10,46 @@ The guards, by the requirement they keep:
 - checks: Menagerie finds a new version on its schedule, at start and at
   each tick, and on request; a check replaces the found versions, and a
   failed one keeps them and records why, template-service-unavailable for a
-  fault, an unreachable service or no answer within the check's wait; two
-  checks of one template share one run that a leaving caller does not end;
-  a check on request answers 200 with the failure recorded.
+  fault, an unreachable service, a malformed listing or no answer within
+  the check's wait; two checks of one template share one run that a
+  leaving caller does not end; a check on request answers 200 with the
+  failure recorded; a template takes a version only at the commit its
+  listing found.
 - moved: a check that finds the current version's tag at another commit
   shows it moved, never replacing the recorded commit; a create and an
   upgrade are refused template-version-moved while it is; the template
   takes that version again, with the new commit, only while it is moved,
-  and the screen offers it through Update version.
+  and the screen offers it through Update version; versions compare by
+  their whole numbers, and the screen sends only a version it offers.
 - descent: an upgrade of a workspace whose applied version is unknown goes
   on only when the template service answers that the current version's
   commit is, or descends from, its applied commit, at the recorded commit,
-  and fails as template-refused otherwise, also when no commit is known.
+  and fails as template-refused otherwise, also when no commit is known or
+  the reply has no descent; with no recorded commit it pins the commit the
+  answer approved, and records the applied record's commit only when it is
+  a full object id.
 - apply: Apply branch refuses, as not-applicable with nothing changed, a
-  record of a workspace with no registered template, a removed, linked or
-  unreadable record, another source, a record no version gives, an older
-  version, and an unknown applied version whose record's commit does not
-  descend or is not known; and records a forward record's version.
+  record of a workspace with no registered template, a removed, linked,
+  oversized or unreadable record, a record the one rule gives no version,
+  the moved current version, an older version, and an unknown applied
+  version whose record's commit does not descend or is not known; and
+  records a forward record's version.
+- record: one rule gives every applied version taken from a record: of the
+  template's source, at a full object id, the found version whose tag is
+  at that commit, the ref's when the ref is a version, else the newest
+  there; a join or the import keeps the commit alone otherwise, only of the
+  template's source and a full object id.
 - import: the first start records each workspace's applied version from
-  its record once, keeping a known one, and completes an unknown one from
-  the found versions.
+  its record once, keeping a known one; a start imports the applied
+  versions and checks every template with no request.
 
 Each mutation changes one guard in place, and every test it names must
-fail; the report names, for each, the assertion that failed. The source is
-restored even on interruption. The report starts failed and passes only
-after every baseline test passes and every mutant compiles and fails each
-of its tests.
+fail by its own assertion; a test that never ends, or a run that times
+out, leaves the mutant a survivor. The report names, for each, the
+assertion that failed, and the review sweep's id of a mutant it also ran.
+The source is restored even on interruption. The report starts failed and
+passes only after every baseline test passes and every mutant compiles and
+fails each of its tests.
 """
 import argparse
 import json
@@ -56,6 +70,9 @@ TESTS = {
     "check-wait": ("./backend/internal/registry", "TestACheckThatGetsNoAnswerFailsWithinItsWait"),
     "check-shared": ("./backend/internal/registry", "TestChecksOfOneTemplateAtOnceShareOneRun"),
     "check-api": ("./backend/internal/api", "TestACheckOnRequestAnswersTheTemplateWhateverTheOutcome"),
+    "check-listed": ("./backend/internal/registry", "TestATemplateTakesAVersionOnlyAtTheCommitItsListingFound"),
+    "check-malformed": ("./backend/internal/registry", "TestAMalformedListingIsRecordedAsUnavailable"),
+    "client-replies": ("./backend/internal/templates", "TestTemplateRoutesNameTheAddressAndDecodeStrictly"),
     "store-failure": ("./backend/internal/store", "TestAFailedCheckKeepsTheFoundVersions"),
     "moved-registry": ("./backend/internal/registry", "TestAMovedTagIsTakenAgainOnlyByUpgradingToIt"),
     "moved-older": ("./backend/internal/registry", "TestAMovedTagTakesNoOlderVersion"),
@@ -64,16 +81,27 @@ TESTS = {
     "moved-jobs": ("./backend/internal/workflows", "TestAMovedTagRefusesCreatesAndUpgradesUntilTakenAgain"),
     "moved-screen": ("web/src/screens/Templates.test.tsx",
                      "takes a moved current version again through Update version"),
+    "screen-offered": ("web/src/screens/Templates.test.tsx",
+                       "offers the newest version in place of a picked one a check no longer offers"),
+    "compare-whole": ("web/src/api/versions.test.ts",
+                      "tells apart numbers above 2^53 that a Number rounds together"),
     "descent": ("./backend/internal/workflows", "TestAnUnknownAppliedVersionIsUpgradedOnlyByDescent"),
     "descent-service": ("template-service/templates", "a_check_answers_whether_the_version_descends_from_a_commit"),
+    "descent-pin": ("./backend/internal/workflows", "TestAnUpgradePinsTheCommitItsDescentCheckApproved"),
+    "record-commit": ("./backend/internal/workflows", "TestAnUpgradeOfAnUncheckedTemplateRecordsTheRecordsCommit"),
     "job-forward": ("./backend/internal/workflows", "TestAnUpgradeJobRefusesAnAppliedVersionNotOlderThanTheCurrent"),
     "stored-version": ("./backend/internal/workflows", "TestAnUpgradeComparesTheStoredAppliedVersion"),
     "upgrade-records": ("./backend/internal/workflows", "TestAnAppliedUpgradeRecordsThePinnedVersion"),
     "apply-unavailable": ("./backend/internal/workflows", "TestApplyBranchWithNoAnswerOnDescentAppliesNothing"),
     "apply-forward": ("./backend/internal/workflows", "TestApplyBranchMovesTheAppliedRecordOnlyForward"),
+    "one-rule": ("./backend/internal/registry", "TestOneRuleGivesTheVersionOfARecord"),
+    "registration-join": ("./backend/internal/registry", "TestARegistrationAndACheckGiveTheVersionAtTheRecordsCommit"),
+    "discovery-join": ("./backend/internal/api", "TestAWorkspaceListedForTheFirstTimeJoinsItsTemplateWhichItsUseKeeps"),
     "import-once": ("./backend/internal/registry", "TestTheFirstStartImportsEachWorkspacesAppliedVersionOnce"),
-    "import-completes": ("./backend/internal/registry", "TestTheAppliedImportCompletesAnUnknownVersionFromFoundVersions"),
-    "unknown-completes": ("./backend/internal/registry", "TestACheckGivesAnUnknownAppliedVersionTheVersionAtItsCommit"),
+    "import-found": ("./backend/internal/registry", "TestTheAppliedImportTakesTheFoundVersionAtTheRecordsCommit"),
+    "unknown-completes": ("./backend/internal/store", "TestAnUnknownAppliedVersionIsCompletedFromItsCommit"),
+    "start-imports": ("./backend/cmd/menagerie", "TestAFirstStartImportsTheAppliedVersions"),
+    "start-checks": ("./backend/cmd/menagerie", "TestAStartChecksTheTemplatesWithNoRequest"),
 }
 
 VERSIONS = "backend/internal/registry/versions.go"
@@ -86,8 +114,23 @@ FLOWS = "backend/internal/workflows/workflows.go"
 UPGRADE = "backend/internal/workflows/upgrade.go"
 APPLY = "backend/internal/workflows/applybranch.go"
 PLAN = "backend/internal/backup/apply.go"
+CLIENT = "backend/internal/templates/client.go"
+MAIN = "backend/cmd/menagerie/main.go"
 CHECK = "template-service/src/templates.rs"
 CHOICES = "web/src/api/versions.ts"
+SCREEN = "web/src/screens/Templates.tsx"
+
+# The review sweep's id of a mutant this script also runs, by its name.
+SWEEP = {
+    "check-wait-bounds": "R05",
+    "descent-at-the-recorded-commit": "W06",
+    "record-version-at-the-records-commit": "P10",
+    "apply-asks-by-the-found-tag": "P18",
+    "upgrade-records-the-records-commit": "W12",
+    "client-refuses-a-check-with-no-descent": "C01",
+    "start-checks-versions": "G04",
+    "start-imports-applied-versions": "G05",
+}
 
 # Each mutant: a name, the requirement it breaks, the source file, the text
 # it replaces (exactly once), its replacement, and the tests that must each
@@ -186,29 +229,62 @@ MUTANTS = [
      ["descent-service"]),
     ("service-refuses-a-malformed-since", "descent", CHECK,
      "        && !crate::revision::is_commit(since)\n", "        && since.is_empty()\n", ["descent-service"]),
+    ("upgrade-pins-the-approved-commit", "descent", UPGRADE,
+     "\tif tpl.CurrentCommit == \"\" && approved != \"\" {\n",
+     "\tif false && tpl.CurrentCommit == \"\" && approved != \"\" {\n", ["descent-pin"]),
+    ("descent-approves-its-commit", "descent", UPGRADE,
+     "\treturn \"commit \" + applied.Commit, checked.Commit, nil\n",
+     "\treturn \"commit \" + applied.Commit, \"\", nil\n", ["descent-pin"]),
+    ("upgrade-records-the-records-commit", "descent", UPGRADE,
+     "\tif commit == \"\" {\n", "\tif false {\n", ["record-commit"]),
+    ("upgrade-records-only-a-full-commit", "descent", UPGRADE,
+     "err == nil && registry.IsCommit(applied.Commit) {\n", "err == nil {\n", ["record-commit"]),
+    ("client-refuses-a-check-with-no-descent", "descent", CLIENT,
+     "\tif out.Source == \"\" || out.Commit == \"\" || out.Descends == nil {\n",
+     "\tif out.Source == \"\" || out.Commit == \"\" {\n", ["client-replies"]),
+    # checks: the listing
+    ("client-checks-every-listed-version", "checks", CLIENT,
+     "\t\tif !listedVersion.MatchString(v.Version) || v.Tag == \"\" || !fullCommit.MatchString(v.Commit) {\n",
+     "\t\tif _ = v; false {\n", ["client-replies", "check-malformed"]),
+    ("client-listed-tag-is-named", "checks", CLIENT,
+     " || v.Tag == \"\" || ", " || ", ["client-replies"]),
+    ("client-listed-commit-is-full", "checks", CLIENT,
+     " || !fullCommit.MatchString(v.Commit) {\n", " {\n", ["client-replies"]),
+    ("template-takes-the-listed-commit", "checks", REGISTRY,
+     "\tif checked.Commit != v.Commit {\n\t\treturn nil, &CheckError{Check: CheckVersion,",
+     "\tif false {\n\t\treturn nil, &CheckError{Check: CheckVersion,", ["check-listed"]),
     # apply
     ("apply-reads-the-record-change", "apply", PLAN,
-     "\tout := Change{Changed: before != after}\n", "\tout := Change{Changed: false && before != after}\n",
+     "\tout := Change{Changed: p.head[path] != after}\n", "\tout := Change{Changed: false && p.head[path] != after}\n",
      ["apply-forward"]),
+    ("apply-bounds-the-record", "apply", PLAN,
+     "\tif blob.Size > limit {\n", "\tif false {\n", ["apply-forward"]),
     ("apply-needs-a-template", "apply", APPLY,
      "\tif id == \"\" {\n\t\treturn nil, refuse(", "\tif false {\n\t\treturn nil, refuse(", ["apply-forward"]),
     ("apply-refuses-a-removed-record", "apply", APPLY,
-     "\tif !change.After.Present {\n", "\tif false && !change.After.Present {\n", ["apply-forward"]),
+     "\tcase !change.After.Present:\n", "\tcase false && !change.After.Present:\n", ["apply-forward"]),
     ("apply-refuses-a-linked-record", "apply", APPLY,
-     "\tif !change.After.Regular {\n", "\tif false && !change.After.Regular {\n", ["apply-forward"]),
+     "\tcase !change.After.Regular:\n", "\tcase false && !change.After.Regular:\n", ["apply-forward"]),
+    ("apply-refuses-an-oversized-record", "apply", APPLY,
+     "\tcase change.After.TooLarge:\n", "\tcase false && change.After.TooLarge:\n", ["apply-forward"]),
     ("apply-refuses-an-unreadable-record", "apply", APPLY,
      "\trecord, err := registry.ParseApplied(change.After.Data)\n\tif err != nil {\n",
      "\trecord, err := registry.ParseApplied(change.After.Data)\n\tif err != nil && false {\n", ["apply-forward"]),
-    ("apply-refuses-another-source", "apply", APPLY,
-     "\tif record.Source != tpl.Source {\n", "\tif false && record.Source != tpl.Source {\n", ["apply-forward"]),
-    ("apply-refuses-an-untagged-record", "apply", APPLY,
-     "\tif version == \"\" {\n\t\treturn nil, refuse(", "\tif false {\n\t\treturn nil, refuse(", ["apply-forward"]),
+    ("apply-takes-the-one-rule", "apply", APPLY,
+     "\tfound, err := registry.RecordVersion(record, tpl)\n\tif err != nil {\n",
+     "\tfound, err := registry.RecordVersion(record, tpl)\n\tif false && err != nil {\n", ["apply-forward"]),
+    ("apply-refuses-the-moved-current-version", "apply", APPLY,
+     "\tif found.Version == tpl.CurrentVersion && tpl.CurrentMoved() {\n",
+     "\tif false && found.Version == tpl.CurrentVersion && tpl.CurrentMoved() {\n", ["apply-forward"]),
     ("apply-refuses-an-older-version", "apply", APPLY,
-     "\t\tif registry.Newer(applied.Version, version) {\n",
-     "\t\tif false && registry.Newer(applied.Version, version) {\n", ["apply-forward"]),
-    ("apply-needs-commits-to-descend", "apply", APPLY,
-     "\tif applied.Commit == \"\" || record.Commit == \"\" {\n",
-     "\tif false && (applied.Commit == \"\" || record.Commit == \"\") {\n", ["apply-forward"]),
+     "\t\tif registry.Newer(applied.Version, found.Version) {\n",
+     "\t\tif false && registry.Newer(applied.Version, found.Version) {\n", ["apply-forward"]),
+    ("apply-needs-a-commit-to-descend", "apply", APPLY,
+     "\tif applied.Commit == \"\" {\n\t\treturn nil, refuse(",
+     "\tif false {\n\t\treturn nil, refuse(", ["apply-forward"]),
+    ("apply-asks-by-the-found-tag", "apply", APPLY,
+     "CheckSince(ctx, tpl.Address, found.Tag, applied.Commit)",
+     "CheckSince(ctx, tpl.Address, record.Ref, applied.Commit)", ["apply-forward"]),
     ("apply-refuses-off-history", "apply", APPLY,
      "\tcase !*checked.Descends:\n", "\tcase false && !*checked.Descends:\n", ["apply-forward"]),
     ("apply-unavailable-applies-nothing", "apply", APPLY,
@@ -224,21 +300,63 @@ MUTANTS = [
     ("apply-checks-every-plan", "apply", APPLY,
      "\tif a.record, err = a.forward(ctx, plan); err != nil {\n",
      "\tif a.record, err = nil, error(nil); err != nil {\n", ["apply-forward"]),
+    # record: the one rule
+    ("record-of-the-templates-source", "record", APPLIED,
+     "\tif rec.Source != tpl.Source {\n\t\treturn store.Version{}",
+     "\tif false && rec.Source != tpl.Source {\n\t\treturn store.Version{}", ["one-rule", "apply-forward"]),
+    ("record-at-a-full-commit", "record", APPLIED,
+     "\tif !IsCommit(rec.Commit) {\n\t\treturn store.Version{}",
+     "\tif false && !IsCommit(rec.Commit) {\n\t\treturn store.Version{}", ["one-rule"]),
+    ("full-commit-has-its-length", "record", APPLIED,
+     "\tif len(commit) != 40 && len(commit) != 64 {\n", "\tif len(commit) == 0 {\n", ["one-rule"]),
+    ("full-commit-is-lower-case-hex", "record", APPLIED,
+     "\t\tif (c < '0' || c > '9') && (c < 'a' || c > 'f') {\n",
+     "\t\tif (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {\n", ["one-rule"]),
+    ("record-version-at-the-records-commit", "record", APPLIED,
+     "\t\tif found.Commit == rec.Commit {\n", "\t\tif true {\n", ["one-rule", "apply-forward", "import-found"]),
+    ("record-ref-must-be-the-version", "record", APPLIED,
+     "\tcase !isVersion:\n", "\tcase true || !isVersion:\n", ["one-rule", "apply-forward"]),
+    ("record-takes-the-newest-at-the-commit", "record", APPLIED,
+     "\t\treturn at[len(at)-1], nil\n", "\t\treturn at[0], nil\n", ["one-rule"]),
+    ("join-takes-the-one-rule", "record", APPLIED,
+     "\tif found, err := RecordVersion(rec, tpl); err == nil {\n",
+     "\tif found, err := RecordVersion(rec, tpl); err == nil && false {\n",
+     ["one-rule", "import-found", "discovery-join"]),
+    ("join-keeps-only-its-sources-commit", "record", APPLIED,
+     "\tif rec.Source == tpl.Source && IsCommit(rec.Commit) {\n", "\tif IsCommit(rec.Commit) {\n",
+     ["one-rule", "import-once"]),
+    ("join-keeps-only-a-full-commit", "record", APPLIED,
+     "\tif rec.Source == tpl.Source && IsCommit(rec.Commit) {\n", "\tif rec.Source == tpl.Source {\n",
+     ["one-rule", "import-once"]),
+    ("registration-joins-by-the-rule", "record", REGISTRY,
+     "\t\t\tout[name] = version(tpl)\n", "\t\t\tout[name], _ = store.AppliedVersion{}, version\n", ["registration-join"]),
+    ("discovery-joins-by-the-rule", "record", TEMPLATES,
+     "\t\t\tif err := t.SetAppliedVersion(name, r.version(tpl)); err != nil {\n",
+     "\t\t\t_ = tpl\n\t\t\tif err := t.SetAppliedVersion(name, AppliedVersion{}); err != nil {\n", ["discovery-join"]),
     # import
-    ("import-takes-a-version-ref", "import", APPLIED,
-     "\tif v, ok := ParseVersion(a.Ref); ok {\n", "\tif v, ok := ParseVersion(a.Ref); ok && false {\n",
-     ["import-once"]),
     ("import-keeps-a-known-version", "import", IMPORT,
      "\t\t\tif current != (store.AppliedVersion{}) {\n\t\t\t\tcontinue\n\t\t\t}\n",
      "\t\t\tif false && current != (store.AppliedVersion{}) {\n\t\t\t\tcontinue\n\t\t\t}\n", ["import-once"]),
-    ("import-completes-from-found-versions", "import", IMPORT,
-     "\t\treturn tx.CompleteApplied()\n", "\t\treturn nil\n", ["import-completes"]),
+    ("import-takes-the-records-version", "import", IMPORT,
+     "\t\t\tif applied := version(tpl); applied != (store.AppliedVersion{}) {\n",
+     "\t\t\t_, _ = version, tpl\n\t\t\tif applied := (store.AppliedVersion{}); applied != (store.AppliedVersion{}) {\n",
+     ["import-once", "import-found"]),
     ("import-runs-once", "import", IMPORT,
      "\tran, err := data.Import(ctx, AppliedImportID, func(tx *store.Tx) error {\n",
      "\tran, err := true, data.Update(ctx, func(tx *store.Tx) error {\n", ["import-once"]),
     ("check-completes-unknown-versions", "import", TEMPLATES,
      "\t\tif err := t.completeApplied(id); err != nil {\n\t\t\treturn err\n\t\t}\n\t\ttpl, err = t.Template(id)\n",
-     "\t\ttpl, err = t.Template(id)\n", ["unknown-completes"]),
+     "\t\ttpl, err = t.Template(id)\n", ["unknown-completes", "registration-join", "import-once"]),
+    ("start-imports-applied-versions", "import", MAIN,
+     "\treturn registry.ImportApplied(ctx, data, root, log.Printf)\n", "\treturn nil\n", ["start-imports"]),
+    ("start-checks-versions", "checks", MAIN,
+     "\tgo versions.Schedule(ctx, ticks.C, log.Printf)\n", "\t_ = versions\n", ["start-checks"]),
+    # the screen
+    ("versions-compare-whole-numbers", "moved", CHOICES,
+     "? BigInt(n) : 0n", "? BigInt(Number(n)) : 0n", ["compare-whole"]),
+    ("screen-sends-an-offered-version", "moved", SCREEN,
+     "  const version = choices.includes(picked) ? picked : (choices[0] ?? \"\");\n",
+     "  const version = picked;\n", ["screen-offered"]),
 ]
 
 
@@ -254,7 +372,8 @@ def run(package, test):
         command = ["nice", "-n", "15", "cargo", "test", "--locked", "--test",
                    package.removeprefix("template-service/"), test, "--", "--exact"]
     else:
-        # A guard broken into a hang fails the test at this bound.
+        # A guard broken into a hang ends here, a survivor: each test that
+        # waits holds its own, shorter deadline with a named failure.
         command = ["nice", "-n", "15", "go", "test", "-p", "2", "-count=1", "-timeout", "120s", package,
                    "-run", "^" + test + "$", "-v"]
     try:
@@ -275,8 +394,9 @@ def outcome(package, test, output):
     if package.startswith("template-service/"):
         return (re.search(rf"test {re.escape(test)} \.\.\. ok", output) is not None,
                 re.search(rf"test {re.escape(test)} \.\.\. FAILED", output) is not None)
-    hung = re.search(rf"panic: test timed out after [^\n]+\n\s+running tests:\n(?:\s+[^\n]+\n)*?\s+{re.escape(test)}\b", output)
-    return f"--- PASS: {test}" in output, f"--- FAIL: {test}" in output or hung is not None
+    # A test that never ends prints no FAIL of its own: the go test
+    # timeout's panic leaves the mutant a survivor.
+    return f"--- PASS: {test}" in output, f"--- FAIL: {test}" in output
 
 
 def assertion(package, output):
@@ -290,10 +410,7 @@ def assertion(package, output):
         found = re.search(r"panicked at ([^\n]+):\n([^\n]+(?:\n  left: [^\n]+\n right: [^\n]+)?)", output)
         return f"{found.group(1)}: {found.group(2)}" if found else None
     found = re.search(r"^\s+(\w+_test\.go:\d+: [^\n]*)", output, re.MULTILINE)
-    if found:
-        return found.group(1)
-    hung = re.search(r"panic: (test timed out after [^\n]+)", output)
-    return hung.group(1) + ": the test never ended" if hung else None
+    return found.group(1) if found else None
 
 
 def main():
@@ -331,11 +448,13 @@ def main():
             for test in tests:
                 package, function = TESTS[test]
                 result = run(package, function)
+                named = assertion(package, result["output"])
+                # Killed: the test's own failure, naming its assertion.
                 killed = (result["exitCode"] is not None and result["exitCode"] != 0
-                          and outcome(package, function, result["output"])[1])
+                          and outcome(package, function, result["output"])[1] and named is not None)
                 report["mutants"].append({"name": name, "requirement": requirement, "test": test,
-                                          "killed": killed,
-                                          "assertion": assertion(package, result["output"]) if killed else None,
+                                          "sweep": SWEEP.get(name), "killed": killed,
+                                          "assertion": named if killed else None,
                                           **result})
                 save()
                 if not killed:
