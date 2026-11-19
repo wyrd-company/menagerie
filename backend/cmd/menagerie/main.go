@@ -147,6 +147,10 @@ func run(configPath string) error {
 	if err := importTemplates(ctx, cfg, root, data, templates.New(cfg.TemplateService.Socket)); err != nil {
 		return err
 	}
+	if err := registry.ImportApplied(ctx, data, root, log.Printf); err != nil {
+		return err
+	}
+	versions := &registry.Registry{Data: data, Templates: templates.New(cfg.TemplateService.Socket), Root: root}
 	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, app)
 	if err != nil {
 		return err
@@ -167,10 +171,14 @@ func run(configPath string) error {
 		return err
 	}
 	policyServer := api.New(api.Options{Root: root, Data: data, Jobs: manager, Policies: func() api.PolicySource { source, _ := clients.Bindings.(api.PolicySource); return source }(), PolicyApplication: policySteps})
-	handler, err := newHandler(cfg, root, data, remote, runtime, clients, manager, parts.hooks, parts.images)
+	handler, err := newHandler(cfg, root, data, remote, runtime, clients, manager, parts.hooks, parts.images, versions)
 	if err != nil {
 		return err
 	}
+	versionTicks := time.NewTicker(cfg.TemplateVersionsEvery())
+	defer versionTicks.Stop()
+	go versions.Schedule(ctx, versionTicks.C, log.Printf)
+	log.Printf("menagerie: checking templates for new versions now and every %s", cfg.TemplateVersionsEvery())
 
 	httpServer := &http.Server{
 		Addr:        cfg.Listen,
@@ -387,8 +395,8 @@ func hookRoutes(hooks *throwaway.HookRunner, app *githubapp.Minter) http.Handler
 
 // newHandler is the workspace service's whole HTTP surface: the workspace
 // API behind manager sign-in.
-func newHandler(cfg *config.Config, root *workspace.Root, data *store.Store, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) (http.Handler, error) {
-	return signedIn(newServer(cfg, root, data, remote, runtime, clients, manager, hooks, images), cfg.OIDC)
+func newHandler(cfg *config.Config, root *workspace.Root, data *store.Store, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) (http.Handler, error) {
+	return signedIn(newServer(cfg, root, data, remote, runtime, clients, manager, hooks, images, versions), cfg.OIDC)
 }
 
 // signedIn serves server behind manager sign-in: the sign-in routes are
@@ -408,8 +416,11 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 // runner image; nil hooks refuse every hook. Every job that can create a
 // container runs through the provisioning steps, which keep what they provision
 // in data.
-func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images) *api.Server {
+func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) *api.Server {
 	service := templates.New(cfg.TemplateService.Socket)
+	if versions == nil {
+		versions = &registry.Registry{Data: data, Templates: service, Root: root}
+	}
 	var image func(context.Context, string) (string, error)
 	if images != nil {
 		image = images.ForTemplate
@@ -460,7 +471,7 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 		// Runs in the workspace's own container, as the t3code-server
 		// Feature's service user.
 		PairingTokens: t3code.NewMinter(runtime.Docker()),
-		Registry:      &registry.Registry{Data: data, Templates: service, Root: root},
+		Registry:      versions,
 		AppliedRecord: registry.Record,
 		UI:            web.FS,
 	})

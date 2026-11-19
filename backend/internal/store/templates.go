@@ -333,6 +333,27 @@ func (t *Tx) completeApplied(id string) error {
 	return err
 }
 
+// CompleteApplied gives each workspace whose applied version is unknown the
+// newest found version of its template whose tag is at its applied commit,
+// when one is.
+func (t *Tx) CompleteApplied() error {
+	ids, err := t.names(`SELECT id FROM templates ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := t.completeApplied(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Workspaces lists the workspaces Menagerie's data holds, in name order.
+func (t *Tx) Workspaces() ([]string, error) {
+	return t.names(`SELECT name FROM workspaces ORDER BY name`)
+}
+
 // SetAppliedVersion records the version and commit last applied to a workspace,
 // "" for unknown; the workspace gets its data when it has none.
 func (t *Tx) SetAppliedVersion(workspace string, applied AppliedVersion) error {
