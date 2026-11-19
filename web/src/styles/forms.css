@@ -42,6 +42,17 @@
   color: var(--text-muted);
 }
 
+/* The mockup's .error and .help lines under the reanswer choice. */
+.upgrade-note {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.upgrade-note.is-error {
+  color: var(--danger);
+}
+
 .template-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));

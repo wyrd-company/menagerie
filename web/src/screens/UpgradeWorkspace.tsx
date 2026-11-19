@@ -119,17 +119,6 @@ function StartUpgrade({ workspace }: { workspace: string }) {
       ) : (
         <p className="muted">Reading…</p>
       )}
-      {unregistered ? (
-        <p className="field-errors" role="alert">
-          Register this workspace's template before upgrading.
-        </p>
-      ) : moved ? (
-        <p className="field-errors" role="alert">
-          The current tag moved. Validate and save the version on Templates before upgrading.
-        </p>
-      ) : upToDate ? (
-        <p className="muted">This workspace already has the current version.</p>
-      ) : null}
       {active ? (
         <div className="notice notice-warn" role="status">
           <p>
@@ -139,10 +128,21 @@ function StartUpgrade({ workspace }: { workspace: string }) {
           <Link href={paths.list(active.jobId)}>Show the running job</Link>
         </div>
       ) : null}
-      <label className="choice">
+      <label className="choice-line">
         <input type="checkbox" checked={reanswer} onChange={(e) => setReanswer(e.target.checked)} />
-        <span>Ask every question again</span>
+        Ask every question again
       </label>
+      {unregistered ? (
+        <p className="upgrade-note is-error" role="alert">
+          Register this workspace's template before upgrading.
+        </p>
+      ) : moved ? (
+        <p className="upgrade-note is-error" role="alert">
+          The current tag moved. Validate and save the version on Templates before upgrading.
+        </p>
+      ) : upToDate ? (
+        <p className="upgrade-note">This workspace already has the current version.</p>
+      ) : null}
       {error ? (
         <div className="notice notice-bad" role="alert">
           <p>
