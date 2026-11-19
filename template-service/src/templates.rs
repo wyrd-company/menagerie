@@ -110,9 +110,7 @@ fn descends(checkout: &std::path::Path, commit: &str, since: &str) -> Result<boo
     let repo = gix::open_opts(checkout, gix::open::Options::isolated()).map_err(|e| failed(&e))?;
     let tip = gix::ObjectId::from_hex(commit.as_bytes()).map_err(|e| failed(&e))?;
     let since = gix::ObjectId::from_hex(since.as_bytes()).map_err(|e| failed(&e))?;
-    if tip == since {
-        return Ok(true);
-    }
+    // The walk yields the tip itself first, then each of its ancestors.
     for ancestor in repo.rev_walk([tip]).all().map_err(|e| failed(&e))? {
         if ancestor.map_err(|e| failed(&e))?.id == since {
             return Ok(true);

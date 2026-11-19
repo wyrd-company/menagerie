@@ -176,7 +176,9 @@ MUTANTS = [
      "    for ancestor in repo.rev_walk([tip]).all().map_err(|e| failed(&e))? {\n        let _ = &ancestor;\n        return Ok(true);\n",
      ["descent-service"]),
     ("service-commit-is-its-own-descendant", "descent", CHECK,
-     "    if tip == since {\n        return Ok(true);\n    }\n", "", ["descent-service"]),
+     "    // The walk yields the tip itself first, then each of its ancestors.\n    for ancestor in repo.rev_walk([tip]).all().map_err(|e| failed(&e))? {\n",
+     "    // The walk yields the tip itself first, then each of its ancestors.\n    for ancestor in repo.rev_walk([tip]).all().map_err(|e| failed(&e))?.skip(1) {\n",
+     ["descent-service"]),
     ("service-refuses-a-malformed-since", "descent", CHECK,
      "        && !crate::revision::is_commit(since)\n", "        && since.is_empty()\n", ["descent-service"]),
     # apply
