@@ -35,8 +35,24 @@
 }
 
 .template-panel input,
-.template-edit input {
+.template-edit input,
+.template-edit select {
   max-width: 640px;
+}
+
+/* The version select is the mockup's native select. */
+.template-edit select {
+  font: inherit;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 8px;
+  min-height: 36px;
+}
+
+.template-edit select:focus-visible {
+  border-color: var(--accent);
 }
 
 .form-error,
@@ -88,14 +104,17 @@
   color: var(--text-muted);
 }
 
-.template-address {
+/* The mockup's .help and .error lines: 14px, 6px apart. */
+.template-address,
+.template-check,
+.template-moved {
   margin: 6px 0 0;
-  font-size: 0.85rem;
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 
 .template-versions {
-  font-size: 0.9rem;
+  font-size: 14px;
   display: grid;
   gap: 6px;
 }
@@ -154,8 +173,15 @@
   }
 }
 
+/* The mockup's .entry-name .help line, then its warning. */
 .entry-template {
-  margin: 0;
+  margin: 4px 0 0;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: 14px;
+}
+
+.entry-upgrade {
+  margin: 0;
+  color: var(--warn);
+  font-size: 14px;
 }

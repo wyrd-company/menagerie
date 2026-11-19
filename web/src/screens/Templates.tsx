@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   ApiError,
+  checkTemplateVersions,
   editTemplate,
   listTemplates,
   registerTemplate,
@@ -8,6 +9,8 @@ import {
   upgradeTemplate,
 } from "../api/client.ts";
 import type { Template } from "../api/types.ts";
+import { checkLine, hasNewer, upgradeChoices } from "../api/versions.ts";
+import { StatusBadge } from "../ui/StatusBadge.tsx";
 
 const asError = (e: unknown) => (e instanceof ApiError ? e : new ApiError(0, null, String(e)));
 
@@ -248,7 +251,25 @@ function TemplateEntry({
   const [editing, setEditing] = useState<Editing>(null);
   const [removeError, setRemoveError] = useState<ApiError | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<ApiError | null>(null);
   const toggle = (next: Editing) => setEditing((current) => (current === next ? null : next));
+  const newer = hasNewer(t);
+  // Upgrade template while a newer version is found; Update version while
+  // the current version's tag has moved.
+  const upgradable = newer || t.currentMoved;
+
+  const check = async () => {
+    setChecking(true);
+    setCheckError(null);
+    try {
+      onChanged(await checkTemplateVersions(t.id));
+    } catch (e) {
+      setCheckError(asError(e));
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const remove = async () => {
     setRemoving(true);
@@ -267,6 +288,22 @@ function TemplateEntry({
       <div>
         <h2 id={`template-${t.id}`}>{t.name}</h2>
         <p className="muted mono template-address">{t.address}</p>
+        <p
+          className={`template-check ${t.lastCheck?.failure && !checking ? "form-error" : "muted"}`}
+          title={t.lastCheck ? new Date(t.lastCheck.at).toLocaleString() : undefined}
+        >
+          {checking ? "Checking versions…" : checkLine(t)}
+        </p>
+        {t.currentMoved ? (
+          <p className="form-error template-moved">
+            Current tag moved. Validate and save this version again before using it.
+          </p>
+        ) : null}
+        {checkError ? (
+          <p className="form-error" role="alert">
+            {checkError.message}
+          </p>
+        ) : null}
         {removeError ? (
           <p className="form-error" role="alert">
             {removeError.message}
@@ -277,15 +314,28 @@ function TemplateEntry({
         <span>
           Current <strong>{t.currentVersion}</strong>
         </span>
+        <span>
+          Newest <strong>{t.newestVersion ?? "none found"}</strong>
+        </span>
+        {newer ? (
+          <StatusBadge state="warn" label="New version" />
+        ) : t.currentMoved ? (
+          <StatusBadge state="failed" label="Tag moved" />
+        ) : null}
       </div>
       <div className="template-actions" role="group" aria-label={`Actions for ${t.name}`}>
-        <button
-          type="button"
-          aria-expanded={editing === "upgrade"}
-          onClick={() => toggle("upgrade")}
-        >
-          Upgrade template
+        <button type="button" disabled={checking} onClick={() => void check()}>
+          Check versions
         </button>
+        {upgradable ? (
+          <button
+            type="button"
+            aria-expanded={editing === "upgrade"}
+            onClick={() => toggle("upgrade")}
+          >
+            {t.currentMoved ? "Update version" : "Upgrade template"}
+          </button>
+        ) : null}
         <button type="button" aria-expanded={editing === "edit"} onClick={() => toggle("edit")}>
           Edit
         </button>
@@ -293,7 +343,7 @@ function TemplateEntry({
           Remove
         </button>
       </div>
-      {editing === "upgrade" ? (
+      {editing === "upgrade" && upgradable ? (
         <VersionEditor
           template={t}
           onSaved={(next) => {
@@ -315,6 +365,11 @@ function TemplateEntry({
   );
 }
 
+/**
+ * Takes a found version newer than the template's current one, or the
+ * current one again while its tag has moved: a select of those versions,
+ * newest first, then Validate and Save.
+ */
 function VersionEditor({
   template: t,
   onSaved,
@@ -322,12 +377,13 @@ function VersionEditor({
   template: Template;
   onSaved: (t: Template) => void;
 }) {
-  const [version, setVersion] = useState("");
-  const { error, validated, busy, edited, run } = useValidated(version.trim());
+  const choices = upgradeChoices(t);
+  const [version, setVersion] = useState(choices[0] ?? "");
+  const { error, validated, busy, edited, run } = useValidated(version);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!validated) return;
-    const saved = await run("saving", () => upgradeTemplate(t.id, version.trim()));
+    const saved = await run("saving", () => upgradeTemplate(t.id, version));
     if (saved) onSaved(saved);
   };
   return (
@@ -336,21 +392,24 @@ function VersionEditor({
         <label className="field-label" htmlFor={`version-${t.id}`}>
           <span className="field-title">Current version</span>
         </label>
-        <input
+        <select
           id={`version-${t.id}`}
           className="mono"
           required
-          autoComplete="off"
-          spellCheck={false}
           autoFocus
-          placeholder={`newer than ${t.currentVersion}`}
           value={version}
           aria-describedby={`version-error-${t.id}`}
           onChange={(e) => {
             setVersion(e.target.value);
             edited();
           }}
-        />
+        >
+          {choices.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
       </div>
       <p className="form-error" id={`version-error-${t.id}`} role="alert">
         {error ? refusal(error) : null}
@@ -361,8 +420,8 @@ function VersionEditor({
       <div className="form-actions">
         <button
           type="button"
-          disabled={busy !== null || !version.trim()}
-          onClick={() => void run("validating", () => upgradeTemplate(t.id, version.trim(), true))}
+          disabled={busy !== null || !version}
+          onClick={() => void run("validating", () => upgradeTemplate(t.id, version, true))}
         >
           {busy === "validating" ? "Checking…" : "Validate"}
         </button>

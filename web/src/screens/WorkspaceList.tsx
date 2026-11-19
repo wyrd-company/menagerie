@@ -2,11 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
   listJobs,
+  listTemplates,
   listWorkspaces,
   mintT3CodePairingToken,
   startJob,
 } from "../api/client.ts";
-import type { Job, Operation, T3CodePairingToken, Workspace } from "../api/types.ts";
+import type { Job, Operation, T3CodePairingToken, Template, Workspace } from "../api/types.ts";
 import { JobPanel } from "../jobs/JobPanel.tsx";
 import { WorkspacePolicies, policyStatus, policyStatusClass } from "./WorkspacePolicies.tsx";
 import { own } from "../own.ts";
@@ -33,6 +34,7 @@ const operationLabel: Record<string, string> = {
 
 function useFleet() {
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
+  const [templates, setTemplates] = useState<Template[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
@@ -40,10 +42,15 @@ function useFleet() {
   // Reads the folders, containers and jobs again. State changes only after the reads.
   const refresh = useCallback(
     () =>
-      Promise.all([listWorkspaces(), listJobs().catch(() => null)])
-        .then(([ws, js]) => {
+      Promise.all([
+        listWorkspaces(),
+        listJobs().catch(() => null),
+        listTemplates().catch(() => null),
+      ])
+        .then(([ws, js, ts]) => {
           setWorkspaces(ws);
           if (js) setJobs(js);
+          if (ts) setTemplates(ts);
           setError(null);
         })
         .catch((e: unknown) =>
@@ -68,11 +75,33 @@ function useFleet() {
     void refresh();
   }, [refresh]);
 
-  return { workspaces, jobs, error, loading, refresh, reload };
+  return { workspaces, templates, jobs, error, loading, refresh, reload };
+}
+
+/**
+ * The workspace's template and the version last applied to it, as the list
+ * shows them: an unknown version shows so, with its commit on hover.
+ */
+function AppliedLine({ ws }: { ws: Workspace }) {
+  const template = ws.template ? ws.template.name : "Unregistered template";
+  if (ws.appliedVersion === null)
+    return (
+      <p
+        className="entry-template"
+        title={ws.appliedCommit ? `Applied commit ${ws.appliedCommit}` : undefined}
+      >
+        {template} · Unknown version
+      </p>
+    );
+  return (
+    <p className="entry-template">
+      {template} · {ws.appliedVersion} applied
+    </p>
+  );
 }
 
 export function WorkspaceList({ jobId }: { jobId: string | null }) {
-  const { workspaces, jobs, error, loading, refresh, reload } = useFleet();
+  const { workspaces, templates, jobs, error, loading, refresh, reload } = useFleet();
   const [policyWorkspace, setPolicyWorkspace] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, Operation>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
@@ -112,6 +141,10 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
     setBranch("");
     setApplying(workspace);
   };
+
+  // The current version of a workspace's template, from the templates list.
+  const current = (ws: Workspace) =>
+    templates.find((t) => t.id === ws.template?.id)?.currentVersion ?? null;
 
   const run = async (workspace: string, operation: Operation, branchName?: string) => {
     setConfirming(null);
@@ -194,9 +227,13 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                           ? "folder gone"
                           : "no container"}
                     </p>
-                    <p className="entry-template">
-                      {ws.template ? ws.template.name : "Unregistered template"}
-                    </p>
+                    <AppliedLine ws={ws} />
+                    {ws.needsUpgrade ? (
+                      <p className="entry-upgrade">
+                        Needs upgrade
+                        {current(ws) ? ` · ${current(ws)} current` : null}
+                      </p>
+                    ) : null}
                     <p className="entry-policies mono" aria-label={`Policies for ${ws.name}`}>
                       {ws.policies.length ? ws.policies.join(" · ") : "No policies"}
                     </p>
@@ -302,7 +339,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                         Apply branch
                       </button>
                     )}
-                    {busy || gone ? (
+                    {busy || gone || (!ws.needsUpgrade && ws.appliedVersion !== null) ? (
                       <span className="button disabled" aria-disabled="true">
                         Upgrade
                       </span>

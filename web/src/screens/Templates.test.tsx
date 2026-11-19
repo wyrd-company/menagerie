@@ -1,11 +1,16 @@
 // The templates screen registers a template from its address, validating
-// it before it saves, shows a refusal by its check, upgrades a template to a
-// newer version the same way, edits it and removes one no workspace uses.
+// it before it saves, shows a refusal by its check, shows each template's
+// found versions and last check, checks one for new versions, upgrades a
+// template to a newer found version, or its moved current version, the same
+// way, edits it and removes one no workspace uses.
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Template } from "../api/types.ts";
 import { TemplatesScreen } from "./Templates.tsx";
+
+const found = (...versions: string[]) =>
+  versions.map((version) => ({ version, tag: version, commit: `c${version}` }));
 
 const kit: Template = {
   id: "sample-kit",
@@ -14,6 +19,10 @@ const kit: Template = {
   currentVersion: "1.0.0",
   runnerImage: null,
   workspaces: ["alpha"],
+  newestVersion: "1.3.0",
+  versions: found("1.0.0", "1.1.0", "1.2.0", "1.3.0"),
+  currentMoved: false,
+  lastCheck: { at: new Date(Date.now() - 12 * 60_000).toISOString(), failure: null },
 };
 
 interface Call {
@@ -68,7 +77,7 @@ function holdReplies() {
     "fetch",
     vi.fn(async (_path: string, init?: RequestInit) => {
       if ((init?.method ?? "GET") === "GET") return Response.json({ templates: [kit] });
-      bodies.push(JSON.parse(String(init?.body)));
+      bodies.push(init?.body ? JSON.parse(String(init.body)) : null);
       return new Promise<Response>((resolve) => releases.push(resolve));
     }),
   );
@@ -212,19 +221,17 @@ describe("the templates screen", () => {
       await userEvent.click(within(entry).getByRole("button", { name: "Validate" }));
       return () => release(answer);
     };
-    await userEvent.type(version, "1.1.0");
+    await userEvent.selectOptions(version, "1.1.0");
     // A pass for 1.1.0 arrives once the version reads 1.2.0.
     let reply = await validate(Response.json({ ...kit, currentVersion: "1.1.0" }));
-    await userEvent.clear(version);
-    await userEvent.type(version, "1.2.0");
+    await userEvent.selectOptions(version, "1.2.0");
     reply();
     expect(await within(entry).findByRole("button", { name: "Validate" })).toBeEnabled();
     expect(within(entry).queryByText(/^Checks passed/)).toBeNull();
     expect(within(entry).getByRole("button", { name: "Save" })).toBeDisabled();
     // A refusal of 1.2.0 arrives once the version reads 1.3.0.
     reply = await validate(refused("version", "1.2.0 is not a version of the repository"));
-    await userEvent.clear(version);
-    await userEvent.type(version, "1.3.0");
+    await userEvent.selectOptions(version, "1.3.0");
     reply();
     expect(await within(entry).findByRole("button", { name: "Validate" })).toBeEnabled();
     expect(within(entry).queryByText(/^version: /)).toBeNull();
@@ -251,7 +258,7 @@ describe("the templates screen", () => {
     const entry = (await screen.findByRole("heading", { name: "Sample kit" })).closest("li")!;
     await userEvent.click(within(entry).getByRole("button", { name: "Upgrade template" }));
     expect(within(entry).getByRole("button", { name: "Save" })).toBeDisabled();
-    await userEvent.type(within(entry).getByLabelText("Current version"), "1.1.0");
+    await userEvent.selectOptions(within(entry).getByLabelText("Current version"), "1.1.0");
     await userEvent.click(within(entry).getByRole("button", { name: "Validate" }));
     expect(await within(entry).findByText("Checks passed · 1.1.0")).toBeInTheDocument();
     await userEvent.click(within(entry).getByRole("button", { name: "Save" }));
@@ -267,6 +274,128 @@ describe("the templates screen", () => {
       { version: "1.1.0", check: true },
       { version: "1.1.0" },
       { name: "Kit", runnerImage: "alpine:3.22" },
+    ]);
+  });
+
+  it("shows the found versions and the last check, and offers only newer found versions", async () => {
+    stubApi({});
+    render(<TemplatesScreen />);
+    const entry = (await screen.findByRole("heading", { name: "Sample kit" })).closest("li")!;
+    expect(within(entry).getByText("Checked 12 minutes ago")).toBeInTheDocument();
+    expect(within(entry).getByText("Current").querySelector("strong")).toHaveTextContent("1.0.0");
+    expect(within(entry).getByText("Newest").querySelector("strong")).toHaveTextContent("1.3.0");
+    expect(within(entry).getByText("New version")).toBeInTheDocument();
+    expect(within(entry).queryByRole("button", { name: "Update version" })).toBeNull();
+    await userEvent.click(within(entry).getByRole("button", { name: "Upgrade template" }));
+    const select = within(entry).getByLabelText<HTMLSelectElement>("Current version");
+    expect([...select.options].map((o) => o.value)).toEqual(["1.3.0", "1.2.0", "1.1.0"]);
+    expect(select.value).toBe("1.3.0");
+  });
+
+  it("offers no template upgrade while no newer version is found", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          templates: [
+            { ...kit, newestVersion: "1.0.0", versions: found("0.9.0", "1.0.0") },
+            {
+              ...kit,
+              id: "never",
+              name: "Never checked",
+              newestVersion: null,
+              versions: [],
+              lastCheck: null,
+            },
+          ],
+        }),
+      ),
+    );
+    render(<TemplatesScreen />);
+    const entry = (await screen.findByRole("heading", { name: "Sample kit" })).closest("li")!;
+    expect(within(entry).queryByRole("button", { name: "Upgrade template" })).toBeNull();
+    expect(within(entry).queryByRole("button", { name: "Update version" })).toBeNull();
+    expect(within(entry).queryByText("New version")).toBeNull();
+    const never = screen.getByRole("heading", { name: "Never checked" }).closest("li")!;
+    expect(within(never).getByText("Not checked yet")).toBeInTheDocument();
+    expect(within(never).getByText("Newest").querySelector("strong")).toHaveTextContent(
+      "none found",
+    );
+  });
+
+  it("checks a template for new versions on request, showing the check while it runs", async () => {
+    const { release } = holdReplies();
+    render(<TemplatesScreen />);
+    const entry = (await screen.findByRole("heading", { name: "Sample kit" })).closest("li")!;
+    const check = within(entry).getByRole("button", { name: "Check versions" });
+    await userEvent.click(check);
+    expect(within(entry).getByText("Checking versions…")).toBeInTheDocument();
+    expect(check).toBeDisabled();
+    release(
+      Response.json({
+        ...kit,
+        newestVersion: "1.4.0",
+        versions: found("1.0.0", "1.4.0"),
+        lastCheck: { at: new Date().toISOString(), failure: null },
+      }),
+    );
+    expect(await within(entry).findByText("Checked just now")).toBeInTheDocument();
+    expect(within(entry).getByText("Newest").querySelector("strong")).toHaveTextContent("1.4.0");
+    expect(check).toBeEnabled();
+  });
+
+  it("shows a failed check, keeping the versions found before", async () => {
+    const { release } = holdReplies();
+    render(<TemplatesScreen />);
+    const entry = (await screen.findByRole("heading", { name: "Sample kit" })).closest("li")!;
+    await userEvent.click(within(entry).getByRole("button", { name: "Check versions" }));
+    release(
+      Response.json({
+        ...kit,
+        lastCheck: { at: new Date().toISOString(), failure: "template-service-unavailable" },
+      }),
+    );
+    const line = await within(entry).findByText(
+      "Check failed just now: template service is unavailable. Previously found versions are kept.",
+    );
+    expect(line).toHaveClass("form-error");
+    expect(within(entry).getByText("Newest").querySelector("strong")).toHaveTextContent("1.3.0");
+  });
+
+  it("takes a moved current version again through Update version", async () => {
+    const moved = { ...kit, currentVersion: "1.3.0", currentMoved: true };
+    const calls: Call[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        const body = (init?.body ? JSON.parse(String(init.body)) : null) as Body;
+        calls.push({ method, path, body });
+        if (method === "GET") return Response.json({ templates: [moved] });
+        // A check alone answers the template at the version, a save stores it.
+        return Response.json({ ...moved, currentMoved: false });
+      }),
+    );
+    render(<TemplatesScreen />);
+    const entry = (await screen.findByRole("heading", { name: "Sample kit" })).closest("li")!;
+    expect(
+      within(entry).getByText(
+        "Current tag moved. Validate and save this version again before using it.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(entry).getByText("Tag moved")).toBeInTheDocument();
+    expect(within(entry).queryByRole("button", { name: "Upgrade template" })).toBeNull();
+    await userEvent.click(within(entry).getByRole("button", { name: "Update version" }));
+    const select = within(entry).getByLabelText<HTMLSelectElement>("Current version");
+    expect([...select.options].map((o) => o.value)).toEqual(["1.3.0"]);
+    await userEvent.click(within(entry).getByRole("button", { name: "Validate" }));
+    expect(await within(entry).findByText("Checks passed · 1.3.0")).toBeInTheDocument();
+    await userEvent.click(within(entry).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(within(entry).queryByText(/^Current tag moved/)).toBeNull());
+    expect(within(entry).queryByRole("button", { name: "Update version" })).toBeNull();
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.body)).toEqual([
+      { version: "1.3.0", check: true },
+      { version: "1.3.0" },
     ]);
   });
 

@@ -62,7 +62,14 @@ test("choose at create, edit immediately, and retain choices across an upgrade",
   expect(binding.Policies.sort()).toEqual(["bob-ssh", "ira-ssh", "workspace", "xolotl-client-key"]);
   expect((await containerFor(page.request, "policy-space"))?.id).toBe(before?.id);
   await shot(page, "policy-edited-no-rebuild");
-  // The workspace kit's repository also has 2.0.0, its next current version.
+  // The workspace kit's repository also has 2.0.0, which a version check
+  // finds: its next current version.
+  const checked = await page.request.post(
+    info.site + "/api/templates/workspace-kit/version-checks",
+    { headers },
+  );
+  expect(checked.status()).toBe(200);
+  expect(await checked.json()).toMatchObject({ newestVersion: "2.0.0" });
   const upgraded = await page.request.post(info.site + "/api/templates/workspace-kit/upgrades", {
     headers,
     data: { version: "2.0.0" },

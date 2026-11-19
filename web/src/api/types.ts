@@ -25,6 +25,12 @@ export interface Workspace {
   xolotlKey: string | null;
   /** The workspace's registered template, or null when its source is not registered. */
   template: TemplateRef | null;
+  /** The template version last applied, or null while it is unknown. */
+  appliedVersion: string | null;
+  /** The commit last applied, or null when none is known. */
+  appliedCommit: string | null;
+  /** The template's current version is newer than appliedVersion. */
+  needsUpgrade: boolean;
 }
 
 export interface TemplateRef {
@@ -42,7 +48,29 @@ export interface Template {
   runnerImage: string | null;
   /** The names of the workspaces that use it. */
   workspaces: string[];
+  /** The newest found version, or null when none is found. */
+  newestVersion: string | null;
+  /** The found versions, in ascending order. */
+  versions: TemplateVersion[];
+  /** A check found the current version's tag at another commit than the recorded one. */
+  currentMoved: boolean;
+  /** The last version check, or null before the first. */
+  lastCheck: { at: string; failure: CheckFailure | (string & {}) | null } | null;
 }
+
+/** A found version of a template: a tag of its repository and its commit. */
+export interface TemplateVersion {
+  version: string;
+  tag: string;
+  commit: string;
+}
+
+/** Why a version check failed. */
+export type CheckFailure =
+  | "template-not-found"
+  | "template-resolve-failed"
+  | "invalid-address"
+  | "template-service-unavailable";
 
 /** The registration checks, in the order they run. */
 export type TemplateCheck = "address" | "fetch" | "version" | "read" | "definition";

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectNoHorizontalScroll, reset, shot } from "./support.ts";
+import { control, expectNoHorizontalScroll, reset, shot } from "./support.ts";
 
 test.beforeEach(async ({ request }) => reset(request));
 
@@ -69,31 +69,30 @@ test("names the check a refused template failed, by the address", async ({ page 
   await expect(page.getByRole("alert")).toContainText("registered already, as Sample kit");
 });
 
-test("upgrades a template to a newer version, edits it and refuses its removal while used", async ({
+test("upgrades a template to a newer found version, edits it and refuses its removal while used", async ({
   page,
 }) => {
   await page.goto("/templates");
   const entry = page.getByRole("listitem").filter({ hasText: "Sample kit" });
+  await expect(entry).toContainText("Checked 1 hour ago");
+  await expect(entry.locator(".template-versions")).toContainText("Current 1.1.0");
+  await expect(entry.locator(".template-versions")).toContainText("Newest 1.2.0");
+  await expect(entry.getByText("New version")).toBeVisible();
   await entry.getByRole("button", { name: "Upgrade template" }).click();
   await expect(entry.getByRole("button", { name: "Save" })).toBeDisabled();
-  await entry.getByLabel("Current version").fill("1.1.0");
-  await entry.getByRole("button", { name: "Validate" }).click();
-  await expect(entry.getByRole("alert")).toContainText(
-    "not a version of the template's repository newer",
-  );
-  await entry.getByLabel("Current version").fill("1.2.0");
+  // Only the found versions newer than the current one are offered.
+  await expect(entry.getByLabel("Current version").locator("option")).toHaveText(["1.2.0"]);
   await shot(page, "templates-upgrade");
   await entry.getByRole("button", { name: "Validate" }).click();
   await expect(entry.getByRole("status")).toHaveText("Checks passed · 1.2.0");
-  await expect(entry.getByText("Current 1.1.0")).toBeVisible();
+  await expect(entry.locator(".template-versions")).toContainText("Current 1.1.0");
   await shot(page, "templates-upgrade-validated");
-  await entry.getByLabel("Current version").fill("1.2.0 ");
-  await expect(entry.getByRole("button", { name: "Save" })).toBeDisabled();
-  await entry.getByLabel("Current version").fill("1.2.0");
-  await entry.getByRole("button", { name: "Validate" }).click();
   await entry.getByRole("button", { name: "Save" }).click();
-  await expect(entry.getByText("1.2.0")).toBeVisible();
+  await expect(entry.locator(".template-versions")).toContainText("Current 1.2.0");
   await expect(entry.getByLabel("Current version")).toHaveCount(0);
+  // No newer version is found: no template upgrade is offered.
+  await expect(entry.getByRole("button", { name: "Upgrade template" })).toHaveCount(0);
+  await expect(entry.getByText("New version")).toHaveCount(0);
 
   await entry.getByRole("button", { name: "Edit" }).click();
   await entry.getByLabel("Display name").fill("Sample kit, renamed");
@@ -109,13 +108,94 @@ test("upgrades a template to a newer version, edits it and refuses its removal w
   await expect(tools).toHaveCount(0);
 });
 
+test("finds a new version on request, shows a failed check and takes a moved tag again", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/templates");
+  const entry = page.getByRole("listitem").filter({ hasText: "Tools kit" });
+  await expect(entry.getByRole("button", { name: "Upgrade template" })).toHaveCount(0);
+  // The repository gets a tag; with no restart, a check on request finds it.
+  await control(request, "release-version", { template: "tools-kit", version: "2.1.0" });
+  await control(request, "hold-checks", { hold: true });
+  await entry.getByRole("button", { name: "Check versions" }).click();
+  await expect(entry).toContainText("Checking versions…");
+  await expect(entry.getByRole("button", { name: "Check versions" })).toBeDisabled();
+  await shot(page, "templates-checking");
+  await control(request, "hold-checks", { hold: false });
+  await expect(entry).toContainText("Checked just now");
+  await expect(entry.locator(".template-versions")).toContainText("Newest 2.1.0");
+  await expect(entry.getByText("New version")).toBeVisible();
+  await shot(page, "templates-newer");
+  // A check while the template service is down keeps what was found.
+  await control(request, "template-service", { available: false });
+  await entry.getByRole("button", { name: "Check versions" }).click();
+  await expect(entry.locator(".template-check")).toHaveText(
+    "Check failed just now: template service is unavailable. Previously found versions are kept.",
+  );
+  await expect(entry.locator(".template-versions")).toContainText("Newest 2.1.0");
+  await shot(page, "templates-check-failed");
+  await control(request, "template-service", { available: true });
+  await entry.getByRole("button", { name: "Upgrade template" }).click();
+  await entry.getByRole("button", { name: "Validate" }).click();
+  await entry.getByRole("button", { name: "Save" }).click();
+  await expect(entry.locator(".template-versions")).toContainText("Current 2.1.0");
+  // The current version's tag moves to another commit.
+  await control(request, "move-tag", { template: "tools-kit" });
+  await entry.getByRole("button", { name: "Check versions" }).click();
+  await expect(entry).toContainText(
+    "Current tag moved. Validate and save this version again before using it.",
+  );
+  await expect(entry.getByText("Tag moved")).toBeVisible();
+  await expect(entry.getByRole("button", { name: "Upgrade template" })).toHaveCount(0);
+  await entry.getByRole("button", { name: "Update version" }).click();
+  await expect(entry.getByLabel("Current version").locator("option")).toHaveText(["2.1.0"]);
+  await shot(page, "templates-moved");
+  await entry.getByRole("button", { name: "Validate" }).click();
+  await expect(entry.getByRole("status")).toHaveText("Checks passed · 2.1.0");
+  await entry.getByRole("button", { name: "Save" }).click();
+  await expect(entry.getByText("Tag moved")).toHaveCount(0);
+  await expect(entry.getByRole("button", { name: "Update version" })).toHaveCount(0);
+});
+
+test("refuses an upgrade from a moved tag and shows each workspace's applied version", async ({
+  page,
+  request,
+}) => {
+  await control(request, "applied", { workspace: "sample-gamma", version: null, commit: "c0ffee" });
+  await control(request, "applied", { workspace: "sample-beta", version: "1.1.0" });
+  await page.goto("/");
+  const alpha = page.getByRole("listitem").filter({ hasText: "sample-alpha" });
+  await expect(alpha.locator(".entry-template")).toHaveText("Sample kit · 1.0.0 applied");
+  await expect(alpha.locator(".entry-upgrade")).toHaveText("Needs upgrade · 1.1.0 current");
+  await expect(alpha.getByRole("link", { name: "Upgrade" })).toBeVisible();
+  const beta = page.getByRole("listitem").filter({ hasText: "sample-beta" });
+  await expect(beta.locator(".entry-template")).toHaveText("Sample kit · 1.1.0 applied");
+  await expect(beta.locator(".entry-upgrade")).toHaveCount(0);
+  await expect(beta.getByText("Upgrade", { exact: true })).toHaveAttribute("aria-disabled", "true");
+  const gamma = page.getByRole("listitem").filter({ hasText: "sample-gamma" });
+  await expect(gamma.locator(".entry-template")).toHaveText("Sample kit · Unknown version");
+  await expect(gamma.locator(".entry-template")).toHaveAttribute("title", "Applied commit c0ffee");
+  await expect(gamma.getByRole("link", { name: "Upgrade" })).toBeVisible();
+  await shot(page, "workspaces-versions");
+  await control(request, "move-tag", { template: "sample-kit" });
+  await control(request, "template", { template: "sample-kit", set: { currentMoved: true } });
+  await page.goto("/workspaces/sample-alpha/upgrade");
+  await expect(page.getByRole("alert")).toHaveText(
+    "The current tag moved. Validate and save the version on Templates before upgrading.",
+  );
+  await expect(page.getByRole("button", { name: "Begin upgrade" })).toBeDisabled();
+  await shot(page, "upgrade-moved");
+});
+
 test("an upgrade applies the workspace's template's current version", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("listitem").filter({ hasText: "sample-alpha" })).toContainText(
     "Sample kit",
   );
   await page.goto("/workspaces/sample-alpha/upgrade");
-  await expect(page.locator(".upgrade-current")).toContainText("Current template Sample kit 1.1.0");
+  await expect(page.locator(".upgrade-current strong").first()).toHaveText("1.0.0");
+  await expect(page.locator(".upgrade-current strong").last()).toHaveText("Sample kit 1.1.0");
   await expect(page.getByRole("radio")).toHaveCount(0);
   await shot(page, "upgrade-current-template");
   await page.goto("/workspaces/sample-gone/upgrade");

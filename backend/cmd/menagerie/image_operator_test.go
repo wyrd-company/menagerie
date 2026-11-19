@@ -177,11 +177,16 @@ func registerTemplate(t *testing.T, c *http.Client, site, name, address string) 
 	}
 }
 
-// upgradeTemplate makes version the current version of the registered
-// template id, as a manager's upgrade of the template does.
+// upgradeTemplate checks the registered template id for new versions, as
+// a manager's Check versions does, and makes version, which the check must
+// find, its current version, as a manager's upgrade of the template does.
 func upgradeTemplate(t *testing.T, c *http.Client, site, id, version string) {
 	t.Helper()
 	header := http.Header{"Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"}}
+	checked := fetch(t, c, http.MethodPost, site+"/api/templates/"+id+"/version-checks", nil, header)
+	if checked.status != http.StatusOK || !strings.Contains(checked.body, `"version":"`+version+`"`) || !strings.Contains(checked.body, `"failure":null`) {
+		t.Fatalf("the version check answered %d %s", checked.status, checked.body)
+	}
 	s := fetch(t, c, http.MethodPost, site+"/api/templates/"+id+"/upgrades", strings.NewReader(fmt.Sprintf(`{"version":%q}`, version)), header)
 	if s.status != http.StatusOK {
 		t.Fatalf("the template upgrade answered %d %s", s.status, s.body)

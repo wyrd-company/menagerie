@@ -31,6 +31,9 @@ const workspace: Workspace = {
   applyFailure: null,
   xolotlKey: null,
   template: null,
+  appliedVersion: null,
+  appliedCommit: null,
+  needsUpgrade: false,
 };
 afterEach(() => {
   vi.unstubAllGlobals();

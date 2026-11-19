@@ -132,14 +132,17 @@ test("create, pair, upgrade and delete a provisioned workspace", async ({ page }
   const template = page
     .getByRole("listitem")
     .filter({ has: page.getByRole("heading", { name: "Workspace kit", exact: true }) });
+  await template.getByRole("button", { name: "Check versions" }).click();
+  await expect(template.locator(".template-versions")).toContainText("Newest 2.0.0");
+  await pause(1000);
   await template.getByRole("button", { name: "Upgrade template" }).click();
-  await template.getByLabel("Current version").pressSequentially("2.0.0", { delay: 60 });
+  await template.getByLabel("Current version").selectOption("2.0.0");
   await template.getByRole("button", { name: "Validate" }).click();
   await expect(template.getByRole("status")).toContainText("Checks passed · 2.0.0");
   await shot(page, "template-upgrade");
   await pause(1000);
   await template.getByRole("button", { name: "Save" }).click();
-  await expect(template.getByText("2.0.0")).toBeVisible();
+  await expect(template.locator(".template-versions")).toContainText("Current 2.0.0");
   await pause(1500);
   await page.getByRole("link", { name: "Workspaces", exact: true }).click();
   await row.getByRole("link", { name: "Upgrade" }).click();

@@ -105,7 +105,11 @@ test.describe("as a manager", () => {
 
     await page.getByRole("link", { name: "Back to the workspace list" }).click();
     await expect(entry(page, "sample-space").locator(".status")).toHaveText("Running");
-    await expect(entry(page, "sample-space")).toContainText("Sample kit");
+    // #87: W shows 1.0.0 applied.
+    await expect(entry(page, "sample-space").locator(".entry-template")).toHaveText(
+      "Sample kit · 1.0.0 applied",
+    );
+    await expect(entry(page, "sample-space").locator(".entry-upgrade")).toHaveCount(0);
   });
 
   test("stops, starts and rebuilds the workspace", async () => {
@@ -126,22 +130,40 @@ test.describe("as a manager", () => {
     await shot(page, "05-list-after-rebuild");
   });
 
-  test("upgrades the template to its repository's newer version with no restart", async () => {
+  test("finds the repository's newer version and upgrades the template, with no restart", async () => {
+    // #87: the template's repository gets the tag 1.1.0.
     await control(page.request, "POST", "/template-version?name=sample-kit&tag=1.1.0");
     await page.getByRole("link", { name: "Templates" }).click();
     const template = page
       .getByRole("listitem")
       .filter({ has: page.getByRole("heading", { name: "Sample kit", exact: true }) });
+    await expect(template.locator(".template-versions")).toContainText("Newest 1.0.0");
+    await expect(template.getByRole("button", { name: "Upgrade template" })).toHaveCount(0);
+    // With no restart, a version check shows that 1.1.0 is available.
+    await template.getByRole("button", { name: "Check versions" }).click();
+    await expect(template.locator(".template-check")).toHaveText("Checked just now");
+    await expect(template.locator(".template-versions")).toContainText("Newest 1.1.0");
+    await expect(template.getByText("New version")).toBeVisible();
+    await shot(page, "06-template-newer");
+    // The manager upgrades X to 1.1.0.
     await template.getByRole("button", { name: "Upgrade template" }).click();
-    await template.getByLabel("Current version").fill("1.1.0");
+    await expect(template.getByLabel("Current version").locator("option")).toHaveText(["1.1.0"]);
     await template.getByRole("button", { name: "Validate" }).click();
     await expect(template.getByRole("status")).toContainText("Checks passed · 1.1.0");
     await template.getByRole("button", { name: "Save" }).click();
-    await expect(template.getByText("1.1.0")).toBeVisible();
+    await expect(template.locator(".template-versions")).toContainText("Current 1.1.0");
     await template.getByRole("button", { name: "Remove" }).click();
     await expect(template.getByRole("alert")).toContainText("sample-space");
     await shot(page, "06-template-upgraded");
+    // W shows 1.0.0 applied and that it needs an upgrade.
     await page.getByRole("link", { name: "Workspaces", exact: true }).click();
+    await expect(entry(page, "sample-space").locator(".entry-template")).toHaveText(
+      "Sample kit · 1.0.0 applied",
+    );
+    await expect(entry(page, "sample-space").locator(".entry-upgrade")).toHaveText(
+      "Needs upgrade · 1.1.0 current",
+    );
+    await shot(page, "06-workspace-needs-upgrade");
   });
 
   test("upgrades with only the new question and keeps an operator edit", async () => {
@@ -171,6 +193,17 @@ test.describe("as a manager", () => {
     expect(branch.files["result.txt"]).toBe("label: Sample project\nsize: large\nregion: north\n");
     expect((await containerFor(page.request, "sample-space"))?.state).toBe("running");
     expect(branch.files[".toha.json"]).toContain("sample-kit@1.1.0");
+    // W shows 1.1.0 applied with no upgrade needed.
+    await page.getByRole("link", { name: "Back to the workspace list" }).click();
+    await expect(entry(page, "sample-space").locator(".entry-template")).toHaveText(
+      "Sample kit · 1.1.0 applied",
+    );
+    await expect(entry(page, "sample-space").locator(".entry-upgrade")).toHaveCount(0);
+    await expect(entry(page, "sample-space").getByText("Upgrade", { exact: true })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await shot(page, "08-workspace-upgraded");
     // The workspace has its template's current version: no upgrade is needed.
     const again = await page.request.post(info.site + "/api/jobs", {
       data: { operation: "upgrade", workspace: "sample-space" },

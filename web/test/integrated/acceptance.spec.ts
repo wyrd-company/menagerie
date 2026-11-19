@@ -136,7 +136,14 @@ test.describe("as a manager", () => {
     await control(page.request, "POST", "/backup/break");
     try {
       await page.goto("/");
-      // The fixture released 2.0.0 after the registration: the next current version.
+      // The fixture released 2.0.0 after the registration: a version check
+      // finds it, the next current version.
+      const checked = await page.request.post(
+        info.site + "/api/templates/kept-kit/version-checks",
+        { headers: { Origin: info.site, "Sec-Fetch-Site": "same-origin" } },
+      );
+      expect(checked.status()).toBe(200);
+      expect(await checked.json()).toMatchObject({ newestVersion: "2.0.0" });
       const upgraded = await page.request.post(info.site + "/api/templates/kept-kit/upgrades", {
         data: { version: "2.0.0" },
         headers: { Origin: info.site, "Sec-Fetch-Site": "same-origin" },

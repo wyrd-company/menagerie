@@ -4,7 +4,6 @@ import type { Template, Workspace } from "../api/types.ts";
 import { JobPanel } from "../jobs/JobPanel.tsx";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
-import { StatusBadge } from "../ui/StatusBadge.tsx";
 
 export function UpgradeWorkspace({
   workspace,
@@ -90,21 +89,46 @@ function StartUpgrade({ workspace }: { workspace: string }) {
 
   const active = current?.activeJob ?? null;
   const unregistered = current !== undefined && current.template === null;
+  const moved = template?.currentMoved === true;
+  // A known applied version that is the current one, or newer, needs nothing.
+  const upToDate =
+    current?.template != null &&
+    template !== null &&
+    current.appliedVersion !== null &&
+    !current.needsUpgrade;
   return (
     <form className="start-form" noValidate onSubmit={(e) => void submit(e)}>
-      <div className="upgrade-current">
-        {current ? <StatusBadge state={current.state} /> : <span className="muted">Reading…</span>}
-        {current?.template ? (
-          <p>
-            Current template <strong>{current.template.name}</strong>{" "}
-            {template ? <strong className="mono">{template.currentVersion}</strong> : null}
-          </p>
-        ) : null}
-      </div>
+      {current ? (
+        <div className="upgrade-current">
+          <span>Applied</span>
+          <strong
+            title={
+              current.appliedVersion === null && current.appliedCommit
+                ? `Applied commit ${current.appliedCommit}`
+                : undefined
+            }
+          >
+            {current.appliedVersion ?? "Unknown version"}
+          </strong>
+          <span>Current template</span>
+          <strong>
+            {current.template ? current.template.name : "Unregistered"}
+            {template ? ` ${template.currentVersion}` : null}
+          </strong>
+        </div>
+      ) : (
+        <p className="muted">Reading…</p>
+      )}
       {unregistered ? (
         <p className="field-errors" role="alert">
           Register this workspace's template before upgrading.
         </p>
+      ) : moved ? (
+        <p className="field-errors" role="alert">
+          The current tag moved. Validate and save the version on Templates before upgrading.
+        </p>
+      ) : upToDate ? (
+        <p className="muted">This workspace already has the current version.</p>
       ) : null}
       {active ? (
         <div className="notice notice-warn" role="status">
@@ -133,7 +157,7 @@ function StartUpgrade({ workspace }: { workspace: string }) {
         <button
           type="submit"
           className="primary"
-          disabled={starting || active !== null || unregistered}
+          disabled={starting || active !== null || unregistered || moved || upToDate}
         >
           {starting ? "Starting…" : "Begin upgrade"}
         </button>

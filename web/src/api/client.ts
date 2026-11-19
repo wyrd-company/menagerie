@@ -116,6 +116,10 @@ export const upgradeTemplate = (id: string, version: string, check = false) =>
     body: JSON.stringify(check ? { version, check } : { version }),
   });
 
+/** Checks a template for new versions now; the template answers with the check's record. */
+export const checkTemplateVersions = (id: string) =>
+  json<Template>(`/api/templates/${encodeURIComponent(id)}/version-checks`, { method: "POST" });
+
 /** Renames a template or changes its runner image; null runs its hooks in the default. */
 export const editTemplate = (id: string, edit: { name?: string; runnerImage?: string | null }) =>
   json<Template>(`/api/templates/${encodeURIComponent(id)}`, {

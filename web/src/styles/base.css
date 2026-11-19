@@ -364,6 +364,11 @@ input[type="checkbox"] {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
+.status-warn {
+  --status: var(--warn);
+  --status-wash: var(--warn-wash);
+}
+
 .status-failed {
   --status: var(--danger);
   --status-wash: var(--danger-wash);
