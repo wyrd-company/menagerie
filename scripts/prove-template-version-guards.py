@@ -14,13 +14,16 @@ The guards, by the requirement they keep:
   the check's wait; two checks of one template share one run that a
   leaving caller does not end; a check on request answers 200 with the
   failure recorded; a template takes a version only at the commit its
-  listing found.
+  listing found; a listing out of ascending order, listing a version twice
+  or a number above 2^64-1, and a check reply whose commit is not a full
+  object id, are no answer.
 - moved: a check that finds the current version's tag at another commit
   shows it moved, never replacing the recorded commit; a create and an
   upgrade are refused template-version-moved while it is; the template
   takes that version again, with the new commit, only while it is moved,
   and the screen offers it through Update version; versions compare by
-  their whole numbers, and the screen sends only a version it offers.
+  their whole numbers, and the screen sends only a version it offers, the
+  newest when the picked one is no longer offered.
 - descent: an upgrade of a workspace whose applied version is unknown goes
   on only when the template service answers that the current version's
   commit is, or descends from, its applied commit, at the recorded commit,
@@ -38,15 +41,19 @@ The guards, by the requirement they keep:
   template's source, at a full object id, the found version whose tag is
   at that commit, the ref's when the ref is a version, else the newest
   there; a join or the import keeps the commit alone otherwise, only of the
-  template's source and a full object id.
+  template's source and a full object id; a refusal quotes the record's
+  ref and commit short.
 - import: the first start records each workspace's applied version from
   its record once, keeping a known one; a start imports the applied
   versions and checks every template with no request.
 
 Each mutation changes one guard in place, and every test it names must
-fail by its own assertion; a test that never ends, or a run that times
-out, leaves the mutant a survivor. The report names, for each, the
-assertion that failed, and the review sweep's id of a mutant it also ran.
+fail by its own assertion: for a Go test, the last _test.go:N: line of the
+innermost failing test or subtest, read from go test -json. A panic, a
+test that never ends, or a run that times out names none and leaves the
+mutant a survivor. The report names its head commit and, for each mutant,
+the assertion that failed and the review sweep's id of a mutant it also
+ran. --self-test checks how the assertion is read and runs nothing.
 The source is restored even on interruption. The report starts failed and
 passes only after every baseline test passes and every mutant compiles and
 fails each of its tests.
@@ -95,6 +102,7 @@ TESTS = {
     "apply-unavailable": ("./backend/internal/workflows", "TestApplyBranchWithNoAnswerOnDescentAppliesNothing"),
     "apply-forward": ("./backend/internal/workflows", "TestApplyBranchMovesTheAppliedRecordOnlyForward"),
     "one-rule": ("./backend/internal/registry", "TestOneRuleGivesTheVersionOfARecord"),
+    "quote-short": ("./backend/internal/registry", "TestARecordsValuesAreQuotedShort"),
     "registration-join": ("./backend/internal/registry", "TestARegistrationAndACheckGiveTheVersionAtTheRecordsCommit"),
     "discovery-join": ("./backend/internal/api", "TestAWorkspaceListedForTheFirstTimeJoinsItsTemplateWhichItsUseKeeps"),
     "import-once": ("./backend/internal/registry", "TestTheFirstStartImportsEachWorkspacesAppliedVersionOnce"),
@@ -129,6 +137,7 @@ SWEEP = {
     "upgrade-records-the-records-commit": "W12",
     "client-refuses-a-check-with-no-descent": "C01",
     "start-checks-versions": "G04",
+    "screen-falls-back-to-the-newest": "V15",
     "start-imports-applied-versions": "G05",
 }
 
@@ -240,7 +249,13 @@ MUTANTS = [
     ("upgrade-records-only-a-full-commit", "descent", UPGRADE,
      "err == nil && registry.IsCommit(applied.Commit) {\n", "err == nil {\n", ["record-commit"]),
     ("client-refuses-a-check-with-no-descent", "descent", CLIENT,
-     "\tif out.Source == \"\" || out.Commit == \"\" || out.Descends == nil {\n",
+     " || !fullCommit.MatchString(out.Commit) || out.Descends == nil {\n",
+     " || !fullCommit.MatchString(out.Commit) {\n", ["client-replies"]),
+    ("client-descent-commit-is-full", "descent", CLIENT,
+     " || !fullCommit.MatchString(out.Commit) || out.Descends == nil {\n",
+     " || out.Commit == \"\" || out.Descends == nil {\n", ["client-replies"]),
+    ("client-check-commit-is-full", "checks", CLIENT,
+     "\tif out.Source == \"\" || !fullCommit.MatchString(out.Commit) {\n",
      "\tif out.Source == \"\" || out.Commit == \"\" {\n", ["client-replies"]),
     # checks: the listing
     ("client-checks-every-listed-version", "checks", CLIENT,
@@ -250,6 +265,14 @@ MUTANTS = [
      " || v.Tag == \"\" || ", " || ", ["client-replies"]),
     ("client-listed-commit-is-full", "checks", CLIENT,
      " || !fullCommit.MatchString(v.Commit) {\n", " {\n", ["client-replies"]),
+    ("client-lists-in-ascending-order", "checks", CLIENT,
+     "\t\tif i > 0 && !after(numbers, last) {\n", "\t\tif false && i > 0 && !after(numbers, last) {\n",
+     ["client-replies"]),
+    ("client-lists-each-version-once", "checks", CLIENT,
+     "\t\t\treturn a[i] > b[i]\n\t\t}\n\t}\n\treturn false\n}\n",
+     "\t\t\treturn a[i] > b[i]\n\t\t}\n\t}\n\treturn true\n}\n", ["client-replies"]),
+    ("client-numbers-within-u64", "checks", CLIENT,
+     "\t\tif !ok {\n", "\t\tif false && !ok {\n", ["client-replies"]),
     ("template-takes-the-listed-commit", "checks", REGISTRY,
      "\tif checked.Commit != v.Commit {\n\t\treturn nil, &CheckError{Check: CheckVersion,",
      "\tif false {\n\t\treturn nil, &CheckError{Check: CheckVersion,", ["check-listed"]),
@@ -318,6 +341,17 @@ MUTANTS = [
      "\tcase !isVersion:\n", "\tcase true || !isVersion:\n", ["one-rule", "apply-forward"]),
     ("record-takes-the-newest-at-the-commit", "record", APPLIED,
      "\t\treturn at[len(at)-1], nil\n", "\t\treturn at[0], nil\n", ["one-rule"]),
+    ("quote-bounds-a-value", "record", APPLIED,
+     "\tif len(value) <= QuoteLimit {\n", "\tif true {\n", ["quote-short"]),
+    ("quote-cuts-at-a-rune", "record", APPLIED,
+     "\tfor cut > 0 && !utf8.RuneStart(value[cut]) {\n", "\tfor false && cut > 0 && !utf8.RuneStart(value[cut]) {\n",
+     ["quote-short"]),
+    ("rule-quotes-a-commit-short", "record", APPLIED,
+     "is not a full Git object id\", Quoted(rec.Commit))", "is not a full Git object id\", strconv.Quote(rec.Commit))",
+     ["quote-short"]),
+    ("rule-quotes-a-ref-short", "record", APPLIED,
+     "(ref %s)\", tpl.ID, Quoted(rec.Commit), Quoted(rec.Ref))", "(ref %s)\", tpl.ID, Quoted(rec.Commit), strconv.Quote(rec.Ref))",
+     ["quote-short"]),
     ("join-takes-the-one-rule", "record", APPLIED,
      "\tif found, err := RecordVersion(rec, tpl); err == nil {\n",
      "\tif found, err := RecordVersion(rec, tpl); err == nil && false {\n",
@@ -357,6 +391,8 @@ MUTANTS = [
     ("screen-sends-an-offered-version", "moved", SCREEN,
      "  const version = choices.includes(picked) ? picked : (choices[0] ?? \"\");\n",
      "  const version = picked;\n", ["screen-offered"]),
+    ("screen-falls-back-to-the-newest", "moved", SCREEN,
+     ": (choices[0] ?? \"\");\n", ": (choices[choices.length - 1] ?? \"\");\n", ["screen-offered"]),
 ]
 
 
@@ -375,14 +411,32 @@ def run(package, test):
         # A guard broken into a hang ends here, a survivor: each test that
         # waits holds its own, shorter deadline with a named failure.
         command = ["nice", "-n", "15", "go", "test", "-p", "2", "-count=1", "-timeout", "120s", package,
-                   "-run", "^" + test + "$", "-v"]
+                   "-run", "^" + test + "$", "-json"]
     try:
         result = subprocess.run(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=1200, check=False)
-        return {"exitCode": result.returncode, "output": result.stdout[-20000:]}
     except subprocess.TimeoutExpired:
-        return {"exitCode": None, "output": "test process timed out"}
+        return {"exitCode": None, "output": "test process timed out", "raw": ""}
+    # The report keeps the text; outcome and assertion read the raw output,
+    # go test's events for a Go package.
+    output = result.stdout
+    if package.startswith("./"):
+        output = "".join(e.get("Output", "") for e in go_events(result.stdout)) or result.stdout
+    return {"exitCode": result.returncode, "output": output[-20000:], "raw": result.stdout}
+
+
+def go_events(raw):
+    """The events of go test -json; a line that is not one, a build error
+    for instance, is left out."""
+    events = []
+    for line in raw.splitlines():
+        if line.startswith("{"):
+            try:
+                events.append(json.loads(line))
+            except ValueError:
+                pass
+    return events
 
 
 def outcome(package, test, output):
@@ -394,13 +448,13 @@ def outcome(package, test, output):
     if package.startswith("template-service/"):
         return (re.search(rf"test {re.escape(test)} \.\.\. ok", output) is not None,
                 re.search(rf"test {re.escape(test)} \.\.\. FAILED", output) is not None)
-    # A test that never ends prints no FAIL of its own: the go test
-    # timeout's panic leaves the mutant a survivor.
-    return f"--- PASS: {test}" in output, f"--- FAIL: {test}" in output
+    events = go_events(output)
+    return (any(e.get("Action") == "pass" and e.get("Test") == test for e in events),
+            any(e.get("Action") == "fail" and e.get("Test") == test for e in events))
 
 
-def assertion(package, output):
-    """The first failing assertion the output names: its place and message."""
+def assertion(package, test, output):
+    """The failing assertion the output names: its place and message."""
     output = re.sub(r"\x1b\[[0-9;]*m", "", output)
     if package.startswith("web/"):
         found = re.search(r"((?:AssertionError|TestingLibraryElementError|Error): [^\n]*)", output)
@@ -409,17 +463,77 @@ def assertion(package, output):
     if package.startswith("template-service/"):
         found = re.search(r"panicked at ([^\n]+):\n([^\n]+(?:\n  left: [^\n]+\n right: [^\n]+)?)", output)
         return f"{found.group(1)}: {found.group(2)}" if found else None
-    found = re.search(r"^\s+(\w+_test\.go:\d+: [^\n]*)", output, re.MULTILINE)
-    return found.group(1) if found else None
+    return go_assertion(test, go_events(output))
+
+
+def go_assertion(test, events):
+    """The assertion of the innermost failing test or subtest of test: the
+    last _test.go:N: line of its own output. A panic, the go test timeout's
+    included, names no assertion."""
+    if any(re.match(r"panic: ", e.get("Output", "")) for e in events):
+        return None
+    failed = [e["Test"] for e in events if e.get("Action") == "fail" and e.get("Test")
+              and (e["Test"] == test or e["Test"].startswith(test + "/"))]
+    for name in failed:
+        if any(other.startswith(name + "/") for other in failed):
+            continue
+        own = [e["Output"].strip() for e in events if e.get("Test") == name and e.get("Action") == "output"
+               and re.match(r"\s+\w+_test\.go:\d+: ", e["Output"])]
+        if own:
+            return own[-1]
+    return None
+
+
+def self_test():
+    """Checks go_assertion against go test -json events of known shape."""
+    def out(name, text):
+        return {"Action": "output", "Test": name, "Output": text}
+
+    def fail(name):
+        return {"Action": "fail", "Test": name}
+
+    cases = [
+        ("a setup log, then a panic", [out("TestA", "    a_test.go:10: setup\n"),
+                                       out("TestA", "panic: boom\n"), fail("TestA")], None),
+        ("the timeout's panic", [out("TestA", "panic: test timed out after 2m0s\n"), fail("TestA")], None),
+        ("a parent's log and a subtest's failure",
+         [out("TestA", "    a_test.go:10: setup\n"), out("TestA/sub", "    a_test.go:20: want 1\n"),
+          fail("TestA/sub"), fail("TestA")], "a_test.go:20: want 1"),
+        ("a log, then the fatal assertion",
+         [out("TestA", "    a_test.go:30: note\n"), out("TestA", "    a_test.go:31: boom\n"), fail("TestA")],
+         "a_test.go:31: boom"),
+        ("another test's line", [out("TestB", "    b_test.go:5: other\n"), fail("TestA")], None),
+        ("a subtest failing with no line of its own, under a parent's log",
+         [out("TestA", "    a_test.go:10: setup\n"), fail("TestA/sub"), fail("TestA")], None),
+        ("a pass", [out("TestA", "    a_test.go:10: note\n"), {"Action": "pass", "Test": "TestA"}], None),
+    ]
+    wrong = [(name, go_assertion("TestA", events), want) for name, events, want in cases
+             if go_assertion("TestA", events) != want]
+    for name, got, want in wrong:
+        print(f"self-test {name}: named {got!r}, want {want!r}")
+    if wrong:
+        raise SystemExit(1)
+    print("SELF_TEST_PASSED")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--report", type=Path)
     parser.add_argument("--only", help="run only the mutants whose name holds this text")
     parser.add_argument("--start", help="skip the mutants before the one of this name")
+    parser.add_argument("--self-test", action="store_true",
+                        help="check how a Go test's failing assertion is read, and run nothing")
     args = parser.parse_args()
-    report = {"outcome": "failed", "baseline": [], "mutants": []}
+    if args.self_test:
+        self_test()
+        return
+    if args.report is None:
+        parser.error("--report is required")
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, capture_output=True).stdout.strip()
+    changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT,
+                             text=True, capture_output=True).stdout.strip()
+    report = {"outcome": "failed", "head": head, "changedFromHead": changed.splitlines(),
+              "baseline": [], "mutants": []}
 
     def save():
         args.report.write_text(json.dumps(report, indent=2) + "\n")
@@ -434,9 +548,10 @@ def main():
         if name not in needed:
             continue
         result = run(package, test)
+        raw = result.pop("raw")
         report["baseline"].append({"test": name, **result})
         save()
-        if result["exitCode"] != 0 or not outcome(package, test, result["output"])[0]:
+        if result["exitCode"] != 0 or not outcome(package, test, raw)[0]:
             raise SystemExit(f"Baseline {name} failed: {result['output']}")
     for name, requirement, path, before, after, tests in mutants:
         source = ROOT / path
@@ -448,10 +563,11 @@ def main():
             for test in tests:
                 package, function = TESTS[test]
                 result = run(package, function)
-                named = assertion(package, result["output"])
+                raw = result.pop("raw")
+                named = assertion(package, function, raw)
                 # Killed: the test's own failure, naming its assertion.
                 killed = (result["exitCode"] is not None and result["exitCode"] != 0
-                          and outcome(package, function, result["output"])[1] and named is not None)
+                          and outcome(package, function, raw)[1] and named is not None)
                 report["mutants"].append({"name": name, "requirement": requirement, "test": test,
                                           "sweep": SWEEP.get(name), "killed": killed,
                                           "assertion": named if killed else None,

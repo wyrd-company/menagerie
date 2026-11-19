@@ -30,7 +30,7 @@ expect() {
 
 # The tools these cases run; a missing one fails here by name, not later
 # inside a hook.
-for tool in git intentional jq yq node task lefthook gofmt rustfmt rumdl; do
+for tool in git intentional jq yq node python3 task lefthook gofmt rustfmt rumdl; do
   command -v "$tool" >/dev/null || { echo "FAIL $tool is not installed; scripts_test.sh needs it"; exit 1; }
 done
 
@@ -381,6 +381,11 @@ expect "every workflow names one Rust toolchain" 0 '^toolchain: [0-9.]+$' echo "
 rust_version=${rust_versions#toolchain: }
 expect "the image builds with the workflows' Rust" 0 "rust:$rust_version-" grep -o "rust:[^@]*" "$repo/Dockerfile"
 expect "the devcontainer has the same Go, Node.js and Rust" 0 '^3$' sh -c "grep -Ec '\"version\": \"($go_version|$node_version|$rust_version)\"' '$repo/.devcontainer/devcontainer.json'"
+
+# The version guard proof counts a kill only by the failing test's own
+# assertion, never by another test's line, a log or a panic.
+expect "the version guard proof reads a Go test's own failing assertion" 0 '^SELF_TEST_PASSED$' \
+  python3 -I "$repo/scripts/prove-template-version-guards.py" --self-test
 
 echo "scripts: $passed passed, $failed failed"
 [ "$failed" -eq 0 ] && [ "$passed" -gt 0 ]
