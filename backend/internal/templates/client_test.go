@@ -315,7 +315,7 @@ func TestTemplateRoutesNameTheAddressAndDecodeStrictly(t *testing.T) {
 		`{"version":"01.0.0","tag":"01.0.0","commit":"` + commit1 + `"}`,
 		`{"version":"v1.0.0","tag":"v1.0.0","commit":"` + commit1 + `"}`,
 	} {
-		f.answer(200, `{"source":"gh:example-org/kit","versions":[{"version":"1.1.0","tag":"1.1.0","commit":"`+commit1+`"},`+version+`]}`)
+		f.answer(200, `{"source":"gh:example-org/kit","versions":[{"version":"0.9.0","tag":"0.9.0","commit":"`+commit1+`"},`+version+`]}`)
 		var unavailable *UnavailableError
 		if _, err := c.ListVersions(ctx, "gh:example-org/kit"); !errors.As(err, &unavailable) {
 			t.Fatalf("%s: %v", version, err)
