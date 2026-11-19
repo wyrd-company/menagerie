@@ -279,6 +279,20 @@ func TestTemplateRoutesNameTheAddressAndDecodeStrictly(t *testing.T) {
 	if path, body := f.last(); path != "/v1/templates/versions" || body != `{"address":"gh:example-org/kit"}`+"\n" {
 		t.Fatalf("request %s %s", path, body)
 	}
+	// A listing from 0.0.0 that steps by patch, minor and major numbers is
+	// in ascending order.
+	steps := []string{"0.0.0", "0.0.1", "0.1.0", "1.0.0"}
+	ascending := ""
+	for i, v := range steps {
+		if i > 0 {
+			ascending += ","
+		}
+		ascending += `{"version":"` + v + `","tag":"` + v + `","commit":"` + commit1 + `"}`
+	}
+	f.answer(200, `{"source":"gh:example-org/kit","versions":[`+ascending+`]}`)
+	if versions, err := c.ListVersions(ctx, "gh:example-org/kit"); err != nil || len(versions.Versions) != len(steps) {
+		t.Fatalf("a listing of %v in ascending order is refused: %+v, %v", steps, versions, err)
+	}
 
 	f.answer(200, `{"source":"gh:example-org/kit","commit":"`+commit1+`","definition":true}`)
 	checked, err := c.Check(ctx, "gh:example-org/kit", "v1.0.0")
@@ -326,6 +340,7 @@ func TestTemplateRoutesNameTheAddressAndDecodeStrictly(t *testing.T) {
 	for _, versions := range [][2]string{
 		{"1.1.0", "1.0.0"},
 		{"1.1.0", "1.0.9"},
+		{"1.0.1", "1.0.0"},
 		{"1.1.0", "1.1.0"},
 		{"1.1.0", "18446744073709551616.0.0"},
 		{"1.1.0", "2.0.18446744073709551616"},
