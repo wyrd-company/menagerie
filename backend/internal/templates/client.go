@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -221,8 +222,20 @@ func (c *Client) ListVersions(ctx context.Context, address string) (*Versions, e
 	if out.Source == "" || out.Versions == nil {
 		return nil, &UnavailableError{Err: errors.New("versions reply names no source or versions")}
 	}
+	for _, v := range out.Versions {
+		if !listedVersion.MatchString(v.Version) || v.Tag == "" || !fullCommit.MatchString(v.Commit) {
+			return nil, &UnavailableError{Err: errors.New("versions reply lists a version that is not a version, a tag and a full commit id")}
+		}
+	}
 	return &out, nil
 }
+
+// listedVersion is a listed version's form, MAJOR.MINOR.PATCH, and
+// fullCommit a full Git object id.
+var (
+	listedVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+	fullCommit    = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
+)
 
 // Check fetches address at ref and reads it, running nothing of it.
 func (c *Client) Check(ctx context.Context, address, ref string) (*Checked, error) {

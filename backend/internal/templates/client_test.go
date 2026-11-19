@@ -254,6 +254,9 @@ func TestRepliesOfAnySizeAreReadWhole(t *testing.T) {
 	}
 }
 
+// commit1 is a full object id the fake answers.
+const commit1 = "abcdef0000000000000000000000000000000001"
+
 func TestTemplateRoutesNameTheAddressAndDecodeStrictly(t *testing.T) {
 	f := newFake(t)
 	c := New(f.socket)
@@ -268,7 +271,7 @@ func TestTemplateRoutesNameTheAddressAndDecodeStrictly(t *testing.T) {
 		t.Fatalf("request %s %s", path, body)
 	}
 
-	f.answer(200, `{"source":"gh:example-org/kit","versions":[{"version":"1.0.0","tag":"v1.0.0","commit":"c1"}]}`)
+	f.answer(200, `{"source":"gh:example-org/kit","versions":[{"version":"1.0.0","tag":"v1.0.0","commit":"`+commit1+`"}]}`)
 	versions, err := c.ListVersions(ctx, "gh:example-org/kit")
 	if err != nil || len(versions.Versions) != 1 || versions.Versions[0].Tag != "v1.0.0" {
 		t.Fatalf("versions %+v, %v", versions, err)
@@ -298,6 +301,39 @@ func TestTemplateRoutesNameTheAddressAndDecodeStrictly(t *testing.T) {
 			t.Fatalf("%s: %v", reply, err)
 		}
 	}
+	// A listing whose versions are not each a version, a tag and a full
+	// commit id is no answer.
+	for _, version := range []string{
+		`{"version":"1.0.0","tag":"1.0.0","commit":""}`,
+		`{"version":"1.0.0","tag":"1.0.0","commit":"c1"}`,
+		`{"version":"1.0.0","tag":"1.0.0","commit":"` + strings.ToUpper(commit1) + `"}`,
+		`{"version":"1.0.0","tag":"","commit":"` + commit1 + `"}`,
+		`{"version":"","tag":"1.0.0","commit":"` + commit1 + `"}`,
+		`{"version":"01.0.0","tag":"01.0.0","commit":"` + commit1 + `"}`,
+		`{"version":"v1.0.0","tag":"v1.0.0","commit":"` + commit1 + `"}`,
+	} {
+		f.answer(200, `{"source":"gh:example-org/kit","versions":[{"version":"1.1.0","tag":"1.1.0","commit":"`+commit1+`"},`+version+`]}`)
+		var unavailable *UnavailableError
+		if _, err := c.ListVersions(ctx, "gh:example-org/kit"); !errors.As(err, &unavailable) {
+			t.Fatalf("%s: %v", version, err)
+		}
+	}
+
+	// A check with since answers descends; a reply without it is no answer.
+	f.answer(200, `{"source":"gh:example-org/kit","commit":"`+commit1+`","definition":true,"descends":false}`)
+	since, err := c.CheckSince(ctx, "gh:example-org/kit", "v1.0.0", commit1)
+	if err != nil || since.Descends == nil || *since.Descends {
+		t.Fatalf("since %+v, %v", since, err)
+	}
+	if path, body := f.last(); path != "/v1/templates/checks" || body != `{"address":"gh:example-org/kit","ref":"v1.0.0","since":"`+commit1+`"}`+"\n" {
+		t.Fatalf("request %s %s", path, body)
+	}
+	f.answer(200, `{"source":"gh:example-org/kit","commit":"`+commit1+`","definition":true}`)
+	var unavailable *UnavailableError
+	if _, err := c.CheckSince(ctx, "gh:example-org/kit", "v1.0.0", commit1); !errors.As(err, &unavailable) {
+		t.Fatalf("a reply without descends: %v", err)
+	}
+
 	f.answer(400, `{"error":{"kind":"invalid-address","message":"the address is not a remote Git address"}}`)
 	var refusal *Error
 	if _, err := c.ReadAddress(ctx, "/srv/kit"); !errors.As(err, &refusal) || refusal.Kind != "invalid-address" || refusal.Status != 400 {
