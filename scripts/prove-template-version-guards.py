@@ -134,10 +134,10 @@ MUTANTS = [
      "\t\tif current.CurrentCommit == \"\" {\n", "\t\tif true {\n", ["moved-imported"]),
     ("create-refused-while-moved", "moved", FLOWS,
      "\tif tpl.CurrentMoved() {\n\t\treturn nil, moved(tpl)\n\t}\n\tif _, err := os.Lstat(folder)",
-     "\tif _, err := os.Lstat(folder)", ["moved-jobs"]),
+     "\tif false && tpl.CurrentMoved() {\n\t\treturn nil, moved(tpl)\n\t}\n\tif _, err := os.Lstat(folder)", ["moved-jobs"]),
     ("upgrade-refused-while-moved", "moved", FLOWS,
      "\tif tpl.CurrentMoved() {\n\t\treturn nil, moved(tpl)\n\t}\n\treturn (&upgrading{",
-     "\treturn (&upgrading{", ["moved-jobs"]),
+     "\tif false && tpl.CurrentMoved() {\n\t\treturn nil, moved(tpl)\n\t}\n\treturn (&upgrading{", ["moved-jobs"]),
     ("store-takes-current-only-while-moved", "moved", TEMPLATES,
      "\tagain := version == current.CurrentVersion && current.CurrentMoved()\n",
      "\tagain := version == current.CurrentVersion\n", ["moved-store"]),
@@ -288,6 +288,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--only", help="run only the mutants whose name holds this text")
+    parser.add_argument("--start", help="skip the mutants before the one of this name")
     args = parser.parse_args()
     report = {"outcome": "failed", "baseline": [], "mutants": []}
 
@@ -296,6 +297,9 @@ def main():
 
     save()
     mutants = [m for m in MUTANTS if not args.only or args.only in m[0]]
+    if args.start:
+        names = [m[0] for m in mutants]
+        mutants = mutants[names.index(args.start):]
     needed = {test for m in mutants for test in m[5]}
     for name, (package, test) in TESTS.items():
         if name not in needed:
@@ -328,7 +332,7 @@ def main():
                 print(f"killed {name} by {test}: {report['mutants'][-1]['assertion']}", flush=True)
         finally:
             source.write_text(original)
-    report["outcome"] = "passed" if not args.only else "partial"
+    report["outcome"] = "passed" if not (args.only or args.start) else "partial"
     save()
     print(f"TEMPLATE_VERSION_GUARDS_PASSED: {len(report['mutants'])} mutant runs rejected over {len(mutants)} mutants")
 

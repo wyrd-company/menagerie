@@ -189,8 +189,12 @@ func TestAMovedTagIsTakenAgainOnlyByUpgradingToIt(t *testing.T) {
 	r, f, _ := world(t)
 	ctx := context.Background()
 	registered(t, r, "")
+	checks := f.called("check " + kit + "@1.2.0")
 	if _, err := r.Upgrade(ctx, "sample-kit", "1.2.0", false); !errors.Is(err, ErrNotNewer) {
 		t.Fatalf("the current version was taken again while its tag had not moved: %v", err)
+	}
+	if f.called("check "+kit+"@1.2.0") != checks {
+		t.Fatal("the current version was checked again while its tag had not moved")
 	}
 	f.moved("1.2.0", "c12b")
 	tpl, err := r.CheckVersions(ctx, "sample-kit")
@@ -227,8 +231,12 @@ func TestAMovedTagTakesNoOlderVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, version := range []string{"1.1.0", "1.0.0"} {
+		checks := f.called("check " + kit + "@" + map[string]string{"1.1.0": "v1.1.0", "1.0.0": "1.0.0"}[version])
 		if _, err := r.Upgrade(ctx, "sample-kit", version, false); !errors.Is(err, ErrNotNewer) {
 			t.Fatalf("%s: %v", version, err)
+		}
+		if f.called("check "+kit+"@"+map[string]string{"1.1.0": "v1.1.0", "1.0.0": "1.0.0"}[version]) != checks {
+			t.Fatalf("%s: an older version was checked while the current tag had moved", version)
 		}
 	}
 }
