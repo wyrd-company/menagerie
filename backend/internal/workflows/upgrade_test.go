@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -396,7 +398,9 @@ func TestAnUnknownAppliedVersionIsUpgradedOnlyByDescent(t *testing.T) {
 				}
 				return
 			}
-			snap := waitEnded(t, job)
+			// A refusal ends the job before the interview; a job that goes
+			// on to ask fails here, by name, not at the test binary's limit.
+			snap := refusedWithin(t, job, 10*time.Second)
 			if snap.State != jobs.Failed || snap.Error.Kind != tc.kind {
 				t.Fatalf("%+v %+v", snap, snap.Error)
 			}
@@ -422,6 +426,21 @@ func TestAnUnknownAppliedVersionIsUpgradedOnlyByDescent(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// refusedWithin waits up to limit for a job that must end on its own, and
+// fails the test by name when it is still running then, as one that went on
+// to wait for answers is.
+func refusedWithin(t *testing.T, job *jobs.Job, limit time.Duration) jobs.Snapshot {
+	t.Helper()
+	deadline := time.Now().Add(limit)
+	for !job.Snapshot().State.Terminal() {
+		if time.Now().After(deadline) {
+			t.Fatalf("the job did not end within %s: it is %s in phase %s, where a refusal ends it before the interview", limit, job.Snapshot().State, job.Snapshot().Phase)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return job.Snapshot()
+}
 
 // A written upgrade, a conflicted one and Toha's already-current each record
 // the pinned version and commit as the workspace's applied version; a plan
@@ -535,7 +554,7 @@ func TestAnUpgradeJobRefusesAnAppliedVersionNotOlderThanTheCurrent(t *testing.T)
 		if err := w.data.SetAppliedVersion(ctx, "alpha", store.AppliedVersion{Version: version, Commit: "3000000000000000000000000000000000000003"}); err != nil {
 			t.Fatal(err)
 		}
-		_, err := (&upgrading{w: w.flows, name: "alpha"}).forward(ctx, nil, tpl)
+		_, _, err := (&upgrading{w: w.flows, name: "alpha"}).forward(ctx, nil, tpl)
 		var failure *jobs.Failure
 		if !errors.As(err, &failure) || failure.Kind != KindTemplateRefused || !strings.Contains(err.Error(), "already has version "+version) {
 			t.Fatalf("%s: %v", version, err)
@@ -544,7 +563,105 @@ func TestAnUpgradeJobRefusesAnAppliedVersionNotOlderThanTheCurrent(t *testing.T)
 	if err := w.data.SetAppliedVersion(ctx, "alpha", store.AppliedVersion{Version: "1.0.0", Commit: sampleTemplate.CurrentCommit}); err != nil {
 		t.Fatal(err)
 	}
-	if from, err := (&upgrading{w: w.flows, name: "alpha"}).forward(ctx, nil, tpl); err != nil || from != "version 1.0.0" {
+	if from, _, err := (&upgrading{w: w.flows, name: "alpha"}).forward(ctx, nil, tpl); err != nil || from != "version 1.0.0" {
 		t.Fatalf("%q %v", from, err)
+	}
+}
+
+// uncheckedTemplate forgets the sample template's current commit, as an
+// imported template has none before its first check.
+func (w *world) uncheckedTemplate(t *testing.T) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+w.data.Path()+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE templates SET current_commit = NULL WHERE id = 'sample'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// selectors records the commit each upgrade start and apply names, and
+// has the apply write a record whose commit is recordCommit.
+func (w *world) selectors(t *testing.T, recordCommit string) *[]string {
+	t.Helper()
+	var mu sync.Mutex
+	commits := &[]string{}
+	keep := func(s templates.Selector) {
+		mu.Lock()
+		defer mu.Unlock()
+		*commits = append(*commits, s.Commit)
+	}
+	w.tmpl.startUpgrade = func(s templates.Selector) (*templates.Reply, error) {
+		keep(s)
+		return reply(templates.Questions, sessionAsking, batch), nil
+	}
+	w.tmpl.applyUpgrade = func(s templates.Selector) (*templates.Applied, error) {
+		keep(s)
+		record := fmt.Sprintf(`{"applications":[{"target":".","template":%q,"source":%q,"commit":%q}]}`, s.Address+"@"+s.Ref, s.Address, recordCommit)
+		writeFile(t, s.Target, ".toha.json", record)
+		return appliedReply(templates.Written, nil, nil), nil
+	}
+	return commits
+}
+
+// With no commit recorded for the current version, an upgrade of an
+// unknown applied version pins the commit the descent check approved, so
+// its start and apply name it and the template service refuses a tag
+// moved since; the workspace records that commit.
+func TestAnUpgradePinsTheCommitItsDescentCheckApproved(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.createWorkspace(t, "alpha")
+	w.newVersion(t)
+	w.uncheckedTemplate(t)
+	w.unknown(t, "alpha")
+	approved := "2000000000000000000000000000000000000002"
+	w.tmpl.checkSince = func(_, ref, since string) (*templates.Checked, error) {
+		return &templates.Checked{Source: sampleTemplate.Source, Commit: approved, Definition: true, Descends: ptr(true)}, nil
+	}
+	commits := w.selectors(t, approved)
+	job := w.startJobBody(t, `{"operation":"upgrade","workspace":"alpha"}`)
+	waitWaiting(t, job, 0)
+	w.answer(t, job, sessionAsking)
+	if snap := endsWithin(t, job, 10*time.Second); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	if !reflect.DeepEqual(*commits, []string{approved, approved}) {
+		t.Fatalf("the start and apply named %q", *commits)
+	}
+	if got, _ := w.data.AppliedVersion(ctx, "alpha"); got != (store.AppliedVersion{Version: "2.0.0", Commit: approved}) {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// An upgrade of a template whose current commit is not known yet records
+// the commit the applied record names, when it is a full object id, and
+// none otherwise.
+func TestAnUpgradeOfAnUncheckedTemplateRecordsTheRecordsCommit(t *testing.T) {
+	for recordCommit, want := range map[string]string{
+		"2b00000000000000000000000000000000000002": "2b00000000000000000000000000000000000002",
+		"not-a-commit": "",
+	} {
+		t.Run(recordCommit, func(t *testing.T) {
+			w := newWorld(t)
+			w.createWorkspace(t, "alpha")
+			w.newVersion(t)
+			w.uncheckedTemplate(t)
+			commits := w.selectors(t, recordCommit)
+			job := w.startJobBody(t, `{"operation":"upgrade","workspace":"alpha"}`)
+			waitWaiting(t, job, 0)
+			w.answer(t, job, sessionAsking)
+			if snap := endsWithin(t, job, 10*time.Second); snap.State != jobs.Succeeded {
+				t.Fatalf("%+v %+v", snap, snap.Error)
+			}
+			if !reflect.DeepEqual(*commits, []string{"", ""}) {
+				t.Fatalf("the start and apply named %q", *commits)
+			}
+			if got, _ := w.data.AppliedVersion(context.Background(), "alpha"); got != (store.AppliedVersion{Version: "2.0.0", Commit: want}) {
+				t.Fatalf("%+v", got)
+			}
+		})
 	}
 }

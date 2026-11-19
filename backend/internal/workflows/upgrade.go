@@ -41,9 +41,15 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	}
 	// A tag that moved after the request was checked is the template
 	// service's template-stale-revision: the job names the recorded commit.
-	from, failure := u.forward(ctx, run, tpl)
+	from, approved, failure := u.forward(ctx, run, tpl)
 	if failure != nil {
 		return failure
+	}
+	if tpl.CurrentCommit == "" && approved != "" {
+		// No commit is recorded for the current version yet: the job pins
+		// the one the descent check approved, so the template service
+		// refuses a tag moved since.
+		tpl.CurrentCommit = approved
 	}
 	fmt.Fprintf(run.Log(""), "upgrading from %s to template %s, version %s\n", from, tpl.ID, tpl.CurrentVersion)
 	target := tpl.ID + " " + tpl.CurrentVersion
@@ -137,35 +143,36 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 // than the template's current version; an unknown one, whose applied
 // commit has no version tag, goes on only when the template service
 // answers that the current version's commit descends from that commit. It
-// says what the workspace is upgraded from.
-func (u *upgrading) forward(ctx context.Context, run *jobs.Run, tpl store.Template) (string, error) {
+// says what the workspace is upgraded from, and the commit a descent check
+// approved, if one ran.
+func (u *upgrading) forward(ctx context.Context, run *jobs.Run, tpl store.Template) (string, string, error) {
 	applied, err := u.w.opts.Data.AppliedVersion(ctx, u.name)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	switch {
 	case applied.Version != "":
 		if !registry.Newer(tpl.CurrentVersion, applied.Version) {
-			return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace already has version %s, and template %s's current version is %s; nothing was upgraded", applied.Version, tpl.ID, tpl.CurrentVersion)}
+			return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the workspace already has version %s, and template %s's current version is %s; nothing was upgraded", applied.Version, tpl.ID, tpl.CurrentVersion)}
 		}
-		return "version " + applied.Version, nil
+		return "version " + applied.Version, "", nil
 	case applied.Commit == "":
-		return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("neither the version nor the commit last applied to the workspace is known, so the upgrade cannot tell that version %s moves it forward; nothing was upgraded", tpl.CurrentVersion)}
+		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("neither the version nor the commit last applied to the workspace is known, so the upgrade cannot tell that version %s moves it forward; nothing was upgraded", tpl.CurrentVersion)}
 	}
-	fmt.Fprintf(run.Log(""), "the workspace's applied version is unknown; asking whether version %s's commit descends from its applied commit %s\n", tpl.CurrentVersion, applied.Commit)
+	fmt.Fprintf(run.Log(""), "the workspace's applied version is unknown; asking whether version %s's commit descends from its applied commit %q\n", tpl.CurrentVersion, applied.Commit)
 	checked, err := u.w.opts.Templates.CheckSince(ctx, tpl.Address, tpl.CurrentTag, applied.Commit)
 	var unavailable *templates.UnavailableError
 	switch {
 	case errors.As(err, &unavailable):
-		return "", &jobs.Failure{Kind: KindTemplateUnavailable, Err: fmt.Errorf("the template service could not say whether version %s descends from the applied commit %s: %w; nothing was upgraded", tpl.CurrentVersion, applied.Commit, err)}
+		return "", "", &jobs.Failure{Kind: KindTemplateUnavailable, Err: fmt.Errorf("the template service could not say whether version %s descends from the applied commit %q: %w; nothing was upgraded", tpl.CurrentVersion, applied.Commit, err)}
 	case err != nil:
-		return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the template service refused to check version %s against the applied commit %s (%s); nothing was upgraded", tpl.CurrentVersion, applied.Commit, refusalKind(err))}
+		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the template service refused to check version %s against the applied commit %q (%s); nothing was upgraded", tpl.CurrentVersion, applied.Commit, refusalKind(err))}
 	case tpl.CurrentCommit != "" && checked.Commit != tpl.CurrentCommit:
-		return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("version %s's tag is at commit %s, not the recorded %s; nothing was upgraded", tpl.CurrentVersion, checked.Commit, tpl.CurrentCommit)}
+		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("version %s's tag is at commit %q, not the recorded %q; nothing was upgraded", tpl.CurrentVersion, checked.Commit, tpl.CurrentCommit)}
 	case !*checked.Descends:
-		return "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("version %s's commit %s does not descend from the workspace's applied commit %s, so the upgrade would not move it forward; nothing was upgraded", tpl.CurrentVersion, checked.Commit, applied.Commit)}
+		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("version %s's commit %q does not descend from the workspace's applied commit %q, so the upgrade would not move it forward; nothing was upgraded", tpl.CurrentVersion, checked.Commit, applied.Commit)}
 	}
-	return "commit " + applied.Commit, nil
+	return "commit " + applied.Commit, checked.Commit, nil
 }
 
 // refusalKind names a template service refusal by its kind alone.
@@ -183,7 +190,7 @@ func refusalKind(err error) string {
 func (w *Workflows) recordApplied(ctx context.Context, run *jobs.Run, name, folder string, tpl store.Template) {
 	commit := tpl.CurrentCommit
 	if commit == "" {
-		if applied, err := registry.ReadApplied(folder); err == nil {
+		if applied, err := registry.ReadApplied(folder); err == nil && registry.IsCommit(applied.Commit) {
 			commit = applied.Commit
 		}
 	}
