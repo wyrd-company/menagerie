@@ -32,11 +32,23 @@ func (w *world) contributeRecord(t *testing.T, name, target string, record *stri
 		t.Fatal(err)
 	}
 	wt, _ := repo.Worktree()
-	if record == nil {
+	switch {
+	case record == nil:
 		if _, err := wt.Remove(".toha.json"); err != nil {
 			t.Fatal(err)
 		}
-	} else {
+	case strings.HasPrefix(*record, "link:"):
+		// A record that is a symbolic link, here to a copy of the record.
+		if err := os.Remove(filepath.Join(dir, ".toha.json")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(strings.TrimPrefix(*record, "link:"), filepath.Join(dir, ".toha.json")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := wt.Add(".toha.json"); err != nil {
+			t.Fatal(err)
+		}
+	default:
 		writeFile(t, dir, ".toha.json", *record)
 		if _, err := wt.Add(".toha.json"); err != nil {
 			t.Fatal(err)
@@ -93,6 +105,7 @@ func TestApplyBranchMovesTheAppliedRecordOnlyForward(t *testing.T) {
 		{name: "removed record", record: nil, refused: []string{"removes the applied record", "version 1.0.0"}},
 		{name: "unreadable record", record: ptr(`{"applications": not json`), refused: []string{"Toha cannot read", "version 1.0.0"}},
 		{name: "no application at the root", record: ptr(`{"applications":[]}`), refused: []string{"Toha cannot read"}},
+		{name: "a link for a record", record: ptr("link:result.txt"), refused: []string{"not a file", "version 1.0.0"}},
 		{name: "another source", record: toha("https://git.example.invalid/example-org/other", "2.0.0", ""),
 			refused: []string{"another template", "template sample"}},
 		{name: "no version tag", record: toha(src, "main", "abc0000000000000000000000000000000000abc"),

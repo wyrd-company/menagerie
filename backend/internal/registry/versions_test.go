@@ -366,13 +366,13 @@ func TestTheScheduleChecksEveryTemplateAtStartAndEachTick(t *testing.T) {
 	}
 	f.released("1.3.0", "1.3.0", "c130")
 	// The check at start finds it.
-	waitFor(t, func() bool { return newest() == "1.3.0" })
+	waitFor(t, "the check at start to find 1.3.0", func() bool { return newest() == "1.3.0" })
 	f.released("1.4.0", "1.4.0", "c140")
 	ticks <- testNow
-	waitFor(t, func() bool { return newest() == "1.4.0" })
+	waitFor(t, "the check at the tick to find 1.4.0", func() bool { return newest() == "1.4.0" })
 	f.refusing("versions "+kit, &templates.Error{Status: 422, Kind: "template-not-found", Message: "https://git.example.invalid/secret"})
 	ticks <- testNow
-	waitFor(t, func() bool { return logged.Load().(string) != "" })
+	waitFor(t, "the failed check to be logged", func() bool { return logged.Load().(string) != "" })
 	cancel()
 	<-done
 	text := logged.Load().(string)
@@ -381,12 +381,12 @@ func TestTheScheduleChecksEveryTemplateAtStartAndEachTick(t *testing.T) {
 	}
 }
 
-func waitFor(t *testing.T, ok func() bool) {
+func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for !ok() {
 		if time.Now().After(deadline) {
-			t.Fatal("timed out")
+			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
