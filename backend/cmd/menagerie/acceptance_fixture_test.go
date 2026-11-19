@@ -334,6 +334,12 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 			t.Errorf("the start's log does not name %q:\n%s", want, started)
 		}
 	}
+	// The start checked every registered template for new versions with no
+	// request: the imported kit, at an address no test fetches, failed.
+	checked := "the version check of template imported-kit failed"
+	waitFor(t, "the start's version check of imported-kit", func() bool {
+		return strings.Contains(c.logs(time.Time{}), checked)
+	})
 	if strings.Contains(started, "sample-password") {
 		t.Errorf("the start's log quotes an address with a password:\n%s", started)
 	}

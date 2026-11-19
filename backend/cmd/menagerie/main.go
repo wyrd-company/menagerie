@@ -144,10 +144,7 @@ func run(configPath string) error {
 	if err := prepareData(ctx, cfg, root, data, runtime, provisioning.Records{Folder: provisioning.DefaultRecords}); err != nil {
 		return err
 	}
-	if err := importTemplates(ctx, cfg, root, data, templates.New(cfg.TemplateService.Socket)); err != nil {
-		return err
-	}
-	if err := registry.ImportApplied(ctx, data, root, log.Printf); err != nil {
+	if err := importTemplateData(ctx, cfg, root, data, templates.New(cfg.TemplateService.Socket)); err != nil {
 		return err
 	}
 	versions := &registry.Registry{Data: data, Templates: templates.New(cfg.TemplateService.Socket), Root: root}
@@ -175,10 +172,9 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	versionTicks := time.NewTicker(cfg.TemplateVersionsEvery())
-	defer versionTicks.Stop()
-	go versions.Schedule(ctx, versionTicks.C, log.Printf)
-	log.Printf("menagerie: checking templates for new versions now and every %s", cfg.TemplateVersionsEvery())
+	// After serveHooks: a check of a private https template reaches its
+	// token through the hook runner socket's credential route.
+	defer checkVersions(ctx, cfg, versions)()
 
 	httpServer := &http.Server{
 		Addr:        cfg.Listen,
@@ -252,6 +248,25 @@ func prepareData(ctx context.Context, cfg *config.Config, root *workspace.Root, 
 	return provisioning.Import(ctx, provisioning.ImportOptions{
 		Data: data, Runtime: runtime, Workspaces: root, Records: records, Agent: agent, Logf: log.Printf,
 	})
+}
+
+// importTemplateData takes over, at a first start, the configuration's
+// templates key and then each workspace's applied version, each once.
+func importTemplateData(ctx context.Context, cfg *config.Config, root *workspace.Root, data *store.Store, service registry.TemplateService) error {
+	if err := importTemplates(ctx, cfg, root, data, service); err != nil {
+		return err
+	}
+	return registry.ImportApplied(ctx, data, root, log.Printf)
+}
+
+// checkVersions checks every registered template for new versions now,
+// then every template-versions.every, until ctx ends. stop ends the
+// schedule's ticker.
+func checkVersions(ctx context.Context, cfg *config.Config, versions *registry.Registry) (stop func()) {
+	ticks := time.NewTicker(cfg.TemplateVersionsEvery())
+	go versions.Schedule(ctx, ticks.C, log.Printf)
+	log.Printf("menagerie: checking templates for new versions now and every %s", cfg.TemplateVersionsEvery())
+	return ticks.Stop
 }
 
 // importTemplates takes over the configuration's templates key once, after
