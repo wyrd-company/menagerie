@@ -417,12 +417,13 @@ image:
    Without `key-policy`, that **Start** or **Rebuild** fails as
    `provisioning-unavailable`.
 5. With `provisioning.xolotl`, list the workspaces with a
-   `customizations.menagerie` block whose names are not 1 to 63 lower case
-   letters, digits, `_` or `-`, starting with a letter or digit. After the
-   upgrade, every **Start** and **Rebuild** of one fails as
-   `provisioning-invalid`. Create each again under a valid name, move its work
-   into the new workspace and delete the old one; **Delete** still works after
-   the upgrade. Menagerie does not rename a workspace.
+   `customizations.menagerie` block and no `customizations.menagerie.xolotl`
+   whose names are not 1 to 63 lower case letters, digits, `_` or `-`,
+   starting with a letter or digit. After the upgrade, and once `key-policy` is
+   set, every **Start** and **Rebuild** of one fails as `provisioning-invalid`.
+   Create each again under a valid name, move its work into the new workspace
+   and delete the old one; **Delete** still works after the upgrade. Menagerie
+   does not rename a workspace.
 6. Make each entry of the `templates` key name a `MAJOR.MINOR.PATCH` tag, with a
    leading `v` if you like. The first start imports the entries once, as
    [The templates key](configuration.md#the-templates-key) says: it skips a
