@@ -45,7 +45,7 @@ vars:
   IMAGE: '{{.MENAGERIE_IMAGE | default "menagerie:dev"}}'
   IMAGE_REPOSITORY: ghcr.io/wyrd-company/menagerie
   # renovate: datasource=github-releases depName=openbao/openbao extractVersion=^v(?<version>.*)$
-  OPENBAO_VERSION: 2.7.2
+  OPENBAO_VERSION: 2.7.3
   # The Wyrwood release the acceptance run's controller and agent come from.
   # renovate: datasource=github-releases depName=wyrd-company/wyrwood
   WYRWOOD_VERSION: 0.7.1
