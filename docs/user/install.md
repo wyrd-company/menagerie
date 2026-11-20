@@ -406,24 +406,49 @@ image:
 2. Back up the `/var/lib/menagerie` volume. Going back needs it.
 3. Repair every workspace whose definition no longer parses, as
    the section below says.
-4. Set [`provisioning.xolotl.key-policy`](configuration.md#xolotl). A template's
-   declaration no longer names the policy of a workspace's client key, and a
-   create that needs a new key fails as `provisioning-unavailable` without it.
-5. Mark as required, or put in groups, the
-   [policies](usage.md#policies) your templates used to declare. Menagerie no
-   longer reads `policies`, `values` or `xolotl` from a template's
+4. With `provisioning.xolotl`, set
+   [`provisioning.xolotl.key-policy`](configuration.md#xolotl) before the first
+   start. A template's declaration no longer names the policy of a workspace's
+   client key, and this covers your existing workspaces too: every workspace
+   whose definition has a `customizations.menagerie` block and no Xolotl key
+   gets a new client key `<key-policy>/<name>` at its next **Start** or
+   **Rebuild**. 0.4.2 issued one only when the template declared `xolotl`,
+   and the keys a 0.4.2 template declared are imported at the first start.
+   Without `key-policy`, that **Start** or **Rebuild** fails as
+   `provisioning-unavailable`.
+5. With `provisioning.xolotl`, list the workspaces with a
+   `customizations.menagerie` block whose names are not 1 to 63 lower case
+   letters, digits, `_` or `-`, starting with a letter or digit. After the
+   upgrade, every **Start** and **Rebuild** of one fails as
+   `provisioning-invalid`. Create each again under a valid name, move its work
+   into the new workspace and delete the old one; **Delete** still works after
+   the upgrade. Menagerie does not rename a workspace.
+6. Make each entry of the `templates` key name a `MAJOR.MINOR.PATCH` tag, with a
+   leading `v` if you like. The first start imports the entries once, as
+   [The templates key](configuration.md#the-templates-key) says: it skips a
+   repository with no such tag, an entry on a host with a port that names a
+   ref (register that template in the interface with no ref instead), and an
+   address Menagerie now refuses. It keeps one template for each repository
+   and folder, with the newest entry's `id`, so point clients and scripts at
+   the id that is kept: a create naming another entry's id is refused as
+   `unknown-template`.
+
+After the first start:
+
+7. Read the start log for each skipped entry and register that template in the
+   interface, then remove the `templates` key.
+8. With `provisioning.wyrwood`, mark as required, or put in groups, on the
+   [Policies](usage.md#policies) screen the policies your templates used to
+   declare, before anyone creates a workspace. Menagerie no longer reads
+   `policies`, `values` or `xolotl` from a template's
    `customizations.menagerie`, and a new workspace gets only the policies a
    manager chose or marked required.
-6. Make each entry of the `templates` key name a `MAJOR.MINOR.PATCH` tag. The
-   first start imports the entries once, and skips a repository with no such
-   tag and an address Menagerie now refuses.
+9. Stop sending `templateId` on an upgrade. Menagerie refuses it with
+   `invalid-request`; an upgrade without it applies the current version of the
+   workspace's template.
 
-After the first start, read the start log for each skipped entry and register
-that template in the interface, then remove the `templates` key. Stop sending
-`templateId` on an upgrade: Menagerie refuses it with `invalid-request`, and
-upgrades the workspace to the current version of its template. On a host with
-provisioning, a new workspace name is 1 to 63 lower case letters, digits, `_`
-or `-`, starting with a letter or digit.
+On a host with provisioning, the name of a new workspace is 1 to 63 lower case
+letters, digits, `_` or `-`, starting with a letter or digit.
 
 ### The first start that keeps Menagerie's data
 
