@@ -404,8 +404,9 @@ image:
    upgrade order; from 0.6.1 that is a [stopped
    rollout](configuration.md#upgrading-wyrwood).
 2. Back up the `/var/lib/menagerie` volume. Going back needs it.
-3. Repair every workspace whose definition no longer parses, as
-   the section below says.
+3. Repair every workspace whose definition no longer parses, as the section
+   below says: the first start imports neither its policies nor a Xolotl key
+   it declares.
 4. With `provisioning.xolotl`, set
    [`provisioning.xolotl.key-policy`](configuration.md#xolotl) before the first
    start. A template's declaration no longer names the policy of a workspace's
@@ -415,7 +416,9 @@ image:
    **Rebuild**. 0.4.2 issued one only when the template declared `xolotl`,
    and the keys a 0.4.2 template declared are imported at the first start.
    Without `key-policy`, that **Start** or **Rebuild** fails as
-   `provisioning-unavailable`.
+   `provisioning-unavailable`. A create, an upgrade and an apply branch, which
+   rebuild the devcontainer, go the same way. `provisioning.xolotl` still needs
+   `provisioning.wyrwood`.
 5. With `provisioning.xolotl`, list the workspaces with a
    `customizations.menagerie` block and no `customizations.menagerie.xolotl`
    whose names are not 1 to 63 lower case letters, digits, `_` or `-`,
@@ -424,8 +427,9 @@ image:
    Create each again under a valid name, move its work into the new workspace
    and delete the old one; **Delete** still works after the upgrade. Menagerie
    does not rename a workspace.
-6. Make each entry of the `templates` key name a `MAJOR.MINOR.PATCH` tag, with a
-   leading `v` if you like. The first start imports the entries once, as
+6. If the configuration has a `templates` key, make each entry of it name a
+   `MAJOR.MINOR.PATCH` tag, with a leading `v` if you like. The first start
+   imports the entries once, as
    [The templates key](configuration.md#the-templates-key) says: it skips a
    repository with no such tag, an entry on a host with a port that names a
    ref (register that template in the interface with no ref instead), and an
@@ -436,8 +440,11 @@ image:
 
 After the first start:
 
-7. Read the start log for each skipped entry and register that template in the
-   interface, then remove the `templates` key.
+7. If the configuration has a `templates` key, read the start log for each
+   skipped entry and register that template in the interface, then remove the
+   key. A template whose address Menagerie refuses can be registered only at
+   an address it accepts, and its id comes from the name you give it, not from
+   the entry.
 8. With `provisioning.wyrwood`, mark as required, or put in groups, on the
    [Policies](usage.md#policies) screen the policies your templates used to
    declare, before anyone creates a workspace. Menagerie no longer reads
@@ -483,9 +490,10 @@ Before the upgrade, repair every workspace whose `.devcontainer/devcontainer.jso
 cannot be read, such as one edited by hand so that it no longer parses. At the
 first start, such a workspace keeps the names of its containers,
 when `provisioning.wyrwood` is configured, so that a later job or its delete
-retires them, but its policies are not imported. If you upgrade without the
-repair, pick that workspace's policies again in the interface once its definition
-is repaired.
+retires them, but its policies and a Xolotl key its definition declares are not
+imported. If you upgrade without the repair, pick that workspace's policies again
+in the interface once its definition is repaired; with `provisioning.xolotl`, its
+next **Start** or **Rebuild** then issues it a new Xolotl key.
 
 ## What Menagerie can do to the host
 
