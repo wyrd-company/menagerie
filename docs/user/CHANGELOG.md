@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6
+
+### Fixes
+
+- The installation command and the deployment example use the Menagerie 0.5.0 image.
+- The upgrade steps from 0.4.2 say that a create, an upgrade and an apply branch need a Xolotl key too, apply the `templates` steps only where the configuration has that key, and say what an unreadable definition loses. The failure table adds a cause of `provisioning-unavailable`, says the name rule is enforced on a create, and says which runner image is used.
+
 ## 0.2.5
 
 ### Fixes
