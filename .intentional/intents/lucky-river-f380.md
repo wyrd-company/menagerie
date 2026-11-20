@@ -1,6 +1,0 @@
----
-menagerie: major
-menagerie-docs: patch
----
-
-Choose workspace policies at creation and edit them on the workspace row. Apply stored selections immediately through Wyrwood 0.7.1 without a rebuild, retain imported identities, and show pending or failed application. Policies a template declares (`customizations.menagerie.wyrwood.policies`, `customizations.menagerie.wyrwood.values` and `customizations.menagerie.xolotl`) are no longer read: mark the policies every workspace needs as required, or put them in groups, on the Policies screen before anyone creates a workspace. With `provisioning.xolotl`, a workspace whose definition has a `customizations.menagerie` block and no Xolotl key gets a new client key `<key-policy>/<name>` at its next create, start or rebuild, and that fails as `provisioning-unavailable` until `provisioning.xolotl.key-policy` is set, as the key policy no longer comes from a template. 0.4.2 issued a key only when the template declared `xolotl`; keys a 0.4.2 template declared are imported at the first start. Menagerie needs Wyrwood 0.7.1 or later, up from 0.6.1: upgrade the Wyrwood controller and agents first. The configuration guide covers the host's key policy and policy recovery.
