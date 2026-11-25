@@ -23,9 +23,8 @@ another history, pushes without force so a branch another writer made
 since the check is never overwritten, requires the pushed branch to read
 back at its commit, and records the destination only after that, and only
 while its id is still registered at the URL it checked, as the job's final
-step, which a time limit can refuse before it begins but not overturn
-after. Each
-mutation changes one guard in place, and its tests must fail; the source is
+step: a time limit that passed refuses it, one that passes while it waits
+cancels it, and none overturns it once it succeeds. Each mutation changes one guard in place, and its tests must fail; the source is
 restored even on interruption. The report starts failed and passes only
 after every baseline test passes and every mutant compiles and fails each
 of its tests.
@@ -62,6 +61,7 @@ TESTS = {
     "extend-forward-only": ("./backend/internal/backup", "TestExtendNeverOverwritesAnotherHistory"),
     "switch-checked-url": ("./backend/internal/store", "TestASwitchNeedsTheCheckedURL"),
     "final-step": ("./backend/internal/jobs", "TestAFinalStepDecidesTheOutcome"),
+    "final-waits": ("./backend/internal/jobs", "TestAFinalStepThatWaitsIsCancelledAtTheLimit"),
     "screen-several": ("web/src/screens/BackupRepositories.test.tsx",
                        "asks for a backup repository on create when several are registered"),
 }
@@ -150,7 +150,12 @@ MUTANTS = [
     ("final-stops-limits", "backend/internal/jobs/run.go",
      "\tj.final = true\n", "", ["final-step"]),
     ("final-settles-first", "backend/internal/jobs/run.go",
-     "\tj.settleLocked(now)\n\tif j.timedOut != nil {\n", "\t_ = now\n\tif j.timedOut != nil {\n", ["final-step"]),
+     "\tj.settleLocked(now)\n\ttimedOut := j.timedOut\n", "\t_ = now\n\ttimedOut := j.timedOut\n", ["final-step"]),
+    ("final-counts-during-step", "backend/internal/jobs/run.go",
+     "\tj.mu.Unlock()\n\tif timedOut != nil {\n",
+     "\tj.final = true\n\tj.stopTimerLocked()\n\tj.mu.Unlock()\n\tif timedOut != nil {\n", ["final-waits"]),
+    ("final-outcome-is-the-steps", "backend/internal/jobs/limits.go",
+     "\tcase j.timedOut != nil && !j.final:\n", "\tcase j.timedOut != nil:\n", ["final-step"]),
     ("screen-chooses-only-one", PICKER,
      "        if (list.length === 1 && list[0]) onChange(list[0].id);\n",
      "        if (list[0]) onChange(list[0].id);\n", ["screen-several"]),
