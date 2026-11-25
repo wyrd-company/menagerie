@@ -31,28 +31,33 @@ func (r *Run) Phase(name string) { r.job.setState(Running, name, true) }
 
 // Final runs step as the job's final step, the one whose effect the job's
 // outcome must agree with, such as recording what the job did. It first
-// settles the job's time limits under the job's lock: a limit that already
-// passed times the job out, and Final returns the timeout's error without
-// running step. Otherwise no time limit counts any more, so a limit that
-// passes while step runs, or before the runner returns, cannot turn an
-// effect step made into a timed-out outcome. Shutdown still cancels the
-// job's context. step must be short and must not wait on the job's
-// context alone.
+// settles the job's time limits: a limit that already passed times the job
+// out, and Final returns the timeout's error without running step. The
+// limits keep counting while step runs, so a limit that passes cancels the
+// job's context and a step bound to it, such as a database transaction
+// still waiting for its connection, stops. Once step succeeds no limit
+// counts any more and the job's outcome is no longer a timeout, even if a
+// limit passed as step finished: step's effect decides. A step that fails
+// ends as a timeout if a limit passed, or with its error.
 func (r *Run) Final(step func() error) error {
 	j := r.job
 	now := j.manager.now()
 	j.mu.Lock()
 	j.settleLocked(now)
-	if j.timedOut != nil {
-		err := j.timedOut
-		j.mu.Unlock()
-		return fmt.Errorf("%w: %s", ErrTimedOut, err.Message)
+	timedOut := j.timedOut
+	j.mu.Unlock()
+	if timedOut != nil {
+		return fmt.Errorf("%w: %s", ErrTimedOut, timedOut.Message)
 	}
+	if err := step(); err != nil {
+		return err
+	}
+	j.mu.Lock()
 	j.final = true
 	j.stopTimerLocked()
 	j.deadline, j.limit = nil, nil
 	j.mu.Unlock()
-	return step()
+	return nil
 }
 
 // SetState records a nonterminal state, such as waiting-for-answers, with

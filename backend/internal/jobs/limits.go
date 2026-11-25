@@ -266,10 +266,10 @@ func (j *Job) timeOutLocked(first due) {
 
 // outcomeLocked chooses how the job ends from its runner's error. A job
 // timed out before it ends fails as timed-out whatever its runner
-// returned.
+// returned, unless its final step succeeded (Run.Final).
 func (j *Job) outcomeLocked(err error) (State, *Error) {
 	switch {
-	case j.timedOut != nil:
+	case j.timedOut != nil && !j.final:
 		return Failed, j.timedOut
 	case errors.Is(err, ErrEnded):
 		return Ended, nil

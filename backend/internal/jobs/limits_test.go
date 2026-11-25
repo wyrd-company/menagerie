@@ -697,16 +697,19 @@ func TestPhasesAreThePublishedPhases(t *testing.T) {
 
 // A final step's effect and the job's outcome agree: a limit that passed
 // before the step times the job out and the step never runs; one that
-// passes during the step, or before the runner returns, times nothing out.
+// passes as a step finishes that succeeds, or before the runner returns,
+// times nothing out.
 func TestAFinalStepDecidesTheOutcome(t *testing.T) {
 	for _, c := range []struct {
 		name      string
 		before    time.Duration
 		wantRan   bool
 		wantState State
+		fires     bool
 	}{
-		{"limit passed before", 20 * time.Minute, false, Failed},
-		{"limit passes during", 0, true, Succeeded},
+		{"limit passed before", 20 * time.Minute, false, Failed, false},
+		{"limit passes during", 0, true, Succeeded, false},
+		{"limit fires as the step succeeds", 0, true, Succeeded, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			clock := newFakeClock()
@@ -717,7 +720,17 @@ func TestAFinalStepDecidesTheOutcome(t *testing.T) {
 				// Pass moves the clock and runs no timer, so the limit is first
 				// seen when the job next settles.
 				clock.Pass(c.before)
-				if err := run.Final(func() error { ran = true; clock.Pass(20 * time.Minute); return nil }); err != nil {
+				if err := run.Final(func() error {
+					ran = true
+					if c.fires {
+						// The limit's timer runs and cancels the context, but the
+						// step has made its effect and succeeds.
+						clock.Advance(20 * time.Minute)
+					} else {
+						clock.Pass(20 * time.Minute)
+					}
+					return nil
+				}); err != nil {
 					return err
 				}
 				clock.Pass(time.Hour)
@@ -734,5 +747,31 @@ func TestAFinalStepDecidesTheOutcome(t *testing.T) {
 				t.Fatalf("%+v", snap.Error)
 			}
 		})
+	}
+}
+
+// A limit keeps counting while a final step runs, so a step that waits on
+// the job's context, as a transaction waits for its connection, is
+// cancelled at the limit and the job times out.
+func TestAFinalStepThatWaitsIsCancelledAtTheLimit(t *testing.T) {
+	clock := newFakeClock()
+	m, _ := limitedManager(context.Background(), clock, Options{Limits: Limits{Default: 10 * time.Minute}})
+	waiting := make(chan struct{})
+	job, err := m.Start("alpha", "move-backup", func(ctx context.Context, run *Run) error {
+		run.Phase("switch")
+		return run.Final(func() error {
+			close(waiting)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-waiting
+	clock.Advance(20 * time.Minute)
+	snap := awaitEnd(t, job)
+	if snap.State != Failed || snap.Error == nil || snap.Error.Kind != KindTimedOut {
+		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
 }
