@@ -124,3 +124,33 @@ func TestSettingAndAdoptingBackupRepositories(t *testing.T) {
 		t.Fatalf("%+v", all)
 	}
 }
+
+// A removed repository's id is never given to another registration, so a
+// request that names it cannot reach the repository registered after; its
+// URL can be registered again.
+func TestARemovedBackupRepositorysIDIsNeverReused(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	first := backupRepository(t, s, "Other", "ssh://git@git.example.invalid/example-org/first.git")
+	if err := s.RemoveBackupRepository(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BackupRepository(ctx, first.ID); !errors.Is(err, ErrNoBackupRepository) {
+		t.Fatalf("%v", err)
+	}
+	again := backupRepository(t, s, "Other", "ssh://git@git.example.invalid/example-org/again.git")
+	if again.ID == first.ID {
+		t.Fatalf("the removed id %q was reused", first.ID)
+	}
+	if err := s.SetWorkspaceBackupRepository(ctx, "alpha", first.ID); !errors.Is(err, ErrNoBackupRepository) {
+		t.Fatalf("%v", err)
+	}
+	same := backupRepository(t, s, "First again", first.URL)
+	if same.ID == first.ID {
+		t.Fatalf("%+v", same)
+	}
+	list, _ := s.BackupRepositories(ctx)
+	if len(list) != 2 {
+		t.Fatalf("%+v", list)
+	}
+}

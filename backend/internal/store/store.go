@@ -128,12 +128,16 @@ var migrations = []string{
 	ALTER TABLE workspaces ADD COLUMN applied_version TEXT CHECK (applied_version != '');
 	ALTER TABLE workspaces ADD COLUMN applied_commit TEXT CHECK (applied_commit != '');`,
 	// 6: the registered backup repositories, and the one each workspace
-	// backs up to, which cannot be removed from under it.
+	// backs up to, which cannot be removed from under it. A removed
+	// repository keeps its row, marked removed, so its id is never given to
+	// another; one URL has one registration that is not removed.
 	`CREATE TABLE backup_repositories (
 		id TEXT PRIMARY KEY CHECK (id != ''),
 		name TEXT NOT NULL CHECK (name != ''),
-		url TEXT NOT NULL UNIQUE CHECK (url != '')
+		url TEXT NOT NULL CHECK (url != ''),
+		removed_at TEXT CHECK (removed_at != '')
 	);
+	CREATE UNIQUE INDEX backup_repositories_url ON backup_repositories(url) WHERE removed_at IS NULL;
 	ALTER TABLE workspaces ADD COLUMN backup_repository TEXT REFERENCES backup_repositories(id);
 	CREATE INDEX workspaces_backup_repository ON workspaces(backup_repository);`,
 }

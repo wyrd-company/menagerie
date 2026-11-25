@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // BackupRepository is a registered backup repository: its permanent id, its
@@ -72,7 +73,7 @@ func BackupRepositoryID(name string) string {
 
 func (t *Tx) backupRepository(id string) (BackupRepository, error) {
 	var r BackupRepository
-	err := t.tx.QueryRowContext(t.ctx, `SELECT id, name, url FROM backup_repositories WHERE id = ?`, id).Scan(&r.ID, &r.Name, &r.URL)
+	err := t.tx.QueryRowContext(t.ctx, `SELECT id, name, url FROM backup_repositories WHERE id = ? AND removed_at IS NULL`, id).Scan(&r.ID, &r.Name, &r.URL)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BackupRepository{}, fmt.Errorf("%w: %s", ErrNoBackupRepository, id)
 	}
@@ -90,10 +91,11 @@ func (t *Tx) backupRepository(id string) (BackupRepository, error) {
 
 // RegisterBackupRepository records r, whose ID is empty, under
 // BackupRepositoryID of its name with -2, -3 and on added while that id is
-// taken. A URL that is registered is a *BackupRepositoryExistsError.
+// taken, by a registration or by one that was removed, so an id never
+// names two repositories. A URL that is registered is a *BackupRepositoryExistsError.
 func (t *Tx) RegisterBackupRepository(r BackupRepository) (BackupRepository, error) {
 	var existing, existingName string
-	err := t.tx.QueryRowContext(t.ctx, `SELECT id, name FROM backup_repositories WHERE url = ?`, r.URL).Scan(&existing, &existingName)
+	err := t.tx.QueryRowContext(t.ctx, `SELECT id, name FROM backup_repositories WHERE url = ? AND removed_at IS NULL`, r.URL).Scan(&existing, &existingName)
 	switch {
 	case err == nil:
 		return BackupRepository{}, &BackupRepositoryExistsError{ID: existing, Name: existingName}
@@ -137,7 +139,7 @@ func (s *Store) TryRegisterBackupRepository(ctx context.Context, r BackupReposit
 // that back up to it.
 func (s *Store) BackupRepositories(ctx context.Context) (out []BackupRepository, err error) {
 	err = s.Update(ctx, func(t *Tx) error {
-		ids, err := t.names(`SELECT id FROM backup_repositories ORDER BY name COLLATE NOCASE, name, id`)
+		ids, err := t.names(`SELECT id FROM backup_repositories WHERE removed_at IS NULL ORDER BY name COLLATE NOCASE, name, id`)
 		if err != nil {
 			return err
 		}
@@ -163,7 +165,8 @@ func (s *Store) BackupRepository(ctx context.Context, id string) (r BackupReposi
 
 // RemoveBackupRepository removes a backup repository no workspace backs up
 // to; one that workspaces back up to is a *BackupRepositoryInUseError
-// naming them, and the foreign key refuses it too. The repository itself,
+// naming them, and the foreign key refuses its row's deletion too. Its row
+// stays, marked removed, so its id is never registered again. The repository itself,
 // and the branches it holds, are left as they are.
 func (s *Store) RemoveBackupRepository(ctx context.Context, id string) error {
 	return s.Update(ctx, func(t *Tx) error {
@@ -174,7 +177,7 @@ func (s *Store) RemoveBackupRepository(ctx context.Context, id string) error {
 		if len(r.Workspaces) > 0 {
 			return &BackupRepositoryInUseError{Workspaces: r.Workspaces}
 		}
-		_, err = t.exec(`DELETE FROM backup_repositories WHERE id = ?`, id)
+		_, err = t.exec(`UPDATE backup_repositories SET removed_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339Nano), id)
 		return err
 	})
 }
