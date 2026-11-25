@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+### Features
+
+- Workspaces can back up to different Git repositories. A new **Backups** screen registers a backup repository with a display name and a Git URL once Menagerie has proved it can write to it, and removes one no workspace backs up to. **New workspace** asks which backup repository the workspace backs up to, choosing the only registered one for you, and the workspace list shows where each workspace backs up to. The create job request takes an optional `backupRepositoryId`. The first start of this release registers the configured `workspace-repository` once and keeps every existing workspace backing up to it; the key is then optional and no longer read, and each start that finds it logs a warning, so remove it after that start.
+- A workspace's backups can move to another registered backup repository: **Move backups** on its row starts a `move-backup` job that checks Menagerie can write to the destination, refuses a destination whose branch of the workspace's name holds another history (`backup-branch-conflict`), commits and pushes a current backup there and reads it back, and only then makes the destination the workspace's repository. A failed move (`backup-move-failed`) keeps the earlier repository and says why, and the earlier repository keeps its branch for recovery. A workspace with no backup repository gets its first the same way. New `job-limits.operations.move-backup`.
+
 ## 0.5.0
 
 ### Breaking
