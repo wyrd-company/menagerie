@@ -17,7 +17,14 @@ removed repository's id is never given to another; a reply's URL holds no
 password, query or fragment, nor an https URL's user name; a create
 refuses a repository removed since it was read; the first start gives the
 imported repository to every workspace folder, one with no data included,
-and removes nothing, so an absent one keeps its data. Each
+and removes nothing, so an absent one keeps its data. A
+move runs the destination's write check, refuses a branch that holds
+another history, pushes without force so a branch another writer made
+since the check is never overwritten, requires the pushed branch to read
+back at its commit, and records the destination only after that, and only
+while its id is still registered at the URL it checked, as the job's final
+step, which a time limit can refuse before it begins but not overturn
+after. Each
 mutation changes one guard in place, and its tests must fail; the source is
 restored even on interruption. The report starts failed and passes only
 after every baseline test passes and every mutant compiles and fails each
@@ -48,6 +55,13 @@ TESTS = {
     "first-start": ("./backend/cmd/menagerie", "TestAFirstStartGivesEveryWorkspaceTheConfiguredRepository"),
     "first-start-absent": ("./backend/cmd/menagerie", "TestAFirstStartKeepsAnAbsentWorkspace"),
     "create-refuses-removed": ("./backend/internal/store", "TestACreateRefusesARemovedBackupRepository"),
+    "move-switches-last": ("./backend/internal/workflows", "TestAMoveWritesAndVerifiesABackupBeforeItSwitchesRepositories"),
+    "move-conflict": ("./backend/internal/workflows", "TestAMoveRefusesABranchThatHoldsAnotherHistory"),
+    "move-unwritable": ("./backend/internal/workflows", "TestAFailedMoveKeepsTheWorkspacesRepository"),
+    "move-not-landed": ("./backend/internal/workflows", "TestAMoveWhoseBackupDoesNotLandKeepsTheWorkspacesRepository"),
+    "extend-forward-only": ("./backend/internal/backup", "TestExtendNeverOverwritesAnotherHistory"),
+    "switch-checked-url": ("./backend/internal/store", "TestASwitchNeedsTheCheckedURL"),
+    "final-step": ("./backend/internal/jobs", "TestAFinalStepDecidesTheOutcome"),
     "screen-several": ("web/src/screens/BackupRepositories.test.tsx",
                        "asks for a backup repository on create when several are registered"),
 }
@@ -59,6 +73,8 @@ BACKUPS = "backend/internal/store/backups.go"
 CREATE = "backend/internal/workflows/create.go"
 FLOWS = "backend/internal/workflows/workflows.go"
 PICKER = "web/src/ui/BackupPicker.tsx"
+MOVE = "backend/internal/workflows/move.go"
+PUSH = "backend/internal/backup/push.go"
 
 # Each mutant: a name, the source file, the text it replaces (exactly once),
 # its replacement, and the tests that must each fail.
@@ -111,6 +127,30 @@ MUTANTS = [
      "\t\tif backups != \"\" {\n\t\t\tif _, err := t.backupRepository(backups); err != nil {\n",
      "\t\tif false {\n\t\t\tif _, err := t.backupRepository(backups); err != nil {\n",
      ["create-refuses-removed"]),
+    ("move-checks-write", MOVE,
+     "\tif err := destination.CheckWrite(ctx, run.Log(\"verify: \")); err != nil {\n",
+     "\tif err := error(nil); err != nil {\n", ["move-unwritable"]),
+    ("move-refuses-other-history", MOVE,
+     "\tif failure := m.conflict(ctx, destination, to, fail); failure != nil {\n",
+     "\tif failure := m.conflict(ctx, destination, to, fail); false && failure != nil {\n", ["move-conflict"]),
+    ("move-reads-back", MOVE,
+     "\tcase landed != commit.Hash:\n", "\tcase false:\n", ["move-not-landed"]),
+    ("move-records-after-push", MOVE,
+     "\trun.Phase(\"commit\")\n",
+     "\t_ = m.w.opts.Data.SetWorkspaceBackupRepository(ctx, m.name, to.ID)\n\trun.Phase(\"commit\")\n",
+     ["move-not-landed"]),
+    ("move-records", MOVE,
+     "\terr = run.Final(func() error { return m.w.opts.Data.SwitchWorkspaceBackupRepository(ctx, m.name, to.ID, to.URL) })\n",
+     "\terr = run.Final(func() error { return nil })\n", ["move-switches-last"]),
+    ("extend-without-force", PUSH,
+     "\treturn r.push(ctx, repo, branch, false, progress)\n",
+     "\treturn r.push(ctx, repo, branch, true, progress)\n", ["extend-forward-only"]),
+    ("switch-checks-url", BACKUPS,
+     "\t\tif r.URL != url {\n", "\t\tif r.URL != url && false {\n", ["switch-checked-url"]),
+    ("final-stops-limits", "backend/internal/jobs/run.go",
+     "\tj.final = true\n", "", ["final-step"]),
+    ("final-settles-first", "backend/internal/jobs/run.go",
+     "\tj.settleLocked(now)\n\tif j.timedOut != nil {\n", "\t_ = now\n\tif j.timedOut != nil {\n", ["final-step"]),
     ("screen-chooses-only-one", PICKER,
      "        if (list.length === 1 && list[0]) onChange(list[0].id);\n",
      "        if (list[0]) onChange(list[0].id);\n", ["screen-several"]),
