@@ -110,12 +110,6 @@ function StartCreate() {
           Choose a template.
         </p>
       ) : null}
-      <BackupPicker value={backupRepositoryId} onChange={setBackupRepositoryId} />
-      {checked && backupRepositoryId === null ? (
-        <p className="field-errors" role="alert">
-          Choose a backup repository.
-        </p>
-      ) : null}
       <div className={`field${nameErrors.length ? " is-invalid" : ""}`}>
         <label className="field-label" htmlFor="workspace-name">
           <span className="field-title">Workspace name</span>
@@ -145,6 +139,12 @@ function StartCreate() {
           </ul>
         ) : null}
       </div>
+      <BackupPicker value={backupRepositoryId} onChange={setBackupRepositoryId} />
+      {checked && backupRepositoryId === null ? (
+        <p className="field-errors" role="alert">
+          Choose a backup repository.
+        </p>
+      ) : null}
       <fieldset className="create-policies">
         <legend>Policies</legend>
         {catalog ? (
