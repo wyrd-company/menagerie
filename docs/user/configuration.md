@@ -443,7 +443,7 @@ once the cancelled work has stopped.
   `create-container`, `wait-for-sockets`, `up`, `verify`,
   `retire`, `stop`, `interview`, `initialize-repository`, `generate`,
   `host-prerequisites`, `fetch`, `plan`, `apply`, `commit`,
-  `backup-local-changes` or `backup`. Template hooks run inside `generate`
+  `backup-local-changes`, `backup` or `switch`. Template hooks run inside `generate`
   and `apply`; a hook
   still running when its job is cancelled has its container killed and
   removed before the job ends.

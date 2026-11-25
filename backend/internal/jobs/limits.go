@@ -42,6 +42,7 @@ var Phases = []string{
 	"commit",
 	"backup-local-changes",
 	"backup",
+	"switch",
 }
 
 // Limits are the time limits on a job's running time. A zero or missing
