@@ -145,10 +145,10 @@ func run(configPath string) error {
 	if err := prepareData(ctx, cfg, root, data, runtime, provisioning.Records{Folder: provisioning.DefaultRecords}); err != nil {
 		return err
 	}
-	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
+	if err := importTemplateData(ctx, cfg, root, data, templates.New(cfg.TemplateService.Socket)); err != nil {
 		return err
 	}
-	if err := importTemplateData(ctx, cfg, root, data, templates.New(cfg.TemplateService.Socket)); err != nil {
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
 		return err
 	}
 	versions := &registry.Registry{Data: data, Templates: templates.New(cfg.TemplateService.Socket), Root: root}
@@ -255,17 +255,48 @@ func prepareData(ctx context.Context, cfg *config.Config, root *workspace.Root, 
 }
 
 // importBackupRepository takes over the configuration's workspace-repository
-// key once, after the workspace import, and warns at each start that finds
-// the key that it is no longer read.
+// key once, after the template imports, and warns at each start that finds
+// the key that it is no longer read. It first lists the workspace folders
+// as the workspace list does, so a folder that has no data yet, such as one
+// restored after an earlier release's first start, gets its workspace,
+// joined to its template, and takes the imported repository with the rest.
 func importBackupRepository(ctx context.Context, cfg *config.Config, root *workspace.Root, data *store.Store) error {
 	if cfg.WorkspaceRepository != "" {
 		log.Print("menagerie: the configuration's workspace-repository key is no longer read: backup repositories are registered in the interface; the first start of this release imported it once, and a later edit imports nothing")
 	}
-	folders, err := root.Names()
+	if err := discoverWorkspaces(ctx, root, data); err != nil {
+		return err
+	}
+	return backuprepos.Import(ctx, data, cfg.WorkspaceRepository, log.Printf)
+}
+
+// discoverWorkspaces joins the workspace folders to Menagerie's data as the
+// workspace list does: a folder listed for the first time gets its
+// workspace, joined to the registered template its applied record names.
+func discoverWorkspaces(ctx context.Context, root *workspace.Root, data *store.Store) error {
+	names, err := root.Names()
 	if err != nil {
 		return err
 	}
-	return backuprepos.Import(ctx, data, cfg.WorkspaceRepository, folders, log.Printf)
+	unknown, err := data.Unknown(ctx, names)
+	if err != nil {
+		return err
+	}
+	if _, err := data.Discover(ctx, names); err != nil {
+		return err
+	}
+	if len(unknown) > 0 {
+		if _, err := data.JoinTemplates(ctx, unknown, func(name string) (string, func(store.Template) store.AppliedVersion) {
+			folder, err := root.Folder(name)
+			if err != nil {
+				return "", nil
+			}
+			return registry.Join(folder)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // importTemplateData takes over, at a first start, the configuration's

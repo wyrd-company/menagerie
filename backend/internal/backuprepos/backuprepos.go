@@ -169,11 +169,11 @@ const ImportID = 6
 // the first start whose data has no backup repository import: url, when
 // it is not "", is registered under a name its path gives, unless a
 // registration has that URL already, and every workspace with no backup
-// repository then backs up to it, each folder of folders included, which
-// gets its workspace's data when it has none. No check runs: the key was
-// the repository every backup went to. With url "" it records the mark and
-// registers nothing.
-func Import(ctx context.Context, data *store.Store, url string, folders []string, logf func(string, ...any)) error {
+// repository then backs up to it. The caller lists the workspace folders
+// first, so a folder with no data has its workspace by then. No check
+// runs: the key was the repository every backup went to. With url "" it
+// records the mark and registers nothing.
+func Import(ctx context.Context, data *store.Store, url string, logf func(string, ...any)) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -182,11 +182,6 @@ func Import(ctx context.Context, data *store.Store, url string, folders []string
 	ran, err := data.Import(ctx, ImportID, func(tx *store.Tx) error {
 		if url == "" {
 			return nil
-		}
-		for _, name := range folders {
-			if err := tx.AddWorkspace(name); err != nil {
-				return err
-			}
 		}
 		var err error
 		registered, err = tx.RegisterBackupRepository(store.BackupRepository{Name: ImportName(url), URL: url})

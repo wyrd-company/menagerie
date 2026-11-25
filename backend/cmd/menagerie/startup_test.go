@@ -103,3 +103,33 @@ func TestAStartChecksTheTemplatesWithNoRequest(t *testing.T) {
 		}
 	}
 }
+
+// The first start of this release gives the configured repository to every
+// workspace, a folder restored since an earlier release's first start, with
+// no data yet, included; that folder also joins its template as the list
+// would join it.
+func TestAFirstStartGivesEveryWorkspaceTheConfiguredRepository(t *testing.T) {
+	root, data := startState(t)
+	ctx := context.Background()
+	record := `{"applications":[{"target":".","template":"` + startSource + `@1.0.0","source":"` + startSource + `","commit":"` + startCommit + `"}]}`
+	restored := filepath.Join(root.Path(), "restored")
+	if err := os.Mkdir(restored, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(restored, registry.RecordName), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{WorkspaceRepository: "ssh://git@git.example.invalid/example-org/workspace-backups.git"}
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alpha", "restored"} {
+		r, ok, err := data.WorkspaceBackupRepository(ctx, name)
+		if err != nil || !ok || r.URL != cfg.WorkspaceRepository {
+			t.Errorf("%s: %+v %v %v", name, r, ok, err)
+		}
+	}
+	if id, err := data.WorkspaceTemplate(ctx, "restored"); err != nil || id != "kit" {
+		t.Fatalf("the restored folder's template is %q, %v", id, err)
+	}
+}
