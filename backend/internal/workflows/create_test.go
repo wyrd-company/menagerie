@@ -28,7 +28,7 @@ func TestOperationsAreStartCreateUpgradeApplyBranchAndDelete(t *testing.T) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{api.OperationApplyBranch, api.OperationCreate, api.OperationDelete, api.OperationStart, api.OperationUpgrade}) {
+	if !reflect.DeepEqual(names, []string{api.OperationApplyBranch, api.OperationCreate, api.OperationDelete, api.OperationMoveBackup, api.OperationStart, api.OperationUpgrade}) {
 		t.Fatalf("operations %v", names)
 	}
 }

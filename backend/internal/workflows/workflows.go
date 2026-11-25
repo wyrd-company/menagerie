@@ -72,6 +72,8 @@ type Runtime interface {
 // *backuprepos.Registry satisfies it.
 type Remotes interface {
 	For(ctx context.Context, workspace string) (*backup.Remote, error)
+	// Remote is the repository at url, with the credentials it gets.
+	Remote(url string) *backup.Remote
 }
 
 // Options compose the workflows.
@@ -110,8 +112,8 @@ func New(opts Options) *Workflows {
 	return &Workflows{opts: opts, interviews: map[string]*interview{}}
 }
 
-// Operations returns the start, create, upgrade, apply-branch and delete
-// operations.
+// Operations returns the start, create, upgrade, apply-branch, delete and
+// move-backup operations.
 func (w *Workflows) Operations() api.Operations {
 	return api.Operations{
 		api.OperationStart:       w.start,
@@ -119,6 +121,7 @@ func (w *Workflows) Operations() api.Operations {
 		api.OperationUpgrade:     w.upgrade,
 		api.OperationApplyBranch: w.applyBranch,
 		api.OperationDelete:      w.delete,
+		api.OperationMoveBackup:  w.moveBackup,
 	}
 }
 

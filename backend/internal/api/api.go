@@ -364,8 +364,8 @@ func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, &RequestError{400, "invalid-request", "policies is only accepted for create."})
 		return
 	}
-	if req.BackupRepositoryID != "" && req.Operation != OperationCreate {
-		s.writeRequestError(w, &RequestError{400, "invalid-request", "backupRepositoryId is only accepted for create."})
+	if req.BackupRepositoryID != "" && req.Operation != OperationCreate && req.Operation != OperationMoveBackup {
+		s.writeRequestError(w, &RequestError{400, "invalid-request", "backupRepositoryId is only accepted for create and move-backup."})
 		return
 	}
 	if req.Operation == OperationCreate {

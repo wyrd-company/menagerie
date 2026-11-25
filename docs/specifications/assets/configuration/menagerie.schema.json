@@ -223,6 +223,9 @@
             },
             "apply-policies": {
               "$ref": "#/$defs/duration"
+            },
+            "move-backup": {
+              "$ref": "#/$defs/duration"
             }
           }
         },
