@@ -63,7 +63,7 @@ func TestServiceListensWhilePolicyImportCannotReachWyrwood(t *testing.T) {
 	manager := jobs.NewManager(ctx, jobs.Options{})
 	defer manager.Wait()
 	defer cancel()
-	handler := newServer(cfg, root, data, backupRemote(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, manager, nil, nil, nil)
+	handler := newServer(cfg, root, data, backupAuth(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, manager, nil, nil, nil)
 	policies := api.New(api.Options{Root: root, Data: data, Jobs: manager, PolicyApplication: steps})
 	reservation, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

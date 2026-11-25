@@ -78,7 +78,7 @@ func (w *Workflows) saveBeforeDelete(ctx context.Context, run *jobs.Run, folder,
 		fmt.Fprintf(run.Log(""), "nothing to commit; branch %s is at %s\n", name, commit.Hash)
 	}
 	run.Phase("backup")
-	if err := push(ctx, w.opts.Remote, folder, name, run); err != nil {
+	if err := push(ctx, w.opts.Remotes, folder, name, run); err != nil {
 		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("backing up the workspace failed; branch %s is at %s; nothing was removed", name, commit.Hash)}
 	}
 	return nil

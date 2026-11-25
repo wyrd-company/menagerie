@@ -55,8 +55,10 @@ type Config struct {
 	// workspaces, unless their names start with a dot. It has the same path
 	// in the container and on the host.
 	WorkspaceRoot string `yaml:"workspace-root"`
-	// WorkspaceRepository is the Git remote that holds one backup branch
-	// per workspace.
+	// WorkspaceRepository is the backup repository of earlier releases,
+	// which every workspace backed up to. It is read only by the first-start
+	// backup repository import, which takes it over once; backup
+	// repositories are registered in the interface.
 	WorkspaceRepository string `yaml:"workspace-repository"`
 	// WyrwoodDirectory is the Wyrwood consumer directory that holds the
 	// SSH agent socket.
@@ -542,9 +544,6 @@ func (c *Config) validate() error {
 	}
 	if c.WorkspaceRoot == "/" {
 		errs = append(errs, errors.New("workspace-root must not be the filesystem root"))
-	}
-	if c.WorkspaceRepository == "" {
-		errs = append(errs, errors.New("workspace-repository is required"))
 	}
 	if c.OIDC.Issuer == "" {
 		errs = append(errs, errors.New("oidc.issuer is required"))

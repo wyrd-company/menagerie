@@ -5,8 +5,9 @@
 // ---
 
 // Package store keeps Menagerie's own data in one SQLite database that only
-// the workspace service opens: the registered templates, the workspaces and
-// their templates, each container name Menagerie bound and each Xolotl key it
+// the workspace service opens: the registered templates and backup
+// repositories, the workspaces with their templates and backup
+// repositories, each container name Menagerie bound and each Xolotl key it
 // issued, the policy settings and selections, each template's found
 // versions and last version check, each workspace's applied version, and the
 // marks of the first-start imports. Every change is one transaction and
@@ -126,6 +127,19 @@ var migrations = []string{
 		('template-not-found', 'template-resolve-failed', 'invalid-address', 'template-service-unavailable'));
 	ALTER TABLE workspaces ADD COLUMN applied_version TEXT CHECK (applied_version != '');
 	ALTER TABLE workspaces ADD COLUMN applied_commit TEXT CHECK (applied_commit != '');`,
+	// 6: the registered backup repositories, and the one each workspace
+	// backs up to, which cannot be removed from under it. A removed
+	// repository keeps its row, marked removed, so its id is never given to
+	// another; one URL has one registration that is not removed.
+	`CREATE TABLE backup_repositories (
+		id TEXT PRIMARY KEY CHECK (id != ''),
+		name TEXT NOT NULL CHECK (name != ''),
+		url TEXT NOT NULL CHECK (url != ''),
+		removed_at TEXT CHECK (removed_at != '')
+	);
+	CREATE UNIQUE INDEX backup_repositories_url ON backup_repositories(url) WHERE removed_at IS NULL;
+	ALTER TABLE workspaces ADD COLUMN backup_repository TEXT REFERENCES backup_repositories(id);
+	CREATE INDEX workspaces_backup_repository ON workspaces(backup_repository);`,
 }
 
 // SchemaVersion is the version of the schema this Menagerie reads and writes.

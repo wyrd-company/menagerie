@@ -331,13 +331,14 @@ func (s *Store) Claimed(ctx context.Context, name string) (claimed bool, err err
 // claims, being created or holding a name or a key, is ErrExists; the caller
 // has found no folder, so any other data of that name is replaced.
 func (s *Store) BeginCreate(ctx context.Context, name string) error {
-	return s.BeginCreateFrom(ctx, name, "")
+	return s.BeginCreateFrom(ctx, name, "", "")
 }
 
 // BeginCreateFrom begins a create, as BeginCreate does, of a workspace of
-// the registered template id, so that the template cannot be removed while
-// the create runs; "" names none.
-func (s *Store) BeginCreateFrom(ctx context.Context, name, template string) error {
+// the registered template id that backs up to the registered backup
+// repository backups, so that neither can be removed while the create runs;
+// "" names none.
+func (s *Store) BeginCreateFrom(ctx context.Context, name, template, backups string) error {
 	return s.Update(ctx, func(t *Tx) error {
 		claimed, err := t.Claimed(name)
 		if err != nil {
@@ -346,12 +347,21 @@ func (s *Store) BeginCreateFrom(ctx context.Context, name, template string) erro
 		if claimed {
 			return fmt.Errorf("%w: %s", ErrExists, name)
 		}
+		// A repository removed since the caller read it is refused here, in
+		// the transaction that records it: its row stays, so the foreign key
+		// alone would take it.
+		if backups != "" {
+			if _, err := t.backupRepository(backups); err != nil {
+				return err
+			}
+		}
 		// Replace any unclaimed data, including its policy selection. A new
 		// create starts with the current required policies through the trigger.
 		if _, err := t.exec(`DELETE FROM workspaces WHERE name = ?`, name); err != nil {
 			return err
 		}
-		_, err = t.exec(`INSERT INTO workspaces (name, creating, template) VALUES (?, 1, ?)`, name, nullable(template))
+		_, err = t.exec(`INSERT INTO workspaces (name, creating, template, backup_repository) VALUES (?, 1, ?, ?)`,
+			name, nullable(template), nullable(backups))
 		return err
 	})
 }
@@ -431,22 +441,8 @@ func (s *Store) EndCreates(ctx context.Context, folderExists func(name string) b
 // returned, in name order.
 func (s *Store) Discover(ctx context.Context, folders []string) (noFolder []string, err error) {
 	err = s.Update(ctx, func(t *Tx) error {
-		for _, name := range folders {
-			exists, err := t.Exists(name)
-			if err != nil {
-				return err
-			}
-			// Listing must not retry or cover an existing selection's failed apply.
-			// A newly discovered folder has no current name or prior observation.
-			if exists {
-				continue
-			}
-			if err := t.AddWorkspace(name); err != nil {
-				return err
-			}
-			if err := t.appliedWithoutName(name); err != nil {
-				return err
-			}
+		if err := t.addFolders(folders); err != nil {
+			return err
 		}
 		known, err := t.names(`SELECT name FROM workspaces ORDER BY name`)
 		if err != nil {
@@ -471,6 +467,33 @@ func (s *Store) Discover(ctx context.Context, folders []string) (noFolder []stri
 		return nil
 	})
 	return noFolder, err
+}
+
+// AddFolders gives each folder that has no workspace in the data one, as
+// Discover does, and removes nothing.
+func (s *Store) AddFolders(ctx context.Context, folders []string) error {
+	return s.Update(ctx, func(t *Tx) error { return t.addFolders(folders) })
+}
+
+func (t *Tx) addFolders(folders []string) error {
+	for _, name := range folders {
+		exists, err := t.Exists(name)
+		if err != nil {
+			return err
+		}
+		// Listing must not retry or cover an existing selection's failed apply.
+		// A newly discovered folder has no current name or prior observation.
+		if exists {
+			continue
+		}
+		if err := t.AddWorkspace(name); err != nil {
+			return err
+		}
+		if err := t.appliedWithoutName(name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RecordAgent records agent on each container name that has none, as the

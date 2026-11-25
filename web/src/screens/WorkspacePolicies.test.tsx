@@ -31,6 +31,7 @@ const workspace: Workspace = {
   applyFailure: null,
   xolotlKey: null,
   template: null,
+  backupRepository: null,
   appliedVersion: null,
   appliedCommit: null,
   needsUpgrade: false,
@@ -48,6 +49,12 @@ it("requires a group choice before create and submits required policies with the
       if (url === "/api/policies") return Response.json(catalog);
       if (url === "/api/templates")
         return Response.json({ templates: [{ id: "v1", name: "Sample template" }] });
+      if (url === "/api/backup-repositories")
+        return Response.json({
+          backupRepositories: [
+            { id: "backups", name: "Backups", url: "git@git.example.test:o/b.git", workspaces: [] },
+          ],
+        });
       posted.push(JSON.parse(String(init?.body)));
       return Response.json({ jobId: "j1" });
     }),
@@ -67,6 +74,7 @@ it("requires a group choice before create and submits required policies with the
         operation: "create",
         workspace: "sample",
         templateId: "v1",
+        backupRepositoryId: "backups",
         policies: ["workspace", "bob-ssh"],
       },
     ]),

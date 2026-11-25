@@ -12,6 +12,15 @@ export interface FixtureWorkspace {
   applied: string | null;
   /** The commit last applied, or null. */
   appliedCommit?: string | null;
+  /** The registered backup repository's id, or null; absent, the first registered one. */
+  backups?: string | null;
+}
+
+/** A registered backup repository. */
+export interface FixtureBackupRepository {
+  id: string;
+  name: string;
+  url: string;
 }
 
 /** A registered template, the versions its repository has and those its checks found. */
@@ -50,6 +59,8 @@ export interface FixtureJob {
   workspace: string;
   operation: string;
   templateId?: string;
+  /** The backup repository a create backs up to. */
+  backupRepositoryId?: string;
   /** The branch an apply-branch job applies. */
   branch?: string;
   state: string;
@@ -79,6 +90,7 @@ export interface FixtureOptions {
 export interface World {
   workspaces: FixtureWorkspace[];
   templates: FixtureTemplate[];
+  backupRepositories: FixtureBackupRepository[];
   options: FixtureOptions;
 }
 
@@ -100,8 +112,26 @@ export function initialWorkspaces(): FixtureWorkspace[] {
     { name: "sample-broken", state: "stopped", containerId: containerId("broken"), ...kit },
     { name: "sample-gamma", state: "no-container", containerId: null, ...kit },
     // Its folder is gone, and Menagerie's data still holds its binding and key.
-    { name: "sample-gone", state: "no-folder", containerId: null, template: null, applied: null },
+    {
+      name: "sample-gone",
+      state: "no-folder",
+      containerId: null,
+      template: null,
+      applied: null,
+      backups: null,
+    },
     { name: "sample-slow", state: "running", containerId: containerId("slow"), ...kit },
+  ];
+}
+
+/** The registered backup repositories: one, which every workspace backs up to. */
+export function initialBackupRepositories(): FixtureBackupRepository[] {
+  return [
+    {
+      id: "example-backups",
+      name: "Example backups",
+      url: "ssh://git@git.example.test/example-org/workspace-backups.git",
+    },
   ];
 }
 

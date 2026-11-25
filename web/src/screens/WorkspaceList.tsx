@@ -228,6 +228,14 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                           : "no container"}
                     </p>
                     <AppliedLine ws={ws} />
+                    <p
+                      className="entry-backup"
+                      title={ws.backupRepository ? ws.backupRepository.url : undefined}
+                    >
+                      {ws.backupRepository
+                        ? `Backs up to ${ws.backupRepository.name}`
+                        : "No backup repository"}
+                    </p>
                     {ws.needsUpgrade ? (
                       <p className="entry-upgrade">
                         Needs upgrade

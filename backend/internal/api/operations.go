@@ -23,6 +23,9 @@ type JobRequest struct {
 	Operation  string   `json:"operation"`
 	Workspace  string   `json:"workspace"`
 	TemplateID string   `json:"templateId,omitempty"`
+	// BackupRepositoryID names the registered backup repository a create
+	// backs the workspace up to.
+	BackupRepositoryID string `json:"backupRepositoryId,omitempty"`
 	// Branch names the branch of the workspace repository that
 	// apply-branch applies.
 	Branch string `json:"branch,omitempty"`

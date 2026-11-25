@@ -15,7 +15,6 @@ is the complete reference.
 
 ```yaml
 workspace-root: /srv/menagerie/workspaces
-workspace-repository: ssh://git@github.com/example-org/workspace-backups.git
 wyrwood-directory: /run/wyrwood
 
 oidc:
@@ -66,14 +65,35 @@ its name starts with a dot: a folder such as `.shared` belongs to the host.
 The path is never `/`. Menagerie finds a workspace's container by the
 `devcontainer.local_folder` label and shows no other container.
 
-`workspace-repository` is the Git remote for backups. Each workspace is
-pushed, by force, to an orphan branch named after its folder. SSH remotes
-use the Wyrwood agent and the known hosts in `/etc/ssh/ssh_known_hosts`.
-An `https` remote on the [GitHub App](#github-app)'s server uses an
-installation token.
-
 `wyrwood-directory` is where the Wyrwood consumer directory is mounted in
 the container, `/run/wyrwood` in the deployment example.
+
+## Backup repositories
+
+Backup repositories are registered in the interface, not in configuration;
+see [Backup repositories](usage.md#backup-repositories). Each workspace is
+pushed, by force, to an orphan branch named after its folder in the backup
+repository chosen when it was created. A repository URL takes these forms:
+
+- `ssh://` or scp-like `git@host:path`, through the Wyrwood agent and the
+  known hosts in `/etc/ssh/ssh_known_hosts`;
+- `https://` on the [GitHub App](#github-app)'s server, with an
+  installation token.
+
+A local path, a `file://` URL, plain `http` and a URL with a password are
+refused. The Git key, or the App, needs write access on every backup
+repository.
+
+### The workspace-repository key
+
+Earlier releases backed every workspace up to the one `workspace-repository`.
+The first start of this release imports it once: the URL is registered as a
+backup repository, named after its path, such as
+`example-org/workspace-backups`, and every existing workspace keeps backing
+up to it. A later edit of the key imports nothing, and every start that finds
+it logs a warning that it is no longer read; remove it once the import has
+run. Without the key, register a backup repository before you create the
+first workspace.
 
 ## Templates
 
@@ -224,10 +244,10 @@ With `github-app`, Menagerie authenticates to GitHub with a GitHub App's
 installation tokens, for repositories on the App's server whose path is
 `/<owner>/<repository>` or `/<owner>/<repository>.git`:
 
-- Backups, with `contents: write` on the repository, when
-  `workspace-repository` is such an `https` URL with no user information,
-  query or fragment. A `workspace-repository` with a user name gets no
-  token and no other credential.
+- Backups, with `contents: write` on the repository, when a backup
+  repository's URL is such an `https` URL with no user information, query
+  or fragment. A backup repository URL with a user name gets no token and
+  no other credential.
 - Template fetches, with `contents: read` on the repository, from every
   `https` address of such a repository. A user name in the address does
   not opt out: the template service asks for the token by the address
@@ -245,7 +265,7 @@ and templates on another host over SSH.
 | `installations` | Optional. The App's installation id by account name, compared in lower case. A repository whose owner is not listed has its installation looked up. |
 | `server` | Optional. The GitHub server's `https` origin; without it, `https://github.com`. The API is `https://api.github.com` for GitHub, `<server>/api/v3` for GitHub Enterprise Server. |
 
-Install the App on the backup repository with Contents read and write, and
+Install the App on each backup repository with Contents read and write, and
 on each private template repository with Contents read. Import its private
 key into OpenBao's Transit engine as an RSA key, as
 [Installation](install.md#github-app) shows; the Wyrwood policy grants
@@ -255,8 +275,8 @@ certificate a private authority signed, see
 JWT through Wyrwood's `vault.sock`, sending no token, and exchanges it for a
 token that covers one repository and one permission. Tokens stay in
 Menagerie's memory until five minutes before they expire; nothing is written
-to disk. A push or fetch with a token follows no redirect: set
-`workspace-repository` to the repository's current address. A failure names
+to disk. A push or fetch with a token follows no redirect: register the
+repository at its current address. A failure names
 a fixed reason, never a token, a URL or GitHub's answer, and the job console
 shows the remote's own text with the URL and the token replaced by
 `[redacted]`.

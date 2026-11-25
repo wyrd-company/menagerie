@@ -40,6 +40,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
+	"github.com/wyrd-company/menagerie/backend/internal/backuprepos"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
@@ -423,12 +424,16 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 		at := strings.LastIndex(address, "@")
 		a.register(t, id, address[:at], "0.0.0", address[at+1:])
 	}
+	// Every create backs up to the only registered backup repository.
+	if _, err := data.RegisterBackupRepository(ctx, store.BackupRepository{Name: "Backups", URL: a.host.URL("backups.git")}); err != nil {
+		t.Fatal(err)
+	}
 	service := templates.New(socket)
 	flows := New(Options{
 		Root:      root,
 		Data:      data,
 		Templates: service,
-		Remote:    &backup.Remote{URL: a.host.URL("backups.git"), Auth: backup.AgentAuth(a.host.AgentPath)},
+		Remotes:   &backuprepos.Registry{Data: data, Auth: backup.AgentAuth(a.host.AgentPath)},
 		Runtime:   runtime,
 		Hooks:     hooks,
 		RunnerImage: func(context.Context, string) (string, error) {
@@ -946,7 +951,7 @@ func TestRegisterCreateTagAndUpgradeThroughTheTemplateService(t *testing.T) {
 	}
 	v100 := gitCLI(t, filepath.Join(a.templates, "kit"), "rev-parse", "1.0.0")
 	if status, body := a.send(t, http.MethodGet, "/api/workspaces", ""); status != 200 ||
-		!strings.Contains(body, `"template":{"id":"kit","name":"Kit"},"appliedVersion":"1.0.0","appliedCommit":"`+v100+`","needsUpgrade":false,"name":"alpha"`) {
+		!strings.Contains(body, `"template":{"id":"kit","name":"Kit"},"backupRepository":{"id":"backups","name":"Backups","url":"`+a.host.URL("backups.git")+`"},"appliedVersion":"1.0.0","appliedCommit":"`+v100+`","needsUpgrade":false,"name":"alpha"`) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 	if status, body := a.post(t, "/api/jobs", `{"operation":"upgrade","workspace":"alpha"}`); status != http.StatusConflict || !strings.Contains(body, "upgrade-not-needed") {

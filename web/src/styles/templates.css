@@ -172,15 +172,33 @@
   }
 }
 
-/* The mockup's .entry-name .help line, then its warning. */
-.entry-template {
+/* The mockup's .entry-name .help line, then its warning. The backup line
+   follows the template line in the same style. */
+.entry-template,
+.entry-backup {
   margin: 4px 0 0;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+.entry-backup {
+  margin-top: 0;
+}
+
+/* The backup repositories screen reuses the templates screen's list. */
+.backups-lede {
+  max-width: 72ch;
+  margin: 0 0 24px;
 }
 
 .entry-upgrade {
   margin: 0;
   color: var(--warn);
   font-size: 14px;
+}
+
+/* A backup repository's URL wraps inside its choice card at any width. */
+.backup-url {
+  overflow-wrap: anywhere;
+  min-width: 0;
 }

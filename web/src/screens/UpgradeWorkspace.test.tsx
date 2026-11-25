@@ -42,6 +42,7 @@ function stubApi(
               name: "sample",
               state: "running",
               containerId: "c1",
+              backupRepository: null,
               activeJob: null,
               policies: [],
               needsChoice: [],

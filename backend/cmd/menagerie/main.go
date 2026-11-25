@@ -30,6 +30,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/auth"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"github.com/wyrd-company/menagerie/backend/internal/backuprepos"
 	"github.com/wyrd-company/menagerie/backend/internal/commits"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
@@ -125,9 +126,9 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	remote := backupRemote(cfg, app)
+	auth := backupAuth(cfg, app)
 	manager := jobs.NewManager(ctx, jobOpts)
-	commitJobs := commits.New(commits.Options{Root: root, Remote: remote, Jobs: manager})
+	commitJobs := commits.New(commits.Options{Root: root, Remote: &backuprepos.Registry{Data: data, Auth: auth}, Jobs: manager})
 	client, err := clientPath()
 	if err != nil {
 		return err
@@ -145,6 +146,9 @@ func run(configPath string) error {
 		return err
 	}
 	if err := importTemplateData(ctx, cfg, root, data, templates.New(cfg.TemplateService.Socket)); err != nil {
+		return err
+	}
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
 		return err
 	}
 	versions := &registry.Registry{Data: data, Templates: templates.New(cfg.TemplateService.Socket), Root: root}
@@ -168,7 +172,7 @@ func run(configPath string) error {
 		return err
 	}
 	policyServer := api.New(api.Options{Root: root, Data: data, Jobs: manager, Policies: func() api.PolicySource { source, _ := clients.Bindings.(api.PolicySource); return source }(), PolicyApplication: policySteps})
-	handler, err := newHandler(cfg, root, data, remote, runtime, clients, manager, parts.hooks, parts.images, versions)
+	handler, err := newHandler(cfg, root, data, auth, runtime, clients, manager, parts.hooks, parts.images, versions)
 	if err != nil {
 		return err
 	}
@@ -248,6 +252,62 @@ func prepareData(ctx context.Context, cfg *config.Config, root *workspace.Root, 
 	return provisioning.Import(ctx, provisioning.ImportOptions{
 		Data: data, Runtime: runtime, Workspaces: root, Records: records, Agent: agent, Logf: log.Printf,
 	})
+}
+
+// importBackupRepository takes over the configuration's workspace-repository
+// key once, after the template imports, and warns at each start that finds
+// the key that it is no longer read. Before the import, and only then, it
+// lists the workspace folders as the workspace list does, so a folder that
+// has no data yet, such as one restored after an earlier release's first
+// start, gets its workspace, joined to its template, and takes the
+// imported repository with the rest. A later start lists nothing.
+func importBackupRepository(ctx context.Context, cfg *config.Config, root *workspace.Root, data *store.Store) error {
+	if cfg.WorkspaceRepository != "" {
+		log.Print("menagerie: the configuration's workspace-repository key is no longer read: backup repositories are registered in the interface; the first start of this release imported it once, and a later edit imports nothing")
+	}
+	done, err := data.Imported(ctx, backuprepos.ImportID)
+	if err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+	if cfg.WorkspaceRepository != "" {
+		if err := discoverWorkspaces(ctx, root, data); err != nil {
+			return err
+		}
+	}
+	return backuprepos.Import(ctx, data, cfg.WorkspaceRepository, log.Printf)
+}
+
+// discoverWorkspaces gives each workspace folder that has no data its
+// workspace as the workspace list does, joined to the registered template
+// its applied record names. Unlike the list it removes nothing, so a
+// workspace whose folder is away keeps its data.
+func discoverWorkspaces(ctx context.Context, root *workspace.Root, data *store.Store) error {
+	names, err := root.Names()
+	if err != nil {
+		return err
+	}
+	unknown, err := data.Unknown(ctx, names)
+	if err != nil {
+		return err
+	}
+	if err := data.AddFolders(ctx, unknown); err != nil {
+		return err
+	}
+	if len(unknown) > 0 {
+		if _, err := data.JoinTemplates(ctx, unknown, func(name string) (string, func(store.Template) store.AppliedVersion) {
+			folder, err := root.Folder(name)
+			if err != nil {
+				return "", nil
+			}
+			return registry.Join(folder)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // importTemplateData takes over, at a first start, the configuration's
@@ -410,8 +470,8 @@ func hookRoutes(hooks *throwaway.HookRunner, app *githubapp.Minter) http.Handler
 
 // newHandler is the workspace service's whole HTTP surface: the workspace
 // API behind manager sign-in.
-func newHandler(cfg *config.Config, root *workspace.Root, data *store.Store, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) (http.Handler, error) {
-	return signedIn(newServer(cfg, root, data, remote, runtime, clients, manager, hooks, images, versions), cfg.OIDC)
+func newHandler(cfg *config.Config, root *workspace.Root, data *store.Store, auth backup.Auth, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) (http.Handler, error) {
+	return signedIn(newServer(cfg, root, data, auth, runtime, clients, manager, hooks, images, versions), cfg.OIDC)
 }
 
 // signedIn serves server behind manager sign-in: the sign-in routes are
@@ -427,12 +487,14 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 
 // newServer composes the workspace API: the container operations, create
 // and upgrade with their interviews, commit, and the web UI embedded at build time.
-// Backups go to remote. Template hooks run through hooks in the template's
+// Each workspace backs up to its backup repository in data, reached with
+// auth. Template hooks run through hooks in the template's
 // runner image; nil hooks refuse every hook. Every job that can create a
 // container runs through the provisioning steps, which keep what they provision
 // in data.
-func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remote *backup.Remote, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) *api.Server {
+func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, auth backup.Auth, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) *api.Server {
 	service := templates.New(cfg.TemplateService.Socket)
+	backups := &backuprepos.Registry{Data: data, Auth: auth}
 	if versions == nil {
 		versions = &registry.Registry{Data: data, Templates: service, Root: root}
 	}
@@ -455,7 +517,7 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 		Root:         root,
 		Data:         data,
 		Templates:    service,
-		Remote:       remote,
+		Remotes:      backups,
 		Runtime:      steps,
 		Hooks:        hooks,
 		RunnerImage:  image,
@@ -465,7 +527,7 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 	for name, op := range flows.Operations() {
 		operations[name] = op
 	}
-	operations[api.OperationCommit] = commits.New(commits.Options{Root: root, Remote: remote, Jobs: manager}).Operation()
+	operations[api.OperationCommit] = commits.New(commits.Options{Root: root, Remote: backups, Jobs: manager}).Operation()
 	operations[api.OperationApplyPolicies] = func(req api.JobRequest) (jobs.Runner, error) {
 		folder, err := api.ExistingFolder(root, req.Workspace)
 		if err != nil {
@@ -487,22 +549,22 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, remo
 		// Feature's service user.
 		PairingTokens: t3code.NewMinter(runtime.Docker()),
 		Registry:      versions,
+		Backups:       backups,
 		AppliedRecord: registry.Join,
 		UI:            web.FS,
 	})
 	return server
 }
 
-// backupRemote is the workspace repository: over https on the GitHub
-// App's server, with a contents write token of app when app is not nil;
-// over SSH, through the SSH agent socket in the Wyrwood consumer
-// directory.
-func backupRemote(cfg *config.Config, app *githubapp.Minter) *backup.Remote {
+// backupAuth is the credentials of every backup repository: over https on
+// the GitHub App's server, a contents write token of app when app is not
+// nil; over SSH, the SSH agent socket in the Wyrwood consumer directory.
+func backupAuth(cfg *config.Config, app *githubapp.Minter) backup.Auth {
 	auth := backup.AgentAuth(filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName))
 	if app != nil {
 		auth = backup.TokenAuth(app.Tokens(githubapp.Write), auth)
 	}
-	return &backup.Remote{URL: cfg.WorkspaceRepository, Auth: auth}
+	return auth
 }
 
 // gitHubApp is the GitHub App token minter, signing through the Transit

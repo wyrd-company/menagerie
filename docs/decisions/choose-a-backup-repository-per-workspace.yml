@@ -1,0 +1,64 @@
+$schema: https://refinery.systems/ontology/decision-record
+status: accepted
+relationships:
+  contextualizes:
+    - menagerie
+    - workspace-api
+    - configuration
+  related-to:
+    - keep-menagerie-data-in-sqlite
+    - admit-templates-through-the-workspace-service
+    - backup-force-push-overwrites-branch
+description: >-
+  Every workspace on a host backed up to the one `workspace-repository` of
+  the configuration file. A manager who runs workspaces for several GitHub
+  organizations needs each workspace's backups in a repository of its own
+  organization (wyrd-company/menagerie#137), and has to be able to move a
+  workspace's backups to another repository later (#138). Templates are
+  already registered in the interface and kept in Menagerie's data
+  (admit-templates-through-the-workspace-service). Backups use the
+  credentials Menagerie already has, chosen by URL: the SSH agent's key, or
+  the GitHub App on its server. A Git host does not say whether a key or a
+  token may write before a push is tried.
+considered-options:
+  "1": >-
+    A registry of backup repositories in Menagerie's data, kept as the
+    templates are: a manager registers one with a display name and a Git
+    URL once Menagerie has proved it can write to it, by pushing a ref
+    outside `refs/heads/` and deleting it. A create names one, the
+    workspace's data records it from the create's start, and every later
+    backup, commit and Apply branch fetch of the workspace uses it. The
+    configuration's `workspace-repository` is imported once, as the
+    registered repository of every existing workspace, and then no longer
+    read.
+  "2": >-
+    A list of backup repositories in the configuration file, each with an
+    id, that a create chooses from, with `workspace-repository` as the
+    default.
+  "3": >-
+    One repository per organization, derived from a URL pattern such as
+    `https://github.com/{owner}/workspace-backups` and an owner a create
+    names.
+decision-outcome:
+  chosen-option: 1
+  justification: >-
+    Option 1 follows the path templates took, so a manager adds a
+    repository without editing a file or restarting, and the data's foreign
+    key keeps a repository registered while a workspace backs up to it.
+    Recording the choice on the workspace keeps a workspace's backups in one
+    place whatever is registered later, and gives #138 one value to change.
+    The write check refuses a repository before any workspace depends on
+    it, which a read check would not for a read-only deploy key. Option 2
+    needs a restart for each repository and keeps two sources of truth once
+    #138 changes a workspace's repository at run time. Option 3 fits only
+    hosts whose organizations all name their repository alike, and says
+    nothing about a workspace that should move.
+expected-outcomes:
+  positive:
+    - Each workspace's backups go to the repository chosen for it, with the credentials of that URL.
+    - A repository that Menagerie cannot write to is refused when it is registered, not at a workspace's first backup.
+    - Existing workspaces keep backing up where they did, with no step by hand.
+  negative:
+    - A registration writes to the repository, and leaves a ref under `refs/menagerie/` if the deletion fails.
+    - Any manager can register any repository the SSH key or the GitHub App can write to, and so send a workspace's tracked files there.
+    - A workspace Menagerie finds with no recorded repository, such as a folder copied into the workspace root, has no backup until a manager gives it one.

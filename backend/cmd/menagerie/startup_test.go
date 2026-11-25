@@ -103,3 +103,72 @@ func TestAStartChecksTheTemplatesWithNoRequest(t *testing.T) {
 		}
 	}
 }
+
+// The first start of this release gives the configured repository to every
+// workspace, a folder restored since an earlier release's first start, with
+// no data yet, included; that folder also joins its template as the list
+// would join it.
+func TestAFirstStartGivesEveryWorkspaceTheConfiguredRepository(t *testing.T) {
+	root, data := startState(t)
+	ctx := context.Background()
+	record := `{"applications":[{"target":".","template":"` + startSource + `@1.0.0","source":"` + startSource + `","commit":"` + startCommit + `"}]}`
+	restored := filepath.Join(root.Path(), "restored")
+	if err := os.Mkdir(restored, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(restored, registry.RecordName), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{WorkspaceRepository: "ssh://git@git.example.invalid/example-org/workspace-backups.git"}
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alpha", "restored"} {
+		r, ok, err := data.WorkspaceBackupRepository(ctx, name)
+		if err != nil || !ok || r.URL != cfg.WorkspaceRepository {
+			t.Errorf("%s: %+v %v %v", name, r, ok, err)
+		}
+	}
+	if id, err := data.WorkspaceTemplate(ctx, "restored"); err != nil || id != "kit" {
+		t.Fatalf("the restored folder's template is %q, %v", id, err)
+	}
+}
+
+// A later start lists no folders, so a workspace whose folder is away
+// during it keeps its data, its backup repository included.
+func TestALaterStartKeepsAnAbsentWorkspacesData(t *testing.T) {
+	root, data := startState(t)
+	ctx := context.Background()
+	cfg := &config.Config{WorkspaceRepository: "ssh://git@git.example.invalid/example-org/workspace-backups.git"}
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
+		t.Fatal(err)
+	}
+	alpha := filepath.Join(root.Path(), "alpha")
+	if err := os.Rename(alpha, alpha+".away"); err != nil {
+		t.Fatal(err)
+	}
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok, err := data.WorkspaceBackupRepository(ctx, "alpha"); err != nil || !ok || r.URL != cfg.WorkspaceRepository {
+		t.Fatalf("%+v %v %v", r, ok, err)
+	}
+}
+
+// The first start keeps the data of a workspace whose folder is away
+// during it, and gives it the configured repository with the rest.
+func TestAFirstStartKeepsAnAbsentWorkspace(t *testing.T) {
+	root, data := startState(t)
+	ctx := context.Background()
+	alpha := filepath.Join(root.Path(), "alpha")
+	if err := os.Rename(alpha, filepath.Join(filepath.Dir(root.Path()), "alpha-away")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{WorkspaceRepository: "ssh://git@git.example.invalid/example-org/workspace-backups.git"}
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok, err := data.WorkspaceBackupRepository(ctx, "alpha"); err != nil || !ok || r.URL != cfg.WorkspaceRepository {
+		t.Fatalf("%+v %v %v", r, ok, err)
+	}
+}

@@ -85,14 +85,14 @@ func TestUpgradeBacksUpLocalChangesBeforeTheInterview(t *testing.T) {
 func TestAnUpgradeWithoutLocalChangesStillPushes(t *testing.T) {
 	w := newWorld(t)
 	// The create's backup fails: the remote branch is missing.
-	w.flows.opts.Remote.URL = filepath.Join(t.TempDir(), "absent.git")
+	w.backups.URL = filepath.Join(t.TempDir(), "absent.git")
 	job := w.startJob(t, "create", "alpha", "sample")
 	waitWaiting(t, job, 0)
 	w.answer(t, job, sessionAsking)
 	if snap := waitEnded(t, job); snap.Error == nil || snap.Error.Kind != KindBackupFailed {
 		t.Fatalf("%+v", snap)
 	}
-	w.flows.opts.Remote.URL = w.remote
+	w.backups.URL = w.remote
 	if w.remoteHistory(t, "alpha") != nil {
 		t.Fatal("remote branch exists")
 	}
@@ -219,7 +219,7 @@ func TestUpgradeFailuresAreVisibleAndReleaseTheSlot(t *testing.T) {
 		before bool
 	}{
 		{"pre-upgrade backup", func(t *testing.T, w *world) {
-			w.flows.opts.Remote.URL = filepath.Join(t.TempDir(), "absent.git")
+			w.backups.URL = filepath.Join(t.TempDir(), "absent.git")
 		}, KindBackupFailed, "nothing was upgraded", 1, true},
 		{"refused start", func(t *testing.T, w *world) {
 			w.tmpl.startUpgrade = func(templates.Selector) (*templates.Reply, error) {
@@ -239,7 +239,7 @@ func TestUpgradeFailuresAreVisibleAndReleaseTheSlot(t *testing.T) {
 		{"backup after the apply", func(t *testing.T, w *world) {
 			apply := w.tmpl.applyUpgrade
 			w.tmpl.applyUpgrade = func(s templates.Selector) (*templates.Applied, error) {
-				w.flows.opts.Remote.URL = filepath.Join(t.TempDir(), "absent.git")
+				w.backups.URL = filepath.Join(t.TempDir(), "absent.git")
 				return apply(s)
 			}
 		}, KindBackupFailed, "its backup failed", 1, false},
@@ -272,7 +272,7 @@ func TestUpgradeFailuresAreVisibleAndReleaseTheSlot(t *testing.T) {
 					t.Fatal("rebuilt after a failed upgrade")
 				}
 			}
-			w.flows.opts.Remote.URL = w.remote
+			w.backups.URL = w.remote
 			if got := len(w.remoteHistory(t, "alpha")); got != tc.pushes {
 				t.Fatalf("%d backup commits", got)
 			}

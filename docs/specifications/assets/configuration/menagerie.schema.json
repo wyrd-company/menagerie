@@ -5,7 +5,6 @@
   "additionalProperties": false,
   "required": [
     "workspace-root",
-    "workspace-repository",
     "wyrwood-directory",
     "oidc"
   ],
@@ -23,7 +22,8 @@
     "workspace-repository": {
       "type": "string",
       "minLength": 1,
-      "description": "Git remote holding one backup branch per workspace."
+      "deprecated": true,
+      "description": "The backup repository of earlier releases, read only by the workspace service's first-start import, which registers it once in Menagerie's data and gives it to every existing workspace; backup repositories are registered in the interface."
     },
     "wyrwood-directory": {
       "type": "string",

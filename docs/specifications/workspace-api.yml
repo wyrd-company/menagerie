@@ -9,6 +9,7 @@ relationships:
     - template-service-api
     - backup-force-push-overwrites-branch
     - workspace-fills-its-backup-branch
+    - choose-a-backup-repository-per-workspace
 format: openapi
 description: >-
   The workspace service serves a JSON API to the browser, defined by
@@ -40,7 +41,9 @@ description: >-
   source its applied record `.toha.json` names for the workspace's root; a
   workspace whose record names a source no registered template has keeps
   working, with `template` null, and joins its template when a manager
-  registers that source. `appliedVersion` is the template version last
+  registers that source. `backupRepository` is the registered backup
+  repository the workspace backs up to, `{id, name, url}`, or null for a
+  workspace Menagerie found with no recorded repository. `appliedVersion` is the template version last
   applied to the workspace: the version its create generated, its last
   upgrade applied or its last Apply branch's record gives. Every path that
   takes `appliedVersion` from a workspace's applied record, a join
@@ -302,11 +305,35 @@ description: >-
   has.
 
 
+  Backup repositories. `GET /api/backup-repositories` lists the registered
+  backup repositories sorted by name as letters without regard to case,
+  then by name and id, each `{id, name, url, workspaces}`, `workspaces` the
+  names of the workspaces that back up to it. Every `url` a reply holds,
+  here and on a workspace's row, has no password, query or fragment, and
+  an `https` one no user name.
+  `POST /api/backup-repositories`
+  takes `{"name","url","check"}`, `check` optional and false by default,
+  and runs the checks of the design's `backup-repositories` in order:
+  `url`, then `write`, which pushes a ref under `refs/menagerie/` and
+  deletes it. A name that is not one line of 1 to 100 characters is 400
+  `invalid-request`; a failed check is 422 `backup-repository-check-failed`
+  with `check` naming it; a URL that is registered is 409
+  `backup-repository-exists`, naming that registration. It answers 201 with
+  the repository and `Location: /api/backup-repositories/{id}`, or, with
+  `check`, 200 with the repository a registration would store, storing
+  nothing. `DELETE /api/backup-repositories/{id}` answers 204, leaving the
+  repository and its branches as they are and its id never given to another
+  repository, 409 `backup-repository-in-use`
+  while a workspace backs up to it, naming those workspaces, and 404
+  `unknown-backup-repository` for an id none has.
+
+
   `POST /api/jobs` starts an operation on a workspace. The operations are
   `start`, `stop`, `rebuild`, `commit` and `apply-policies` on an existing workspace folder,
   `apply-branch` on an existing workspace folder, which also names a
   `branch`, and the interview operations `create`, which also names a
-  registered template's `templateId`, and `upgrade`, which takes no
+  registered template's `templateId` and optionally a registered backup
+  repository's `backupRepositoryId`, and `upgrade`, which takes no
   `templateId` and an optional boolean `reanswer`. Any other operation is refused as
   `unknown-operation`. The service acquires the workspace's job slot before
   any work begins. A workspace has at most one unfinished job; another
@@ -408,7 +435,13 @@ description: >-
   hold, one being created or listed as `no-folder` included; otherwise it is
   refused 409 `workspace-exists`; a `templateId` no template has is 404
   `unknown-template`, and a template whose `currentMoved` is true 409
-  `template-version-moved`. Its job pins the template's current version and its
+  `template-version-moved`. A `backupRepositoryId` no repository has is 404
+  `unknown-backup-repository`; without one, the create takes the only
+  registered backup repository, and is 400 `invalid-request` when none or
+  several are registered. `backupRepositoryId` on another operation is 400
+  `invalid-request`. The create's workspace records its backup repository
+  from the job's start, so it cannot be removed while the create runs, and
+  every later backup, commit and Apply branch of the workspace uses it. Its job pins the template's current version and its
   commit when it starts, and writes the workspace's data with that
   template, so the template cannot be removed while the create runs; once
   generation has written the applied record, the pinned version and commit
@@ -499,7 +532,7 @@ description: >-
   workspace's next `start`, which runs what remains of the create; any other failed create is ended by
   deleting the workspace, which removes the folder. On success the service commits
   the output as the branch's first commit, which has no parent, force-pushes
-  it to the workspace repository and starts the devcontainer. A branch of the
+  it to the workspace repository, its backup repository, and starts the devcontainer. A branch of the
   workspace's name that the workspace repository already holds, from a
   deleted workspace, is first copied to `archive/<workspace>-<UTC stamp>`, and
   the console names it. With a provisioning declaration, the steps of the
@@ -1026,4 +1059,13 @@ validation-criteria: >-
   the same, a sweep commit a workspace left dirty, each onto the backup
   branch, an `initializeCommand` find no socket, and a start keep a
   single container and a Compose primary created without the socket, with
-  the same container id, until a rebuild gives it the socket.
+  the same container id, until a rebuild gives it the socket. `go test
+  ./backend/internal/backuprepos/ ./backend/internal/api/` registers a
+  backup repository over the test's SSH host, refuses each URL form the
+  routes refuse and a repository Menagerie cannot write to, stores nothing
+  for a check, and refuses removing one a workspace backs up to; `go test
+  ./backend/internal/workflows/` has a create record its repository from
+  its start and take the only registered one;
+  `scripts/prove-backup-repository-guards.py` breaks each of those guards,
+  the write check's deletion of its ref and the data's foreign key in turn
+  and requires its test to fail.
