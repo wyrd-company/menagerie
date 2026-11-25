@@ -70,6 +70,7 @@ func TestRegisterRefusals(t *testing.T) {
 		{"File", "file://" + filepath.Join(f.Dir, "backups.git"), CheckURL},
 		{"Plain", "http://git.example.invalid/example-org/backups.git", CheckURL},
 		{"Spaced", " " + f.URL("backups.git"), CheckURL},
+		{"Password", "https://user:secret@git.example.invalid/example-org/backups.git", CheckURL},
 		{"Absent", f.URL("absent.git"), CheckWrite},
 	} {
 		_, err := r.Register(ctx, c.name, c.url, true)

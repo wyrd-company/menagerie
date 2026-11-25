@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 )
 
@@ -163,7 +165,7 @@ func TestAGenerationThatWroteNothingFails(t *testing.T) {
 
 func TestABackupFailureFailsTheCreateBeforeStarting(t *testing.T) {
 	w := newWorld(t)
-	w.flows.opts.Remote.URL = filepath.Join(t.TempDir(), "absent.git")
+	w.backups.URL = filepath.Join(t.TempDir(), "absent.git")
 	job := w.startJob(t, "create", "alpha", "sample")
 	waitWaiting(t, job, 0)
 	w.answer(t, job, sessionAsking)
@@ -265,7 +267,7 @@ func TestACreateWhoseInterviewWaitsStaysInMenageriesData(t *testing.T) {
 		t.Fatalf("%+v %+v", snap, snap.Error)
 	}
 	status, body = w.do(t, http.MethodGet, "/api/workspaces", "")
-	if status != http.StatusOK || !strings.Contains(body, `"needsChoice":[],"template":{"id":"sample","name":"Sample"},"appliedVersion":"1.0.0","appliedCommit":"`+sampleTemplate.CurrentCommit+`","needsUpgrade":false,"name":"alpha","state":"running"`) {
+	if status != http.StatusOK || !strings.Contains(body, `"needsChoice":[],"template":{"id":"sample","name":"Sample"},"backupRepository":{"id":"backups","name":"Backups","url":"`+w.remote+`"},"appliedVersion":"1.0.0","appliedCommit":"`+sampleTemplate.CurrentCommit+`","needsUpgrade":false,"name":"alpha","state":"running"`) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 }
@@ -278,7 +280,7 @@ func TestAWorkspaceWithNoFolderIsRefusedACreateAndTakesADelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, body := w.do(t, http.MethodGet, "/api/workspaces", "")
-	if status != http.StatusOK || !strings.Contains(body, `"needsChoice":[],"template":null,"appliedVersion":null,"appliedCommit":null,"needsUpgrade":false,"name":"gone","state":"no-folder","containerId":null,"activeJob":null}`) {
+	if status != http.StatusOK || !strings.Contains(body, `"needsChoice":[],"template":null,"backupRepository":null,"appliedVersion":null,"appliedCommit":null,"needsUpgrade":false,"name":"gone","state":"no-folder","containerId":null,"activeJob":null}`) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 	status, body = w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"gone","templateId":"sample"}`)
@@ -384,5 +386,56 @@ func TestMissingHostPrerequisitesStopACreateBeforeItsCommit(t *testing.T) {
 	}
 	if _, err := repo.Head(); err == nil {
 		t.Error("committed after a failed check")
+	}
+}
+
+// A create records the backup repository it names from its start; one
+// that names none takes the only registered repository, and with two
+// registered it must name one. An unregistered one is refused before any
+// job.
+func TestACreateRecordsItsBackupRepository(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	job := w.startJob(t, "create", "alpha", "sample")
+	waitWaiting(t, job, 0)
+	if got, ok, err := w.data.WorkspaceBackupRepository(ctx, "alpha"); err != nil || !ok || got.ID != "backups" {
+		t.Fatalf("while the interview waits: %+v %v %v", got, ok, err)
+	}
+	if !strings.Contains(logText(job), "backing up to Backups (backups)") {
+		t.Fatalf("log:\n%s", logText(job))
+	}
+	w.answer(t, job, sessionAsking)
+	if snap := waitEnded(t, job); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v\n%s", snap.Error, logText(job))
+	}
+
+	other, err := w.data.RegisterBackupRepository(ctx, store.BackupRepository{Name: "Other", URL: filepath.Join(t.TempDir(), "other.git")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		body   string
+		status int
+		kind   string
+	}{
+		{`{"operation":"create","workspace":"beta","templateId":"sample"}`, http.StatusBadRequest, "invalid-request"},
+		{`{"operation":"create","workspace":"beta","templateId":"sample","backupRepositoryId":"absent"}`, http.StatusNotFound, KindUnknownBackupRepository},
+		{`{"operation":"start","workspace":"alpha","backupRepositoryId":"backups"}`, http.StatusBadRequest, "invalid-request"},
+	} {
+		status, body := w.do(t, http.MethodPost, "/api/jobs", c.body)
+		if status != c.status || !strings.Contains(body, `"kind":"`+c.kind+`"`) {
+			t.Errorf("%s: %d %s", c.body, status, body)
+		}
+	}
+	status, body := w.do(t, http.MethodPost, "/api/jobs", `{"operation":"create","workspace":"beta","templateId":"sample","backupRepositoryId":"`+other.ID+`"}`)
+	if status != http.StatusAccepted {
+		t.Fatalf("%d %s", status, body)
+	}
+	var snap jobs.Snapshot
+	_ = json.Unmarshal([]byte(body), &snap)
+	started, _ := w.manager.Get(snap.JobID)
+	waitWaiting(t, started, 0)
+	if got, _, _ := w.data.WorkspaceBackupRepository(ctx, "beta"); got.ID != other.ID {
+		t.Fatalf("%+v", got)
 	}
 }

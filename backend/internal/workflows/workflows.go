@@ -68,6 +68,12 @@ type Runtime interface {
 	Delete(ctx context.Context, folder string, p devcontainer.Progress, save func(context.Context) error) error
 }
 
+// Remotes resolves a workspace's backup repository.
+// *backuprepos.Registry satisfies it.
+type Remotes interface {
+	For(ctx context.Context, workspace string) (*backup.Remote, error)
+}
+
 // Options compose the workflows.
 type Options struct {
 	Root *workspace.Root
@@ -76,8 +82,9 @@ type Options struct {
 	Data      *store.Store
 	Policies  api.PolicySource
 	Templates Templates
-	// Remote is the workspace repository backups are pushed to.
-	Remote  *backup.Remote
+	// Remotes gives each workspace the backup repository its backups go to
+	// and Apply branch fetches from.
+	Remotes Remotes
 	Runtime Runtime
 	// Hooks runs the template service's hooks in throwaway containers.
 	// Nil refuses every hook.
@@ -174,6 +181,10 @@ func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 	if tpl.CurrentMoved() {
 		return nil, moved(tpl)
 	}
+	backups, err := w.createBackups(req.BackupRepositoryID)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Lstat(folder); !errors.Is(err, os.ErrNotExist) {
 		return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindWorkspaceExists, Message: fmt.Sprintf("workspace %s already exists", req.Workspace)}
 	}
@@ -184,7 +195,33 @@ func (w *Workflows) create(req api.JobRequest) (jobsRunner, error) {
 	if claimed {
 		return nil, &api.RequestError{Status: http.StatusConflict, Kind: KindWorkspaceExists, Message: fmt.Sprintf("workspace %s already exists in Menagerie's data: it is being created, or its folder is gone and it still holds a binding or a key, which its delete removes", req.Workspace)}
 	}
-	return (&creation{w: w, name: req.Workspace, folder: folder, template: req.TemplateID, policies: req.Policies}).run, nil
+	return (&creation{w: w, name: req.Workspace, folder: folder, template: req.TemplateID, backups: backups, policies: req.Policies}).run, nil
+}
+
+// KindUnknownBackupRepository refuses a request that names no registered
+// backup repository.
+const KindUnknownBackupRepository = api.KindUnknownBackupRepository
+
+// createBackups is the backup repository a create names, or, when it names
+// none, the only registered one.
+func (w *Workflows) createBackups(id string) (string, error) {
+	ctx := context.Background()
+	if id == "" {
+		registered, err := w.opts.Data.BackupRepositories(ctx)
+		if err != nil {
+			return "", err
+		}
+		if len(registered) != 1 {
+			return "", &api.RequestError{Status: http.StatusBadRequest, Kind: "invalid-request", Message: "backupRepositoryId is required: name one of the registered backup repositories"}
+		}
+		return registered[0].ID, nil
+	}
+	if _, err := w.opts.Data.BackupRepository(ctx, id); errors.Is(err, store.ErrNoBackupRepository) {
+		return "", &api.RequestError{Status: http.StatusNotFound, Kind: KindUnknownBackupRepository, Message: fmt.Sprintf("no registered backup repository has the id %q", id)}
+	} else if err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // upgrade applies the current version of the workspace's registered

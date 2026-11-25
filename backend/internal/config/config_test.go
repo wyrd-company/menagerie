@@ -47,6 +47,15 @@ func TestParseValidDocument(t *testing.T) {
 	}
 }
 
+// workspace-repository is read only by the first-start import, so a
+// document without it is valid.
+func TestTheWorkspaceRepositoryIsOptional(t *testing.T) {
+	cfg, err := Parse([]byte(strings.Replace(valid, "workspace-repository: git@example.test:example/workspaces.git\n", "", 1)))
+	if err != nil || cfg.WorkspaceRepository != "" {
+		t.Fatalf("%+v %v", cfg, err)
+	}
+}
+
 func TestLoadReadsFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
 	if err := os.WriteFile(path, []byte(valid+"listen: 127.0.0.1:9000\n"), 0o600); err != nil {
@@ -408,7 +417,6 @@ func TestParseRejects(t *testing.T) {
 		{"relative root", strings.Replace(valid, "/srv/workspaces/", "srv/workspaces", 1), "workspace-root must be an absolute path"},
 		{"filesystem root", strings.Replace(valid, "/srv/workspaces/", "/", 1), "workspace-root must not be the filesystem root"},
 		{"missing root", strings.Replace(valid, "workspace-root: /srv/workspaces/\n", "", 1), "workspace-root is required"},
-		{"missing repository", strings.Replace(valid, "workspace-repository: git@example.test:example/workspaces.git\n", "", 1), "workspace-repository is required"},
 		{"relative wyrwood", strings.Replace(valid, "/run/wyrwood/containers/example", "wyrwood", 1), "wyrwood-directory must be an absolute path"},
 		{"relative socket", valid + "template-service:\n  socket: template.sock\n", "template-service.socket must be an absolute path"},
 		{"missing issuer", strings.Replace(valid, "  issuer: https://id.example.test\n", "", 1), "oidc.issuer is required"},

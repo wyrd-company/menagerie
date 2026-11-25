@@ -51,6 +51,8 @@ type Options struct {
 	Provisioned       bool
 	// Registry registers and changes templates.
 	Registry Registry
+	// Backups registers backup repositories. Nil registers none.
+	Backups BackupRegistry
 	// AppliedRecord is the source a workspace folder's applied record
 	// names, or "", and the applied version it gives a template of that
 	// source; a folder listed for the first time joins the registered
@@ -92,6 +94,9 @@ func (s *Server) routes() []struct {
 		{Route{http.MethodDelete, "/api/templates/{id}"}, s.removeTemplate},
 		{Route{http.MethodPost, "/api/templates/{id}/upgrades"}, s.upgradeTemplate},
 		{Route{http.MethodPost, "/api/templates/{id}/version-checks"}, s.checkTemplateVersions},
+		{Route{http.MethodGet, "/api/backup-repositories"}, s.listBackupRepositories},
+		{Route{http.MethodPost, "/api/backup-repositories"}, s.registerBackupRepository},
+		{Route{http.MethodDelete, "/api/backup-repositories/{id}"}, s.removeBackupRepository},
 		{Route{http.MethodGet, "/api/jobs"}, s.listJobs},
 		{Route{http.MethodPost, "/api/jobs"}, s.startJob},
 		{Route{http.MethodGet, "/api/jobs/{id}"}, s.getJob},
@@ -145,6 +150,7 @@ func (s *Server) mountUI(ui fs.FS) {
 	s.mux.HandleFunc("GET /create", index)
 	s.mux.HandleFunc("GET /policies", index)
 	s.mux.HandleFunc("GET /templates", index)
+	s.mux.HandleFunc("GET /backup-repositories", index)
 	s.mux.HandleFunc("GET /workspaces/{name}/upgrade", index)
 }
 
@@ -183,6 +189,9 @@ type workspaceRow struct {
 	XolotlKey         *string             `json:"xolotlKey"`
 	NeedsChoice       []string            `json:"needsChoice"`
 	Template          *templateRef        `json:"template"`
+	// BackupRepository is the repository the workspace backs up to, or
+	// null when it has none.
+	BackupRepository *backupRepositoryRef `json:"backupRepository"`
 	// AppliedVersion is the template version last applied, or null while
 	// it is unknown; AppliedCommit is its commit, or null.
 	AppliedVersion *string `json:"appliedVersion"`
@@ -261,6 +270,11 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, apiError{Kind: "internal-error", Message: err.Error()})
 		return
 	}
+	backups, err := s.opts.Data.WorkspaceBackupRepositories(r.Context())
+	if err != nil {
+		writeError(w, 500, apiError{Kind: "internal-error", Message: err.Error()})
+		return
+	}
 	applied, err := s.opts.Data.AppliedVersions(r.Context())
 	if err != nil {
 		writeError(w, 500, apiError{Kind: "internal-error", Message: err.Error()})
@@ -275,6 +289,9 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 		if a.Commit != "" {
 			commit := a.Commit
 			rows[i].AppliedCommit = &commit
+		}
+		if b, ok := backups[rows[i].Name]; ok {
+			rows[i].BackupRepository = &backupRepositoryRef{ID: b.ID, Name: b.Name, URL: b.URL}
 		}
 		if t, ok := used[rows[i].Name]; ok {
 			rows[i].Template = &templateRef{ID: t.ID, Name: t.Name}
@@ -344,6 +361,10 @@ func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Operation != OperationCreate && req.Policies != nil {
 		s.writeRequestError(w, &RequestError{400, "invalid-request", "policies is only accepted for create."})
+		return
+	}
+	if req.BackupRepositoryID != "" && req.Operation != OperationCreate {
+		s.writeRequestError(w, &RequestError{400, "invalid-request", "backupRepositoryId is only accepted for create."})
 		return
 	}
 	if req.Operation == OperationCreate {

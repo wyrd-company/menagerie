@@ -342,6 +342,80 @@ paths:
           $ref: "#/components/responses/Error"
         "500":
           $ref: "#/components/responses/Error"
+  /api/backup-repositories:
+    get:
+      operationId: listBackupRepositories
+      summary: The registered backup repositories.
+      responses:
+        "200":
+          description: Registered backup repositories, sorted by name without regard to case, then by name and id.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [backupRepositories]
+                additionalProperties: false
+                properties:
+                  backupRepositories:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BackupRepository"
+        "500":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: registerBackupRepository
+      summary: Register a backup repository once Menagerie can write to it; with check, run the checks alone.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupRepositoryRegistration"
+      responses:
+        "200":
+          description: With check, the checks passed; nothing was stored. The repository a registration would store.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupRepository"
+        "201":
+          description: The registered backup repository.
+          headers:
+            Location:
+              description: /api/backup-repositories/{id}
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupRepository"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/backup-repositories/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: removeBackupRepository
+      summary: Remove a backup repository no workspace backs up to. The repository and its branches are left as they are.
+      responses:
+        "204":
+          description: Removed.
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /api/jobs:
     get:
       operationId: listJobs
@@ -592,7 +666,7 @@ components:
           $ref: "#/components/schemas/PolicySettings"
     Workspace:
       type: object
-      required: [name, state, containerId, activeJob, policies, needsChoice, selectionRevision, appliedRevision, applyFailure, selectionImported, xolotlKey, template, appliedVersion, appliedCommit, needsUpgrade]
+      required: [name, state, containerId, activeJob, policies, needsChoice, selectionRevision, appliedRevision, applyFailure, selectionImported, xolotlKey, template, backupRepository, appliedVersion, appliedCommit, needsUpgrade]
       additionalProperties: false
       properties:
         policies:
@@ -629,6 +703,23 @@ components:
                 id:
                   type: string
                 name:
+                  type: string
+        backupRepository:
+          description: >-
+            The registered backup repository the workspace backs up to, or
+            null: a workspace Menagerie found with no recorded repository,
+            whose backups fail until it has one.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [id, name, url]
+              additionalProperties: false
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
+                url:
                   type: string
         appliedVersion:
           type: [string, "null"]
@@ -751,6 +842,45 @@ components:
                     - type: "null"
                     - type: string
                       enum: [template-not-found, template-resolve-failed, invalid-address, template-service-unavailable]
+    BackupRepository:
+      type: object
+      required: [id, name, url, workspaces]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+          description: Permanent, made from the name when the repository is registered.
+        name:
+          type: string
+        url:
+          type: string
+          description: The Git URL every backup of its workspaces goes to.
+        workspaces:
+          type: array
+          description: The workspaces that back up to it, in name order.
+          items:
+            type: string
+    BackupRepositoryRegistration:
+      type: object
+      required: [name, url]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: One line of 1 to 100 characters.
+        url:
+          type: string
+          description: >-
+            An ssh://, scp-like (git@host:path) or https:// Git URL with no
+            password. A local path, a file:// URL and plain http are
+            refused.
+        check:
+          type: boolean
+          default: false
+          description: Run the checks alone, as a registration would, and store nothing.
     TemplateRegistration:
       type: object
       required: [name, address]
@@ -805,6 +935,13 @@ components:
             template's id, whose current version and commit the create's job
             pins. An upgrade applies the current version of the workspace's
             own template.
+        backupRepositoryId:
+          type: string
+          description: >-
+            Create only: the registered backup repository the workspace backs
+            up to, recorded from the create's start. Absent, the create takes
+            the only registered repository, and is refused when none or
+            several are registered.
         branch:
           type: string
           description: >-
@@ -1055,6 +1192,10 @@ components:
                 - template-check-failed
                 - template-exists
                 - template-in-use
+                - unknown-backup-repository
+                - backup-repository-check-failed
+                - backup-repository-exists
+                - backup-repository-in-use
                 - template-not-registered
                 - version-not-newer
                 - upgrade-not-needed
@@ -1074,6 +1215,9 @@ components:
             check:
               type: string
               description: >-
-                Present with template-check-failed: the first registration
-                check that failed.
-              enum: [address, fetch, version, read, definition]
+                Present with template-check-failed and
+                backup-repository-check-failed: the first registration
+                check that failed. A template's are address, fetch,
+                version, read and definition; a backup repository's are url
+                and write.
+              enum: [address, fetch, version, read, definition, url, write]

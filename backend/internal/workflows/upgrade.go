@@ -64,7 +64,7 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 		fmt.Fprintf(run.Log(""), "no local changes to tracked files; branch %s is at %s\n", u.name, before.Hash)
 	}
 	run.Phase("backup")
-	if err := push(ctx, u.w.opts.Remote, u.folder, u.name, run); err != nil {
+	if err := push(ctx, u.w.opts.Remotes, u.folder, u.name, run); err != nil {
 		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("backing up the workspace before the upgrade failed: %w; nothing was upgraded", err)}
 	}
 
@@ -122,7 +122,7 @@ func (u *upgrading) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	run.Phase("backup")
-	if err := push(ctx, u.w.opts.Remote, u.folder, u.name, run); err != nil {
+	if err := push(ctx, u.w.opts.Remotes, u.folder, u.name, run); err != nil {
 		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("the upgrade was written and committed as %s, but its backup failed: %w; the devcontainer was not rebuilt", commit.Hash, err)}
 	}
 

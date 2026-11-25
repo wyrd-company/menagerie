@@ -129,7 +129,7 @@ func TestApplyBranchBringsAPushedCommitIntoTheWorkspaceAndTheNextBackupKeepsIt(t
 	if c, err := backup.CommitAll(folder, "alpha", "later", io.Discard); err != nil || !c.Changed {
 		t.Fatalf("%v %v", c, err)
 	}
-	if _, err := w.flows.opts.Remote.Push(context.Background(), folder, "alpha", nil); err != nil {
+	if _, err := w.backups.Push(context.Background(), folder, "alpha", nil); err != nil {
 		t.Fatal(err)
 	}
 	history := w.remoteHistory(t, "alpha")
@@ -378,8 +378,8 @@ func (w *world) overHTTPS(t *testing.T, tokens *sentinelTokens) {
 	tokens.token = filepath.Base(w.remote) + "-token"
 	host := backuptest.NewHTTPS(t, filepath.Dir(w.remote), "x-access-token", tokens.token)
 	tokens.prefix = host.Server.URL
-	w.flows.opts.Remote.URL = host.URL(filepath.Base(w.remote))
-	w.flows.opts.Remote.Auth = backup.TokenAuth(tokens, nil)
+	w.backups.URL = host.URL(filepath.Base(w.remote))
+	w.backups.Auth = backup.TokenAuth(tokens, nil)
 }
 
 func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
@@ -393,7 +393,7 @@ func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 			return "alpha"
 		}},
 		"unreachable repository": {KindFetchFailed, func(t *testing.T, w *world, auth *countingAuth) string {
-			w.flows.opts.Remote.URL = filepath.Join(t.TempDir(), sentinel+"-absent.git")
+			w.backups.URL = filepath.Join(t.TempDir(), sentinel+"-absent.git")
 			return "alpha"
 		}},
 		"missing branch": {KindBranchNotFound, func(t *testing.T, w *world, auth *countingAuth) string { return "absent" }},
@@ -458,10 +458,10 @@ func TestApplyBranchFailuresNeverNameTheWorkspaceRepository(t *testing.T) {
 				t.Fatal(err)
 			}
 			w.remote = dir
-			w.flows.opts.Remote.URL = dir
+			w.backups.URL = dir
 			w.createWorkspace(t, "alpha")
 			auth := &countingAuth{}
-			w.flows.opts.Remote.Auth = auth.auth
+			w.backups.Auth = auth.auth
 			branch := c.setup(t, w, auth)
 
 			job, snap := w.applyBranch(t, "alpha", branch)
@@ -542,7 +542,7 @@ func TestARefusalAfterTheStopStartsTheDevcontainerAgain(t *testing.T) {
 		w.createWorkspace(t, "alpha")
 		w.contribute(t, "alpha", "review/one", map[string]string{"x.txt": "x\n"})
 		auth := &countingAuth{failAt: 3}
-		w.flows.opts.Remote.Auth = auth.auth
+		w.backups.Auth = auth.auth
 		w.failsAfterTheStop(t, KindBackupFailed, func(folder string) { writeFile(t, folder, "notes.txt", "late\n") })
 		if got := w.rt.seen(); !reflect.DeepEqual(got, []string{"up alpha", "stop alpha", "up alpha"}) {
 			t.Fatalf("runtime %v", got)
@@ -710,7 +710,7 @@ func TestEveryExitThatLeavesTheDevcontainerStoppedSaysSo(t *testing.T) {
 		w.createWorkspace(t, "alpha")
 		w.contribute(t, "alpha", "alpha", map[string]string{"x.txt": "x\n"})
 		auth := &countingAuth{failAt: 2}
-		w.flows.opts.Remote.Auth = auth.auth
+		w.backups.Auth = auth.auth
 		job, snap := w.applyBranch(t, "alpha", "alpha")
 		if snap.Error == nil || snap.Error.Kind != KindBackupFailed || !strings.Contains(logText(job), StoppedNotice) {
 			t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))

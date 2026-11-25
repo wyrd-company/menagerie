@@ -181,13 +181,17 @@ runner-image: busybox:1.37
 	manager := jobs.NewManager(ctx, jobs.Options{})
 	var opts devcontainer.Options
 	data := testData(t)
+	// The configured repository, which every create backs up to.
+	if err := importBackupRepository(ctx, cfg, data); err != nil {
+		t.Fatal(err)
+	}
 	parts := throwawayContainers(ctx, cfg, root, docker, data, &opts)
 	_, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(stopHooks)
-	handler, err := newHandler(cfg, root, data, backupRemote(cfg, nil), devcontainer.New(docker, opts), provisioning.Clients{}, manager, parts.hooks, parts.images, nil)
+	handler, err := newHandler(cfg, root, data, backupAuth(cfg, nil), devcontainer.New(docker, opts), provisioning.Clients{}, manager, parts.hooks, parts.images, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

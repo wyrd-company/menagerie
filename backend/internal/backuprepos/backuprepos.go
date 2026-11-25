@@ -92,6 +92,9 @@ func ValidURL(url string) error {
 	if err != nil {
 		return &CheckError{Check: CheckURL, Message: "the URL is not a valid Git URL"}
 	}
+	if endpoint.Password != "" {
+		return &CheckError{Check: CheckURL, Message: "the URL must not hold a password: Menagerie's credentials come from the SSH agent or the GitHub App"}
+	}
 	switch endpoint.Protocol {
 	case "ssh", "https":
 		return nil

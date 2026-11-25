@@ -119,7 +119,7 @@ func TestAJobPastItsLimitTimesOutThroughTheAPI(t *testing.T) {
 	t.Cleanup(cancel)
 	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
 	rt := devcontainer.New(nil, devcontainer.Options{Containers: hanging{}, RunnerImage: func(context.Context) (string, error) { return "runner:sample", nil }})
-	server := httptest.NewServer(newServer(cfg, root, testData(t), backupRemote(cfg, nil), rt, provisioning.Clients{}, manager, nil, nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, testData(t), backupAuth(cfg, nil), rt, provisioning.Clients{}, manager, nil, nil, nil))
 	t.Cleanup(server.Close)
 
 	for range 2 {

@@ -380,8 +380,11 @@ func (r *fakeRuntime) seen() []string {
 // world is a workspace root, a bare workspace repository, and the API
 // server composed with the workflows.
 type world struct {
-	root    string
-	remote  string
+	root   string
+	remote string
+	// backups is every workspace's backup repository, at remote until a
+	// test points it elsewhere.
+	backups *backup.Remote
 	tmpl    *fakeTemplates
 	rt      *fakeRuntime
 	manager *jobs.Manager
@@ -416,12 +419,18 @@ func newWorldWith(t *testing.T, opts jobs.Options) *world {
 	if _, err := w.data.RecordCheck(context.Background(), "sample", sampleVersions, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	// The only registered backup repository, which a create that names
+	// none backs up to.
+	if _, err := w.data.RegisterBackupRepository(context.Background(), store.BackupRepository{Name: "Backups", URL: w.remote}); err != nil {
+		t.Fatal(err)
+	}
+	w.backups = &backup.Remote{URL: w.remote}
 	w.rt.data = w.data
 	w.flows = New(Options{
 		Root:      root,
 		Data:      w.data,
 		Templates: w.tmpl,
-		Remote:    &backup.Remote{URL: w.remote},
+		Remotes:   fixedRemote{w.backups},
 		Runtime:   w.rt,
 	})
 	server := api.New(api.Options{Root: root, Data: w.data, Status: w.rt, Jobs: w.manager, Operations: w.flows.Operations(), Interviews: w.flows})
@@ -612,3 +621,8 @@ func testData(t *testing.T) *store.Store {
 	t.Cleanup(func() { _ = data.Close() })
 	return data
 }
+
+// fixedRemote gives every workspace the same backup repository.
+type fixedRemote struct{ remote *backup.Remote }
+
+func (f fixedRemote) For(context.Context, string) (*backup.Remote, error) { return f.remote, nil }

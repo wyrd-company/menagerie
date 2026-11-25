@@ -125,7 +125,7 @@ func TestBackupsUseAWriteTokenOnTheAppsServerAndSSHElsewhere(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	https := github.URL + "/example-org/backups.git"
-	auth, release, err := backupRemote(&config.Config{WyrwoodDirectory: dir, WorkspaceRepository: https}, m).Auth(context.Background(), https)
+	auth, release, err := backupAuth(&config.Config{WyrwoodDirectory: dir}, m)(context.Background(), https)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestBackupsUseAWriteTokenOnTheAppsServerAndSSHElsewhere(t *testing.T) {
 	}
 	defer l.Close()
 	ssh := "git@example.invalid:sample/backups.git"
-	auth, release, err = backupRemote(&config.Config{WyrwoodDirectory: dir, WorkspaceRepository: ssh}, m).Auth(context.Background(), ssh)
+	auth, release, err = backupAuth(&config.Config{WyrwoodDirectory: dir}, m)(context.Background(), ssh)
 	if err != nil {
 		t.Fatal(err)
 	}

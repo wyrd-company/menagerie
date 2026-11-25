@@ -225,7 +225,7 @@ func TestAWorkspaceListedForTheFirstTimeJoinsItsTemplateWhichItsUseKeeps(t *test
 		t.Fatal(err)
 	}
 	_, data := f.do(t, "GET", "/api/workspaces", "")
-	if !strings.Contains(string(data), `"template":{"id":"kit","name":"Kit"},"appliedVersion":"1.0.0","appliedCommit":"`+commitOf("1.0.0")+`","needsUpgrade":true,"name":"delta"`) || !strings.Contains(string(data), `"template":null,"appliedVersion":null,"appliedCommit":null,"needsUpgrade":false,"name":"alpha"`) {
+	if !strings.Contains(string(data), `"template":{"id":"kit","name":"Kit"},"backupRepository":null,"appliedVersion":"1.0.0","appliedCommit":"`+commitOf("1.0.0")+`","needsUpgrade":true,"name":"delta"`) || !strings.Contains(string(data), `"template":null,"backupRepository":null,"appliedVersion":null,"appliedCommit":null,"needsUpgrade":false,"name":"alpha"`) {
 		t.Fatalf("%s", data)
 	}
 	resp, data := f.do(t, "DELETE", "/api/templates/kit", "")

@@ -81,7 +81,11 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 			fmt.Fprintf(run.Log(""), "could not delete %s; the next apply replaces it\n", backup.FetchedRef)
 		}
 	}()
-	fetched, err := a.w.opts.Remote.Fetch(ctx, a.folder, a.name, a.branch, run.Log("fetch: "))
+	r, err := remote(ctx, a.w.opts.Remotes, a.name, run)
+	if err != nil {
+		return &jobs.Failure{Kind: KindFetchFailed, Err: fmt.Errorf("the workspace has no backup repository to fetch branch %s from; nothing was changed", a.branch)}
+	}
+	fetched, err := r.Fetch(ctx, a.folder, a.name, a.branch, run.Log("fetch: "))
 	if errors.Is(err, backup.ErrBranchNotFound) {
 		return &jobs.Failure{Kind: KindBranchNotFound, Err: fmt.Errorf("the workspace repository has no branch %s; nothing was changed", a.branch)}
 	}
@@ -108,7 +112,7 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 		// the push only moves the remote forward.
 		if a.branch == a.name {
 			run.Phase("backup")
-			if err := push(ctx, a.w.opts.Remote, a.folder, a.name, run); err != nil {
+			if err := push(ctx, a.w.opts.Remotes, a.folder, a.name, run); err != nil {
 				return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("branch %s is already applied, but the backup of the workspace failed", a.branch)}
 			}
 		}
@@ -176,7 +180,7 @@ func (a *applying) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	run.Phase("backup")
-	if err := push(ctx, a.w.opts.Remote, a.folder, a.name, run); err != nil {
+	if err := push(ctx, a.w.opts.Remotes, a.folder, a.name, run); err != nil {
 		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("branch %s was applied as %s, but its backup failed; the devcontainer was not rebuilt", a.branch, applied.Hash)}
 	}
 	if err := a.w.opts.Runtime.Rebuild(ctx, a.folder, run); err != nil {
@@ -238,7 +242,7 @@ func (a *applying) backUp(ctx context.Context, run *jobs.Run, onlyChanged bool) 
 	case onlyChanged && !c.Changed:
 	default:
 		run.Phase("backup")
-		if err := push(ctx, a.w.opts.Remote, a.folder, a.name, run); err != nil {
+		if err := push(ctx, a.w.opts.Remotes, a.folder, a.name, run); err != nil {
 			return c, &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("backing up the workspace before applying %s failed; nothing was applied", a.branch)}
 		}
 	}

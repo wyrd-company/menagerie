@@ -110,7 +110,7 @@ func TestSchemaAgreesWithParser(t *testing.T) {
 	if got, want := fmt.Sprint(oidc.Properties["scopes"].Default), fmt.Sprint(auth.DefaultScopes); got != want {
 		t.Errorf("scopes default %s, auth requests %s", got, want)
 	}
-	if got := strings.Join(root.Required, ","); got != "workspace-root,workspace-repository,wyrwood-directory,oidc" {
+	if got := strings.Join(root.Required, ","); got != "workspace-root,wyrwood-directory,oidc" {
 		t.Errorf("required %s", got)
 	}
 	if got := root.Properties["templates"].Items.Properties["id"]; got == nil {

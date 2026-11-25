@@ -33,6 +33,8 @@ type creation struct {
 	name     string
 	folder   string
 	template string
+	// backups is the registered backup repository the workspace backs up to.
+	backups  string
 	policies []string
 }
 
@@ -51,7 +53,14 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 	if err != nil {
 		return err
 	}
-	if err := c.w.opts.Data.BeginCreateFrom(ctx, c.name, tpl.ID, ""); err != nil {
+	backups, err := c.w.opts.Data.BackupRepository(ctx, c.backups)
+	if errors.Is(err, store.ErrNoBackupRepository) {
+		return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("backup repository %s is no longer registered; nothing was written", c.backups)}
+	}
+	if err != nil {
+		return err
+	}
+	if err := c.w.opts.Data.BeginCreateFrom(ctx, c.name, tpl.ID, backups.ID); err != nil {
 		if errors.Is(err, store.ErrExists) {
 			return &jobs.Failure{Kind: KindWorkspaceExists, Err: fmt.Errorf("workspace %s already exists in Menagerie's data; nothing was written", c.name)}
 		}
@@ -81,7 +90,7 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 		return err
 	}
 
-	fmt.Fprintf(run.Log(""), "creating from template %s, version %s\n", tpl.ID, tpl.CurrentVersion)
+	fmt.Fprintf(run.Log(""), "creating from template %s, version %s, backing up to %s (%s)\n", tpl.ID, tpl.CurrentVersion, backups.Name, backups.ID)
 	t := c.w.opts.Templates
 	sel := c.w.selector(c.name, c.folder, tpl)
 	reply, err := c.w.interview(ctx, run, interviewSteps{
@@ -184,7 +193,7 @@ func (s *saving) save(ctx context.Context, run *jobs.Run) error {
 		return s.failure
 	}
 	run.Phase("backup")
-	if err := push(ctx, s.w.opts.Remote, s.folder, s.name, run); err != nil {
+	if err := push(ctx, s.w.opts.Remotes, s.folder, s.name, run); err != nil {
 		s.failure = &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("the workspace was generated and committed as %s, but its backup failed: %w; the workspace was not started; start it with the start operation, which backs it up first", commit, err)}
 		return s.failure
 	}
@@ -266,9 +275,23 @@ func reportApplied(log io.Writer, applied *templates.Applied) {
 	}
 }
 
+// remote is the workspace's backup repository. A workspace with none is
+// named in the job's console, as a failure that names no cause would not.
+func remote(ctx context.Context, remotes Remotes, name string, run *jobs.Run) (*backup.Remote, error) {
+	r, err := remotes.For(ctx, name)
+	if err != nil {
+		fmt.Fprintf(run.Log(""), "%v\n", err)
+	}
+	return r, err
+}
+
 // push backs up the workspace branch and logs whether it changed.
-func push(ctx context.Context, remote *backup.Remote, folder, name string, run *jobs.Run) error {
-	pushed, err := remote.Push(ctx, folder, name, run.Log("backup: "))
+func push(ctx context.Context, remotes Remotes, folder, name string, run *jobs.Run) error {
+	r, err := remote(ctx, remotes, name, run)
+	if err != nil {
+		return err
+	}
+	pushed, err := r.Push(ctx, folder, name, run.Log("backup: "))
 	if err != nil {
 		return err
 	}
