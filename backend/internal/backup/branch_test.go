@@ -68,3 +68,46 @@ func TestInHistoryFollowsTheWorkspaceBranch(t *testing.T) {
 		}
 	}
 }
+
+// Extend moves a branch only forward: it creates a missing branch, moves
+// one that is in the local history, and refuses one another writer moved
+// to a history the workspace does not have, leaving it as it was.
+func TestExtendNeverOverwritesAnotherHistory(t *testing.T) {
+	dir := t.TempDir()
+	bare(t, dir, "backups.git")
+	remote := &Remote{URL: filepath.Join(dir, "backups.git")}
+	ctx := context.Background()
+	folder := newWorkspace(t, "alpha")
+	root, err := CommitRoot(folder, "alpha", generate(t, folder), "Create workspace alpha", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pushed, err := remote.Extend(ctx, folder, "alpha", nil); err != nil || !pushed {
+		t.Fatalf("create: %v %v", pushed, err)
+	}
+	write(t, folder, "later.txt", "later\n")
+	later, err := CommitAll(folder, "alpha", "Later", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pushed, err := remote.Extend(ctx, folder, "alpha", nil); err != nil || !pushed {
+		t.Fatalf("forward: %v %v", pushed, err)
+	}
+	if got, _, _ := remote.BranchCommit(ctx, "alpha"); got != later.Hash || got == root.Hash {
+		t.Fatalf("at %s", got)
+	}
+	other := newWorkspace(t, "alpha")
+	foreign, err := CommitRoot(other, "alpha", generate(t, other), "another alpha", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.Push(ctx, other, "alpha", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.Extend(ctx, folder, "alpha", nil); err == nil {
+		t.Fatal("Extend overwrote another history")
+	}
+	if got, _, _ := remote.BranchCommit(ctx, "alpha"); got != foreign.Hash {
+		t.Fatalf("the other history's branch moved to %s", got)
+	}
+}
