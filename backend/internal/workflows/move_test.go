@@ -278,7 +278,7 @@ func TestAMoveWhoseBackupDoesNotLandKeepsTheWorkspacesRepository(t *testing.T) {
 	}{
 		{"refused", "pre-receive", "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/*) echo refused >&2; exit 1;; esac; done\n",
 			"pushing branch alpha to Guarded failed"},
-		{"moved", "post-receive", "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/*) tree=$(git hash-object -w -t tree /dev/null); git update-ref \"$ref\" \"$(echo elsewhere | git commit-tree \"$tree\")\";; esac; done\n",
+		{"moved", "post-receive", "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/*) export GIT_AUTHOR_NAME=hook GIT_AUTHOR_EMAIL=hook@example.invalid GIT_COMMITTER_NAME=hook GIT_COMMITTER_EMAIL=hook@example.invalid; tree=$(git hash-object -w -t tree /dev/null); git update-ref \"$ref\" \"$(echo elsewhere | git commit-tree \"$tree\")\";; esac; done\n",
 			"branch alpha in Guarded is at "},
 	} {
 		t.Run(c.name, func(t *testing.T) {
