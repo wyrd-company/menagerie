@@ -142,13 +142,13 @@ design-challenges:
     registered still at the URL the job checked. The record is the job's
     final step (`Run.Final` in the jobs package): it settles the job's time
     limits first, so a move past its limit times out and records nothing.
-    The limits keep counting while the record runs: a limit that passes
-    cancels the job's context, and a record that the cancellation
-    interrupts, for example while it waits for the database connection,
-    records nothing and the move times out. A record that commits decides
-    the outcome, so a recorded switch is never reported as a timeout. Every
-    other failure is
-    `backup-move-failed`, the workspace keeps its repository, and the
+    The limits keep counting while the record runs: when a limit's timer
+    runs, which can be after the limit passed, it cancels the job's
+    context, and a record that the cancellation interrupts, for example
+    while it waits for the database connection, records nothing and the
+    move times out. A record that commits decides the outcome, even past a
+    limit whose timer has not run, so a recorded switch is never reported
+    as a timeout. Every other failure is `backup-move-failed`, the workspace keeps its repository, and the
     message says so. The move never writes to the earlier repository, whose
     branch keeps the workspace's earlier backups for recovery. The job
     holds the workspace's job slot, so no commit or backup of the workspace

@@ -139,9 +139,10 @@ func (m *moving) run(ctx context.Context, run *jobs.Run) error {
 
 	run.Phase("switch")
 	// The switch is the job's final step: a time limit that passed before it
-	// times the job out and nothing is switched; one that passes cancels the
-	// job's context, so a switch still waiting is interrupted and records
-	// nothing; a switch that commits decides the outcome.
+	// times the job out and nothing is switched; when a limit's timer runs
+	// during the switch it cancels the job's context, so a switch still
+	// waiting is interrupted and records nothing; a switch that commits
+	// decides the outcome, even past a limit whose timer has not run.
 	err = run.Final(func() error { return m.w.opts.Data.SwitchWorkspaceBackupRepository(ctx, m.name, to.ID, to.URL) })
 	switch {
 	case errors.Is(err, jobs.ErrTimedOut):
