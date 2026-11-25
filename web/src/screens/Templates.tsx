@@ -11,6 +11,7 @@ import {
 import type { Template } from "../api/types.ts";
 import { checkLine, hasNewer, upgradeChoices } from "../api/versions.ts";
 import { StatusBadge } from "../ui/StatusBadge.tsx";
+import { useValidated } from "../ui/useValidated.ts";
 
 const asError = (e: unknown) => (e instanceof ApiError ? e : new ApiError(0, null, String(e)));
 
@@ -91,50 +92,6 @@ export function TemplatesScreen() {
   );
 }
 
-/** A Validate's or Save's reply, with the values its request sent. */
-interface Reply {
-  values: string;
-  validated?: Template;
-  error?: ApiError;
-}
-
-/**
- * Validate, then save: Validate runs the checks alone and stores nothing; Save
- * stays disabled until a Validate of the current values passes, and checks
- * again. Any edit disables Save and clears the result and refusal. values
- * names what the form would send now; a reply counts only while the form
- * still holds the values its request sent, so a Validate that an edit
- * overtook enables nothing.
- */
-function useValidated(values: string) {
-  const [reply, setReply] = useState<Reply | null>(null);
-  const [busy, setBusy] = useState<"validating" | "saving" | null>(null);
-  const current = reply?.values === values ? reply : null;
-  const edited = () => setReply(null);
-  const run = async (kind: "validating" | "saving", call: () => Promise<Template>) => {
-    const sent = values;
-    setBusy(kind);
-    setReply((last) => (last?.error ? null : last));
-    try {
-      const template = await call();
-      if (kind === "validating") setReply({ values: sent, validated: template });
-      return template;
-    } catch (e) {
-      setReply({ values: sent, error: asError(e) });
-      return null;
-    } finally {
-      setBusy(null);
-    }
-  };
-  return {
-    error: current?.error ?? null,
-    validated: current?.validated ?? null,
-    busy,
-    edited,
-    run,
-  };
-}
-
 function Registration({ onRegistered }: { onRegistered: () => void }) {
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
@@ -145,7 +102,9 @@ function Registration({ onRegistered }: { onRegistered: () => void }) {
     ...(runnerImage.trim() ? { runnerImage: runnerImage.trim() } : {}),
     ...(check ? { check } : {}),
   });
-  const { error, validated, busy, edited, run } = useValidated(JSON.stringify(registration(false)));
+  const { error, validated, busy, edited, run } = useValidated<Template>(
+    JSON.stringify(registration(false)),
+  );
   const filled = name.trim() !== "" && address.trim() !== "";
 
   const submit = async (event: FormEvent) => {
@@ -382,7 +341,7 @@ function VersionEditor({
   // A check while the form is open can take the picked version off the
   // offer; the newest offered one takes its place.
   const version = choices.includes(picked) ? picked : (choices[0] ?? "");
-  const { error, validated, busy, edited, run } = useValidated(version);
+  const { error, validated, busy, edited, run } = useValidated<Template>(version);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!validated) return;
