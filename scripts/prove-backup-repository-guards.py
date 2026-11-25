@@ -14,8 +14,9 @@ and takes the only registered one only when exactly one is; a backup goes
 to the workspace's own repository and fails when it has none; the create
 screen chooses the only registered repository, never one of several. A
 removed repository's id is never given to another; a reply's URL holds no
-password, query or fragment; the import gives its repository to every
-workspace folder, one with no data included. Each
+password, query or fragment, nor an https URL's user name; a create
+refuses a repository removed since it was read; the first start gives the
+imported repository to every workspace folder, one with no data included. Each
 mutation changes one guard in place, and its tests must fail; the source is
 restored even on interruption. The report starts failed and passes only
 after every baseline test passes and every mutant compiles and fails each
@@ -43,7 +44,8 @@ TESTS = {
     "id-never-reused": ("./backend/internal/store", "TestARemovedBackupRepositorysIDIsNeverReused"),
     "public-url": ("./backend/internal/backuprepos", "TestPublicURLHoldsNoCredential"),
     "replies-no-credential": ("./backend/internal/api", "TestRepliesNameNoBackupCredential"),
-    "import-once": ("./backend/internal/backuprepos", "TestImportTakesOverTheConfiguredRepositoryOnce"),
+    "first-start": ("./backend/cmd/menagerie", "TestAFirstStartGivesEveryWorkspaceTheConfiguredRepository"),
+    "create-refuses-removed": ("./backend/internal/store", "TestACreateRefusesARemovedBackupRepository"),
     "screen-several": ("web/src/screens/BackupRepositories.test.tsx",
                        "asks for a backup repository on create when several are registered"),
 }
@@ -95,9 +97,15 @@ MUTANTS = [
      "\t\tu.User = neturl.User(u.User.Username())\n", "\t\t_ = u.User\n", ["public-url"]),
     ("reply-uses-public-url", "backend/internal/api/backups.go",
      "URL: backuprepos.PublicURL(r.URL)", "URL: r.URL", ["replies-no-credential"]),
-    ("import-adds-folders", REGISTRY,
-     "\t\t\tif err := tx.AddWorkspace(name); err != nil {\n", "\t\t\tif err := error(nil); name == \"\" && err != nil {\n",
-     ["import-once"]),
+    ("public-url-drops-https-user", REGISTRY,
+     "\t\tu.User = nil\n", "\t\t_ = u\n", ["public-url"]),
+    ("start-lists-folders-first", "backend/cmd/menagerie/main.go",
+     "\tif err := discoverWorkspaces(ctx, root, data); err != nil {\n", "\tif err := error(nil); err != nil {\n",
+     ["first-start"]),
+    ("create-refuses-removed", "backend/internal/store/workspaces.go",
+     "\t\tif backups != \"\" {\n\t\t\tif _, err := t.backupRepository(backups); err != nil {\n",
+     "\t\tif false {\n\t\t\tif _, err := t.backupRepository(backups); err != nil {\n",
+     ["create-refuses-removed"]),
     ("screen-chooses-only-one", PICKER,
      "        if (list.length === 1 && list[0]) onChange(list[0].id);\n",
      "        if (list[0]) onChange(list[0].id);\n", ["screen-several"]),

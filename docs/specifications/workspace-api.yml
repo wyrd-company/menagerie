@@ -309,7 +309,8 @@ description: >-
   backup repositories sorted by name as letters without regard to case,
   then by name and id, each `{id, name, url, workspaces}`, `workspaces` the
   names of the workspaces that back up to it. Every `url` a reply holds,
-  here and on a workspace's row, has no password, query or fragment.
+  here and on a workspace's row, has no password, query or fragment, and
+  an `https` one no user name.
   `POST /api/backup-repositories`
   takes `{"name","url","check"}`, `check` optional and false by default,
   and runs the checks of the design's `backup-repositories` in order:

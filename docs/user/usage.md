@@ -478,8 +478,9 @@ again. A repository whose URL is registered already is
 refused with the registration it has.
 
 **Remove** forgets a repository that no workspace backs up to; the
-repository and its branches stay as they are. A URL with a password, kept from
-an earlier release's `workspace-repository`, is shown without it.
+repository and its branches stay as they are. A URL with a token or a
+password, kept from an earlier release's `workspace-repository`, is shown
+without them.
 
 ## Backups
 

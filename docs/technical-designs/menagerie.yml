@@ -106,8 +106,10 @@ design-challenges:
     separated by single dashes, or `backups` when the name has none, with
     `-2`, `-3` and on added while it is taken. A removed repository keeps
     its row, marked removed, so its id never names another repository and a
-    request that still names it is refused. A URL in a reply or on a page
-    has no password, query or fragment: a registration refuses a password,
+    request that still names it is refused, a create's in the transaction
+    that would record it. A URL in a reply or on a page has no password,
+    query or fragment, and an `https` URL no user name, where a token can
+    stand too: a registration refuses a password,
     and the import keeps the configured URL whole for its backups. A registration can be asked
     to check without storing, as a template's can, and a save runs every
     check again. A create names a registered repository, or, when it names
@@ -1434,8 +1436,10 @@ proposed-design:
     `example-org/workspace-backups`, without its query and fragment, or
     `Workspace backups` when that is not a valid name, unless a
     registration has that URL already; every workspace with no backup
-    repository then backs up to it, each workspace folder included, which
-    gets its workspace when it has none, and the start
+    repository then backs up to it. The import runs after the template
+    imports, and the start first lists the workspace folders as the
+    workspace list does, so a folder with no data yet gets its workspace,
+    joined to its template, and takes the repository too, and the start
     log names it and how many workspaces took it. Without the key the import
     records its mark and registers nothing.
     The policy settings start empty. A workspace that first-start-import
