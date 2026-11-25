@@ -174,6 +174,48 @@ async function runApplyBranch(world: World, job: FixtureJob) {
   finish(job, "succeeded");
 }
 
+/**
+ * Moves a workspace's backups: a destination whose URL names "conflict" has
+ * another workspace's branch of that name, and the move fails before it
+ * pushes, keeping the workspace's repository.
+ */
+async function runMoveBackup(world: World, job: FixtureJob) {
+  const ws = workspace(world, job.workspace);
+  const to = world.backupRepositories.find((r) => r.id === job.backupRepositoryId);
+  if (!ws || !to) return;
+  const from = world.backupRepositories.find(
+    (r) => r.id === (ws.backups ?? world.backupRepositories[0]?.id),
+  );
+  const stays = from
+    ? `the workspace still backs up to ${from.name}`
+    : "the workspace has no backup repository yet";
+  setState(job, "running", "verify");
+  log(
+    job,
+    `moving the backups of ${ws.name} from ${from?.name} (${from?.id}) to ${to.name} (${to.id})`,
+  );
+  log(job, `Menagerie can write to ${to.name}`);
+  if (to.url.includes("conflict")) {
+    finish(job, "failed", {
+      kind: "backup-branch-conflict",
+      message: `${to.name} already has a branch ${ws.name}, at 5c0ffee, which is not in the workspace's history; nothing was pushed: rename or remove that branch, or choose another repository; ${stays}`,
+    });
+    return;
+  }
+  setState(job, "running", "commit");
+  log(job, `nothing to commit; branch ${ws.name} is at 0decade`);
+  setState(job, "running", "backup");
+  log(job, `pushed refs/heads/${ws.name}`);
+  log(job, `branch ${ws.name} in ${to.name} is at 0decade`);
+  await tick();
+  ws.backups = to.id;
+  log(
+    job,
+    `workspace ${ws.name} now backs up to ${to.name}; its earlier backups stay on branch ${ws.name} in ${from?.name}`,
+  );
+  finish(job, "succeeded");
+}
+
 /** Replays a delete; its folder goes last. One with no folder removes only what Menagerie's data holds. */
 async function runDelete(world: World, job: FixtureJob) {
   const ws = workspace(world, job.workspace);
@@ -246,5 +288,6 @@ export function run(world: World, job: FixtureJob) {
   else if (job.operation === "upgrade") void runUpgrade(world, job);
   else if (job.operation === "apply-branch") void runApplyBranch(world, job);
   else if (job.operation === "delete") void runDelete(world, job);
+  else if (job.operation === "move-backup") void runMoveBackup(world, job);
   else void runContainerJob(world, job);
 }

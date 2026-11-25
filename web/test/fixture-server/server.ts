@@ -657,6 +657,7 @@ export function createFixture(options: { distDir: string }) {
           "apply-branch",
           "delete",
           "apply-policies",
+          "move-backup",
         ].includes(operation)
       ) {
         return fail(res, 400, "invalid-request", "operation and workspace are required");
@@ -667,8 +668,37 @@ export function createFixture(options: { distDir: string }) {
       if (operation === "create" && !world.templates.some((t) => t.id === input.templateId)) {
         return fail(res, 404, "unknown-template", `no registered template ${input.templateId}`);
       }
-      if (input.backupRepositoryId !== undefined && operation !== "create")
-        return fail(res, 400, "invalid-request", "backupRepositoryId is only accepted for create.");
+      if (
+        input.backupRepositoryId !== undefined &&
+        operation !== "create" &&
+        operation !== "move-backup"
+      )
+        return fail(
+          res,
+          400,
+          "invalid-request",
+          "backupRepositoryId is only accepted for create and move-backup.",
+        );
+      if (operation === "move-backup") {
+        if (input.backupRepositoryId === undefined)
+          return fail(res, 400, "invalid-request", "backupRepositoryId is required");
+        const to = world.backupRepositories.find((r) => r.id === input.backupRepositoryId);
+        if (!to)
+          return fail(
+            res,
+            404,
+            "unknown-backup-repository",
+            `no registered backup repository has the id "${input.backupRepositoryId}"`,
+          );
+        const ws = world.workspaces.find((w) => w.name === name);
+        if (ws && backupsOf(ws)?.id === to.id)
+          return fail(
+            res,
+            409,
+            "backup-repository-unchanged",
+            `workspace ${name} already backs up to ${to.name}`,
+          );
+      }
       if (operation === "create") {
         if (input.backupRepositoryId === undefined && world.backupRepositories.length !== 1)
           return fail(
@@ -770,6 +800,7 @@ export function createFixture(options: { distDir: string }) {
       if (input.templateId) job.templateId = input.templateId;
       if (operation === "create")
         job.backupRepositoryId = input.backupRepositoryId ?? world.backupRepositories[0]!.id;
+      if (operation === "move-backup") job.backupRepositoryId = input.backupRepositoryId!;
       if (input.branch) job.branch = input.branch;
       jobs.set(job.jobId, job);
       setImmediate(() => {

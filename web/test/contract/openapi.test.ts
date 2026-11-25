@@ -218,6 +218,24 @@ describe("the fixture server keeps the workspace API contract", () => {
       backupRepositoryId: "client-backups",
     });
     expect(started.status).toBe(202);
+    for (const [body, kind] of [
+      [{ backupRepositoryId: "example-backups" }, "backup-repository-unchanged"],
+      [{ backupRepositoryId: "absent" }, "unknown-backup-repository"],
+      [{}, "invalid-request"],
+    ] as const) {
+      const refused = await expectResponse(
+        "/api/jobs",
+        "post",
+        await post("/api/jobs", { operation: "move-backup", workspace: "sample-alpha", ...body }),
+      );
+      expect(refused).toMatchObject({ error: { kind } });
+    }
+    const moving = await post("/api/jobs", {
+      operation: "move-backup",
+      workspace: "sample-alpha",
+      backupRepositoryId: "client-backups",
+    });
+    expect(moving.status).toBe(202);
     const inUse = await call("/api/backup-repositories/example-backups", { method: "DELETE" });
     expect(await expectResponse("/api/backup-repositories/{id}", "delete", inUse)).toMatchObject({
       error: { kind: "backup-repository-in-use" },
@@ -558,12 +576,17 @@ describe("the UI client sends request bodies the contract accepts", () => {
         templateId: "sample-kit",
         backupRepositoryId: "example-backups",
       });
+      await startJob({
+        operation: "move-backup",
+        workspace: "sample",
+        backupRepositoryId: "client-backups",
+      });
       await startJob({ operation: "upgrade", workspace: "sample" });
     } finally {
       vi.unstubAllGlobals();
     }
     for (const body of bodies) expectValid(schema("JobRequest"), body);
-    expect(bodies).toHaveLength(6);
+    expect(bodies).toHaveLength(7);
   });
 
   it("answers with an AnswerRequest that carries the session as received", async () => {

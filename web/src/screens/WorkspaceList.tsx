@@ -14,6 +14,7 @@ import { own } from "../own.ts";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
 import { StatusBadge } from "../ui/StatusBadge.tsx";
+import { MoveBackup } from "../ui/MoveBackup.tsx";
 
 interface RowError {
   message: string;
@@ -30,6 +31,7 @@ const operationLabel: Record<string, string> = {
   "apply-branch": "applying a branch",
   delete: "deleting",
   "apply-policies": "applying policies",
+  "move-backup": "moving backups",
 };
 
 function useFleet() {
@@ -107,6 +109,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
   const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
   const [confirming, setConfirming] = useState<string | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
+  const [moving, setMoving] = useState<string | null>(null);
   const [branch, setBranch] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
   const [typedName, setTypedName] = useState("");
@@ -131,6 +134,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
   const openDelete = (workspace: string) => {
     setConfirming(null);
     setApplying(null);
+    setMoving(null);
     setTypedName("");
     setDeleting(workspace);
   };
@@ -138,6 +142,7 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
   const openApply = (workspace: string) => {
     setConfirming(null);
     setDeleting(null);
+    setMoving(null);
     setBranch("");
     setApplying(workspace);
   };
@@ -146,18 +151,32 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
   const current = (ws: Workspace) =>
     templates.find((t) => t.id === ws.template?.id)?.currentVersion ?? null;
 
-  const run = async (workspace: string, operation: Operation, branchName?: string) => {
+  const openMove = (workspace: string) => {
+    setConfirming(null);
+    setDeleting(null);
+    setApplying(null);
+    setMoving(workspace);
+  };
+
+  const run = async (
+    workspace: string,
+    operation: Operation,
+    branchName?: string,
+    backupRepositoryId?: string,
+  ) => {
     setConfirming(null);
     setApplying(null);
     setDeleting(null);
+    setMoving(null);
     setPending((p) => ({ ...p, [workspace]: operation }));
     setRowErrors(({ [workspace]: _, ...rest }) => rest);
     try {
-      const job = await startJob(
-        branchName === undefined
-          ? { operation, workspace }
-          : { operation, workspace, branch: branchName },
-      );
+      const job = await startJob({
+        operation,
+        workspace,
+        ...(branchName === undefined ? {} : { branch: branchName }),
+        ...(backupRepositoryId === undefined ? {} : { backupRepositoryId }),
+      });
       navigate(paths.list(job.jobId));
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(0, null, String(e));
@@ -365,12 +384,27 @@ export function WorkspaceList({ jobId }: { jobId: string | null }) {
                     </button>
                     <button
                       type="button"
+                      disabled={busy || gone || moving === ws.name}
+                      onClick={() => openMove(ws.name)}
+                    >
+                      Move backups
+                    </button>
+                    <button
+                      type="button"
                       disabled={busy || deleting === ws.name}
                       onClick={() => openDelete(ws.name)}
                     >
                       Delete
                     </button>
                   </div>
+                  {moving === ws.name ? (
+                    <MoveBackup
+                      workspace={ws}
+                      busy={busy}
+                      onMove={(id) => void run(ws.name, "move-backup", undefined, id)}
+                      onCancel={() => setMoving(null)}
+                    />
+                  ) : null}
                   {deleting === ws.name ? (
                     <form
                       className="entry-delete"
