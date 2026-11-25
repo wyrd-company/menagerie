@@ -256,16 +256,26 @@ func prepareData(ctx context.Context, cfg *config.Config, root *workspace.Root, 
 
 // importBackupRepository takes over the configuration's workspace-repository
 // key once, after the template imports, and warns at each start that finds
-// the key that it is no longer read. It first lists the workspace folders
-// as the workspace list does, so a folder that has no data yet, such as one
-// restored after an earlier release's first start, gets its workspace,
-// joined to its template, and takes the imported repository with the rest.
+// the key that it is no longer read. Before the import, and only then, it
+// lists the workspace folders as the workspace list does, so a folder that
+// has no data yet, such as one restored after an earlier release's first
+// start, gets its workspace, joined to its template, and takes the
+// imported repository with the rest. A later start lists nothing.
 func importBackupRepository(ctx context.Context, cfg *config.Config, root *workspace.Root, data *store.Store) error {
 	if cfg.WorkspaceRepository != "" {
 		log.Print("menagerie: the configuration's workspace-repository key is no longer read: backup repositories are registered in the interface; the first start of this release imported it once, and a later edit imports nothing")
 	}
-	if err := discoverWorkspaces(ctx, root, data); err != nil {
+	done, err := data.Imported(ctx, backuprepos.ImportID)
+	if err != nil {
 		return err
+	}
+	if done {
+		return nil
+	}
+	if cfg.WorkspaceRepository != "" {
+		if err := discoverWorkspaces(ctx, root, data); err != nil {
+			return err
+		}
 	}
 	return backuprepos.Import(ctx, data, cfg.WorkspaceRepository, log.Printf)
 }

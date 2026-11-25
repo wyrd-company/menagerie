@@ -133,3 +133,24 @@ func TestAFirstStartGivesEveryWorkspaceTheConfiguredRepository(t *testing.T) {
 		t.Fatalf("the restored folder's template is %q, %v", id, err)
 	}
 }
+
+// A later start lists no folders, so a workspace whose folder is away
+// during it keeps its data, its backup repository included.
+func TestALaterStartKeepsAnAbsentWorkspacesData(t *testing.T) {
+	root, data := startState(t)
+	ctx := context.Background()
+	cfg := &config.Config{WorkspaceRepository: "ssh://git@git.example.invalid/example-org/workspace-backups.git"}
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
+		t.Fatal(err)
+	}
+	alpha := filepath.Join(root.Path(), "alpha")
+	if err := os.Rename(alpha, alpha+".away"); err != nil {
+		t.Fatal(err)
+	}
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok, err := data.WorkspaceBackupRepository(ctx, "alpha"); err != nil || !ok || r.URL != cfg.WorkspaceRepository {
+		t.Fatalf("%+v %v %v", r, ok, err)
+	}
+}
