@@ -416,9 +416,11 @@ description: >-
   long-running threshold passed while the job ran is alerted once, before
   any `job-failed` alert, at the latest when the job ends. A job's final
   step, `move-backup`'s `switch` record, settles the running time before
-  it begins; the limits keep counting while it runs, so one that passes
-  cancels it before it records, and stop only once it succeeds, so the
-  job's outcome agrees with what the step recorded. The slot is
+  it begins, and the limits keep counting while it runs: one that passes
+  while the step waits, such as for the database connection, cancels it
+  and the job times out with nothing recorded. A step that records
+  decides the outcome: the job succeeds even if a limit passed while the
+  step ran, so the job's outcome agrees with what the step recorded. The slot is
   released when the work returns, never before, so work that ignores
   cancellation keeps its workspace busy.
   A cancelled generate or apply revokes its hook token and kills and
