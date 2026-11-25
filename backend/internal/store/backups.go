@@ -229,6 +229,33 @@ func (s *Store) SetWorkspaceBackupRepository(ctx context.Context, workspace, id 
 	})
 }
 
+// ErrBackupRepositoryChanged means the registered backup repository of an id
+// no longer has the URL a caller checked: it was removed, and another
+// registration took its id.
+var ErrBackupRepositoryChanged = errors.New("the backup repository is no longer registered at the URL that was checked")
+
+// SwitchWorkspaceBackupRepository makes the registered backup repository id
+// the one a workspace backs up to, as SetWorkspaceBackupRepository does,
+// only while id is still registered at url, read in the same transaction.
+// Otherwise it is ErrBackupRepositoryChanged, or ErrNoBackupRepository for
+// an id none has, and changes nothing.
+func (s *Store) SwitchWorkspaceBackupRepository(ctx context.Context, workspace, id, url string) error {
+	return s.Update(ctx, func(t *Tx) error {
+		r, err := t.backupRepository(id)
+		if err != nil {
+			return err
+		}
+		if r.URL != url {
+			return fmt.Errorf("%w: %s", ErrBackupRepositoryChanged, id)
+		}
+		if err := t.AddWorkspace(workspace); err != nil {
+			return err
+		}
+		_, err = t.exec(`UPDATE workspaces SET backup_repository = ? WHERE name = ?`, id, workspace)
+		return err
+	})
+}
+
 // AdoptBackupRepository gives every workspace that has no backup repository
 // the registered backup repository id, and returns how many it gave it.
 func (t *Tx) AdoptBackupRepository(id string) (int64, error) {
