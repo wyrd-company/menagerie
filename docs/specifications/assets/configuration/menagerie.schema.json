@@ -223,6 +223,9 @@
             },
             "apply-policies": {
               "$ref": "#/$defs/duration"
+            },
+            "move-backup": {
+              "$ref": "#/$defs/duration"
             }
           }
         },
@@ -255,7 +258,8 @@
               "apply",
               "commit",
               "backup-local-changes",
-              "backup"
+              "backup",
+              "switch"
             ]
           },
           "additionalProperties": {

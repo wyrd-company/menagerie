@@ -171,3 +171,30 @@ func TestACreateRefusesARemovedBackupRepository(t *testing.T) {
 		t.Fatal("a refused create left data")
 	}
 }
+
+// A switch lands only while the id is registered, and at the URL the
+// caller checked.
+func TestASwitchNeedsTheCheckedURL(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	r := backupRepository(t, s, "Other", "ssh://git@git.example.invalid/example-org/other.git")
+	if err := s.SwitchWorkspaceBackupRepository(ctx, "alpha", r.ID, "ssh://git@git.example.invalid/example-org/elsewhere.git"); !errors.Is(err, ErrBackupRepositoryChanged) {
+		t.Fatalf("%v", err)
+	}
+	if _, ok, _ := s.WorkspaceBackupRepository(ctx, "alpha"); ok {
+		t.Fatal("a refused switch recorded a repository")
+	}
+	gone := backupRepository(t, s, "Gone", "ssh://git@git.example.invalid/example-org/gone.git")
+	if err := s.RemoveBackupRepository(ctx, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SwitchWorkspaceBackupRepository(ctx, "alpha", gone.ID, gone.URL); !errors.Is(err, ErrNoBackupRepository) {
+		t.Fatalf("%v", err)
+	}
+	if err := s.SwitchWorkspaceBackupRepository(ctx, "alpha", r.ID, r.URL); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.WorkspaceBackupRepository(ctx, "alpha"); got.ID != r.ID {
+		t.Fatalf("%+v", got)
+	}
+}

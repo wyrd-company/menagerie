@@ -20,6 +20,7 @@ const operationVerb: Record<string, string> = {
   commit: "Commit",
   "apply-branch": "Apply branch to",
   delete: "Delete",
+  "move-backup": "Move the backups of",
 };
 
 /** Live phases, log lines and the outcome of one job. */

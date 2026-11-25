@@ -922,7 +922,7 @@ components:
       properties:
         operation:
           type: string
-          enum: [start, stop, rebuild, create, upgrade, commit, apply-branch, delete, apply-policies]
+          enum: [start, stop, rebuild, create, upgrade, commit, apply-branch, delete, apply-policies, move-backup]
         workspace:
           type: string
         policies:
@@ -938,10 +938,12 @@ components:
         backupRepositoryId:
           type: string
           description: >-
-            Create only: the registered backup repository the workspace backs
-            up to, recorded from the create's start. Absent, the create takes
+            For create, the registered backup repository the workspace backs
+            up to, recorded from the create's start; absent, the create takes
             the only registered repository, and is refused when none or
-            several are registered.
+            several are registered. Required by move-backup: the registered
+            repository, other than the workspace's own, that its backups move
+            to. Refused on every other operation.
         branch:
           type: string
           description: >-
@@ -1042,6 +1044,8 @@ components:
             - not-applied
             - merge-conflicted
             - backup-failed
+            - backup-move-failed
+            - backup-branch-conflict
             - commit-failed
             - branch-not-found
             - fetch-failed
@@ -1193,6 +1197,7 @@ components:
                 - template-exists
                 - template-in-use
                 - unknown-backup-repository
+                - backup-repository-unchanged
                 - backup-repository-check-failed
                 - backup-repository-exists
                 - backup-repository-in-use

@@ -54,8 +54,9 @@ policy for a single-select group, at least one for a multi-select group.
 **Policy import pending** shows whether the binding has the stored selection.
 A failed apply shows its message on the row.
 
-Each row has **Stop**, **Start**, **Rebuild**, **Apply branch**, **Upgrade**
-and [**T3 Code token**](#connect-t3-code-to-a-workspace). A commit,
+Each row has **Stop**, **Start**, **Rebuild**, **Apply branch**, **Upgrade**,
+[**T3 Code token**](#connect-t3-code-to-a-workspace) and
+[**Move backups**](#move-a-workspaces-backups). A commit,
 from the [schedule or the workspace itself](#commit-from-inside-a-workspace),
 shows on its row as **committing**. Rebuild asks
 for confirmation, then removes the container and creates it again from the
@@ -482,6 +483,31 @@ refused with the registration it has.
 repository and its branches stay as they are. A URL with a token or a
 password, kept from an earlier release's `workspace-repository`, is shown
 without them.
+
+### Move a workspace's backups
+
+**Move backups** on a workspace's row chooses another registered backup
+repository for it. A workspace that has none, such as a folder copied into
+the workspace root, gets its first one the same way. The move is a job with
+four phases:
+
+1. `verify`: Menagerie checks that it can write to the destination, as a
+   registration does, and reads the destination's branch with the workspace's
+   name. A branch from another history, such as another workspace of that
+   name, fails the job as `backup-branch-conflict` with nothing pushed. A
+   branch with the workspace's own commits is taken over.
+2. `commit`: every change is committed, as a commit job does.
+3. `backup`: the branch is pushed to the destination, without overwriting a
+   branch someone else wrote there since `verify`, and read back.
+4. `switch`: the workspace backs up to the destination from now on; the row
+   then shows it.
+
+Only a branch that reads back at the commit pushed is switched to, and a move
+that passed its [time limit](configuration.md#job-time-limits) switches
+nothing. A failed move keeps the earlier
+repository, and its message says why, so you can fix the cause and move
+again. The earlier repository keeps its branch as it was, with the
+workspace's earlier backups, for recovery.
 
 ## Backups
 

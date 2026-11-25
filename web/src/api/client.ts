@@ -177,7 +177,7 @@ export interface StartJob {
   operation: Operation;
   workspace: string;
   templateId?: string;
-  /** The registered backup repository a create backs the workspace up to. */
+  /** The registered backup repository a create backs the workspace up to, or a move-backup moves its backups to. */
   backupRepositoryId?: string;
   /** The branch of the workspace repository an apply-branch job applies. */
   branch?: string;

@@ -100,7 +100,8 @@ export type Operation =
   | "commit"
   | "apply-branch"
   | "delete"
-  | "apply-policies";
+  | "apply-policies"
+  | "move-backup";
 
 export interface ErrorBody {
   kind: string;

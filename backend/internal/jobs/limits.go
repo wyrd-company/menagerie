@@ -42,6 +42,7 @@ var Phases = []string{
 	"commit",
 	"backup-local-changes",
 	"backup",
+	"switch",
 }
 
 // Limits are the time limits on a job's running time. A zero or missing
@@ -219,7 +220,7 @@ func (j *Job) tick() {
 // running, has not ended or timed out, and the process is not shutting
 // down, so shutdown is never a timeout.
 func (j *Job) countingLocked() bool {
-	return !j.state.Terminal() && j.timedOut == nil && !j.clock.since.IsZero() && j.manager.ctx.Err() == nil
+	return !j.state.Terminal() && j.timedOut == nil && !j.final && !j.clock.since.IsZero() && j.manager.ctx.Err() == nil
 }
 
 // settleLocked brings the clock up to now and settles what has passed by
@@ -265,10 +266,10 @@ func (j *Job) timeOutLocked(first due) {
 
 // outcomeLocked chooses how the job ends from its runner's error. A job
 // timed out before it ends fails as timed-out whatever its runner
-// returned.
+// returned, unless its final step succeeded (Run.Final).
 func (j *Job) outcomeLocked(err error) (State, *Error) {
 	switch {
-	case j.timedOut != nil:
+	case j.timedOut != nil && !j.final:
 		return Failed, j.timedOut
 	case errors.Is(err, ErrEnded):
 		return Ended, nil

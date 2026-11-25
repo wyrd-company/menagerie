@@ -105,7 +105,8 @@
   padding: 0.3rem 0.6rem;
 }
 
-.entry-delete {
+.entry-delete,
+.entry-move {
   grid-area: delete;
   display: flex;
   flex-wrap: wrap;
@@ -114,8 +115,22 @@
   font-size: 0.875rem;
 }
 
-.entry-delete p {
+.entry-delete p,
+.entry-move p {
   flex-basis: 100%;
+}
+
+/* The destination select, as wide as the delete form's name field, and no
+   wider than a narrow row. */
+.entry-move select {
+  font: inherit;
+  min-height: 2rem;
+  max-width: 100%;
+  padding: 0.3rem 0.6rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
 }
 
 .entry-delete input {

@@ -626,3 +626,7 @@ func testData(t *testing.T) *store.Store {
 type fixedRemote struct{ remote *backup.Remote }
 
 func (f fixedRemote) For(context.Context, string) (*backup.Remote, error) { return f.remote, nil }
+
+func (f fixedRemote) Remote(url string) *backup.Remote {
+	return &backup.Remote{URL: url, Auth: f.remote.Auth}
+}

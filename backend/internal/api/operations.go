@@ -24,7 +24,7 @@ type JobRequest struct {
 	Workspace  string   `json:"workspace"`
 	TemplateID string   `json:"templateId,omitempty"`
 	// BackupRepositoryID names the registered backup repository a create
-	// backs the workspace up to.
+	// backs the workspace up to, or a move-backup moves its backups to.
 	BackupRepositoryID string `json:"backupRepositoryId,omitempty"`
 	// Branch names the branch of the workspace repository that
 	// apply-branch applies.
@@ -74,6 +74,10 @@ const OperationApplyBranch = "apply-branch"
 
 // OperationDelete removes a workspace from the host.
 const OperationDelete = "delete"
+
+// OperationMoveBackup moves a workspace's backups to another registered
+// backup repository.
+const OperationMoveBackup = "move-backup"
 
 // ContainerRuntime runs container operations on a workspace folder.
 // *devcontainer.Runtime satisfies it.

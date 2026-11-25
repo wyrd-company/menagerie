@@ -75,19 +75,45 @@ func (r *Remote) Push(ctx context.Context, folder, workspace string, progress io
 			err = os.Remove(markerPath(folder))
 		}
 	}()
+	return r.push(ctx, repo, branch, true, progress)
+}
+
+// Extend pushes the workspace branch to the branch of the same name in the
+// repository without force: the push lands only when the repository has no
+// such branch or its branch is the local commit or one of its ancestors,
+// as the repository decides when it takes the push, so a branch another
+// writer moved since it was read is never overwritten. Pushed is false
+// when the branch already held the local commit. It archives nothing.
+func (r *Remote) Extend(ctx context.Context, folder, workspace string, progress io.Writer) (pushed bool, err error) {
+	repo, branch, err := open(folder, workspace)
+	if err != nil {
+		return false, err
+	}
+	if _, err := repo.Reference(branch, false); err != nil {
+		return false, fmt.Errorf("workspace branch %s has no commit: %w", branch.Short(), err)
+	}
+	return r.push(ctx, repo, branch, false, progress)
+}
+
+// push pushes branch to the branch of the same name, with force or not.
+func (r *Remote) push(ctx context.Context, repo *git.Repository, branch plumbing.ReferenceName, force bool, progress io.Writer) (bool, error) {
 	s, err := r.open(ctx, progress)
 	if err != nil {
 		return false, err
 	}
 	defer s.close()
 	ctx, auth, progress := s.ctx, s.auth, s.progress
+	spec := branch.String() + ":" + branch.String()
+	if force {
+		spec = "+" + spec
+	}
 	remote := git.NewRemote(repo.Storer, &config.RemoteConfig{Name: remoteName, URLs: []string{r.URL}})
 	err = remote.PushContext(ctx, &git.PushOptions{
 		RemoteName: remoteName,
-		RefSpecs:   []config.RefSpec{config.RefSpec("+" + branch.String() + ":" + branch.String())},
+		RefSpecs:   []config.RefSpec{config.RefSpec(spec)},
 		Auth:       auth,
 		Progress:   progress,
-		Force:      true,
+		Force:      force,
 	})
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return false, nil

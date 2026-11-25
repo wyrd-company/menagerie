@@ -330,6 +330,8 @@ description: >-
 
   `POST /api/jobs` starts an operation on a workspace. The operations are
   `start`, `stop`, `rebuild`, `commit` and `apply-policies` on an existing workspace folder,
+  `move-backup` on an existing workspace folder, which also names a
+  `backupRepositoryId`,
   `apply-branch` on an existing workspace folder, which also names a
   `branch`, and the interview operations `create`, which also names a
   registered template's `templateId` and optionally a registered backup
@@ -351,7 +353,7 @@ description: >-
   `remove-folder`, `create-container`,
   `wait-for-sockets`, `up`, `verify`, `retire`, `stop`,
   `interview`, `initialize-repository`, `generate`, `host-prerequisites`,
-  `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
+  `fetch`, `plan`, `apply`, `commit`, `backup-local-changes`, `backup` or `switch`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `runner-image-unavailable`, `provisioning-invalid`, `provisioning-unavailable`,
   `provisioning-not-ready`, `binding-outside-grant`, `policy-outside-grant`,
@@ -363,8 +365,37 @@ description: >-
   or `backup-failed`, for `start` of a workspace whose create it finishes
   `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
   for `apply-branch` `branch-not-found`, `fetch-failed`, `backup-failed`,
-  `not-applicable`, `template-service-unavailable` or `apply-failed`. Its message says what was written and
+  `not-applicable`, `template-service-unavailable` or `apply-failed`, and
+  for `move-backup` `backup-move-failed` or `backup-branch-conflict`. Its message says what was written and
   what recovery is needed.
+
+
+  Move backup. `move-backup` names an existing workspace folder and a
+  registered backup repository other than the one the workspace backs up
+  to: without `backupRepositoryId` it is 400 `invalid-request`, with one no
+  repository has 404 `unknown-backup-repository`, and with the workspace's
+  own repository 409 `backup-repository-unchanged`, each before any job. A
+  workspace with no backup repository can take its first this way. The job
+  runs `verify`, `commit`, `backup` and `switch`. In `verify` it refuses a workspace
+  whose create has not finished, runs the destination's write check, and
+  reads the destination's branch of the workspace's name: a branch at a
+  commit that is not the workspace branch's commit or one of its ancestors
+  fails the job as `backup-branch-conflict`, naming the commit, with nothing
+  committed or pushed; a branch at one of them, as an earlier move that
+  failed after its push leaves, is taken over. `commit` commits every
+  change, as the commit operation does. `backup` pushes the workspace
+  branch to the destination without force, so a branch another writer made
+  after `verify` is never overwritten, reads the destination's branch back,
+  and requires it at the commit it pushed. Only then does `switch` record
+  the destination in Menagerie's data, and only while its id is still
+  registered at the URL the job checked. The record is the job's final
+  step: a job past its time limit times out before it and records nothing,
+  a record that a limit's cancellation interrupts, once the limit's timer
+  runs, records nothing and the job times out, and a record that commits decides the outcome,
+  so a recorded switch never ends `timed-out`. Every later backup, commit and Apply branch uses it. Any other failure is `backup-move-failed`. A failed move keeps
+  the workspace's repository, and its message says so. A move never
+  changes the earlier repository's branch, which keeps the workspace's
+  earlier backups for recovery.
 
 
   Time limits are configured in `job-limits` and are optional; without
@@ -383,7 +414,15 @@ description: >-
   move to `waiting-for-answers` and the job's end each first settle the
   running time, so a job that ends past a limit ends timed-out, and a
   long-running threshold passed while the job ran is alerted once, before
-  any `job-failed` alert, at the latest when the job ends. The slot is
+  any `job-failed` alert, at the latest when the job ends. A job's final
+  step, `move-backup`'s `switch` record, settles the running time before
+  it begins, and the limits keep counting while it runs: when a limit's
+  timer runs, which can be after the limit passed, it cancels the job's
+  context, and a step that the cancellation interrupts, such as one
+  waiting for the database connection, records nothing and the job times
+  out. A step that records decides the outcome:
+  the job succeeds even if a limit passed while the step ran, so the
+  job's outcome agrees with what the step recorded. The slot is
   released when the work returns, never before, so work that ignores
   cancellation keeps its workspace busy.
   A cancelled generate or apply revokes its hook token and kills and
@@ -1065,7 +1104,11 @@ validation-criteria: >-
   routes refuse and a repository Menagerie cannot write to, stores nothing
   for a check, and refuses removing one a workspace backs up to; `go test
   ./backend/internal/workflows/` has a create record its repository from
-  its start and take the only registered one;
+  its start and take the only registered one, and moves a workspace's
+  backups to an empty repository, refuses one whose branch holds another
+  history, one Menagerie cannot write to, one that refuses the branch over
+  the test's SSH host and one whose hook moves the branch after the push,
+  each keeping the workspace's repository;
   `scripts/prove-backup-repository-guards.py` breaks each of those guards,
   the write check's deletion of its ref and the data's foreign key in turn
   and requires its test to fail.

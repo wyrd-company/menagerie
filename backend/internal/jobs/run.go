@@ -29,6 +29,37 @@ func (r *Run) JobID() string { return r.job.id }
 // phase's time limit counts from this call.
 func (r *Run) Phase(name string) { r.job.setState(Running, name, true) }
 
+// Final runs step as the job's final step, the one whose effect the job's
+// outcome must agree with, such as recording what the job did. It first
+// settles the job's time limits: a limit that already passed times the job
+// out, and Final returns the timeout's error without running step. The
+// limits keep counting while step runs: when a limit's timer runs it
+// cancels the job's context, which interrupts a step still waiting on it,
+// such as a database transaction waiting for its connection. Once step
+// succeeds no limit counts any more and the job's outcome is no longer a
+// timeout, even if a limit passed while step ran: step's effect decides. A step that fails
+// ends as a timeout if a limit passed, or with its error.
+func (r *Run) Final(step func() error) error {
+	j := r.job
+	now := j.manager.now()
+	j.mu.Lock()
+	j.settleLocked(now)
+	timedOut := j.timedOut
+	j.mu.Unlock()
+	if timedOut != nil {
+		return fmt.Errorf("%w: %s", ErrTimedOut, timedOut.Message)
+	}
+	if err := step(); err != nil {
+		return err
+	}
+	j.mu.Lock()
+	j.final = true
+	j.stopTimerLocked()
+	j.deadline, j.limit = nil, nil
+	j.mu.Unlock()
+	return nil
+}
+
 // SetState records a nonterminal state, such as waiting-for-answers, with
 // the current phase. Time limits pause while the job waits. Terminal states are set by the runner's return.
 func (r *Run) SetState(state State) error {

@@ -124,7 +124,35 @@ design-challenges:
     has no backup repository. A backup repository that a workspace backs
     up to cannot be removed, and the refusal names those workspaces;
     removing one forgets it and leaves the repository and its branches as
-    they are.
+    they are. A `move-backup` job moves a workspace's backups to another
+    registered repository, or gives a workspace with none its first. Its
+    `verify` phase refuses a workspace whose create has not finished, runs
+    the destination's write check and reads the destination's branch of the
+    workspace's name; a branch whose commit is neither the workspace
+    branch's commit nor one of its ancestors fails the job as
+    `backup-branch-conflict`, before anything is committed or pushed, and
+    one that is, which an earlier move that failed after its push leaves,
+    is taken over. `commit` commits every change, as the commit operation
+    does, and `backup` pushes the branch to the destination without force,
+    so the destination takes it only while its branch is still absent or in
+    the workspace's history, and a branch another writer made after the
+    check is never overwritten; it then reads the destination's branch
+    back. Only when it is at the commit pushed does `switch` record the
+    destination, in one transaction that requires the repository's id to be
+    registered still at the URL the job checked. The record is the job's
+    final step (`Run.Final` in the jobs package): it settles the job's time
+    limits first, so a move past its limit times out and records nothing.
+    The limits keep counting while the record runs: when a limit's timer
+    runs, which can be after the limit passed, it cancels the job's
+    context, and a record that the cancellation interrupts, for example
+    while it waits for the database connection, records nothing and the
+    move times out. A record that commits decides the outcome, even past a
+    limit whose timer has not run, so a recorded switch is never reported
+    as a timeout. Every other failure is `backup-move-failed`, the workspace keeps its repository, and the
+    message says so. The move never writes to the earlier repository, whose
+    branch keeps the workspace's earlier backups for recovery. The job
+    holds the workspace's job slot, so no commit or backup of the workspace
+    runs between its push and the switch.
   template-versions: >-
     A template's versions are the tags of a remote repository, reached over
     SSH through the Wyrwood agent, over `https` with a GitHub App token, or
@@ -181,7 +209,8 @@ proposed-design:
     backup repository it backs up to, whether
     it needs an upgrade, which policy groups need a choice, and whether its
     binding has its selection, and offers start, stop, rebuild, apply branch,
-    upgrade, policies and delete. Apply branch takes a branch name in the
+    upgrade, policies, move backups and delete. Move backups takes another
+    registered backup repository in the row. Apply branch takes a branch name in the
     row. Delete asks the manager to type the workspace's name and says that
     ignored files are not backed up. Policies opens a panel in the row with
     the workspace's required policies, its choice in each policy group and

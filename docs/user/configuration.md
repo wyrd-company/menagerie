@@ -435,15 +435,15 @@ once the cancelled work has stopped.
 
 - `default` limits every operation.
 - `operations` gives `start`, `stop`, `rebuild`, `create`, `upgrade`,
-  `commit`, `apply-branch`, `apply-policies` or `delete` its own limit, which
-  replaces `default`.
+  `commit`, `apply-branch`, `apply-policies`, `delete` or `move-backup` its
+  own limit, which replaces `default`.
 - `phases` limits each stay in a phase, inside any operation:
   `read-definition`, `issue-key`, `bind`, `initialize-command`, `build`,
   `unbind`, `remove-container`, `revoke-key`, `remove-folder`,
   `create-container`, `wait-for-sockets`, `up`, `verify`,
   `retire`, `stop`, `interview`, `initialize-repository`, `generate`,
   `host-prerequisites`, `fetch`, `plan`, `apply`, `commit`,
-  `backup-local-changes` or `backup`. Template hooks run inside `generate`
+  `backup-local-changes`, `backup` or `switch`. Template hooks run inside `generate`
   and `apply`; a hook
   still running when its job is cancelled has its container killed and
   removed before the job ends.
