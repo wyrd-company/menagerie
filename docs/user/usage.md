@@ -469,12 +469,17 @@ its Git URL, in a form
 **Validate**. Menagerie checks that it can write to the repository: it pushes
 a ref under `refs/menagerie/`, not a branch, and deletes it again, so an empty
 repository stays empty. A refusal names the check that failed, `url` or
-`write`. **Save** stays unavailable until a Validate of the form as it is now
-passes, and checks again. A repository whose URL is registered already is
+`write`. The check proves Menagerie may write to the repository, not that its
+branch rules allow it: a repository whose branch protection stops Menagerie
+creating or force-pushing a branch named after a workspace passes Validate,
+and that workspace's first backup fails as `backup-failed`. **Save** stays
+unavailable until a Validate of the form as it is now passes, and checks
+again. A repository whose URL is registered already is
 refused with the registration it has.
 
 **Remove** forgets a repository that no workspace backs up to; the
-repository and its branches stay as they are.
+repository and its branches stay as they are. A URL with a password, kept from
+an earlier release's `workspace-repository`, is shown without it.
 
 ## Backups
 

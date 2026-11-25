@@ -97,10 +97,18 @@ design-challenges:
     git-and-credentials and github-app), and deletes it, within one minute.
     The ref is not a branch, an empty repository stays empty, and no
     workspace is read. A failed deletion fails the check and names the ref.
+    The check proves the credentials may write to the repository, not that
+    its branch rules let them create and force-update a workspace's branch;
+    a repository that protects its branches fails a workspace's first
+    backup instead, as `backup-failed`.
     A URL that is registered already is refused, naming that registration.
     The `id` is permanent: the lower-case letters and digits of the name,
     separated by single dashes, or `backups` when the name has none, with
-    `-2`, `-3` and on added while it is taken. A registration can be asked
+    `-2`, `-3` and on added while it is taken. A removed repository keeps
+    its row, marked removed, so its id never names another repository and a
+    request that still names it is refused. A URL in a reply or on a page
+    has no password, query or fragment: a registration refuses a password,
+    and the import keeps the configured URL whole for its backups. A registration can be asked
     to check without storing, as a template's can, and a save runs every
     check again. A create names a registered repository, or, when it names
     none and exactly one is registered, takes that one; with none or several
@@ -1423,9 +1431,11 @@ proposed-design:
     6. Backup repository: the configuration's `workspace-repository`, when
     it is set, is registered with no check, named by its URL's path without
     a leading slash and a `.git` suffix, such as
-    `example-org/workspace-backups`, or `Workspace backups` when that is not
-    a valid name, unless a registration has that URL already; every
-    workspace with no backup repository then backs up to it, and the start
+    `example-org/workspace-backups`, without its query and fragment, or
+    `Workspace backups` when that is not a valid name, unless a
+    registration has that URL already; every workspace with no backup
+    repository then backs up to it, each workspace folder included, which
+    gets its workspace when it has none, and the start
     log names it and how many workspaces took it. Without the key the import
     records its mark and registers nothing.
     The policy settings start empty. A workspace that first-start-import

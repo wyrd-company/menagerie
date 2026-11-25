@@ -78,9 +78,9 @@ description: >-
   workspace service reads it only for its first-start import, at the first
   start whose Menagerie data has no backup repository import: the URL is
   registered as a backup repository with no check, named by its path
-  without a leading slash and a `.git` suffix, unless a registration has
-  that URL, and every workspace with no backup repository then backs up to
-  it. The import records that it ran, with or without the key, so a later
+  without a leading slash, its query and fragment and a `.git` suffix,
+  unless a registration has that URL, and every workspace with no backup
+  repository, each workspace folder included, then backs up to it. The import records that it ran, with or without the key, so a later
   edit imports nothing. Every start that finds the key logs one warning
   that says backup repositories are registered in the interface.
 

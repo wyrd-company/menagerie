@@ -308,7 +308,9 @@ description: >-
   Backup repositories. `GET /api/backup-repositories` lists the registered
   backup repositories sorted by name as letters without regard to case,
   then by name and id, each `{id, name, url, workspaces}`, `workspaces` the
-  names of the workspaces that back up to it. `POST /api/backup-repositories`
+  names of the workspaces that back up to it. Every `url` a reply holds,
+  here and on a workspace's row, has no password, query or fragment.
+  `POST /api/backup-repositories`
   takes `{"name","url","check"}`, `check` optional and false by default,
   and runs the checks of the design's `backup-repositories` in order:
   `url`, then `write`, which pushes a ref under `refs/menagerie/` and
@@ -319,7 +321,8 @@ description: >-
   the repository and `Location: /api/backup-repositories/{id}`, or, with
   `check`, 200 with the repository a registration would store, storing
   nothing. `DELETE /api/backup-repositories/{id}` answers 204, leaving the
-  repository and its branches as they are, 409 `backup-repository-in-use`
+  repository and its branches as they are and its id never given to another
+  repository, 409 `backup-repository-in-use`
   while a workspace backs up to it, naming those workspaces, and 404
   `unknown-backup-repository` for an id none has.
 

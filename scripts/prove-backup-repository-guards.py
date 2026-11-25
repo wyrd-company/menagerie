@@ -12,7 +12,10 @@ workspace backs up to; adopting the imported repository gives it only to
 workspaces that have none; a create records its repository from its start
 and takes the only registered one only when exactly one is; a backup goes
 to the workspace's own repository and fails when it has none; the create
-screen chooses the only registered repository, never one of several. Each
+screen chooses the only registered repository, never one of several. A
+removed repository's id is never given to another; a reply's URL holds no
+password, query or fragment; the import gives its repository to every
+workspace folder, one with no data included. Each
 mutation changes one guard in place, and its tests must fail; the source is
 restored even on interruption. The report starts failed and passes only
 after every baseline test passes and every mutant compiles and fails each
@@ -37,6 +40,10 @@ TESTS = {
     "kept-registered": ("./backend/internal/store", "TestAWorkspaceKeepsItsBackupRepositoryRegistered"),
     "adopt-only-none": ("./backend/internal/store", "TestSettingAndAdoptingBackupRepositories"),
     "create-records": ("./backend/internal/workflows", "TestACreateRecordsItsBackupRepository"),
+    "id-never-reused": ("./backend/internal/store", "TestARemovedBackupRepositorysIDIsNeverReused"),
+    "public-url": ("./backend/internal/backuprepos", "TestPublicURLHoldsNoCredential"),
+    "replies-no-credential": ("./backend/internal/api", "TestRepliesNameNoBackupCredential"),
+    "import-once": ("./backend/internal/backuprepos", "TestImportTakesOverTheConfiguredRepositoryOnce"),
     "screen-several": ("web/src/screens/BackupRepositories.test.tsx",
                        "asks for a backup repository on create when several are registered"),
 }
@@ -81,6 +88,16 @@ MUTANTS = [
      "\tif err := c.w.opts.Data.BeginCreateFrom(ctx, c.name, tpl.ID, \"\"); err != nil {\n", ["create-records"]),
     ("only-the-only-one", FLOWS,
      "\t\tif len(registered) != 1 {\n", "\t\tif len(registered) == 0 {\n", ["create-records"]),
+    ("removal-keeps-the-id", BACKUPS,
+     "\t\t_, err = t.exec(`UPDATE backup_repositories SET removed_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339Nano), id)\n",
+     "\t\t_ = time.Now\n\t\t_, err = t.exec(`DELETE FROM backup_repositories WHERE id = ?`, id)\n", ["id-never-reused"]),
+    ("public-url-drops-password", REGISTRY,
+     "\t\tu.User = neturl.User(u.User.Username())\n", "\t\t_ = u.User\n", ["public-url"]),
+    ("reply-uses-public-url", "backend/internal/api/backups.go",
+     "URL: backuprepos.PublicURL(r.URL)", "URL: r.URL", ["replies-no-credential"]),
+    ("import-adds-folders", REGISTRY,
+     "\t\t\tif err := tx.AddWorkspace(name); err != nil {\n", "\t\t\tif err := error(nil); name == \"\" && err != nil {\n",
+     ["import-once"]),
     ("screen-chooses-only-one", PICKER,
      "        if (list.length === 1 && list[0]) onChange(list[0].id);\n",
      "        if (list[0]) onChange(list[0].id);\n", ["screen-several"]),
