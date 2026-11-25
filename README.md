@@ -37,7 +37,7 @@ Menagerie is one container image for Linux hosts with Docker Engine, on
 
 | Method | Command |
 | --- | --- |
-| Container image | `docker pull ghcr.io/wyrd-company/menagerie:0.5.0` |
+| Container image | `docker pull ghcr.io/wyrd-company/menagerie:0.5.1` |
 | From source | `task build:image` (tags `menagerie:dev`) |
 
 [Installation](docs/user/install.md) covers the host, the identity provider and

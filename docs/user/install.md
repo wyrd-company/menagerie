@@ -395,6 +395,26 @@ needs the backup. A start that finds no data takes back what the workspaces,
 their definitions, their containers and Wyrwood still hold, as the first start
 after an upgrade does.
 
+### Upgrading from 0.5.0
+
+Release 0.5.1 lets each workspace back up to its own [backup
+repository](usage.md#backup-repositories). From 0.4.2, follow the next section
+first.
+
+1. Back up the `/var/lib/menagerie` volume. Release 0.5.1 adds backup
+   repositories to Menagerie's data, and 0.5.0 refuses to start on that data,
+   so going back needs the backup.
+2. Pull the image and recreate the container, keeping `workspace-repository`
+   in the configuration. The first start registers it as a backup repository
+   and every existing workspace keeps backing up to it, as [the
+   workspace-repository key](configuration.md#the-workspace-repository-key)
+   says.
+3. After that start, remove `workspace-repository` from the configuration.
+   Menagerie no longer reads it, and every start that finds it logs a warning.
+
+An install with no `workspace-repository` registers a backup repository on the
+**Backups** screen before it creates its first workspace.
+
 ### Upgrading from 0.4.2
 
 Release 0.5.0 changes what a 0.4.2 install relies on. Before you pull the
