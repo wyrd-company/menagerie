@@ -196,3 +196,9 @@
   color: var(--warn);
   font-size: 14px;
 }
+
+/* A backup repository's URL wraps inside its choice card at any width. */
+.backup-url {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

@@ -64,7 +64,7 @@ export function BackupPicker({ value, onChange }: Props) {
               onChange={() => onChange(r.id)}
             />
             <span className="template-name">{r.name}</span>
-            <span className="template-id mono" title={r.url}>
+            <span className="template-id mono backup-url" title={r.url}>
               {r.url}
             </span>
           </label>

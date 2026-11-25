@@ -142,7 +142,9 @@ function Registration({ onRegistered }: { onRegistered: () => void }) {
           <span className="field-title">Git URL</span>
         </label>
         <p className="field-description" id="backup-url-desc">
-          An ssh, scp-like (git@host:path) or https URL. Menagerie must be able to push to it.
+          An ssh, scp-like (git@host:path) or https URL. Validate checks that Menagerie can push to
+          it, not branch protection: a rule that stops Menagerie creating or force-pushing a
+          workspace&apos;s branch fails that workspace&apos;s backups.
         </p>
         <input
           id="backup-url"
