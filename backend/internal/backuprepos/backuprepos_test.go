@@ -180,7 +180,8 @@ func TestImportName(t *testing.T) {
 // A URL as a reply shows it holds no password, query or fragment.
 func TestPublicURLHoldsNoCredential(t *testing.T) {
 	for url, want := range map[string]string{
-		"https://user:sentinel@git.example.invalid/example-org/backups.git":  "https://user@git.example.invalid/example-org/backups.git",
+		"https://user:sentinel@git.example.invalid/example-org/backups.git":  "https://git.example.invalid/example-org/backups.git",
+		"https://sentinel@git.example.invalid/example-org/backups.git":       "https://git.example.invalid/example-org/backups.git",
 		"https://git.example.invalid/example-org/backups.git?token=sentinel": "https://git.example.invalid/example-org/backups.git",
 		"https://git.example.invalid/o/b.git#sentinel":                       "https://git.example.invalid/o/b.git",
 		"ssh://git:sentinel@git.example.invalid/o/b.git":                     "ssh://git@git.example.invalid/o/b.git",

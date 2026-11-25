@@ -94,7 +94,7 @@ func TestABackupRepositoryIsRegisteredListedAndRemovedThroughTheAPI(t *testing.T
 func TestRepliesNameNoBackupCredential(t *testing.T) {
 	f := newFixture(t, nil)
 	ctx := context.Background()
-	url := "https://user:sentinel@git.example.invalid/example-org/backups.git?token=sentinel"
+	url := "https://sentinel@git.example.invalid/example-org/backups.git?token=sentinel"
 	r, err := f.data.RegisterBackupRepository(ctx, store.BackupRepository{Name: "Imported", URL: url})
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +104,7 @@ func TestRepliesNameNoBackupCredential(t *testing.T) {
 	}
 	for _, path := range []string{"/api/backup-repositories", "/api/workspaces"} {
 		_, data := f.do(t, "GET", path, "")
-		if strings.Contains(string(data), "sentinel") || !strings.Contains(string(data), "https://user@git.example.invalid/example-org/backups.git") {
+		if strings.Contains(string(data), "sentinel") || !strings.Contains(string(data), `"url":"https://git.example.invalid/example-org/backups.git"`) {
 			t.Errorf("%s: %s", path, data)
 		}
 	}

@@ -224,8 +224,9 @@ func ImportName(url string) string {
 }
 
 // PublicURL is url as a reply or a page shows it: an URL with a scheme
-// loses its password, query and fragment, which can hold a credential that
-// an earlier release's workspace-repository carried. A registration refuses
+// loses its password, query and fragment, and an http or https URL its
+// user name too, since a token can stand in either, as an earlier
+// release's workspace-repository could carry them. A registration refuses
 // a URL with a password; the import keeps one, because backups used it.
 func PublicURL(url string) string {
 	u, err := neturl.Parse(url)
@@ -237,7 +238,10 @@ func PublicURL(url string) string {
 		}
 		return url
 	}
-	if u.User != nil {
+	switch {
+	case u.Scheme == "http" || u.Scheme == "https":
+		u.User = nil
+	case u.User != nil:
 		u.User = neturl.User(u.User.Username())
 	}
 	u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = "", false, "", ""
