@@ -34,8 +34,8 @@ func (r *Run) Phase(name string) { r.job.setState(Running, name, true) }
 // settles the job's time limits: a limit that already passed times the job
 // out, and Final returns the timeout's error without running step. The
 // limits keep counting while step runs, so a limit that passes cancels the
-// job's context and a step bound to it, such as a database transaction
-// still waiting for its connection, stops. Once step succeeds no limit
+// job's context, which interrupts a step still waiting on it, such as a
+// database transaction waiting for its connection. Once step succeeds no limit
 // counts any more and the job's outcome is no longer a timeout, even if a
 // limit passed as step finished: step's effect decides. A step that fails
 // ends as a timeout if a limit passed, or with its error.

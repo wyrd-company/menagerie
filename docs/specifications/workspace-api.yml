@@ -390,8 +390,8 @@ description: >-
   the destination in Menagerie's data, and only while its id is still
   registered at the URL the job checked. The record is the job's final
   step: a job past its time limit times out before it and records nothing,
-  a limit that passes while the record waits cancels it and the job times
-  out with nothing recorded, and once the record commits no limit counts,
+  a record that a passing limit's cancellation interrupts records nothing
+  and the job times out, and a record that commits decides the outcome,
   so a recorded switch never ends `timed-out`. Every later backup, commit and Apply branch uses it. Any other failure is `backup-move-failed`. A failed move keeps
   the workspace's repository, and its message says so. A move never
   changes the earlier repository's branch, which keeps the workspace's
@@ -416,11 +416,12 @@ description: >-
   long-running threshold passed while the job ran is alerted once, before
   any `job-failed` alert, at the latest when the job ends. A job's final
   step, `move-backup`'s `switch` record, settles the running time before
-  it begins, and the limits keep counting while it runs: one that passes
-  while the step waits, such as for the database connection, cancels it
-  and the job times out with nothing recorded. A step that records
-  decides the outcome: the job succeeds even if a limit passed while the
-  step ran, so the job's outcome agrees with what the step recorded. The slot is
+  it begins, and the limits keep counting while it runs: a limit that
+  passes cancels the job's context, and a step that the cancellation
+  interrupts, such as one waiting for the database connection, records
+  nothing and the job times out. A step that records decides the outcome:
+  the job succeeds even if a limit passed while the step ran, so the
+  job's outcome agrees with what the step recorded. The slot is
   released when the work returns, never before, so work that ignores
   cancellation keeps its workspace busy.
   A cancelled generate or apply revokes its hook token and kills and
