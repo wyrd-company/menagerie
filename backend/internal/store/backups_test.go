@@ -154,3 +154,20 @@ func TestARemovedBackupRepositorysIDIsNeverReused(t *testing.T) {
 		t.Fatalf("%+v", list)
 	}
 }
+
+// A create that names a repository removed since it was read is refused in
+// the transaction that would record it.
+func TestACreateRefusesARemovedBackupRepository(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	r := backupRepository(t, s, "Other", "ssh://git@git.example.invalid/example-org/other.git")
+	if err := s.RemoveBackupRepository(ctx, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BeginCreateFrom(ctx, "alpha", "", r.ID); !errors.Is(err, ErrNoBackupRepository) {
+		t.Fatalf("%v", err)
+	}
+	if exists, _ := s.Exists(ctx, "alpha"); exists {
+		t.Fatal("a refused create left data")
+	}
+}

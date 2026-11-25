@@ -347,6 +347,14 @@ func (s *Store) BeginCreateFrom(ctx context.Context, name, template, backups str
 		if claimed {
 			return fmt.Errorf("%w: %s", ErrExists, name)
 		}
+		// A repository removed since the caller read it is refused here, in
+		// the transaction that records it: its row stays, so the foreign key
+		// alone would take it.
+		if backups != "" {
+			if _, err := t.backupRepository(backups); err != nil {
+				return err
+			}
+		}
 		// Replace any unclaimed data, including its policy selection. A new
 		// create starts with the current required policies through the trigger.
 		if _, err := t.exec(`DELETE FROM workspaces WHERE name = ?`, name); err != nil {

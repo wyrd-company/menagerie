@@ -61,6 +61,9 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 		return err
 	}
 	if err := c.w.opts.Data.BeginCreateFrom(ctx, c.name, tpl.ID, backups.ID); err != nil {
+		if errors.Is(err, store.ErrNoBackupRepository) {
+			return &jobs.Failure{Kind: KindBackupFailed, Err: fmt.Errorf("backup repository %s was removed as the create began; nothing was written", c.backups)}
+		}
 		if errors.Is(err, store.ErrExists) {
 			return &jobs.Failure{Kind: KindWorkspaceExists, Err: fmt.Errorf("workspace %s already exists in Menagerie's data; nothing was written", c.name)}
 		}
