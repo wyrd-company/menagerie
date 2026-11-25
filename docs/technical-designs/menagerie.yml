@@ -8,6 +8,7 @@ relationships:
     - name-workspace-provisioning-after-the-workspace
     - let-menagerie-decide-each-binding
     - issue-a-key-to-every-provisioned-workspace
+    - choose-a-backup-repository-per-workspace
   mitigates:
     - menagerie-data-loss
 objective: >-
@@ -54,8 +55,10 @@ design-challenges:
     `initializeCommand` comes from a definition the workspace's own
     devcontainer may be able to edit.
   git-credentials: >-
-    Menagerie backs up each workspace to GitHub. No credential may be stored
-    in the Menagerie container.
+    Menagerie backs up each workspace to a Git repository, on GitHub or
+    another host, and a host's workspaces can belong to several
+    organizations, each with a repository of its own. No credential may be
+    stored in the Menagerie container.
   workspace-commits: >-
     Changes made inside a devcontainer, such as scripts an agent adds to a
     writable folder of the workspace, must be committed and backed up
@@ -79,6 +82,39 @@ design-challenges:
   long-running-operations: >-
     Builds and rebuilds take minutes. The UI must show progress and must not
     start two operations on one workspace.
+  backup-repositories: >-
+    Each workspace backs up to one registered backup repository, which its
+    data records; the decision choose-a-backup-repository-per-workspace
+    explains why. A manager registers a repository with a display name, one
+    line of 1 to 100 characters, and a Git URL: `ssh://`, scp-like
+    `git@host:path` or `https://`, with no password and no surrounding
+    space. A local path, a `file://` URL and plain `http` are refused, so a
+    registration never writes into Menagerie's own filesystem. Registration
+    runs two checks in this order and refuses the repository at the first
+    that fails, naming it: `url`, the URL has one of those forms; `write`,
+    Menagerie pushes a ref `refs/menagerie/write-check-<random>` holding one
+    empty commit made in memory, with the credentials the URL gets (see
+    git-and-credentials and github-app), and deletes it, within one minute.
+    The ref is not a branch, an empty repository stays empty, and no
+    workspace is read. A failed deletion fails the check and names the ref.
+    A URL that is registered already is refused, naming that registration.
+    The `id` is permanent: the lower-case letters and digits of the name,
+    separated by single dashes, or `backups` when the name has none, with
+    `-2`, `-3` and on added while it is taken. A registration can be asked
+    to check without storing, as a template's can, and a save runs every
+    check again. A create names a registered repository, or, when it names
+    none and exactly one is registered, takes that one; with none or several
+    registered it is refused. The create's workspace records the repository
+    from the create's start, so it cannot be removed while the create's
+    interview waits. Every backup, commit and Apply branch fetch of a
+    workspace resolves its repository from the data when it runs. A
+    workspace with none, such as a folder copied into the workspace root
+    after the first start, fails each backup as `backup-failed` and fails
+    an Apply branch as `fetch-failed`, and the job's console says that it
+    has no backup repository. A backup repository that a workspace backs
+    up to cannot be removed, and the refusal names those workspaces;
+    removing one forgets it and leaves the repository and its branches as
+    they are.
   template-versions: >-
     A template's versions are the tags of a remote repository, reached over
     SSH through the Wyrwood agent, over `https` with a GitHub App token, or
@@ -129,9 +165,10 @@ proposed-design:
     the files the template generated; repositories cloned inside the workspace
     are ignored by the template's `.gitignore`.
   screens: >-
-    The UI has five screens. The workspace list shows every workspace with
+    The UI has six screens. The workspace list shows every workspace with
     its status (running, stopped, no container, no folder, or the operation
-    in progress), its template and the version last applied to it, whether
+    in progress), its template and the version last applied to it, the
+    backup repository it backs up to, whether
     it needs an upgrade, which policy groups need a choice, and whether its
     binding has its selection, and offers start, stop, rebuild, apply branch,
     upgrade, policies and delete. Apply branch takes a branch name in the
@@ -139,7 +176,8 @@ proposed-design:
     ignored files are not backed up. Policies opens a panel in the row with
     the workspace's required policies, its choice in each policy group and
     its other policies, where a manager adds and removes them. The create screen selects a
-    registered template, names the workspace, takes a choice in each policy
+    registered template and a registered backup repository, the only one
+    preselected, names the workspace, takes a choice in each policy
     group and any other policies, and runs the interview. The upgrade screen
     runs the interview for the current version of the workspace's template,
     asking only what the recorded answers do not cover, or, when the manager
@@ -152,7 +190,11 @@ proposed-design:
     save: Validate runs the checks without storing, Save stays disabled
     until a Validate of the form's current values passes, which the form
     shows as `Checks passed` with the version, and any edit disables Save
-    again and clears that result and any refusal; Save checks again. The policies screen lists the policies inside the operator key's
+    again and clears that result and any refusal; Save checks again. The
+    backup repositories screen lists the registered backup repositories
+    with the workspaces that back up to each, registers one the same way,
+    validate then save, with `Checks passed` naming its id, and removes one
+    that no workspace backs up to. The policies screen lists the policies inside the operator key's
     grant and those the settings name outside it, marks policies required,
     and creates, edits and removes policy groups.
   workspace-discovery: >-
@@ -177,13 +219,17 @@ proposed-design:
     devcontainers and throwaway containers never reach it. Every change is
     one transaction and foreign keys are enforced, so a constraint, not a
     scan of files, keeps these rules: a template has one registration per
-    source, a template that a workspace uses cannot be removed, and a
+    source, a template that a workspace uses cannot be removed, a backup
+    repository has one registration per URL, a backup repository that a
+    workspace backs up to cannot be removed, and a
     container name or a Xolotl key belongs to one workspace at a time. The
     schema's version is the database's `user_version`; a start upgrades an
     older schema in one transaction before it serves, and refuses a newer
     one. The data holds the registered templates (see template-registry and
-    template-versions); the workspaces, keyed by folder name, each with
-    whether a create is making it, its template, the version and commit last
+    template-versions); the registered backup repositories (see
+    backup-repositories); the workspaces, keyed by folder name, each with
+    whether a create is making it, its template, its backup repository, the
+    version and commit last
     applied, its Xolotl key, its per-binding values, its policy selection
     and that selection's revision, the revision last applied to its binding
     and the reason the last apply failed, whether its selection is still to
@@ -420,7 +466,9 @@ proposed-design:
     version is then the pinned version. Without a provisioning
     declaration, the workspace service commits, backs the commit up to an
     orphan branch named after the workspace in the workspace repository, and
-    starts the devcontainer through devcontainer-builder. A branch of that name
+    starts the devcontainer through devcontainer-builder. The workspace
+    repository is the create's backup repository (see backup-repositories).
+    A branch of that name
     from a deleted workspace is the only copy left of it, so the backup first
     copies it to `archive/<name>-<UTC stamp>` and the console names the copy. With one, it runs
     the provisioning steps, which include that commit and backup. A create
@@ -1170,7 +1218,8 @@ proposed-design:
     image's own. A refused reference resolves as an unset variable does and
     is named in the job log.
   git-and-credentials: >-
-    The workspace repository is a backup, not a synchronized copy. The local
+    The workspace repository, a workspace's backup repository (see
+    backup-repositories), is a backup, not a synchronized copy. The local
     workspace is the source of truth; the workspace service uses go-git to
     init, commit and force-push the workspace branch, and never pulls it.
     It fetches only on Apply branch, and then only the named branch, into
@@ -1181,9 +1230,9 @@ proposed-design:
     mounted from the host consumer directory. The agent offers one Git key,
     an OpenBao Transit key, and with provisioning also the operator key, which
     no Git host accepts. The Git key must reach every repository Menagerie uses
-    over SSH: a deploy key with write access on the workspace repository
-    when it is the only one, else the SSH key of a machine user with write
-    access on the workspace repository and read access on the private
+    over SSH: a deploy key with write access on the backup repository
+    when there is one repository, else the SSH key of a machine user with write
+    access on every backup repository and read access on the private
     template repositories. Toha fetches SSH templates through the same
     agent; its git transport runs the image's ssh client with
     `SSH_AUTH_SOCK` set to Wyrwood's socket. Repositories on GitHub can
@@ -1257,12 +1306,13 @@ proposed-design:
     the `menagerie_managers` group claim. Every authenticated user is a
     manager.
   configuration: >-
-    Configuration names the workspace root, the workspace repository, the
+    Configuration names the workspace root, the
     OIDC issuer and client, the Wyrwood consumer directory, the registry
     credential secrets, the default runner image, the commit schedule, the
     template version schedule, the socket folder, the GitHub App and
-    provisioning. Templates, their versions, the policy settings and the
-    selections are Menagerie's data, never configuration. Optional
+    provisioning. Templates, their versions, the backup repositories, the
+    policy settings and the selections are Menagerie's data, never
+    configuration. Optional
     `template-versions` has `every`, a duration, absent `1h`. Optional
     `provisioning` has `readiness-wait`,
     a duration, absent `2m`; `wyrwood`, with `controller`, the controller's
@@ -1286,9 +1336,15 @@ proposed-design:
     parser is a breaking change of its own (wyrd-company/menagerie#98),
     made only in a release after one that imported the key; a file that
     still has it then fails to parse, and the error names the key.
+  workspace-repository-key: >-
+    `workspace-repository`, the one backup repository of earlier releases,
+    is optional. The workspace service reads it only for import 6 of
+    first-start-import, which takes it over once, so a later edit of the key
+    imports nothing, and every start that finds the key logs one warning
+    that says backup repositories are registered in the interface.
   first-start-import: >-
     Menagerie's data takes over what a host of an earlier release keeps
-    elsewhere, with no step by hand. Imports 1 to 4 each have a mark in the
+    elsewhere, with no step by hand. Imports 1 to 4 and 6 each have a mark in the
     data and run, before the workspace service serves, at the first start
     whose schema has them, each in one transaction with its mark; the
     template import waits up to one minute for the template service, which
@@ -1296,7 +1352,8 @@ proposed-design:
     process supervisor starts the workspace service again. Import 5 runs for each workspace as it says. A start that
     finds no database runs every import, so a lost data volume
     recovers what the workspaces, their definitions, their containers and
-    Wyrwood still hold (see menagerie-data-loss).
+    Wyrwood still hold (see menagerie-data-loss). Import 6 runs after
+    imports 1 and 2, before the template import.
     1. Workspaces: each workspace folder gets its workspace, as
     workspace-discovery gives one to a folder listed for the first time.
     2. Provisioned names and keys: each workspace holds the names and keys
@@ -1363,6 +1420,14 @@ proposed-design:
     and a job that would bind or change that workspace's binding fails as
     `provisioning-unavailable`, so no binding is ever changed from a
     selection that was not imported.
+    6. Backup repository: the configuration's `workspace-repository`, when
+    it is set, is registered with no check, named by its URL's path without
+    a leading slash and a `.git` suffix, such as
+    `example-org/workspace-backups`, or `Workspace backups` when that is not
+    a valid name, unless a registration has that URL already; every
+    workspace with no backup repository then backs up to it, and the start
+    log names it and how many workspaces took it. Without the key the import
+    records its mark and registers nothing.
     The policy settings start empty. A workspace that first-start-import
     takes over keeps its access: its binding holds what it held, and its
     key is the one it had.

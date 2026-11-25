@@ -26,6 +26,10 @@ folder**: it offers only [**Delete**](#delete-a-workspace), which removes
 them. **Refresh** reads the folders, the containers and Menagerie's data
 again.
 
+Each row names the [backup repository](#backup-repositories) it backs up to,
+as **Backs up to** its name, with its URL when you hold the pointer over it,
+or **No backup repository** for a folder Menagerie found with none.
+
 Each row names its [template](#templates), or **Unregistered template** for a
 workspace whose template is not registered; such a workspace keeps working and
 joins its template when a manager registers it. Beside it is the version last
@@ -203,7 +207,9 @@ retrying.
 ## Create a workspace
 
 Choose **New workspace**, pick a registered template, shown with its current
-version, and enter the workspace's name, which becomes its folder. The
+version, pick the [backup repository](#backup-repositories) its backups go to,
+chosen for you when only one is registered, and enter the workspace's name,
+which becomes its folder. The
 workspace gets the template's current version. Required policies are selected
 already. Choose a policy in each group, exactly one in a single-select group,
 and any other policies the workspace needs. **Begin interview** asks the
@@ -222,7 +228,7 @@ The job console then shows each phase:
    `host-prerequisites-missing` when the host lacks any, and the message names
    them all. Nothing is committed or started.
 4. `commit` and `backup`: the first commit, pushed to the workspace's own
-   orphan branch in the workspace repository.
+   orphan branch in its backup repository.
 5. `initialize-command`: the devcontainer's `initializeCommand`, in
    throwaway containers that see only the workspace folder, with only the
    variables of [`local-env`](configuration.md#local-environment) beside
@@ -232,7 +238,7 @@ The job console then shows each phase:
 
 The answers are kept in the workspace, in `.toha.json`.
 
-If a branch with the workspace's name is already in the workspace repository,
+If a branch with the workspace's name is already in the backup repository,
 from a workspace that was deleted, the `backup` phase first copies it to
 `archive/<name>-<UTC stamp>`, and the console names the copy.
 
@@ -451,9 +457,29 @@ workspace's own branch is refused, the workspace repository keeps the pushed
 commits, and the message names the fetched commit, until the next backup of
 the workspace replaces them.
 
+## Backup repositories
+
+**Backups** lists the registered backup repositories, each with its URL and
+the workspaces that back up to it. Every workspace backs up to one of them,
+chosen when it is created.
+
+To register one, choose **Register repository**, give it a display name and
+its Git URL, in a form
+[Configuration](configuration.md#backup-repositories) lists, and choose
+**Validate**. Menagerie checks that it can write to the repository: it pushes
+a ref under `refs/menagerie/`, not a branch, and deletes it again, so an empty
+repository stays empty. A refusal names the check that failed, `url` or
+`write`. **Save** stays unavailable until a Validate of the form as it is now
+passes, and checks again. A repository whose URL is registered already is
+refused with the registration it has.
+
+**Remove** forgets a repository that no workspace backs up to; the
+repository and its branches stay as they are.
+
 ## Backups
 
-Each workspace is backed up to a branch named after its folder, created
+Each workspace is backed up to a branch named after its folder, in its backup
+repository, created
 without a parent and replaced by force at every backup. Commits pushed to
 that branch from elsewhere survive only when
 [Apply branch](#apply-a-reviewed-branch) brings them in before the next

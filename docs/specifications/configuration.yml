@@ -10,11 +10,11 @@ description: >-
   document and an empty document are errors.
 
 
-  It names the workspace root, the workspace repository, the Wyrwood
+  It names the workspace root, the Wyrwood
   consumer directory, the OIDC issuer and client, the HTTP listen address,
   the template service socket, the hook runner socket and the candidate
-  folder. Templates are Menagerie's data, registered in the interface,
-  never configuration. `workspace-root`
+  folder. Templates and backup repositories are Menagerie's data,
+  registered in the interface, never configuration. `workspace-root`
   and `wyrwood-directory` are absolute paths; the workspace root is used as
   written (cleaned, not symlink-resolved) because container labels carry
   the path the host daemon sees, and it is never `/`. Defaults: listen
@@ -71,6 +71,18 @@ description: >-
   read only by the import. Every start that finds the key logs one warning
   that names it and says that templates are registered in the interface.
   The template service reads nothing of `templates`.
+
+
+  Optional `workspace-repository`, deprecated in the schema, is the one
+  Git remote that every workspace backed up to in earlier releases. The
+  workspace service reads it only for its first-start import, at the first
+  start whose Menagerie data has no backup repository import: the URL is
+  registered as a backup repository with no check, named by its path
+  without a leading slash and a `.git` suffix, unless a registration has
+  that URL, and every workspace with no backup repository then backs up to
+  it. The import records that it ran, with or without the key, so a later
+  edit imports nothing. Every start that finds the key logs one warning
+  that says backup repositories are registered in the interface.
 
 
   `oidc` names the identity provider and Menagerie's public client, which

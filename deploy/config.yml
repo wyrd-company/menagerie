@@ -5,11 +5,10 @@
 # The same path as on the host: compose.yml mounts it at its own path.
 workspace-root: /srv/menagerie/workspaces
 
-# Each workspace is backed up to its own orphan branch here. An https URL
-# on GitHub uses the GitHub App below; an SSH URL uses the Wyrwood agent's
-# ssh-agent.sock instead.
-workspace-repository: https://github.com/example-org/workspace-backups.git
-# workspace-repository: ssh://git@github.com/example-org/workspace-backups.git
+# Backup repositories are registered in the interface. A host upgrading
+# from a release before backup repositories keeps its old
+# workspace-repository key for one start, which registers it once:
+# workspace-repository: https://github.com/example-org/workspace-backups.git
 
 # Where compose.yml mounts the Wyrwood consumer directory.
 wyrwood-directory: /run/wyrwood

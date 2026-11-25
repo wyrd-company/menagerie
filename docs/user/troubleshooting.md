@@ -103,10 +103,10 @@ A push or fetch over `https` names a fixed reason too:
 | --- | --- |
 | the workspace repository did not accept the credentials | The App's installation and permissions. |
 | the workspace repository denied access | The App has Contents read and write. |
-| the workspace repository was not found | `workspace-repository`. |
+| the workspace repository was not found | The workspace's backup repository URL, on [Backup repositories](usage.md#backup-repositories). |
 | the workspace repository answered status N | The server's status for that code. |
 | the workspace repository answered with a redirect; register the repository at its current address | The repository moved: give its current address. |
-| the workspace repository address is not a valid Git URL | `workspace-repository`. |
+| the workspace repository address is not a valid Git URL | The workspace's backup repository URL. |
 | the workspace repository's credentials could not be prepared | The credential source for that URL. |
 | the workspace repository could not be reached or refused the transfer | Network access, and the remote's text in the job console. |
 
