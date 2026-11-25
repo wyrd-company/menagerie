@@ -1055,4 +1055,13 @@ validation-criteria: >-
   the same, a sweep commit a workspace left dirty, each onto the backup
   branch, an `initializeCommand` find no socket, and a start keep a
   single container and a Compose primary created without the socket, with
-  the same container id, until a rebuild gives it the socket.
+  the same container id, until a rebuild gives it the socket. `go test
+  ./backend/internal/backuprepos/ ./backend/internal/api/` registers a
+  backup repository over the test's SSH host, refuses each URL form the
+  routes refuse and a repository Menagerie cannot write to, stores nothing
+  for a check, and refuses removing one a workspace backs up to; `go test
+  ./backend/internal/workflows/` has a create record its repository from
+  its start and take the only registered one;
+  `scripts/prove-backup-repository-guards.py` breaks each of those guards,
+  the write check's deletion of its ref and the data's foreign key in turn
+  and requires its test to fail.
