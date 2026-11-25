@@ -133,9 +133,17 @@ design-challenges:
     `backup-branch-conflict`, before anything is committed or pushed, and
     one that is, which an earlier move that failed after its push leaves,
     is taken over. `commit` commits every change, as the commit operation
-    does, and `backup` force-pushes the branch to the destination and reads
-    the destination's branch back. Only when it is at the commit pushed does
-    the data record the destination; every other failure is
+    does, and `backup` pushes the branch to the destination without force,
+    so the destination takes it only while its branch is still absent or in
+    the workspace's history, and a branch another writer made after the
+    check is never overwritten; it then reads the destination's branch
+    back. Only when it is at the commit pushed does `switch` record the
+    destination, in one transaction that requires the repository's id to be
+    registered still at the URL the job checked. Entering `switch` settles
+    the job's time limits, and the record is bound to the job's context, so
+    a move past its limit records nothing; a limit that passes during that
+    transaction itself still times the job out after the record, and the
+    console says the switch was recorded. Every other failure is
     `backup-move-failed`, the workspace keeps its repository, and the
     message says so. The move never writes to the earlier repository, whose
     branch keeps the workspace's earlier backups for recovery. The job

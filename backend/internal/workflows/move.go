@@ -120,8 +120,11 @@ func (m *moving) run(ctx context.Context, run *jobs.Run) error {
 	}
 
 	run.Phase("backup")
-	if _, err := destination.Push(ctx, m.folder, m.name, run.Log("backup: ")); err != nil {
-		return fail(KindBackupMoveFailed, "pushing branch %s to %s failed: %v", m.name, to.Name, err)
+	// Without force: the destination takes the push only while its branch
+	// is still absent or in the workspace's history, so a branch another
+	// writer made after the conflict check is never overwritten.
+	if _, err := destination.Extend(ctx, m.folder, m.name, run.Log("backup: ")); err != nil {
+		return fail(KindBackupMoveFailed, "pushing branch %s to %s failed: %v; if %s's branch %s changed since the check, nothing of it was overwritten", m.name, to.Name, err, to.Name, m.name)
 	}
 	landed, found, err := destination.BranchCommit(ctx, m.name)
 	switch {
@@ -134,8 +137,24 @@ func (m *moving) run(ctx context.Context, run *jobs.Run) error {
 	}
 	fmt.Fprintf(run.Log(""), "branch %s in %s is at %s\n", m.name, to.Name, landed)
 
-	if err := m.w.opts.Data.SetWorkspaceBackupRepository(ctx, m.name, to.ID); err != nil {
+	// Entering the phase settles the job's time limits: a limit that passed
+	// times the job out and cancels ctx here, so the switch below, bound to
+	// ctx, records nothing and the outcome and the repository agree.
+	run.Phase("switch")
+	if err := ctx.Err(); err != nil {
+		return fail(KindBackupMoveFailed, "the backup landed in %s, but the job ended before it switched the workspace's repository; move again", to.Name)
+	}
+	err = m.w.opts.Data.SwitchWorkspaceBackupRepository(ctx, m.name, to.ID, to.URL)
+	if errors.Is(err, store.ErrBackupRepositoryChanged) || errors.Is(err, store.ErrNoBackupRepository) {
+		return fail(KindBackupMoveFailed, "backup repository %s was removed during the move, and the id is no longer the repository the move checked; nothing was switched", to.ID)
+	}
+	if err != nil {
 		return fail(KindBackupMoveFailed, "the backup landed in %s, but recording it as the workspace's repository failed: %v; move again", to.Name, err)
+	}
+	if ctx.Err() != nil {
+		// A limit that passed during the switch's own transaction still
+		// times the job out; the console says what the data holds.
+		fmt.Fprintf(run.Log(""), "the switch was recorded before the job ended\n")
 	}
 	if had {
 		fmt.Fprintf(run.Log(""), "workspace %s now backs up to %s; its earlier backups stay on branch %s in %s\n", m.name, to.Name, m.name, from.Name)

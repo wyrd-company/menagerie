@@ -489,7 +489,7 @@ without them.
 **Move backups** on a workspace's row chooses another registered backup
 repository for it. A workspace that has none, such as a folder copied into
 the workspace root, gets its first one the same way. The move is a job with
-three phases:
+four phases:
 
 1. `verify`: Menagerie checks that it can write to the destination, as a
    registration does, and reads the destination's branch with the workspace's
@@ -497,10 +497,14 @@ three phases:
    name, fails the job as `backup-branch-conflict` with nothing pushed. A
    branch with the workspace's own commits is taken over.
 2. `commit`: every change is committed, as a commit job does.
-3. `backup`: the branch is pushed to the destination and read back.
+3. `backup`: the branch is pushed to the destination, without overwriting a
+   branch someone else wrote there since `verify`, and read back.
+4. `switch`: the workspace backs up to the destination from now on; the row
+   then shows it.
 
-Only when the branch reads back at the commit pushed does the workspace back
-up to the destination; the row then shows it. A failed move keeps the earlier
+Only a branch that reads back at the commit pushed is switched to, and a move
+that passed its [time limit](configuration.md#job-time-limits) switches
+nothing. A failed move keeps the earlier
 repository, and its message says why, so you can fix the cause and move
 again. The earlier repository keeps its branch as it was, with the
 workspace's earlier backups, for recovery.

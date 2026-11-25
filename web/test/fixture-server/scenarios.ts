@@ -208,6 +208,7 @@ async function runMoveBackup(world: World, job: FixtureJob) {
   log(job, `pushed refs/heads/${ws.name}`);
   log(job, `branch ${ws.name} in ${to.name} is at 0decade`);
   await tick();
+  setState(job, "running", "switch");
   ws.backups = to.id;
   log(
     job,

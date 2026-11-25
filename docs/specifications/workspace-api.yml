@@ -353,7 +353,7 @@ description: >-
   `remove-folder`, `create-container`,
   `wait-for-sockets`, `up`, `verify`, `retire`, `stop`,
   `interview`, `initialize-repository`, `generate`, `host-prerequisites`,
-  `fetch`, `plan`, `apply`, `commit`, `backup-local-changes` or `backup`. A failed job carries `error.kind`:
+  `fetch`, `plan`, `apply`, `commit`, `backup-local-changes`, `backup` or `switch`. A failed job carries `error.kind`:
   `timed-out`, `initialize-command-failed`, `registry-credentials-unavailable`,
   `runner-image-unavailable`, `provisioning-invalid`, `provisioning-unavailable`,
   `provisioning-not-ready`, `binding-outside-grant`, `policy-outside-grant`,
@@ -376,18 +376,20 @@ description: >-
   repository has 404 `unknown-backup-repository`, and with the workspace's
   own repository 409 `backup-repository-unchanged`, each before any job. A
   workspace with no backup repository can take its first this way. The job
-  runs `verify`, `commit` and `backup`. In `verify` it refuses a workspace
+  runs `verify`, `commit`, `backup` and `switch`. In `verify` it refuses a workspace
   whose create has not finished, runs the destination's write check, and
   reads the destination's branch of the workspace's name: a branch at a
   commit that is not the workspace branch's commit or one of its ancestors
   fails the job as `backup-branch-conflict`, naming the commit, with nothing
   committed or pushed; a branch at one of them, as an earlier move that
   failed after its push leaves, is taken over. `commit` commits every
-  change, as the commit operation does. `backup` force-pushes the workspace
-  branch to the destination, reads the destination's branch back, and
-  requires it at the commit it pushed. Only then does Menagerie's data
-  record the destination, and every later backup, commit and Apply branch
-  uses it. Any other failure is `backup-move-failed`. A failed move keeps
+  change, as the commit operation does. `backup` pushes the workspace
+  branch to the destination without force, so a branch another writer made
+  after `verify` is never overwritten, reads the destination's branch back,
+  and requires it at the commit it pushed. Only then does `switch` record
+  the destination in Menagerie's data, and only while its id is still
+  registered at the URL the job checked; a job past its time limit records
+  nothing. Every later backup, commit and Apply branch uses it. Any other failure is `backup-move-failed`. A failed move keeps
   the workspace's repository, and its message says so. A move never
   changes the earlier repository's branch, which keeps the workspace's
   earlier backups for recovery.

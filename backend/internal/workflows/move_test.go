@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -90,7 +91,7 @@ func TestAMoveWritesAndVerifiesABackupBeforeItSwitchesRepositories(t *testing.T)
 	if snap.State != jobs.Succeeded {
 		t.Fatalf("%+v\n%s", snap.Error, logText(job))
 	}
-	if want := []string{"verify", "commit", "backup"}; !reflect.DeepEqual(phases(job), want) {
+	if want := []string{"verify", "commit", "backup", "switch"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v", phases(job))
 	}
 	repo, _ := git.PlainOpen(folder)
@@ -296,6 +297,22 @@ func testABackupThatDoesNotLand(t *testing.T, hook, script, message string) {
 	}
 	if want := []string{"verify", "commit", "backup"}; !reflect.DeepEqual(phases(job), want) {
 		t.Fatalf("phases %v", phases(job))
+	}
+	if got := backsUpTo(t, w, "alpha"); got != "backups" {
+		t.Fatalf("backs up to %q", got)
+	}
+}
+
+// A move that passes its time limit before the switch keeps the
+// workspace's repository, so its timed-out outcome and the repository
+// agree.
+func TestAMoveThatTimesOutKeepsTheWorkspacesRepository(t *testing.T) {
+	w := newWorldWith(t, jobs.Options{Limits: jobs.Limits{Phases: map[string]time.Duration{"backup": 200 * time.Millisecond}}})
+	w.createWorkspace(t, "alpha")
+	slow := w.hooked(t, "pre-receive", "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/*) sleep 2;; esac; done\n")
+	job, snap := w.moveBackup(t, "alpha", slow.ID)
+	if snap.State != jobs.Failed || snap.Error.Kind != jobs.KindTimedOut {
+		t.Fatalf("%+v %+v\n%s", snap, snap.Error, logText(job))
 	}
 	if got := backsUpTo(t, w, "alpha"); got != "backups" {
 		t.Fatalf("backs up to %q", got)
