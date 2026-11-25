@@ -117,6 +117,7 @@ async function complete(world: World, job: FixtureJob) {
     world.workspaces.push(ws);
     world.workspaces.sort((a, b) => a.name.localeCompare(b.name));
   }
+  if (job.backupRepositoryId) ws.backups = job.backupRepositoryId;
   if (template) {
     ws.template = template.id;
     ws.applied = template.currentVersion;

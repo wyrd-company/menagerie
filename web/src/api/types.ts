@@ -25,6 +25,8 @@ export interface Workspace {
   xolotlKey: string | null;
   /** The workspace's registered template, or null when its source is not registered. */
   template: TemplateRef | null;
+  /** The registered backup repository the workspace backs up to, or null when it has none. */
+  backupRepository: BackupRepositoryRef | null;
   /** The template version last applied, or null while it is unknown. */
   appliedVersion: string | null;
   /** The commit last applied, or null when none is known. */
@@ -37,6 +39,20 @@ export interface TemplateRef {
   id: string;
   name: string;
 }
+
+export interface BackupRepositoryRef {
+  id: string;
+  name: string;
+  url: string;
+}
+
+/** A registered backup repository, with the names of the workspaces that back up to it. */
+export interface BackupRepository extends BackupRepositoryRef {
+  workspaces: string[];
+}
+
+/** A backup repository's registration checks, in the order they run. */
+export type BackupCheck = "url" | "write";
 
 /** A registered template. */
 export interface Template {
@@ -90,8 +106,8 @@ export interface ErrorBody {
   kind: string;
   message: string;
   activeJobId?: string;
-  /** With template-check-failed: the first registration check that failed. */
-  check?: TemplateCheck | (string & {});
+  /** With template-check-failed and backup-repository-check-failed: the first registration check that failed. */
+  check?: TemplateCheck | BackupCheck | (string & {});
 }
 
 export type JobState = "running" | "waiting-for-answers" | "succeeded" | "failed" | "ended";

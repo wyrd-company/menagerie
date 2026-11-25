@@ -96,6 +96,7 @@ describe.each(names)("a workspace or state named %s", (name) => {
                     selectionImported: true,
                     xolotlKey: null,
                     template: null,
+                    backupRepository: null,
                     appliedVersion: null,
                     appliedCommit: null,
                     needsUpgrade: false,

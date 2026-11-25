@@ -166,7 +166,70 @@ describe("the fixture server keeps the workspace API contract", () => {
     await post("/__fixture/reset", {});
     await expectResponse("/api/workspaces", "get", await call("/api/workspaces"));
     await expectResponse("/api/templates", "get", await call("/api/templates"));
+    await expectResponse("/api/backup-repositories", "get", await call("/api/backup-repositories"));
     await expectResponse("/api/jobs", "get", await call("/api/jobs"));
+  });
+
+  it("registers and removes backup repositories, and creates to a chosen one", async () => {
+    await post("/__fixture/reset", {});
+    const url = "git@git.example.test:client-org/backups.git";
+    const checked = await post("/api/backup-repositories", {
+      name: "Client backups",
+      url,
+      check: true,
+    });
+    expect(await expectResponse("/api/backup-repositories", "post", checked)).toMatchObject({
+      id: "client-backups",
+      workspaces: [],
+    });
+    const registered = await post("/api/backup-repositories", { name: "Client backups", url });
+    expect(registered.headers.get("location")).toBe("/api/backup-repositories/client-backups");
+    await expectResponse("/api/backup-repositories", "post", registered);
+    for (const [refused, kind, check] of [
+      [{ name: "Again", url }, "backup-repository-exists", undefined],
+      [{ name: "Local", url: "/srv/backups.git" }, "backup-repository-check-failed", "url"],
+      [
+        { name: "Read only", url: "git@git.example.test:o/readonly.git" },
+        "backup-repository-check-failed",
+        "write",
+      ],
+    ] as const) {
+      const body = await expectResponse(
+        "/api/backup-repositories",
+        "post",
+        await post("/api/backup-repositories", refused),
+      );
+      expect(body).toMatchObject({ error: { kind, ...(check ? { check } : {}) } });
+    }
+    const two = await expectResponse(
+      "/api/jobs",
+      "post",
+      await post("/api/jobs", {
+        operation: "create",
+        workspace: "fresh",
+        templateId: "sample-kit",
+      }),
+    );
+    expect(two).toMatchObject({ error: { kind: "invalid-request" } });
+    const started = await post("/api/jobs", {
+      operation: "create",
+      workspace: "fresh",
+      templateId: "sample-kit",
+      backupRepositoryId: "client-backups",
+    });
+    expect(started.status).toBe(202);
+    const inUse = await call("/api/backup-repositories/example-backups", { method: "DELETE" });
+    expect(await expectResponse("/api/backup-repositories/{id}", "delete", inUse)).toMatchObject({
+      error: { kind: "backup-repository-in-use" },
+    });
+    await post("/__fixture/reset", {});
+    await post("/api/backup-repositories", { name: "Spare", url });
+    const removed = await call("/api/backup-repositories/spare", { method: "DELETE" });
+    expect(removed.status).toBe(204);
+    const missing = await call("/api/backup-repositories/spare", { method: "DELETE" });
+    expect(await expectResponse("/api/backup-repositories/{id}", "delete", missing)).toMatchObject({
+      error: { kind: "unknown-backup-repository" },
+    });
   });
 
   it("registers, upgrades, edits and removes templates", async () => {
@@ -489,12 +552,18 @@ describe("the UI client sends request bodies the contract accepts", () => {
       for (const operation of ["start", "stop", "rebuild"] as const)
         await startJob({ operation, workspace: "sample" });
       await startJob({ operation: "create", workspace: "sample", templateId: "sample-kit" });
+      await startJob({
+        operation: "create",
+        workspace: "sample",
+        templateId: "sample-kit",
+        backupRepositoryId: "example-backups",
+      });
       await startJob({ operation: "upgrade", workspace: "sample" });
     } finally {
       vi.unstubAllGlobals();
     }
     for (const body of bodies) expectValid(schema("JobRequest"), body);
-    expect(bodies).toHaveLength(5);
+    expect(bodies).toHaveLength(6);
   });
 
   it("answers with an AnswerRequest that carries the session as received", async () => {

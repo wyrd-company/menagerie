@@ -15,12 +15,14 @@ import { finish, log, send, summary } from "./events.ts";
 import { answer, run } from "./scenarios.ts";
 import {
   commitOf,
+  initialBackupRepositories,
   initialTemplates,
   initialWorkspaces,
   newer,
   type FixtureJob,
   type FixtureOptions,
   type FixtureTemplate,
+  type FixtureWorkspace,
   type World,
 } from "./state.ts";
 
@@ -28,8 +30,16 @@ export function createFixture(options: { distDir: string }) {
   const world: World = {
     workspaces: initialWorkspaces(),
     templates: initialTemplates(),
+    backupRepositories: initialBackupRepositories(),
     options: { upgradeDocument: "raw", t3CodeInstalled: true },
   };
+  // A workspace's backup repository: absent, the first registered one.
+  const backupsOf = (w: FixtureWorkspace) =>
+    w.backups === null
+      ? undefined
+      : world.backupRepositories.find(
+          (r) => r.id === (w.backups ?? world.backupRepositories[0]?.id),
+        );
   let jobs = new Map<string, FixtureJob>();
   let signedIn = true;
   let dockerAvailable = true;
@@ -50,6 +60,7 @@ export function createFixture(options: { distDir: string }) {
     for (const job of jobs.values()) for (const res of job.listeners) res.end();
     world.workspaces = initialWorkspaces();
     world.templates = initialTemplates();
+    world.backupRepositories = initialBackupRepositories();
     world.options = { upgradeDocument: "raw", t3CodeInstalled: true };
     jobs = new Map();
     signedIn = true;
@@ -277,11 +288,15 @@ export function createFixture(options: { distDir: string }) {
             (j) => j.workspace === w.name && j.finishedAt === null,
           );
           const template = world.templates.find((t) => t.id === w.template);
+          const backups = backupsOf(w);
           return {
             name: w.name,
             state: w.state,
             containerId: w.containerId,
             template: template ? { id: template.id, name: template.name } : null,
+            backupRepository: backups
+              ? { id: backups.id, name: backups.name, url: backups.url }
+              : null,
             appliedVersion: w.applied,
             appliedCommit: w.appliedCommit ?? null,
             needsUpgrade:
@@ -371,11 +386,102 @@ export function createFixture(options: { distDir: string }) {
           ? { at: new Date(Date.now() - 3_600_000).toISOString(), failure: null }
           : t.lastCheck,
     });
+    const backupBody = (r: { id: string; name: string; url: string }) => ({
+      id: r.id,
+      name: r.name,
+      url: r.url,
+      workspaces: world.workspaces
+        .filter((w) => backupsOf(w)?.id === r.id)
+        .map((w) => w.name)
+        .sort(),
+    });
     const validName = (name: unknown) =>
       typeof name === "string" &&
       name.trim() !== "" &&
       [...name].length <= 100 &&
       ![...name].some((c) => c.charCodeAt(0) < 0x20 || "\u007f\u2028\u2029".includes(c));
+    if (pathname === "/api/backup-repositories" && method === "GET") {
+      const sorted = [...world.backupRepositories].sort(
+        (a, b) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase()) ||
+          a.name.localeCompare(b.name) ||
+          a.id.localeCompare(b.id),
+      );
+      return json(res, 200, { backupRepositories: sorted.map(backupBody) });
+    }
+    if (pathname === "/api/backup-repositories" && method === "POST") {
+      // The fixture's write check stands in for Menagerie's: a URL naming a
+      // repository "readonly" or "missing" fails it.
+      const input = JSON.parse(await readBody(req)) as {
+        name?: unknown;
+        url?: unknown;
+        check?: unknown;
+      };
+      if (!validName(input.name) || typeof input.url !== "string")
+        return fail(res, 400, "invalid-request", "name must be one line of 1 to 100 characters");
+      if (input.check !== undefined && typeof input.check !== "boolean")
+        return fail(res, 400, "invalid-request", "member check has the wrong type");
+      const url = input.url;
+      const check = (name: string, message: string) =>
+        fail(res, 422, "backup-repository-check-failed", message, { check: name });
+      if (!/^(git@|ssh:\/\/|https:\/\/)/.test(url) || /:\/\/[^/@]*:[^/@]*@/.test(url))
+        return check(
+          "url",
+          "the URL must be an ssh, scp-like or https Git URL; a local path, a file URL and plain http are refused",
+        );
+      if (url.includes("readonly") || url.includes("missing"))
+        return check(
+          "write",
+          "Menagerie could not write to the repository: the workspace repository denied access",
+        );
+      const existing = world.backupRepositories.find((r) => r.url === url);
+      if (existing)
+        return fail(
+          res,
+          409,
+          "backup-repository-exists",
+          `this repository is registered already, as ${existing.name} (${existing.id})`,
+        );
+      const stem =
+        (input.name as string)
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(Boolean)
+          .join("-") || "backups";
+      let id = stem;
+      for (let n = 2; world.backupRepositories.some((r) => r.id === id); n++) id = `${stem}-${n}`;
+      const repository = { id, name: (input.name as string).trim(), url };
+      if (input.check === true) return json(res, 200, backupBody(repository));
+      world.backupRepositories.push(repository);
+      return json(res, 201, backupBody(repository), {
+        Location: `/api/backup-repositories/${id}`,
+      });
+    }
+    const backupMatch = /^\/api\/backup-repositories\/([^/]+)$/.exec(pathname);
+    if (backupMatch && method === "DELETE") {
+      const repository = world.backupRepositories.find(
+        (r) => r.id === decodeURIComponent(backupMatch[1]!),
+      );
+      if (!repository)
+        return fail(
+          res,
+          404,
+          "unknown-backup-repository",
+          "no registered backup repository has this id",
+        );
+      const users = world.workspaces.filter((w) => backupsOf(w) === repository).map((w) => w.name);
+      if (users.length)
+        return fail(
+          res,
+          409,
+          "backup-repository-in-use",
+          `workspace ${users.join(", ")} backs up to this repository; move those workspaces' backups to another repository first`,
+        );
+      world.backupRepositories = world.backupRepositories.filter((r) => r !== repository);
+      res.writeHead(204);
+      res.end();
+      return;
+    }
     if (pathname === "/api/templates" && method === "GET") {
       const sorted = [...world.templates].sort(
         (a, b) =>
@@ -534,6 +640,7 @@ export function createFixture(options: { distDir: string }) {
         operation?: string;
         workspace?: string;
         templateId?: string;
+        backupRepositoryId?: string;
         branch?: string;
         policies?: string[];
       };
@@ -559,6 +666,27 @@ export function createFixture(options: { distDir: string }) {
       }
       if (operation === "create" && !world.templates.some((t) => t.id === input.templateId)) {
         return fail(res, 404, "unknown-template", `no registered template ${input.templateId}`);
+      }
+      if (input.backupRepositoryId !== undefined && operation !== "create")
+        return fail(res, 400, "invalid-request", "backupRepositoryId is only accepted for create.");
+      if (operation === "create") {
+        if (input.backupRepositoryId === undefined && world.backupRepositories.length !== 1)
+          return fail(
+            res,
+            400,
+            "invalid-request",
+            "backupRepositoryId is required: name one of the registered backup repositories",
+          );
+        if (
+          input.backupRepositoryId !== undefined &&
+          !world.backupRepositories.some((r) => r.id === input.backupRepositoryId)
+        )
+          return fail(
+            res,
+            404,
+            "unknown-backup-repository",
+            `no registered backup repository has the id "${input.backupRepositoryId}"`,
+          );
       }
       const refuseMoved = (t: FixtureTemplate) =>
         fail(
@@ -640,6 +768,8 @@ export function createFixture(options: { distDir: string }) {
         stage: "first",
       };
       if (input.templateId) job.templateId = input.templateId;
+      if (operation === "create")
+        job.backupRepositoryId = input.backupRepositoryId ?? world.backupRepositories[0]!.id;
       if (input.branch) job.branch = input.branch;
       jobs.set(job.jobId, job);
       setImmediate(() => {

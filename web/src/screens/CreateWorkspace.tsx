@@ -6,6 +6,7 @@ import { JobPanel } from "../jobs/JobPanel.tsx";
 import { navigate, paths } from "../router.ts";
 import { Link } from "../ui/Link.tsx";
 import { TemplatePicker } from "../ui/TemplatePicker.tsx";
+import { BackupPicker } from "../ui/BackupPicker.tsx";
 
 /** Problems the browser can see in a folder name; the service checks the rest. */
 export function nameProblems(name: string): string[] {
@@ -43,6 +44,7 @@ export function CreateWorkspace({ jobId }: { jobId: string | null }) {
 
 function StartCreate() {
   const [templateId, setTemplateId] = useState<string | null>(null);
+  const [backupRepositoryId, setBackupRepositoryId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -74,7 +76,14 @@ function StartCreate() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setChecked(true);
-    if (problems.length > 0 || templateId === null || !catalog || policyProblems.length) return;
+    if (
+      problems.length > 0 ||
+      templateId === null ||
+      backupRepositoryId === null ||
+      !catalog ||
+      policyProblems.length
+    )
+      return;
     setStarting(true);
     setError(null);
     try {
@@ -82,6 +91,7 @@ function StartCreate() {
         operation: "create",
         workspace: name.trim(),
         templateId,
+        backupRepositoryId,
         policies,
       });
       navigate(paths.create(job.jobId), { replace: true });
@@ -98,6 +108,12 @@ function StartCreate() {
       {checked && templateId === null ? (
         <p className="field-errors" role="alert">
           Choose a template.
+        </p>
+      ) : null}
+      <BackupPicker value={backupRepositoryId} onChange={setBackupRepositoryId} />
+      {checked && backupRepositoryId === null ? (
+        <p className="field-errors" role="alert">
+          Choose a backup repository.
         </p>
       ) : null}
       <div className={`field${nameErrors.length ? " is-invalid" : ""}`}>

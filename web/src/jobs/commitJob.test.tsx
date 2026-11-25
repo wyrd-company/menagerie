@@ -47,6 +47,7 @@ describe("a commit job", () => {
                     selectionImported: true,
                     xolotlKey: null,
                     template: null,
+                    backupRepository: null,
                     appliedVersion: null,
                     appliedCommit: null,
                     needsUpgrade: false,

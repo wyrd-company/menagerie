@@ -1,11 +1,12 @@
 import { useSyncExternalStore } from "react";
 
 // The page routes: the workspace list, create, a workspace's upgrade, the
-// registered templates and the policy settings.
+// registered templates and backup repositories, and the policy settings.
 export type Route =
   | { screen: "list"; jobId: string | null }
   | { screen: "policies" }
   | { screen: "templates" }
+  | { screen: "backups" }
   | { screen: "create"; jobId: string | null }
   | { screen: "upgrade"; workspace: string; jobId: string | null }
   | { screen: "missing"; path: string };
@@ -13,6 +14,7 @@ export type Route =
 export function parseRoute(pathname: string, search: string): Route {
   if (pathname === "/policies") return { screen: "policies" };
   if (pathname === "/templates") return { screen: "templates" };
+  if (pathname === "/backup-repositories") return { screen: "backups" };
   const jobId = new URLSearchParams(search).get("job");
   if (pathname === "/" || pathname === "") return { screen: "list", jobId };
   if (pathname === "/create") return { screen: "create", jobId };
@@ -30,6 +32,7 @@ export function parseRoute(pathname: string, search: string): Route {
 export const paths = {
   policies: () => "/policies",
   templates: () => "/templates",
+  backups: () => "/backup-repositories",
   list: (jobId?: string) => (jobId ? `/?job=${encodeURIComponent(jobId)}` : "/"),
   create: (jobId?: string) => (jobId ? `/create?job=${encodeURIComponent(jobId)}` : "/create"),
   upgrade: (workspace: string, jobId?: string) =>

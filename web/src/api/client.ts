@@ -1,5 +1,6 @@
 import { objectFromRaw, stringifyJson, topLevelMembers, type RawJson } from "./rawJson.ts";
 import type {
+  BackupRepository,
   ErrorBody,
   InterviewReply,
   Job,
@@ -132,6 +133,30 @@ export async function removeTemplate(id: string): Promise<void> {
   await request(`/api/templates/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+export async function listBackupRepositories(): Promise<BackupRepository[]> {
+  return (await json<{ backupRepositories: BackupRepository[] }>("/api/backup-repositories"))
+    .backupRepositories;
+}
+
+export interface BackupRepositoryRegistration {
+  name: string;
+  url: string;
+  /** Run the checks alone and store nothing. */
+  check?: boolean;
+}
+
+/** Registers a backup repository once Menagerie can write to it; with check, runs the checks alone. */
+export const registerBackupRepository = (registration: BackupRepositoryRegistration) =>
+  json<BackupRepository>("/api/backup-repositories", {
+    method: "POST",
+    body: JSON.stringify(registration),
+  });
+
+/** Removes a backup repository no workspace backs up to; the repository itself is left as it is. */
+export async function removeBackupRepository(id: string): Promise<void> {
+  await request(`/api/backup-repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 export async function mintT3CodePairingToken(workspace: string): Promise<T3CodePairingToken> {
   return json<T3CodePairingToken>(
     `/api/workspaces/${encodeURIComponent(workspace)}/t3-code-pairing-tokens`,
@@ -152,6 +177,8 @@ export interface StartJob {
   operation: Operation;
   workspace: string;
   templateId?: string;
+  /** The registered backup repository a create backs the workspace up to. */
+  backupRepositoryId?: string;
   /** The branch of the workspace repository an apply-branch job applies. */
   branch?: string;
   /** An upgrade asks every question again, with the recorded answers as defaults. */
