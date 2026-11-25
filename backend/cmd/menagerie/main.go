@@ -280,9 +280,10 @@ func importBackupRepository(ctx context.Context, cfg *config.Config, root *works
 	return backuprepos.Import(ctx, data, cfg.WorkspaceRepository, log.Printf)
 }
 
-// discoverWorkspaces joins the workspace folders to Menagerie's data as the
-// workspace list does: a folder listed for the first time gets its
-// workspace, joined to the registered template its applied record names.
+// discoverWorkspaces gives each workspace folder that has no data its
+// workspace as the workspace list does, joined to the registered template
+// its applied record names. Unlike the list it removes nothing, so a
+// workspace whose folder is away keeps its data.
 func discoverWorkspaces(ctx context.Context, root *workspace.Root, data *store.Store) error {
 	names, err := root.Names()
 	if err != nil {
@@ -292,7 +293,7 @@ func discoverWorkspaces(ctx context.Context, root *workspace.Root, data *store.S
 	if err != nil {
 		return err
 	}
-	if _, err := data.Discover(ctx, names); err != nil {
+	if err := data.AddFolders(ctx, unknown); err != nil {
 		return err
 	}
 	if len(unknown) > 0 {

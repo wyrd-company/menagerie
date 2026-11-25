@@ -441,22 +441,8 @@ func (s *Store) EndCreates(ctx context.Context, folderExists func(name string) b
 // returned, in name order.
 func (s *Store) Discover(ctx context.Context, folders []string) (noFolder []string, err error) {
 	err = s.Update(ctx, func(t *Tx) error {
-		for _, name := range folders {
-			exists, err := t.Exists(name)
-			if err != nil {
-				return err
-			}
-			// Listing must not retry or cover an existing selection's failed apply.
-			// A newly discovered folder has no current name or prior observation.
-			if exists {
-				continue
-			}
-			if err := t.AddWorkspace(name); err != nil {
-				return err
-			}
-			if err := t.appliedWithoutName(name); err != nil {
-				return err
-			}
+		if err := t.addFolders(folders); err != nil {
+			return err
 		}
 		known, err := t.names(`SELECT name FROM workspaces ORDER BY name`)
 		if err != nil {
@@ -481,6 +467,33 @@ func (s *Store) Discover(ctx context.Context, folders []string) (noFolder []stri
 		return nil
 	})
 	return noFolder, err
+}
+
+// AddFolders gives each folder that has no workspace in the data one, as
+// Discover does, and removes nothing.
+func (s *Store) AddFolders(ctx context.Context, folders []string) error {
+	return s.Update(ctx, func(t *Tx) error { return t.addFolders(folders) })
+}
+
+func (t *Tx) addFolders(folders []string) error {
+	for _, name := range folders {
+		exists, err := t.Exists(name)
+		if err != nil {
+			return err
+		}
+		// Listing must not retry or cover an existing selection's failed apply.
+		// A newly discovered folder has no current name or prior observation.
+		if exists {
+			continue
+		}
+		if err := t.AddWorkspace(name); err != nil {
+			return err
+		}
+		if err := t.appliedWithoutName(name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RecordAgent records agent on each container name that has none, as the
