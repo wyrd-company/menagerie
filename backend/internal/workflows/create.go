@@ -51,7 +51,7 @@ func (c *creation) run(ctx context.Context, run *jobs.Run) error {
 	if err != nil {
 		return err
 	}
-	if err := c.w.opts.Data.BeginCreateFrom(ctx, c.name, tpl.ID); err != nil {
+	if err := c.w.opts.Data.BeginCreateFrom(ctx, c.name, tpl.ID, ""); err != nil {
 		if errors.Is(err, store.ErrExists) {
 			return &jobs.Failure{Kind: KindWorkspaceExists, Err: fmt.Errorf("workspace %s already exists in Menagerie's data; nothing was written", c.name)}
 		}

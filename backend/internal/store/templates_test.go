@@ -45,7 +45,7 @@ func TestTheForeignKeyKeepsATemplateAWorkspaceUses(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	registered(t, s, "Kit")
-	if err := s.BeginCreateFrom(ctx, "alpha", "kit"); err != nil {
+	if err := s.BeginCreateFrom(ctx, "alpha", "kit", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`DELETE FROM templates WHERE id = 'kit'`); err == nil {
@@ -212,7 +212,7 @@ func TestAnUnknownAppliedVersionIsCompletedFromItsCommit(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	registered(t, s, "Kit")
-	if err := s.BeginCreateFrom(ctx, "alpha", "kit"); err != nil {
+	if err := s.BeginCreateFrom(ctx, "alpha", "kit", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetAppliedVersion(ctx, "alpha", AppliedVersion{Commit: "c100"}); err != nil {

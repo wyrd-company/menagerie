@@ -331,13 +331,14 @@ func (s *Store) Claimed(ctx context.Context, name string) (claimed bool, err err
 // claims, being created or holding a name or a key, is ErrExists; the caller
 // has found no folder, so any other data of that name is replaced.
 func (s *Store) BeginCreate(ctx context.Context, name string) error {
-	return s.BeginCreateFrom(ctx, name, "")
+	return s.BeginCreateFrom(ctx, name, "", "")
 }
 
 // BeginCreateFrom begins a create, as BeginCreate does, of a workspace of
-// the registered template id, so that the template cannot be removed while
-// the create runs; "" names none.
-func (s *Store) BeginCreateFrom(ctx context.Context, name, template string) error {
+// the registered template id that backs up to the registered backup
+// repository backups, so that neither can be removed while the create runs;
+// "" names none.
+func (s *Store) BeginCreateFrom(ctx context.Context, name, template, backups string) error {
 	return s.Update(ctx, func(t *Tx) error {
 		claimed, err := t.Claimed(name)
 		if err != nil {
@@ -351,7 +352,8 @@ func (s *Store) BeginCreateFrom(ctx context.Context, name, template string) erro
 		if _, err := t.exec(`DELETE FROM workspaces WHERE name = ?`, name); err != nil {
 			return err
 		}
-		_, err = t.exec(`INSERT INTO workspaces (name, creating, template) VALUES (?, 1, ?)`, name, nullable(template))
+		_, err = t.exec(`INSERT INTO workspaces (name, creating, template, backup_repository) VALUES (?, 1, ?, ?)`,
+			name, nullable(template), nullable(backups))
 		return err
 	})
 }

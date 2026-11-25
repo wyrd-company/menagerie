@@ -221,6 +221,15 @@ func (t *Tx) templateWorkspaces(id string) ([]string, error) {
 // letters and digits of the name, separated by single dashes, or
 // "template" when the name has none.
 func TemplateID(name string) string {
+	if id := slug(name); id != "" {
+		return id
+	}
+	return "template"
+}
+
+// slug is the lower-case letters and digits of name, separated by single
+// dashes, or "" when it has none.
+func slug(name string) string {
 	var parts []string
 	var part strings.Builder
 	flush := func() {
@@ -237,9 +246,6 @@ func TemplateID(name string) string {
 		}
 	}
 	flush()
-	if len(parts) == 0 {
-		return "template"
-	}
 	return strings.Join(parts, "-")
 }
 
