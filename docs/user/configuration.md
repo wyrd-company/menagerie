@@ -435,8 +435,8 @@ once the cancelled work has stopped.
 
 - `default` limits every operation.
 - `operations` gives `start`, `stop`, `rebuild`, `create`, `upgrade`,
-  `commit`, `apply-branch`, `apply-policies` or `delete` its own limit, which
-  replaces `default`.
+  `commit`, `apply-branch`, `apply-policies`, `delete` or `move-backup` its
+  own limit, which replaces `default`.
 - `phases` limits each stay in a phase, inside any operation:
   `read-definition`, `issue-key`, `bind`, `initialize-command`, `build`,
   `unbind`, `remove-container`, `revoke-key`, `remove-folder`,

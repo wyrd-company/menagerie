@@ -330,6 +330,8 @@ description: >-
 
   `POST /api/jobs` starts an operation on a workspace. The operations are
   `start`, `stop`, `rebuild`, `commit` and `apply-policies` on an existing workspace folder,
+  `move-backup` on an existing workspace folder, which also names a
+  `backupRepositoryId`,
   `apply-branch` on an existing workspace folder, which also names a
   `branch`, and the interview operations `create`, which also names a
   registered template's `templateId` and optionally a registered backup
@@ -363,8 +365,32 @@ description: >-
   or `backup-failed`, for `start` of a workspace whose create it finishes
   `backup-failed`, for `commit` `commit-failed` or `backup-failed`, and
   for `apply-branch` `branch-not-found`, `fetch-failed`, `backup-failed`,
-  `not-applicable`, `template-service-unavailable` or `apply-failed`. Its message says what was written and
+  `not-applicable`, `template-service-unavailable` or `apply-failed`, and
+  for `move-backup` `backup-move-failed` or `backup-branch-conflict`. Its message says what was written and
   what recovery is needed.
+
+
+  Move backup. `move-backup` names an existing workspace folder and a
+  registered backup repository other than the one the workspace backs up
+  to: without `backupRepositoryId` it is 400 `invalid-request`, with one no
+  repository has 404 `unknown-backup-repository`, and with the workspace's
+  own repository 409 `backup-repository-unchanged`, each before any job. A
+  workspace with no backup repository can take its first this way. The job
+  runs `verify`, `commit` and `backup`. In `verify` it refuses a workspace
+  whose create has not finished, runs the destination's write check, and
+  reads the destination's branch of the workspace's name: a branch at a
+  commit that is not the workspace branch's commit or one of its ancestors
+  fails the job as `backup-branch-conflict`, naming the commit, with nothing
+  committed or pushed; a branch at one of them, as an earlier move that
+  failed after its push leaves, is taken over. `commit` commits every
+  change, as the commit operation does. `backup` force-pushes the workspace
+  branch to the destination, reads the destination's branch back, and
+  requires it at the commit it pushed. Only then does Menagerie's data
+  record the destination, and every later backup, commit and Apply branch
+  uses it. Any other failure is `backup-move-failed`. A failed move keeps
+  the workspace's repository, and its message says so. A move never
+  changes the earlier repository's branch, which keeps the workspace's
+  earlier backups for recovery.
 
 
   Time limits are configured in `job-limits` and are optional; without
@@ -1065,7 +1091,11 @@ validation-criteria: >-
   routes refuse and a repository Menagerie cannot write to, stores nothing
   for a check, and refuses removing one a workspace backs up to; `go test
   ./backend/internal/workflows/` has a create record its repository from
-  its start and take the only registered one;
+  its start and take the only registered one, and moves a workspace's
+  backups to an empty repository, refuses one whose branch holds another
+  history, one Menagerie cannot write to, one that refuses the branch over
+  the test's SSH host and one whose hook moves the branch after the push,
+  each keeping the workspace's repository;
   `scripts/prove-backup-repository-guards.py` breaks each of those guards,
   the write check's deletion of its ref and the data's foreign key in turn
   and requires its test to fail.

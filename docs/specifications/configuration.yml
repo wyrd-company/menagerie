@@ -126,7 +126,7 @@ description: >-
   `waiting-for-answers` does not count, and no deadline applies while a job
   waits. Interviews keep no expiry. `default` limits every operation
   without its own limit; `operations` gives `start`, `stop`, `rebuild`,
-  `create`, `upgrade`, `commit`, `apply-branch`, `apply-policies` or `delete` its own limit, which
+  `create`, `upgrade`, `commit`, `apply-branch`, `apply-policies`, `delete` or `move-backup` its own limit, which
   replaces `default`; `phases`
   limits each stay in a phase, counted from each entry into the phase
   (an answered interview enters `interview` again), inside any operation.
