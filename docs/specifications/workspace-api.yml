@@ -388,8 +388,10 @@ description: >-
   after `verify` is never overwritten, reads the destination's branch back,
   and requires it at the commit it pushed. Only then does `switch` record
   the destination in Menagerie's data, and only while its id is still
-  registered at the URL the job checked; a job past its time limit records
-  nothing. Every later backup, commit and Apply branch uses it. Any other failure is `backup-move-failed`. A failed move keeps
+  registered at the URL the job checked. The record is the job's final
+  step: a job past its time limit times out before it and records nothing,
+  and once it begins no limit counts, so a recorded switch never ends
+  `timed-out`. Every later backup, commit and Apply branch uses it. Any other failure is `backup-move-failed`. A failed move keeps
   the workspace's repository, and its message says so. A move never
   changes the earlier repository's branch, which keeps the workspace's
   earlier backups for recovery.
@@ -411,7 +413,10 @@ description: >-
   move to `waiting-for-answers` and the job's end each first settle the
   running time, so a job that ends past a limit ends timed-out, and a
   long-running threshold passed while the job ran is alerted once, before
-  any `job-failed` alert, at the latest when the job ends. The slot is
+  any `job-failed` alert, at the latest when the job ends. A job's final
+  step, `move-backup`'s `switch` record, settles the running time before
+  it begins and stops every limit once it does, so the job's outcome
+  agrees with what the step recorded. The slot is
   released when the work returns, never before, so work that ignores
   cancellation keeps its workspace busy.
   A cancelled generate or apply revokes its hook token and kills and
