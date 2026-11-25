@@ -16,7 +16,8 @@ screen chooses the only registered repository, never one of several. A
 removed repository's id is never given to another; a reply's URL holds no
 password, query or fragment, nor an https URL's user name; a create
 refuses a repository removed since it was read; the first start gives the
-imported repository to every workspace folder, one with no data included. Each
+imported repository to every workspace folder, one with no data included,
+and a later start lists no folder, so an absent one keeps its data. Each
 mutation changes one guard in place, and its tests must fail; the source is
 restored even on interruption. The report starts failed and passes only
 after every baseline test passes and every mutant compiles and fails each
@@ -45,6 +46,7 @@ TESTS = {
     "public-url": ("./backend/internal/backuprepos", "TestPublicURLHoldsNoCredential"),
     "replies-no-credential": ("./backend/internal/api", "TestRepliesNameNoBackupCredential"),
     "first-start": ("./backend/cmd/menagerie", "TestAFirstStartGivesEveryWorkspaceTheConfiguredRepository"),
+    "later-start": ("./backend/cmd/menagerie", "TestALaterStartKeepsAnAbsentWorkspacesData"),
     "create-refuses-removed": ("./backend/internal/store", "TestACreateRefusesARemovedBackupRepository"),
     "screen-several": ("web/src/screens/BackupRepositories.test.tsx",
                        "asks for a backup repository on create when several are registered"),
@@ -102,6 +104,8 @@ MUTANTS = [
     ("start-lists-folders-first", "backend/cmd/menagerie/main.go",
      "\tif err := discoverWorkspaces(ctx, root, data); err != nil {\n", "\tif err := error(nil); err != nil {\n",
      ["first-start"]),
+    ("later-start-lists-nothing", "backend/cmd/menagerie/main.go",
+     "\tif done {\n\t\treturn nil\n\t}\n", "\t_ = done\n", ["later-start"]),
     ("create-refuses-removed", "backend/internal/store/workspaces.go",
      "\t\tif backups != \"\" {\n\t\t\tif _, err := t.backupRepository(backups); err != nil {\n",
      "\t\tif false {\n\t\t\tif _, err := t.backupRepository(backups); err != nil {\n",

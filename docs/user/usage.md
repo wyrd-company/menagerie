@@ -472,7 +472,8 @@ repository stays empty. A refusal names the check that failed, `url` or
 `write`. The check proves Menagerie may write to the repository, not that its
 branch rules allow it: a repository whose branch protection stops Menagerie
 creating or force-pushing a branch named after a workspace passes Validate,
-and that workspace's first backup fails as `backup-failed`. **Save** stays
+and the backup that meets the rule fails as `backup-failed`, whether it is
+the workspace's first or a later one. **Save** stays
 unavailable until a Validate of the form as it is now passes, and checks
 again. A repository whose URL is registered already is
 refused with the registration it has.
