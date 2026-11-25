@@ -1437,9 +1437,10 @@ proposed-design:
     `Workspace backups` when that is not a valid name, unless a
     registration has that URL already; every workspace with no backup
     repository then backs up to it. The import runs after the template
-    imports, and that start, and no later one, first lists the workspace
-    folders as the workspace list does, so a folder with no data yet gets its workspace,
-    joined to its template, and takes the repository too, and the start
+    imports, and that start, and no later one, first gives each workspace
+    folder with no data its workspace as the workspace list does, joined to
+    its template, so it takes the repository too; unlike the list it removes
+    nothing, so a workspace whose folder is away keeps its data. The start
     log names it and how many workspaces took it. Without the key the import
     records its mark and registers nothing.
     The policy settings start empty. A workspace that first-start-import
