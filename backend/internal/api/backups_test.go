@@ -13,6 +13,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 	"github.com/wyrd-company/menagerie/backend/internal/backuprepos"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 )
 
 type backupBody struct {
@@ -85,5 +86,26 @@ func TestABackupRepositoryIsRegisteredListedAndRemovedThroughTheAPI(t *testing.T
 	resp, data = f.do(t, "DELETE", "/api/backup-repositories/example-backups", "")
 	if body := decode[checkBody](t, data); resp.StatusCode != http.StatusNotFound || body.Error.Kind != KindUnknownBackupRepository {
 		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+}
+
+// A repository the import took over with a password in its URL is listed,
+// and shown on its workspaces' rows, without it.
+func TestRepliesNameNoBackupCredential(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx := context.Background()
+	url := "https://user:sentinel@git.example.invalid/example-org/backups.git?token=sentinel"
+	r, err := f.data.RegisterBackupRepository(ctx, store.BackupRepository{Name: "Imported", URL: url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.data.SetWorkspaceBackupRepository(ctx, "alpha", r.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/backup-repositories", "/api/workspaces"} {
+		_, data := f.do(t, "GET", path, "")
+		if strings.Contains(string(data), "sentinel") || !strings.Contains(string(data), "https://user@git.example.invalid/example-org/backups.git") {
+			t.Errorf("%s: %s", path, data)
+		}
 	}
 }

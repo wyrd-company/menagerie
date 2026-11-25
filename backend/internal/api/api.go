@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/wyrd-company/menagerie/backend/internal/backuprepos"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
@@ -291,7 +292,7 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
 			rows[i].AppliedCommit = &commit
 		}
 		if b, ok := backups[rows[i].Name]; ok {
-			rows[i].BackupRepository = &backupRepositoryRef{ID: b.ID, Name: b.Name, URL: b.URL}
+			rows[i].BackupRepository = &backupRepositoryRef{ID: b.ID, Name: b.Name, URL: backuprepos.PublicURL(b.URL)}
 		}
 		if t, ok := used[rows[i].Name]; ok {
 			rows[i].Template = &templateRef{ID: t.ID, Name: t.Name}

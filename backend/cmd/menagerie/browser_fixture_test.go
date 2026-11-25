@@ -182,7 +182,7 @@ runner-image: busybox:1.37
 	var opts devcontainer.Options
 	data := testData(t)
 	// The configured repository, which every create backs up to.
-	if err := importBackupRepository(ctx, cfg, data); err != nil {
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
 		t.Fatal(err)
 	}
 	parts := throwawayContainers(ctx, cfg, root, docker, data, &opts)

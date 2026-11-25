@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	neturl "net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -168,10 +169,11 @@ const ImportID = 6
 // the first start whose data has no backup repository import: url, when
 // it is not "", is registered under a name its path gives, unless a
 // registration has that URL already, and every workspace with no backup
-// repository then backs up to it. No check runs: the key was the
-// repository every backup went to. With url "" it records the mark and
+// repository then backs up to it, each folder of folders included, which
+// gets its workspace's data when it has none. No check runs: the key was
+// the repository every backup went to. With url "" it records the mark and
 // registers nothing.
-func Import(ctx context.Context, data *store.Store, url string, logf func(string, ...any)) error {
+func Import(ctx context.Context, data *store.Store, url string, folders []string, logf func(string, ...any)) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -180,6 +182,11 @@ func Import(ctx context.Context, data *store.Store, url string, logf func(string
 	ran, err := data.Import(ctx, ImportID, func(tx *store.Tx) error {
 		if url == "" {
 			return nil
+		}
+		for _, name := range folders {
+			if err := tx.AddWorkspace(name); err != nil {
+				return err
+			}
 		}
 		var err error
 		registered, err = tx.RegisterBackupRepository(store.BackupRepository{Name: ImportName(url), URL: url})
@@ -199,16 +206,40 @@ func Import(ctx context.Context, data *store.Store, url string, logf func(string
 }
 
 // ImportName is the display name of the imported repository: the path of
-// its URL, without a leading slash and a .git suffix, such as
-// example-org/workspace-backups, or "Workspace backups" when it has none.
+// its URL, without a leading slash, a query, a fragment and a .git suffix,
+// such as example-org/workspace-backups, or "Workspace backups" when it
+// has none. It holds no credential the URL holds.
 func ImportName(url string) string {
 	endpoint, err := transport.NewEndpoint(url)
 	if err != nil {
 		return "Workspace backups"
 	}
-	path := strings.TrimSuffix(strings.Trim(endpoint.Path, "/"), ".git")
+	path, _, _ := strings.Cut(endpoint.Path, "?")
+	path, _, _ = strings.Cut(path, "#")
+	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
 	if ValidName(path) != nil {
 		return "Workspace backups"
 	}
 	return path
+}
+
+// PublicURL is url as a reply or a page shows it: an URL with a scheme
+// loses its password, query and fragment, which can hold a credential that
+// an earlier release's workspace-repository carried. A registration refuses
+// a URL with a password; the import keeps one, because backups used it.
+func PublicURL(url string) string {
+	u, err := neturl.Parse(url)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		if at := strings.LastIndex(url, "@"); at >= 0 && strings.Contains(url[:at], ":") && !strings.Contains(url, "://") {
+			// An scp-like address with a password, user:password@host:path.
+			user, _, _ := strings.Cut(url[:at], ":")
+			return user + url[at:]
+		}
+		return url
+	}
+	if u.User != nil {
+		u.User = neturl.User(u.User.Username())
+	}
+	u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = "", false, "", ""
+	return u.String()
 }

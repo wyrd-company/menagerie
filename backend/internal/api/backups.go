@@ -40,7 +40,7 @@ type backupRepositoryRef struct {
 }
 
 func backupRepositoryOf(r store.BackupRepository) BackupRepository {
-	out := BackupRepository{ID: r.ID, Name: r.Name, URL: r.URL, Workspaces: r.Workspaces}
+	out := BackupRepository{ID: r.ID, Name: r.Name, URL: backuprepos.PublicURL(r.URL), Workspaces: r.Workspaces}
 	if out.Workspaces == nil {
 		out.Workspaces = []string{}
 	}

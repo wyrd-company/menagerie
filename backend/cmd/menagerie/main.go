@@ -145,7 +145,7 @@ func run(configPath string) error {
 	if err := prepareData(ctx, cfg, root, data, runtime, provisioning.Records{Folder: provisioning.DefaultRecords}); err != nil {
 		return err
 	}
-	if err := importBackupRepository(ctx, cfg, data); err != nil {
+	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
 		return err
 	}
 	if err := importTemplateData(ctx, cfg, root, data, templates.New(cfg.TemplateService.Socket)); err != nil {
@@ -257,11 +257,15 @@ func prepareData(ctx context.Context, cfg *config.Config, root *workspace.Root, 
 // importBackupRepository takes over the configuration's workspace-repository
 // key once, after the workspace import, and warns at each start that finds
 // the key that it is no longer read.
-func importBackupRepository(ctx context.Context, cfg *config.Config, data *store.Store) error {
+func importBackupRepository(ctx context.Context, cfg *config.Config, root *workspace.Root, data *store.Store) error {
 	if cfg.WorkspaceRepository != "" {
 		log.Print("menagerie: the configuration's workspace-repository key is no longer read: backup repositories are registered in the interface; the first start of this release imported it once, and a later edit imports nothing")
 	}
-	return backuprepos.Import(ctx, data, cfg.WorkspaceRepository, log.Printf)
+	folders, err := root.Names()
+	if err != nil {
+		return err
+	}
+	return backuprepos.Import(ctx, data, cfg.WorkspaceRepository, folders, log.Printf)
 }
 
 // importTemplateData takes over, at a first start, the configuration's

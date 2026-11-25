@@ -123,14 +123,16 @@ func TestImportTakesOverTheConfiguredRepositoryOnce(t *testing.T) {
 	var logged []string
 	logf := func(format string, args ...any) { logged = append(logged, format) }
 	url := "ssh://git@git.example.invalid/example-org/workspace-backups.git"
-	if err := Import(ctx, data, url, logf); err != nil {
+	// A folder restored after the first start of an earlier release has no
+	// data until it is listed; the import gives it the repository too.
+	if err := Import(ctx, data, url, []string{"alpha", "restored"}, logf); err != nil {
 		t.Fatal(err)
 	}
 	list, err := data.BackupRepositories(ctx)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("%+v %v", list, err)
 	}
-	if got := list[0]; got.Name != "example-org/workspace-backups" || got.URL != url || !reflect.DeepEqual(got.Workspaces, []string{"alpha"}) {
+	if got := list[0]; got.Name != "example-org/workspace-backups" || got.URL != url || !reflect.DeepEqual(got.Workspaces, []string{"alpha", "restored"}) {
 		t.Fatalf("%+v", got)
 	}
 	if len(logged) != 1 {
@@ -139,7 +141,7 @@ func TestImportTakesOverTheConfiguredRepositoryOnce(t *testing.T) {
 	if err := data.BeginCreate(ctx, "beta"); err != nil {
 		t.Fatal(err)
 	}
-	if err := Import(ctx, data, "ssh://git@git.example.invalid/example-org/other.git", logf); err != nil {
+	if err := Import(ctx, data, "ssh://git@git.example.invalid/example-org/other.git", []string{"beta"}, logf); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := data.BackupRepositories(ctx); len(list) != 1 {
@@ -150,7 +152,7 @@ func TestImportTakesOverTheConfiguredRepositoryOnce(t *testing.T) {
 	}
 
 	fresh := open(t)
-	if err := Import(ctx, fresh, "", logf); err != nil {
+	if err := Import(ctx, fresh, "", nil, logf); err != nil {
 		t.Fatal(err)
 	}
 	if done, _ := fresh.Imported(ctx, ImportID); !done {
@@ -163,12 +165,29 @@ func TestImportTakesOverTheConfiguredRepositoryOnce(t *testing.T) {
 
 func TestImportName(t *testing.T) {
 	for url, want := range map[string]string{
-		"git@github.com:example-org/backups.git":             "example-org/backups",
-		"https://github.com/example-org/backups":             "example-org/backups",
-		"ssh://git@git.example.invalid:2222/srv/backups.git": "srv/backups",
-		"ssh://git@git.example.invalid/":                     "Workspace backups",
+		"git@github.com:example-org/backups.git":                                  "example-org/backups",
+		"https://github.com/example-org/backups":                                  "example-org/backups",
+		"ssh://git@git.example.invalid:2222/srv/backups.git":                      "srv/backups",
+		"ssh://git@git.example.invalid/":                                          "Workspace backups",
+		"https://git.example.invalid/example-org/backups.git?token=sentinel#frag": "example-org/backups",
 	} {
 		if got := ImportName(url); got != want {
+			t.Errorf("%s: %q", url, got)
+		}
+	}
+}
+
+// A URL as a reply shows it holds no password, query or fragment.
+func TestPublicURLHoldsNoCredential(t *testing.T) {
+	for url, want := range map[string]string{
+		"https://user:sentinel@git.example.invalid/example-org/backups.git":  "https://user@git.example.invalid/example-org/backups.git",
+		"https://git.example.invalid/example-org/backups.git?token=sentinel": "https://git.example.invalid/example-org/backups.git",
+		"https://git.example.invalid/o/b.git#sentinel":                       "https://git.example.invalid/o/b.git",
+		"ssh://git:sentinel@git.example.invalid/o/b.git":                     "ssh://git@git.example.invalid/o/b.git",
+		"git:sentinel@git.example.invalid:o/b.git":                           "git@git.example.invalid:o/b.git",
+		"git@github.com:example-org/backups.git":                             "git@github.com:example-org/backups.git",
+	} {
+		if got := PublicURL(url); got != want || strings.Contains(got, "sentinel") {
 			t.Errorf("%s: %q", url, got)
 		}
 	}
