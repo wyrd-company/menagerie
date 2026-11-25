@@ -694,3 +694,45 @@ func TestPhasesAreThePublishedPhases(t *testing.T) {
 		t.Fatalf("published phases %v, Phases %v", got, want)
 	}
 }
+
+// A final step's effect and the job's outcome agree: a limit that passed
+// before the step times the job out and the step never runs; one that
+// passes during the step, or before the runner returns, times nothing out.
+func TestAFinalStepDecidesTheOutcome(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		before    time.Duration
+		wantRan   bool
+		wantState State
+	}{
+		{"limit passed before", 20 * time.Minute, false, Failed},
+		{"limit passes during", 0, true, Succeeded},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clock := newFakeClock()
+			m, _ := limitedManager(context.Background(), clock, Options{Limits: Limits{Default: 10 * time.Minute}})
+			ran := false
+			job, err := m.Start("alpha", "move-backup", func(ctx context.Context, run *Run) error {
+				run.Phase("switch")
+				// Pass moves the clock and runs no timer, so the limit is first
+				// seen when the job next settles.
+				clock.Pass(c.before)
+				if err := run.Final(func() error { ran = true; clock.Pass(20 * time.Minute); return nil }); err != nil {
+					return err
+				}
+				clock.Pass(time.Hour)
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snap := awaitEnd(t, job)
+			if ran != c.wantRan || snap.State != c.wantState {
+				t.Fatalf("ran %v, %+v %+v", ran, snap, snap.Error)
+			}
+			if c.wantState == Failed && (snap.Error == nil || snap.Error.Kind != KindTimedOut) {
+				t.Fatalf("%+v", snap.Error)
+			}
+		})
+	}
+}

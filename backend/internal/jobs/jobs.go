@@ -289,6 +289,9 @@ type Job struct {
 	deadline *time.Time
 	limit    *Limit
 	timedOut *Error
+	// final says the runner began its final step (Run.Final): no time
+	// limit counts from then on, so the outcome is the step's.
+	final bool
 }
 
 // ID returns the job's identifier.
