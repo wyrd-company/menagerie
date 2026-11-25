@@ -240,7 +240,7 @@ func TestHTTPSFailuresHaveFixedReasons(t *testing.T) {
 }
 
 // redirectReason is the fixed reason of a refused redirect.
-const redirectReason = "the workspace repository answered with a redirect; set workspace-repository to its current address"
+const redirectReason = "the workspace repository answered with a redirect; register the repository at its current address"
 
 // TestATokenNeverFollowsARedirect: a push and a fetch with a token are
 // refused at the first redirect, to another repository on the same origin
