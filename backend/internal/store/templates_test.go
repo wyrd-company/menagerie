@@ -123,7 +123,7 @@ func TestFoundVersionsKeepTheirOrderAndGoWithTheirTemplate(t *testing.T) {
 	registered(t, s, "Kit")
 	found := []Version{{"1.0.0", "1.0.0", "c100"}, {"1.10.0", "v1.10.0", "c110"}, {"2.0.0", "2.0.0", "c200"}}
 	at := time.Date(2026, 11, 18, 9, 30, 0, 123, time.UTC)
-	tpl, err := s.RecordCheck(ctx, "kit", found, at)
+	tpl, err := s.RecordCheck(ctx, "kit", Credential{}, found, at)
 	if err != nil || !reflect.DeepEqual(tpl.Versions, found) || tpl.Newest() != "2.0.0" || !tpl.CheckedAt.Equal(at) {
 		t.Fatalf("%+v %v", tpl, err)
 	}
@@ -134,10 +134,10 @@ func TestFoundVersionsKeepTheirOrderAndGoWithTheirTemplate(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT count(*) FROM template_versions`).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("%d found versions outlived their template: %v", left, err)
 	}
-	if _, err := s.RecordCheck(ctx, "kit", found, at); !errors.Is(err, ErrNoTemplate) {
+	if _, err := s.RecordCheck(ctx, "kit", Credential{}, found, at); !errors.Is(err, ErrNoTemplate) {
 		t.Fatalf("%v", err)
 	}
-	if _, err := s.RecordCheckFailure(ctx, "kit", CheckServiceUnavailable, at); !errors.Is(err, ErrNoTemplate) {
+	if _, err := s.RecordCheckFailure(ctx, "kit", Credential{}, CheckServiceUnavailable, at); !errors.Is(err, ErrNoTemplate) {
 		t.Fatalf("%v", err)
 	}
 }
@@ -149,14 +149,14 @@ func TestAFailedCheckKeepsTheFoundVersions(t *testing.T) {
 	ctx := context.Background()
 	registered(t, s, "Kit")
 	found := []Version{{"1.0.0", "1.0.0", "c100"}}
-	if _, err := s.RecordCheck(ctx, "kit", found, time.Unix(100, 0)); err != nil {
+	if _, err := s.RecordCheck(ctx, "kit", Credential{}, found, time.Unix(100, 0)); err != nil {
 		t.Fatal(err)
 	}
-	tpl, err := s.RecordCheckFailure(ctx, "kit", CheckTemplateNotFound, time.Unix(200, 0))
+	tpl, err := s.RecordCheckFailure(ctx, "kit", Credential{}, CheckTemplateNotFound, time.Unix(200, 0))
 	if err != nil || !reflect.DeepEqual(tpl.Versions, found) || tpl.CheckFailure != CheckTemplateNotFound || !tpl.CheckedAt.Equal(time.Unix(200, 0)) {
 		t.Fatalf("%+v %v", tpl, err)
 	}
-	if _, err := s.RecordCheckFailure(ctx, "kit", "internal-error", time.Unix(300, 0)); err == nil {
+	if _, err := s.RecordCheckFailure(ctx, "kit", Credential{}, "internal-error", time.Unix(300, 0)); err == nil {
 		t.Fatal("the data took a failure that is no check's")
 	}
 }
@@ -175,7 +175,7 @@ func TestAMovedCurrentVersionIsTakenAgainOnlyWhileMoved(t *testing.T) {
 	if _, err := s.AdvanceTemplate(ctx, "kit", "1.1.0", "1.1.0", "c11b", newer); !errors.Is(err, ErrNotNewer) {
 		t.Fatalf("taken again while not moved: %v", err)
 	}
-	tpl, err := s.RecordCheck(ctx, "kit", []Version{{"1.0.0", "1.0.0", "c100"}, {"1.1.0", "1.1.0", "c11b"}}, time.Unix(1, 0))
+	tpl, err := s.RecordCheck(ctx, "kit", Credential{}, []Version{{"1.0.0", "1.0.0", "c100"}, {"1.1.0", "1.1.0", "c11b"}}, time.Unix(1, 0))
 	if err != nil || !tpl.CurrentMoved() {
 		t.Fatalf("%+v %v", tpl, err)
 	}
@@ -194,12 +194,12 @@ func TestAnImportedTemplateTakesItsCommitFromItsFirstCheck(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	registered(t, s, "Kit")
-	tpl, err := s.RecordCheck(ctx, "kit", []Version{{"1.0.0", "v1.0.0", "c100"}}, time.Unix(1, 0))
+	tpl, err := s.RecordCheck(ctx, "kit", Credential{}, []Version{{"1.0.0", "v1.0.0", "c100"}}, time.Unix(1, 0))
 	if err != nil || tpl.CurrentCommit != "c100" || tpl.CurrentTag != "v1.0.0" || tpl.CurrentMoved() {
 		t.Fatalf("%+v %v", tpl, err)
 	}
 	// Later checks never replace a recorded commit: a moved tag shows.
-	tpl, err = s.RecordCheck(ctx, "kit", []Version{{"1.0.0", "1.0.0", "c10b"}}, time.Unix(2, 0))
+	tpl, err = s.RecordCheck(ctx, "kit", Credential{}, []Version{{"1.0.0", "1.0.0", "c10b"}}, time.Unix(2, 0))
 	if err != nil || tpl.CurrentCommit != "c100" || !tpl.CurrentMoved() {
 		t.Fatalf("%+v %v", tpl, err)
 	}
@@ -221,14 +221,14 @@ func TestAnUnknownAppliedVersionIsCompletedFromItsCommit(t *testing.T) {
 	if got, _ := s.AppliedVersion(ctx, "alpha"); got != (AppliedVersion{Commit: "c100"}) {
 		t.Fatalf("%+v", got)
 	}
-	if _, err := s.RecordCheck(ctx, "kit", []Version{{"1.0.0", "1.0.0", "c100"}, {"1.0.1", "1.0.1", "c100"}}, time.Unix(1, 0)); err != nil {
+	if _, err := s.RecordCheck(ctx, "kit", Credential{}, []Version{{"1.0.0", "1.0.0", "c100"}, {"1.0.1", "1.0.1", "c100"}}, time.Unix(1, 0)); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.AppliedVersion(ctx, "alpha"); got != (AppliedVersion{Version: "1.0.1", Commit: "c100"}) {
 		t.Fatalf("%+v", got)
 	}
 	// A known version is never replaced by a check.
-	if _, err := s.RecordCheck(ctx, "kit", []Version{{"2.0.0", "2.0.0", "c100"}}, time.Unix(2, 0)); err != nil {
+	if _, err := s.RecordCheck(ctx, "kit", Credential{}, []Version{{"2.0.0", "2.0.0", "c100"}}, time.Unix(2, 0)); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.AppliedVersion(ctx, "alpha"); got.Version != "1.0.1" {
@@ -241,7 +241,7 @@ func TestAnUnknownAppliedVersionIsCompletedFromItsCommit(t *testing.T) {
 	if got, _ := s.AppliedVersion(ctx, "alpha"); got != (AppliedVersion{Commit: "c100"}) {
 		t.Fatalf("%+v", got)
 	}
-	if _, err := s.RecordCheck(ctx, "kit", []Version{{"2.0.0", "2.0.0", "c100"}}, time.Unix(3, 0)); err != nil {
+	if _, err := s.RecordCheck(ctx, "kit", Credential{}, []Version{{"2.0.0", "2.0.0", "c100"}}, time.Unix(3, 0)); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.AppliedVersion(ctx, "alpha"); got != (AppliedVersion{Version: "2.0.0", Commit: "c100"}) {
@@ -260,12 +260,24 @@ func TestATemplateKeepsItsCredential(t *testing.T) {
 		t.Fatalf("%+v %v", tpl, err)
 	}
 	key := Credential{Key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSampleKeyFakeSampleKeyFakeSampleKeyFake"}
-	if _, err := s.SetTemplateCredential(ctx, "absent", key); !errors.Is(err, ErrNoTemplate) {
+	found := []Version{{"1.0.0", "1.0.0", "c100"}}
+	if _, err := s.SetTemplateCredential(ctx, "absent", key, found, time.Unix(1, 0)); !errors.Is(err, ErrNoTemplate) {
 		t.Fatalf("absent: %v", err)
 	}
-	changed, err := s.SetTemplateCredential(ctx, tpl.ID, key)
-	if err != nil || changed.Credential != key {
+	if _, err := s.RecordCheckFailure(ctx, tpl.ID, tpl.Credential, CheckTemplateResolve, time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	// The change's own listing replaces the failed check of the App.
+	changed, err := s.SetTemplateCredential(ctx, tpl.ID, key, found, time.Unix(2, 0))
+	if err != nil || changed.Credential != key || changed.CheckFailure != "" || !changed.CheckedAt.Equal(time.Unix(2, 0)) || !reflect.DeepEqual(changed.Versions, found) {
 		t.Fatalf("%+v %v", changed, err)
+	}
+	// A check with the App that ends after the change records nothing.
+	if late, err := s.RecordCheckFailure(ctx, tpl.ID, tpl.Credential, CheckTemplateResolve, time.Unix(3, 0)); err != nil || late.CheckFailure != "" || !late.CheckedAt.Equal(time.Unix(2, 0)) {
+		t.Fatalf("a superseded failure: %+v %v", late, err)
+	}
+	if late, err := s.RecordCheck(ctx, tpl.ID, tpl.Credential, nil, time.Unix(3, 0)); err != nil || !reflect.DeepEqual(late.Versions, found) || !late.CheckedAt.Equal(time.Unix(2, 0)) {
+		t.Fatalf("a superseded check: %+v %v", late, err)
 	}
 	listed, err := s.Templates(ctx)
 	if err != nil || len(listed) != 1 || listed[0].Credential != key {

@@ -489,7 +489,7 @@ func TestAMovedTagRefusesCreatesAndUpgradesUntilTakenAgain(t *testing.T) {
 	w.createWorkspace(t, "alpha")
 	w.newVersion(t)
 	moved := "2b00000000000000000000000000000000000002"
-	tpl, err := w.data.RecordCheck(ctx, "sample", []store.Version{
+	tpl, err := w.data.RecordCheck(ctx, "sample", store.Credential{}, []store.Version{
 		{Version: "1.0.0", Tag: "1.0.0", Commit: sampleTemplate.CurrentCommit},
 		{Version: "2.0.0", Tag: "v2.0.0", Commit: moved},
 	}, time.Now())
@@ -671,7 +671,7 @@ func TestAnUpgradeOfAnUncheckedTemplateRecordsTheRecordsCommit(t *testing.T) {
 func TestEveryTemplateRequestNamesTheTemplatesCredential(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	if _, err := w.data.SetTemplateCredential(ctx, "sample", store.Credential{App: "sample-org"}); err != nil {
+	if _, err := w.data.SetTemplateCredential(ctx, "sample", store.Credential{App: "sample-org"}, sampleVersions, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w.createWorkspace(t, "alpha")
@@ -707,7 +707,7 @@ func TestEveryTemplateRequestNamesTheTemplatesCredential(t *testing.T) {
 // which one the Git host refused.
 func TestARefusedDescentCheckNamesTheTemplatesCredential(t *testing.T) {
 	w := newWorld(t)
-	if _, err := w.data.SetTemplateCredential(context.Background(), "sample", store.Credential{App: "sample-org"}); err != nil {
+	if _, err := w.data.SetTemplateCredential(context.Background(), "sample", store.Credential{App: "sample-org"}, sampleVersions, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w.createWorkspace(t, "alpha")

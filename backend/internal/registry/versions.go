@@ -82,9 +82,9 @@ func (r *Registry) checkVersions(ctx context.Context, id string) (store.Template
 	// The outcome is recorded even when the check's wait has ended.
 	record := context.WithoutCancel(ctx)
 	if err != nil {
-		return r.Data.RecordCheckFailure(record, id, CheckFailure(err), r.now())
+		return r.Data.RecordCheckFailure(record, id, tpl.Credential, CheckFailure(err), r.now())
 	}
-	return r.Data.RecordCheck(record, id, found(versions.Versions), r.now())
+	return r.Data.RecordCheck(record, id, tpl.Credential, found(versions.Versions), r.now())
 }
 
 // CheckFailure is the reason a version check records for a template

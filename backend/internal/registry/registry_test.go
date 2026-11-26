@@ -661,8 +661,13 @@ func TestATemplatesCredentialChangesOnceItsChecksPass(t *testing.T) {
 	if !reflect.DeepEqual(f.credentials, want) || !slices.Contains(f.calls, "check "+kit+"@v1.1.0") {
 		t.Fatalf("%+v %v", f.credentials, f.calls)
 	}
+	// The change records its own listing as the version check, so a failed
+	// check with the earlier credential no longer shows.
+	if _, err := r.Data.RecordCheckFailure(ctx, tpl.ID, tpl.Credential, store.CheckTemplateResolve, time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
 	changed, err := r.SetCredential(ctx, tpl.ID, key, false)
-	if err != nil || changed.Credential != key {
+	if err != nil || changed.Credential != key || changed.CheckFailure != "" || len(changed.Versions) != len(f.versions[kit]) {
 		t.Fatalf("%+v %v", changed, err)
 	}
 	// The current version's tag gone, the change is refused.

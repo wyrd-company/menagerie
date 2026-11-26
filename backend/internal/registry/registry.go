@@ -389,7 +389,7 @@ func (r *Registry) SetCredential(ctx context.Context, id string, credential stor
 	if check {
 		return tpl, nil
 	}
-	return r.Data.SetTemplateCredential(ctx, id, tpl.Credential)
+	return r.Data.SetTemplateCredential(ctx, id, tpl.Credential, found(versions.Versions), r.now())
 }
 
 // refusal is the check a template service failure fails: a refused address
