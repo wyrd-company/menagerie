@@ -1139,3 +1139,10 @@ validation-criteria: >-
   `scripts/prove-backup-repository-guards.py` breaks each of those guards,
   the write check's deletion of its ref and the data's foreign key in turn
   and requires its test to fail.
+  `scripts/prove-backup-credential-guards.py` breaks in turn the key
+  offered alone, the App's token sent only where it serves, each refusal
+  of a credential that does not fit its URL, the key recorded without its
+  comment, the write check with the credential given, a checked change
+  storing nothing, a change landing only at the URL checked, the operator
+  key left out of the list and the screen's Apps for an https URL, and
+  requires its test to fail.
