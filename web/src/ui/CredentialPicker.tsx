@@ -7,20 +7,61 @@ import type {
   SSHKeyChoice,
 } from "../api/types.ts";
 
+// The URL rules below are the backend's: go-git's endpoint parsing for the
+// kind of URL, and githubapp's Minter.Repository for the Apps serving it.
+const schemePattern = /^[^:]+:\/\//;
+const scpLikePattern = /^(?:[^@]+@)?[^:\s]+:(?:[0-9]{1,5}:)?[^\\].*$/;
+const ownerPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+const namePattern = /^[A-Za-z0-9._-]+$/;
+
 /** How a Git URL authenticates: over SSH with a key, over https with an App. */
 export function urlKind(url: string): "ssh" | "https" | null {
   const u = url.trim();
-  if (u.startsWith("ssh://")) return "ssh";
-  if (u.startsWith("https://")) return "https";
-  // scp-like: user@host:path, with no scheme.
-  if (!u.includes("://") && /^[^/:@\s]+@[^/:\s]+:/.test(u)) return "ssh";
+  if (schemePattern.test(u)) {
+    const scheme = u.slice(0, u.indexOf("://")).toLowerCase();
+    return scheme === "ssh" ? "ssh" : scheme === "https" ? "https" : null;
+  }
+  // scp-like: [user@]host:path, with no scheme and no "/" before the first ":".
+  if (scpLikePattern.test(u) && !u.slice(0, u.indexOf(":")).includes("/")) return "ssh";
   return null;
 }
 
-/** The Apps whose server holds url, in configuration order. */
+/** The host a URL names, lower case and without https's default port 443. */
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether an App on server serves url: an https repository URL on its host. */
+function serves(server: string, url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:" || u.username || u.password) return false;
+  if (url.includes("?") || url.includes("#")) return false;
+  if (u.host !== hostOf(server)) return false;
+  const [owner = "", ...rest] = u.pathname.replace(/^\//, "").split("/");
+  const name = rest.join("/").replace(/\.git$/, "");
+  return (
+    owner.length <= 100 &&
+    ownerPattern.test(owner) &&
+    name.length <= 100 &&
+    namePattern.test(name) &&
+    name !== "." &&
+    name !== ".."
+  );
+}
+
+/** The Apps that serve url, in configuration order. */
 export function servingApps(url: string, apps: GitHubAppChoice[]): GitHubAppChoice[] {
-  const u = url.trim().toLowerCase();
-  return apps.filter((a) => u.startsWith(a.server.toLowerCase().replace(/\/+$/, "") + "/"));
+  const u = url.trim();
+  return apps.filter((a) => serves(a.server, u));
 }
 
 /** The credentials that fit url: keys over SSH, the Apps that serve it over https. */

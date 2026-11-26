@@ -208,6 +208,22 @@ it("offers an https URL only the Apps that serve it, and none off their servers"
   ]);
 });
 
+it("offers credentials for the URL forms the service accepts", async () => {
+  stubApi([]);
+  render(<BackupRepositoriesScreen />);
+  await userEvent.click(
+    (await screen.findAllByRole("button", { name: "Register repository" }))[0]!,
+  );
+  const url = screen.getByRole("textbox", { name: /Git URL/ });
+  // An explicit default port names the App's server all the same.
+  await userEvent.type(url, "https://git.example.test:443/client-org/backups.git");
+  expect(await screen.findByRole("combobox", { name: "Credential" })).toHaveValue("client-org");
+  // An scp-like address with no user name is SSH, as user git.
+  await userEvent.clear(url);
+  await userEvent.type(url, "git.example.test:example-org/backups.git");
+  expect(screen.getByRole("group", { name: "Public key" })).toHaveTextContent(gitKey);
+});
+
 it("says why the agent offers no key", async () => {
   stubApi([], { githubApps: [], sshKeys: [], sshAgent: "the SSH agent could not be reached" });
   render(<BackupRepositoriesScreen />);
