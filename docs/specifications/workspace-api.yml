@@ -1129,7 +1129,9 @@ validation-criteria: >-
   operator key, refuses each credential that does not fit a URL, and sends
   only the named App's token; `go test ./backend/internal/backup/` offers
   the test's SSH host only the repository's key from an agent whose first
-  key is another; `go test
+  key is another, waits for a slow agent's signature, and refuses a key
+  that a later listing offers and the check's listing did not, or that
+  the listing names under an alias too; `go test
   ./backend/internal/workflows/` has a create record its repository from
   its start and take the only registered one, and moves a workspace's
   backups to an empty repository, refuses one whose branch holds another
@@ -1148,8 +1150,9 @@ validation-criteria: >-
   refused, the key list's request wait, a transfer's lack of one, a
   connection idle between requests, the connection's close at its
   operation's end, a saved key refused once excluded, by the listing that
-  gives its signer, the write check's refusal naming its credential, the
+  gives its signer and under every name it lists, the key list's operator
+  key under every name, the write check's refusal naming its credential, the
   picker's App names in any case and its saved credential never swapped,
   and the screen's Apps and keys for each URL form of the shared table
-  `credential-url-cases.json`, its hosts unescaped as Go does, and
-  requires its test to fail.
+  `credential-url-cases.json`, its hosts unescaped as Go does, IPv6
+  zones included, and requires its test to fail.

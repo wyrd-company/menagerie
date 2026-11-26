@@ -477,7 +477,11 @@ its Git URL, in a form
   server, one of the Apps that serve it. An `https` URL no App serves gets no
   credential.
 
-When only one credential fits the URL, the form chooses it. Menagerie offers
+When only one credential fits the URL and you have chosen none, the form
+chooses it. A credential you chose stays chosen until you choose another:
+if you then change the URL so that it no longer fits, the form chooses
+nothing, even when only one credential fits the new URL, so choose the one
+you want before you validate. Menagerie offers
 the repository that credential alone, so each repository can have a key or
 an App of its own. Then choose **Validate**. Menagerie checks that the
 credential fits the URL, and that it can write to the repository with it: it
@@ -493,8 +497,10 @@ unavailable until a Validate of the form as it is now passes, and checks
 again. A repository whose URL is registered already is
 refused with the registration it has.
 
-**Change credential** chooses another credential for a repository, such as a
-key that replaces one, in the same way: **Validate** checks writing with the
+**Change credential** chooses another credential for a repository, such as
+a key that replaces one, in the same way. It starts from the saved
+credential, and when that one no longer fits it chooses nothing until you
+do: **Validate** checks writing with the
 new credential, and **Save** records it only after that passes. The
 workspaces that back up to the repository use it from their next backup.
 

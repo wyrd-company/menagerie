@@ -12,7 +12,7 @@ operator key), records a key without its comment, and checks writing with
 the credential given, not every key; a checked change stores nothing; a
 change lands only at the URL it checked; the key list leaves out the
 operator key; a transfer waits for a slow agent and refuses its key by
-the listing that gives its signer; the backups screen offers an https URL
+the listing that gives its signer, under every name it lists the key; the backups screen offers an https URL
 only the Apps that serve it, reads hosts as Go does, matches App names in
 any case and never swaps a saved credential for another. Each mutation changes one guard in place, and its tests must
 fail; the source is restored even on interruption. The report starts
@@ -45,6 +45,8 @@ TESTS = {
     "wait-per-request": ("./backend/internal/backup", "TestAgentWaitBoundsEachRequestAlone"),
     "slow-transfer": ("./backend/internal/backup", "TestATransferWaitsForASlowAgent"),
     "one-listing": ("./backend/internal/backup", "TestTheRefusalChecksTheListingThatGivesTheSigner"),
+    "every-name": ("./backend/internal/backup", "TestTheRefusalChecksEveryNameOfTheKey"),
+    "keys-every-name": ("./backend/internal/gitcreds", "TestKeysLeaveOutTheOperatorKeyUnderEveryName"),
     "saved-operator-key": ("./backend/internal/gitcreds", "TestAuthRefusesASavedKeyThatIsNowTheOperatorKey"),
     "service-url-table": ("./backend/internal/gitcreds", "TestTheServiceReadsURLFormsAsThePickerDoes"),
     "picker-url-table": ("web/test/contract/credential-urls.test.ts", "URL table: "),
@@ -90,11 +92,11 @@ MUTANTS = [
      "\t\tkeyring, release, err := DialAgent(ctx, socket, time.Second)\n", ["slow-transfer"]),
     ("refusal-reads-the-signers-listing", PUSH,
      "\tsigners, err := keyring.Signers()\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"ssh agent: %w\", err)\n\t}\n"
-     "\tfor _, signer := range signers {\n\t\tif !bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {\n"
+     "\tvar found ssh.Signer\n\tfor _, signer := range signers {\n\t\tif !bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {\n"
      "\t\t\tcontinue\n\t\t}\n\t\tif refuse != nil {\n",
      "\tfirst, _ := keyring.List()\n"
      "\tsigners, err := keyring.Signers()\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"ssh agent: %w\", err)\n\t}\n"
-     "\tfor _, signer := range signers {\n\t\tif !bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {\n"
+     "\tvar found ssh.Signer\n\tfor _, signer := range signers {\n\t\tif !bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {\n"
      "\t\t\tcontinue\n\t\t}\n"
      "\t\tif refuse != nil && func() bool {\n\t\t\tfor _, k := range first {\n"
      "\t\t\t\tif bytes.Equal(k.Marshal(), wanted.Marshal()) {\n\t\t\t\t\treturn true\n\t\t\t\t}\n"
@@ -146,9 +148,14 @@ MUTANTS = [
      "    host: host.toLowerCase(),\n", ["picker-url-table", "screen-url-forms"]),
     ("picker-unescaped-host", URLS,
      "  const host = decodeHost(m[2]!);\n", "  const host = m[2]!;\n", ["picker-url-table"]),
-    ("picker-kind-refuses-a-bad-host", URLS,
-     "    return decodeHost(hostOf(u)) === null ? null : scheme;\n", "    return scheme;\n",
-     ["picker-url-table"]),
+    ("picker-unescapes-every-byte", URLS,
+     "    if (raw[i] === \"%\" && /^[0-9A-Fa-f]{2}$/.test(hex)) {\n",
+     "    if (raw[i] === \"%\" && /^[89A-Fa-f][0-9A-Fa-f]$/.test(hex)) {\n", ["picker-url-table"]),
+    ("refusal-checks-every-name", PUSH,
+     "\t\tif found == nil {\n\t\t\tfound = signer\n\t\t}\n", "\t\treturn signer, nil\n", ["every-name"]),
+    ("keys-leave-out-every-name", CREDS,
+     "\t\tif excluded[string(k.Marshal())] {\n",
+     "\t\tif s.Excluded != \"\" && selects(s.Excluded, k) {\n", ["keys-every-name"]),
     ("picker-app-names-in-any-case", PICKER,
      "const sameApp = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();\n",
      "const sameApp = (a: string, b: string) => a === b;\n", ["picker-app-case"]),

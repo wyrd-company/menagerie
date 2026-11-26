@@ -1275,7 +1275,9 @@ proposed-design:
     a key dials the agent, finds that key among its signers, and offers the
     Git host that key alone; one listing gives both the signer and the key
     the operator-key check reads, so the agent cannot sign with a key the
-    check did not see. An agent that no longer offers it fails the
+    check did not see, and the check reads every name the listing gives
+    the key: Wyrwood lists one Transit key once for each identity that
+    names it. The key list leaves out the operator key under every name. An agent that no longer offers it fails the
     transfer naming its fingerprint, before any connection. A transfer with
     an App sends that App's contents write token, and fails, naming the
     App, a URL the App does not serve or an App no longer configured. A
@@ -1310,7 +1312,10 @@ proposed-design:
     since excluded it, by the agent's listing. Template fetches keep the
     rule chosen by URL. The URL forms and the credential each takes are a
     shared table, docs/specifications/assets/workspace-api/credential-url-cases.json,
-    which the service's tests and the picker's both read.
+    which the service's tests and the picker's both read. The picker is
+    never stricter than the service: a URL the service refuses outright,
+    marked refused in the table, it may read more loosely, and the
+    service's refusal on save explains the URL.
   git-and-credentials: >-
     The workspace repository, a workspace's backup repository (see
     backup-repositories), is a backup, not a synchronized copy. The local
