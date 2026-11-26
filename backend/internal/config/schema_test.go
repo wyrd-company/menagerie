@@ -28,6 +28,7 @@ type schemaNode struct {
 	Enum          []string               `json:"enum"`
 	PropertyNames *schemaNode            `json:"propertyNames"`
 	Defs          map[string]*schemaNode `json:"$defs"`
+	Not           *schemaNode            `json:"not"`
 }
 
 // schemaKeys lists every property path the schema defines.
@@ -112,6 +113,11 @@ func TestSchemaAgreesWithParser(t *testing.T) {
 	}
 	if got := strings.Join(root.Required, ","); got != "workspace-root,wyrwood-directory,oidc" {
 		t.Errorf("required %s", got)
+	}
+	// The parser refuses github-app and github-apps together; so does the
+	// schema.
+	if root.Not == nil || strings.Join(root.Not.Required, ",") != "github-app,github-apps" {
+		t.Errorf("the schema does not refuse github-app with github-apps: %+v", root.Not)
 	}
 	if got := root.Properties["templates"].Items.Properties["id"]; got == nil {
 		t.Fatal("template id missing")

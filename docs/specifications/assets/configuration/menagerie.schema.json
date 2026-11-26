@@ -8,6 +8,13 @@
     "wyrwood-directory",
     "oidc"
   ],
+  "not": {
+    "description": "github-app and github-apps are two forms of one setting: a configuration has one or the other, not both.",
+    "required": [
+      "github-app",
+      "github-apps"
+    ]
+  },
   "properties": {
     "listen": {
       "type": "string",
