@@ -97,12 +97,18 @@ workspace's repository:
   choose **Validate**. The refusal gives the reason, and Validate changes
   nothing.
 - **A key's fingerprint alone, "which the SSH agent no longer offers"**:
-  the key is gone from the agent. Change credential would offer another
-  key, so do not use it to diagnose. Offer the key again in Menagerie's
+  the key is gone from the agent. Offer it again in Menagerie's
   [Wyrwood policy](install.md#policy), or choose its replacement with
   **Change credential** and give its public key to the Git host.
 - **An App "which is no longer configured"**: restore the App in
   `github-apps`, or choose another with **Change credential**.
+- **An App "which no longer serves this repository's server"**: the
+  App's `server` changed. Restore it, or choose another App with
+  **Change credential**.
+
+**Change credential** starts from the saved credential. When that one is
+gone, it chooses nothing until you choose, so **Validate** never checks a
+different credential than the one you see.
 
 A failed **Validate** names the credential the Git host refused, as in
 `Menagerie could not write to the repository with SSH key SHA256:…` or

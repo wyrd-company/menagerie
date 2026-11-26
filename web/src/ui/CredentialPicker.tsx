@@ -17,10 +17,15 @@ function choicesFor(url: string, credentials: Credentials | null) {
   };
 }
 
+/** Whether two App names name one App: the service compares them in any case. */
+const sameApp = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
 /**
- * The credential a form sends for url: chosen, while it still fits; else
- * the only credential that fits; else none, which the service refuses
- * where one fits.
+ * The credential a form sends for url: chosen, while it still fits, an
+ * App under its configured name; else, when none was chosen, the only
+ * credential that fits; else none, which the service refuses where one
+ * fits. A chosen credential that no longer fits is never swapped for
+ * another unasked.
  */
 export function effectiveChoice(
   url: string,
@@ -28,10 +33,12 @@ export function effectiveChoice(
   chosen: BackupCredentialChoice | null,
 ): BackupCredentialChoice | null {
   const { keys, apps } = choicesFor(url, credentials);
-  if (chosen && "sshKey" in chosen && keys.some((k) => k.publicKey === chosen.sshKey))
-    return chosen;
-  if (chosen && "githubApp" in chosen && apps.some((a) => a.name === chosen.githubApp))
-    return chosen;
+  if (chosen && "sshKey" in chosen)
+    return keys.some((k) => k.publicKey === chosen.sshKey) ? chosen : null;
+  if (chosen && "githubApp" in chosen) {
+    const app = apps.find((a) => sameApp(a.name, chosen.githubApp));
+    return app ? { githubApp: app.name } : null;
+  }
   if (keys.length === 1) return { sshKey: keys[0]!.publicKey };
   if (apps.length === 1) return { githubApp: apps[0]!.name };
   return null;
@@ -49,9 +56,12 @@ export function describeCredential(
       : "Credential chosen by URL: the first GitHub App on its server, if any";
   }
   if ("githubApp" in credential) {
-    if (credentials && !credentials.githubApps.some((a) => a.name === credential.githubApp))
-      return `GitHub App ${credential.githubApp}, which is no longer configured`;
-    return `GitHub App ${credential.githubApp}`;
+    if (!credentials) return `GitHub App ${credential.githubApp}`;
+    const app = credentials.githubApps.find((a) => sameApp(a.name, credential.githubApp));
+    if (!app) return `GitHub App ${credential.githubApp}, which is no longer configured`;
+    if (servingApps(url, [app]).length === 0)
+      return `GitHub App ${app.name}, which no longer serves this repository's server`;
+    return `GitHub App ${app.name}`;
   }
   const key = credentials?.sshKeys.find((k) => k.publicKey === credential.sshKey);
   if (key) return `SSH key ${key.name} · ${credential.fingerprint}`;
