@@ -182,7 +182,7 @@ func TestNoFailureCarriesAValue(t *testing.T) {
 			url := "https://" + w.minter.host + "/" + sentinelOwner + "/" + sentinelRepo
 			req := httptest.NewRequest(http.MethodPost, CredentialPath, strings.NewReader(`{"url":"`+url+`"}`)).WithContext(ctx)
 			rec := httptest.NewRecorder()
-			Handler(w.minter).ServeHTTP(rec, req)
+			Handler(one(w.minter)).ServeHTTP(rec, req)
 			if rec.Code != http.StatusBadGateway {
 				t.Fatalf("route %d %s", rec.Code, rec.Body)
 			}

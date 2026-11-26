@@ -246,29 +246,40 @@ description: >-
   Xolotl being out of reach. The template service ignores this section.
 
 
-  Optional `github-app` names a GitHub App whose installation tokens
-  authenticate backups and template fetches to `https` repository URLs on
-  its server: a URL whose path is exactly `/{owner}/{repo}` or
-  `/{owner}/{repo}.git`, with no query or fragment. A backup URL must also
-  have no user information; one with a user name gets no token. A template
-  address may have a user name: the template service asks for the token by
-  the address without it, so a user name does not opt out. Other URLs keep their own authentication, so SSH and the App can both be
-  in use. `app-id`, a positive integer, and `transit-key`, the name of the
-  RSA Transit key at the mount `transit` that holds the App's private key
-  (letters, digits, `_`, `.` and `-`, starting with a letter or digit, at
-  most 128 characters), are required in the section. Optional
-  `installations` maps an account name to the App's installation id, a
-  positive integer; names are GitHub account names, compared in lower
-  case, and appear once. A repository whose owner is not listed has its
-  installation looked up. Optional `server` is the GitHub server's origin,
-  an `https` URL with a host and no user information, path, query or
-  fragment; absent or empty, `https://github.com`. The API is
-  `https://api.github.com` for `https://github.com` and `{server}/api/v3`
-  otherwise. The workspace service signs the App's JWT through the Wyrwood
-  vault socket, `unix://{wyrwood-directory}/vault.sock`, with
-  `transit/sign/{transit-key}/sha2-256`, sending no token and no
-  namespace. No error of the section names a value: an error names the
-  field and the rule. The template service ignores this section.
+  Optional `github-apps` lists GitHub Apps, in order, whose installation
+  tokens authenticate backups and template fetches to `https` repository
+  URLs on their servers: a URL whose path is exactly `/{owner}/{repo}` or
+  `/{owner}/{repo}.git`, with no query or fragment. Optional `github-app`
+  is one App, as earlier releases configured it; a configuration gives
+  `github-app` or `github-apps`, not both. Each App has a `name`, the name
+  a backup repository's credential calls it: letters, digits, `_`, `.` and
+  `-`, starting with a letter or digit, at most 100 characters, compared
+  without regard to case, and given once. It is required in `github-apps`;
+  in `github-app`, absent is `github-app`. A backup repository whose
+  credential names an App uses that App alone, and only for a URL on its
+  server. A backup repository registered by an earlier release, which has
+  no credential, and a template fetch use the first App whose server holds
+  the URL. A backup URL must also have no user information; one with a
+  user name gets no token. A template address may have a user name: the
+  template service asks for the token by the address without it, so a
+  user name does not opt out. Other URLs keep their own authentication,
+  so SSH and the Apps can all be in use. `app-id`, a positive integer, and
+  `transit-key`, the name of the RSA Transit key at the mount `transit`
+  that holds the App's private key (letters, digits, `_`, `.` and `-`,
+  starting with a letter or digit, at most 128 characters), are required
+  in each App. Optional `installations` maps an account name to the App's
+  installation id, a positive integer; names are GitHub account names,
+  compared in lower case, and appear once. A repository whose owner is not
+  listed has its installation looked up. Optional `server` is the GitHub
+  server's origin, an `https` URL with a host and no user information,
+  path, query or fragment; absent or empty, `https://github.com`. The API
+  is `https://api.github.com` for `https://github.com` and
+  `{server}/api/v3` otherwise. The workspace service signs each App's JWT
+  through the Wyrwood vault socket, `unix://{wyrwood-directory}/vault.sock`,
+  with `transit/sign/{transit-key}/sha2-256`, sending no token and no
+  namespace. No error of either key names a value: an error names the
+  field, with the App's index in `github-apps`, and the rule. The template
+  service ignores both keys.
 validation-criteria: >-
   `go test ./backend/internal/config/` parses a valid document, applies the
   defaults, rejects each invalid field, tells a document with the
@@ -289,8 +300,10 @@ validation-criteria: >-
   `commit` limit, and check that no error of those fields quotes the
   value given. They parse `template-versions`, apply its default when it
   is absent, and refuse an empty, missing, malformed or zero `every` and
-  an unknown member without quoting the value given. They parse `github-app` with its default server and check
-  that no error of the section quotes the value given.
+  an unknown member without quoting the value given. They parse `github-app` with its default server and name, and
+  `github-apps` in order, refuse both together, an App of `github-apps`
+  with no name and a name given twice, and check that no error of either
+  key quotes the value given.
   `go test ./backend/internal/registry/` imports the `templates` key once
   as one template per source at its newest version, skips and names by
   `id` alone each refused entry and each source with no version, joins the
@@ -310,5 +323,6 @@ validation-criteria: >-
   in no reply, data, log or Git request.
   `go test ./backend/cmd/menagerie/` checks that `local-env` reaches the
   devcontainer runtime, that `job-limits` and `alerts` reach the jobs
-  manager, and that `github-app` gives backups on its server a write token
-  and the hook runner socket's credential route read tokens.
+  manager, that `github-app` gives backups on its server a write token
+  and the hook runner socket's credential route read tokens, and that
+  every App of `github-apps` is composed in order.

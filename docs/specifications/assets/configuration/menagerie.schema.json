@@ -430,12 +430,18 @@
     "github-app": {
       "type": "object",
       "additionalProperties": false,
-      "description": "GitHub App whose installation tokens authenticate backups and template fetches to https repository URLs on its server: /{owner}/{repo} or /{owner}/{repo}.git, with no user information, query or fragment. Its private key is an RSA Transit key in OpenBao, used through the Wyrwood vault socket. Other URLs keep their own authentication. Absent, no token is minted.",
+      "description": "One GitHub App, as earlier releases configured it; github-apps lists any number, and a configuration gives one key or the other. The App's installation tokens authenticate the backups of a backup repository whose credential names it, and template fetches to https repository URLs on its server: /{owner}/{repo} or /{owner}/{repo}.git, with no user information, query or fragment. A backup repository registered by an earlier release, with no credential, and a template fetch use the first App whose server holds the URL. Its private key is an RSA Transit key in OpenBao, used through the Wyrwood vault socket. Absent, no token is minted.",
       "required": [
         "app-id",
         "transit-key"
       ],
       "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+          "maxLength": 100,
+          "description": "The name a backup repository's credential calls the App, compared without regard to case. Absent in github-app, github-app."
+        },
         "app-id": {
           "type": "integer",
           "minimum": 1,
@@ -463,6 +469,56 @@
           "type": "string",
           "default": "https://github.com",
           "description": "The GitHub server's https origin, with no user information, path, query or fragment. The API is https://api.github.com for https://github.com, else {server}/api/v3."
+        }
+      }
+    },
+    "github-apps": {
+      "type": "array",
+      "description": "The GitHub Apps, in order, each named. The first App whose server holds an https URL serves a template fetch and a backup repository registered with no credential; a backup repository with a credential uses only the App it names. Absent, the App of github-app, if any.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One GitHub App: as github-app, with a name it must give.",
+        "required": [
+          "name",
+          "app-id",
+          "transit-key"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+            "maxLength": 100,
+            "description": "The name a backup repository's credential calls the App, compared without regard to case; no two Apps share one."
+          },
+          "app-id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The App's id, the issuer of its JWTs."
+          },
+          "transit-key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+            "maxLength": 128,
+            "description": "Name of the Transit key, at the mount transit, that holds the App's private key."
+          },
+          "installations": {
+            "type": "object",
+            "description": "The App's installation id by account name, compared in lower case. A repository whose owner is not listed has its installation looked up.",
+            "propertyNames": {
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$",
+              "maxLength": 100
+            },
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "server": {
+            "type": "string",
+            "default": "https://github.com",
+            "description": "The GitHub server's https origin, with no user information, path, query or fragment. The API is https://api.github.com for https://github.com, else {server}/api/v3."
+          }
         }
       }
     }

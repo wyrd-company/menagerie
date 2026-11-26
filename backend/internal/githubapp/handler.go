@@ -21,15 +21,16 @@ const CredentialPath = "/v1/credentials/github"
 const maxCredentialRequest = 8 << 10
 
 // Handler serves CredentialPath: a contents read token for the one
-// repository an https URL on the server names. A nil Minter, which is no
-// github-app configuration, serves no URL.
+// repository an https URL names, from the first of apps whose server holds
+// it. No Apps, which is no github-app or github-apps configuration, serves
+// no URL.
 //
 //	POST {"url": "https://github.com/{owner}/{repo}[.git]"}
 //	200 {"username": "x-access-token", "password": token}
 //	400, 405 {"reason"}  not a credential request
 //	404 {"reason"}       no github-app, or not a repository URL on its server
 //	502 {"reason"}       the token could not be minted; a fixed reason
-func Handler(m *Minter) http.Handler {
+func Handler(apps Apps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -45,16 +46,16 @@ func Handler(m *Minter) http.Handler {
 			reply(w, http.StatusBadRequest, map[string]string{"reason": "the request is not a credential request"})
 			return
 		}
-		if m == nil {
+		if len(apps) == 0 {
 			reply(w, http.StatusNotFound, map[string]string{"reason": "no GitHub App is configured"})
 			return
 		}
-		repo, ok := m.Repository(req.URL)
+		app, repo, ok := apps.Serving(req.URL)
 		if !ok {
 			reply(w, http.StatusNotFound, map[string]string{"reason": "the URL is not an https repository URL on the GitHub App's server"})
 			return
 		}
-		token, err := m.Token(r.Context(), repo, Read)
+		token, err := app.Token(r.Context(), repo, Read)
 		if err != nil {
 			reason := "the token could not be minted"
 			var e *Error
