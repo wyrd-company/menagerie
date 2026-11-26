@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -196,5 +198,81 @@ func TestASwitchNeedsTheCheckedURL(t *testing.T) {
 	}
 	if got, _, _ := s.WorkspaceBackupRepository(ctx, "alpha"); got.ID != r.ID {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// A registration keeps its credential, an App or a key, and a change of it
+// lands only while the repository is still registered at the URL checked.
+func TestABackupRepositoryKeepsItsCredential(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	url := "https://git.example.invalid/example-org/backups.git"
+	r, err := s.RegisterBackupRepository(ctx, BackupRepository{Name: "Org", URL: url, Credential: Credential{App: "sample-org"}})
+	if err != nil || r.Credential != (Credential{App: "sample-org"}) {
+		t.Fatalf("%+v %v", r, err)
+	}
+	key := Credential{Key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSampleKeyFakeSampleKeyFakeSampleKeyFake"}
+	if _, err := s.SetBackupRepositoryCredential(ctx, r.ID, "https://git.example.invalid/example-org/other.git", key); !errors.Is(err, ErrBackupRepositoryChanged) {
+		t.Fatalf("another URL: %v", err)
+	}
+	if got, _ := s.BackupRepository(ctx, r.ID); got.Credential != (Credential{App: "sample-org"}) {
+		t.Fatalf("changed at another URL: %+v", got)
+	}
+	if _, err := s.SetBackupRepositoryCredential(ctx, "absent", url, key); !errors.Is(err, ErrNoBackupRepository) {
+		t.Fatalf("absent: %v", err)
+	}
+	changed, err := s.SetBackupRepositoryCredential(ctx, r.ID, url, key)
+	if err != nil || changed.Credential != key {
+		t.Fatalf("%+v %v", changed, err)
+	}
+	listed, err := s.BackupRepositories(ctx)
+	if err != nil || len(listed) != 1 || listed[0].Credential != key {
+		t.Fatalf("%+v %v", listed, err)
+	}
+	if cleared, err := s.SetBackupRepositoryCredential(ctx, r.ID, url, Credential{}); err != nil || !cleared.Credential.IsZero() {
+		t.Fatalf("%+v %v", cleared, err)
+	}
+	// The data refuses an App and a key together.
+	err = s.Update(ctx, func(tx *Tx) error {
+		_, err := tx.exec(`UPDATE backup_repositories SET credential_app = 'a', credential_key = 'k' WHERE id = ?`, r.ID)
+		return err
+	})
+	if err == nil {
+		t.Fatal("an App and a key were stored together")
+	}
+}
+
+// A database of schema 6, which a release with backup repositories and no
+// credentials wrote, upgrades with each registration kept and naming no
+// credential, so its URL keeps choosing one.
+func TestSchemaSixUpgradesKeepingBackupRepositoriesWithNoCredential(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "menagerie.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations[:6] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 6`,
+		`INSERT INTO backup_repositories (id, name, url) VALUES ('backups', 'Backups', 'git@git.example.invalid:example-org/backups.git')`,
+		`INSERT INTO workspaces (name, backup_repository) VALUES ('alpha', 'backups')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	r, ok, err := s.WorkspaceBackupRepository(context.Background(), "alpha")
+	if err != nil || !ok || r.ID != "backups" || !r.Credential.IsZero() {
+		t.Fatalf("%+v %v %v", r, ok, err)
 	}
 }

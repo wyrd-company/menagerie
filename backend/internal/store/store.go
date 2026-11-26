@@ -140,6 +140,11 @@ var migrations = []string{
 	CREATE UNIQUE INDEX backup_repositories_url ON backup_repositories(url) WHERE removed_at IS NULL;
 	ALTER TABLE workspaces ADD COLUMN backup_repository TEXT REFERENCES backup_repositories(id);
 	CREATE INDEX workspaces_backup_repository ON workspaces(backup_repository);`,
+	// 7: each backup repository's credential: the name of a GitHub App, or
+	// an SSH key's public key, or neither for a registration an earlier
+	// release made, whose credential its URL chooses.
+	`ALTER TABLE backup_repositories ADD COLUMN credential_app TEXT CHECK (credential_app != '');
+	ALTER TABLE backup_repositories ADD COLUMN credential_key TEXT CHECK (credential_key IS NULL OR (credential_key != '' AND credential_app IS NULL));`,
 }
 
 // SchemaVersion is the version of the schema this Menagerie reads and writes.
