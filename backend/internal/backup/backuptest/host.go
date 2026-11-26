@@ -48,9 +48,13 @@ type Host struct {
 	KnownHosts string
 	// HostKey is the server's public host key.
 	HostKey ssh.PublicKey
+	// UserKey is the public key of the agent's key, which the server
+	// accepts; the agent names it UserKeyName.
+	UserKey ssh.PublicKey
 
 	mu         sync.Mutex
 	commands   []string
+	offered    []string
 	authorized map[string]bool
 	sessions   sync.WaitGroup
 }
@@ -74,12 +78,14 @@ func New(t *testing.T) *Host {
 
 	_, userPriv, _ := ed25519.GenerateKey(rand.Reader)
 	userSigner, _ := ssh.NewSignerFromKey(userPriv)
-	f.Authorize(userSigner.PublicKey())
+	f.UserKey = userSigner.PublicKey()
+	f.Authorize(f.UserKey)
 
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			f.mu.Lock()
 			ok := f.authorized[string(key.Marshal())]
+			f.offered = append(f.offered, ssh.FingerprintSHA256(key))
 			f.mu.Unlock()
 			if meta.User() == "git" && ok {
 				return nil, nil
@@ -102,7 +108,7 @@ func New(t *testing.T) *Host {
 	go f.serve(l, config)
 
 	keyring := agent.NewKeyring()
-	if err := keyring.Add(agent.AddedKey{PrivateKey: userPriv}); err != nil {
+	if err := keyring.Add(agent.AddedKey{PrivateKey: userPriv, Comment: UserKeyName}); err != nil {
 		t.Fatal(err)
 	}
 	f.AgentPath = f.ServeAgent(t, keyring)
@@ -110,6 +116,26 @@ func New(t *testing.T) *Host {
 	f.KnownHosts = filepath.Join(f.Dir, "known_hosts")
 	f.WriteKnownHosts(t, f.KnownHosts, f.HostKey)
 	return f
+}
+
+// UserKeyName is the agent's comment on the host's own key, as Wyrwood
+// names a key by its Transit key.
+const UserKeyName = "sample-git-key"
+
+// AuthorizedKey is key in authorized-keys form with no comment, as a
+// backup repository's credential records it.
+func AuthorizedKey(key ssh.PublicKey) string {
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
+}
+
+// Offered lists the SHA256 fingerprints of the keys clients offered the
+// server, in order, and forgets them.
+func (f *Host) Offered() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.offered
+	f.offered = nil
+	return out
 }
 
 // Authorize lets key sign in as git, beside the host's own agent key: an

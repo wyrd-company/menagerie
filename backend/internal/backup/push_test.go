@@ -3,6 +3,9 @@ package backup
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +13,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
@@ -146,4 +150,92 @@ func TestAgentAuthUsesTheDefaultKnownHostsWhenNoneAreGiven(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "knownhosts") && !strings.Contains(err.Error(), "known hosts") {
 		t.Fatalf("push to a host with no known key: %v", err)
 	}
+}
+
+// AgentKeyAuth offers the Git host only the repository's key, whatever
+// else the agent holds, and fails naming the key when the agent does not
+// offer it.
+func TestAgentKeyAuthOffersOnlyTheRepositorysKey(t *testing.T) {
+	f := backuptest.New(t)
+	bare(t, f.Dir, "backups.git")
+	folder := newWorkspace(t, "alpha")
+	if _, err := CommitRoot(folder, "alpha", generate(t, folder), "Create", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// The decoy is the agent's first key, which an agent offering every key
+	// offers before the repository's.
+	keyring := agent.NewKeyring()
+	decoy, repoKey := sampleKey(t, keyring, "sample-decoy-key"), sampleKey(t, keyring, "sample-repository-key")
+	f.Authorize(repoKey)
+	socket := f.ServeAgent(t, keyring)
+	push := func(auth Auth) error {
+		_, err := (&Remote{URL: f.URL("backups.git"), Auth: auth}).Push(ctx, folder, "alpha", nil)
+		return err
+	}
+	// Every key, as a registration from an earlier release has it: the
+	// host sees the decoy first, so the fixture records each offer.
+	f.Offered()
+	if err := push(AgentAuth(socket, f.KnownHosts)); err != nil {
+		t.Fatal(err)
+	}
+	if offered := f.Offered(); len(offered) == 0 || offered[0] != ssh.FingerprintSHA256(decoy) {
+		t.Fatalf("every key offered %v, not the decoy first", offered)
+	}
+	write(t, folder, "later.txt", "a later backup\n")
+	if _, err := CommitAll(folder, "alpha", "Later", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := push(AgentKeyAuth(socket, backuptest.AuthorizedKey(repoKey), f.KnownHosts)); err != nil {
+		t.Fatal(err)
+	}
+	offered := f.Offered()
+	for _, fingerprint := range offered {
+		if fingerprint != ssh.FingerprintSHA256(repoKey) {
+			t.Fatalf("offered %s besides the repository's key", fingerprint)
+		}
+	}
+	if len(offered) == 0 {
+		t.Fatal("no key offered")
+	}
+	err := push(AgentKeyAuth(socket, backuptest.AuthorizedKey(decoy), f.KnownHosts))
+	if err == nil || !strings.Contains(err.Error(), "unable to authenticate") {
+		t.Fatalf("a key the host refuses: %v", err)
+	}
+	for _, fingerprint := range f.Offered() {
+		if fingerprint != ssh.FingerprintSHA256(decoy) {
+			t.Fatalf("offered %s besides the repository's key", fingerprint)
+		}
+	}
+	absent := sampleKey(t, agent.NewKeyring(), "sample-absent-key")
+	err = push(AgentKeyAuth(socket, backuptest.AuthorizedKey(absent), f.KnownHosts))
+	if err == nil || !strings.Contains(err.Error(), "does not offer the repository's key "+ssh.FingerprintSHA256(absent)) {
+		t.Fatalf("a key the agent does not offer: %v", err)
+	}
+	if offered := f.Offered(); len(offered) != 0 {
+		t.Fatalf("a key the agent does not offer reached the host: %v", offered)
+	}
+	if err := push(AgentKeyAuth(socket, "not a key", f.KnownHosts)); err == nil || !strings.Contains(err.Error(), "not a public key") {
+		t.Fatalf("not a key: %v", err)
+	}
+	_, _, err = AgentKeyAuth(socket, backuptest.AuthorizedKey(repoKey))(ctx, "https://git.example.invalid/example-org/backups.git")
+	var credentials *CredentialsError
+	if !errors.As(err, &credentials) {
+		t.Fatalf("an https URL: %v", err)
+	}
+}
+
+// sampleKey adds a generated key to keyring under name and returns its
+// public key.
+func sampleKey(t *testing.T, keyring agent.Agent, name string) ssh.PublicKey {
+	t.Helper()
+	_, private, _ := ed25519.GenerateKey(rand.Reader)
+	signer, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keyring.Add(agent.AddedKey{PrivateKey: private, Comment: name}); err != nil {
+		t.Fatal(err)
+	}
+	return signer.PublicKey()
 }

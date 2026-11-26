@@ -7,6 +7,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/wyrd-company/menagerie/backend/internal/backup/gitclient"
@@ -162,13 +164,36 @@ func TokenAuth(tokens Tokens, otherwise Auth) Auth {
 // /etc/ssh/ssh_known_hosts). A URL that is not SSH pushes without
 // credentials.
 func AgentAuth(socket string, knownHosts ...string) Auth {
+	return agentAuth(socket, "", knownHosts)
+}
+
+// AgentKeyAuth authenticates SSH pushes as AgentAuth does, offering only
+// the agent's key whose public key is publicKey, in authorized-keys form,
+// so that no other key in the agent reaches the Git host. When the agent
+// does not offer that key, the transfer fails naming its fingerprint. A
+// URL that is not SSH is refused: the key is no credential for it.
+func AgentKeyAuth(socket, publicKey string, knownHosts ...string) Auth {
+	return agentAuth(socket, publicKey, knownHosts)
+}
+
+// agentAuth is AgentAuth, offering only the key publicKey when it is not "".
+func agentAuth(socket, publicKey string, knownHosts []string) Auth {
 	return func(ctx context.Context, url string) (transport.AuthMethod, func(), error) {
 		endpoint, err := transport.NewEndpoint(url)
 		if err != nil {
 			return nil, nil, fmt.Errorf("workspace repository address: %w", err)
 		}
 		if endpoint.Protocol != "ssh" {
+			if publicKey != "" {
+				return nil, nil, NewCredentialsError(errors.New("an SSH key is the credential of an SSH URL only"))
+			}
 			return nil, func() {}, nil
+		}
+		var wanted ssh.PublicKey
+		if publicKey != "" {
+			if wanted, _, _, _, err = ssh.ParseAuthorizedKey([]byte(publicKey)); err != nil {
+				return nil, nil, errors.New("ssh agent: the repository's key is not a public key")
+			}
 		}
 		var d net.Dialer
 		conn, err := d.DialContext(ctx, "unix", socket)
@@ -179,7 +204,17 @@ func AgentAuth(socket string, knownHosts ...string) Auth {
 		if user == "" {
 			user = "git"
 		}
-		auth := &gitssh.PublicKeysCallback{User: user, Callback: agent.NewClient(conn).Signers}
+		keyring := agent.NewClient(conn)
+		signers := keyring.Signers
+		if wanted != nil {
+			signer, err := agentSigner(keyring, wanted)
+			if err != nil {
+				_ = conn.Close()
+				return nil, nil, err
+			}
+			signers = func() ([]ssh.Signer, error) { return []ssh.Signer{signer}, nil }
+		}
+		auth := &gitssh.PublicKeysCallback{User: user, Callback: signers}
 		if len(knownHosts) > 0 {
 			callback, err := gitssh.NewKnownHostsCallback(knownHosts...)
 			if err != nil {
@@ -190,6 +225,21 @@ func AgentAuth(socket string, knownHosts ...string) Auth {
 		}
 		return auth, func() { _ = conn.Close() }, nil
 	}
+}
+
+// agentSigner is the signer of keyring's key wanted, or an error naming
+// wanted's fingerprint when keyring does not offer it.
+func agentSigner(keyring agent.ExtendedAgent, wanted ssh.PublicKey) (ssh.Signer, error) {
+	signers, err := keyring.Signers()
+	if err != nil {
+		return nil, fmt.Errorf("ssh agent: %w", err)
+	}
+	for _, signer := range signers {
+		if bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {
+			return signer, nil
+		}
+	}
+	return nil, fmt.Errorf("ssh agent: the agent does not offer the repository's key %s; check that Menagerie's Wyrwood policy offers it, or change the repository's credential", ssh.FingerprintSHA256(wanted))
 }
 
 // CredentialsError reports that tokens had no credentials for the
@@ -203,6 +253,10 @@ func (e *CredentialsError) Error() string {
 
 // Unwrap returns the Tokens error.
 func (e *CredentialsError) Unwrap() error { return e.cause }
+
+// NewCredentialsError is a *CredentialsError of cause, whose text must
+// name no token and no URL: a failure that keeps its text for any URL.
+func NewCredentialsError(cause error) error { return &CredentialsError{cause: cause} }
 
 // transfer is what one push or fetch uses: its context, credentials and
 // progress writer.
