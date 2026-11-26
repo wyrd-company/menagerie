@@ -195,8 +195,7 @@ func agentAuth(socket, publicKey string, knownHosts []string) Auth {
 				return nil, nil, errors.New("ssh agent: the repository's key is not a public key")
 			}
 		}
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "unix", socket)
+		conn, err := DialAgent(ctx, socket, agentWait)
 		if err != nil {
 			return nil, nil, fmt.Errorf("ssh agent: %w", err)
 		}
@@ -225,6 +224,50 @@ func agentAuth(socket, publicKey string, knownHosts []string) Auth {
 		}
 		return auth, func() { _ = conn.Close() }, nil
 	}
+}
+
+// DefaultAgentWait is how long one request to the SSH agent may wait for
+// its reply. The agent is local, so a request it has not answered by then
+// is one it will not answer.
+const DefaultAgentWait = 5 * time.Second
+
+// agentWait is the wait AgentAuth and AgentKeyAuth give the agent; tests
+// shorten it.
+var agentWait = DefaultAgentWait
+
+// DialAgent dials the SSH agent at socket for an operation of ctx. Each
+// request on the connection waits at most wait for its reply, and the
+// connection closes when ctx ends, so a stalled agent fails the request
+// rather than holding the operation past its deadline.
+func DialAgent(ctx context.Context, socket string, wait time.Duration) (net.Conn, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", socket)
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	return &agentConn{Conn: conn, wait: wait, stop: stop}, nil
+}
+
+// agentConn is a connection to the SSH agent whose requests each have a
+// deadline: the agent client writes a request and then reads its reply, so
+// a deadline set at each write bounds the reply that follows.
+type agentConn struct {
+	net.Conn
+	wait time.Duration
+	stop func() bool
+}
+
+func (c *agentConn) Write(p []byte) (int, error) {
+	if err := c.Conn.SetDeadline(time.Now().Add(c.wait)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(p)
+}
+
+func (c *agentConn) Close() error {
+	c.stop()
+	return c.Conn.Close()
 }
 
 // agentSigner is the signer of keyring's key wanted, or an error naming

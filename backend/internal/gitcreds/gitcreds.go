@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"golang.org/x/crypto/ssh"
@@ -59,6 +60,18 @@ type Source struct {
 	// operator key, as its configuration selects it: by name, public key or
 	// SHA256 fingerprint. Empty excludes none.
 	Excluded string
+	// AgentWait is how long one request to the agent may wait for its
+	// reply; zero is backup.DefaultAgentWait.
+	AgentWait time.Duration
+}
+
+// dial dials the agent for an operation of ctx; see backup.DialAgent.
+func (s *Source) dial(ctx context.Context) (net.Conn, error) {
+	wait := s.AgentWait
+	if wait == 0 {
+		wait = backup.DefaultAgentWait
+	}
+	return backup.DialAgent(ctx, s.Socket, wait)
 }
 
 // FitError refuses a credential for a URL. Its message names what to
@@ -79,8 +92,7 @@ func (s *Source) AppChoices() []App {
 // Keys lists the keys the agent offers, in the agent's order, without the
 // excluded key.
 func (s *Source) Keys(ctx context.Context) ([]Key, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", s.Socket)
+	conn, err := s.dial(ctx)
 	if err != nil {
 		return nil, errors.New("the SSH agent could not be reached")
 	}
@@ -112,31 +124,30 @@ func selects(selection string, key *agent.Key) bool {
 
 // excluded reports whether key is the excluded key: by its fingerprint or
 // public key, or by its name in the agent, which lists it with its
-// comment. An agent that cannot be reached names nothing, and the write
-// check that follows fails.
-func (s *Source) excluded(ctx context.Context, key ssh.PublicKey) bool {
+// comment. An agent that cannot be reached or does not list its keys in
+// time is an error: the key may be the excluded one.
+func (s *Source) excluded(ctx context.Context, key ssh.PublicKey) (bool, error) {
 	if s.Excluded == "" {
-		return false
+		return false, nil
 	}
 	if selects(s.Excluded, &agent.Key{Format: key.Type(), Blob: key.Marshal()}) {
-		return true
+		return true, nil
 	}
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", s.Socket)
+	conn, err := s.dial(ctx)
 	if err != nil {
-		return false
+		return false, errors.New("the SSH agent could not be reached")
 	}
 	defer conn.Close()
 	listed, err := agent.NewClient(conn).List()
 	if err != nil {
-		return false
+		return false, errors.New("the SSH agent did not list its keys")
 	}
 	for _, k := range listed {
 		if bytes.Equal(k.Marshal(), key.Marshal()) && selects(s.Excluded, k) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // authorized is key in authorized-keys form with no comment.
@@ -174,7 +185,11 @@ func (s *Source) Fit(ctx context.Context, url string, c store.Credential) error 
 		if err != nil {
 			return &FitError{Message: "the SSH key is not a public key in authorized-keys form"}
 		}
-		if s.excluded(ctx, parsed) {
+		excluded, err := s.excluded(ctx, parsed)
+		if err != nil {
+			return &FitError{Message: err.Error() + ", so Menagerie could not check that the SSH key is not provisioning's operator key; try again"}
+		}
+		if excluded {
 			return &FitError{Message: "the SSH key is provisioning's operator key, which no Git host is given; choose another"}
 		}
 		return nil

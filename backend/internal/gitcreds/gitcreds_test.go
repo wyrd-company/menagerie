@@ -203,3 +203,21 @@ func TestAuthUsesOnlyTheCredentialsApp(t *testing.T) {
 		t.Fatalf("a key: %q %v", got, err)
 	}
 }
+
+func TestAStalledAgentFailsDiscoveryAndTheFitInTime(t *testing.T) {
+	s := &Source{Socket: backuptest.StalledAgent(t), Excluded: "provisioning.wyrwood.operator-key", AgentWait: 50 * time.Millisecond}
+	key := backuptest.AuthorizedKey(sampleKey(t, agent.NewKeyring(), "sample-git-key"))
+	ctx := context.Background()
+	err := backuptest.Within(t, 2*time.Second, func() error { _, err := s.Keys(ctx); return err })
+	if err == nil || err.Error() != "the SSH agent did not list its keys" {
+		t.Fatalf("keys: %v", err)
+	}
+	// The key may be the operator key, which only the agent's list names.
+	err = backuptest.Within(t, 2*time.Second, func() error {
+		return s.Fit(ctx, "git@git.example.test:example-org/backups.git", store.Credential{Key: key})
+	})
+	var fit *FitError
+	if !errors.As(err, &fit) || !strings.Contains(fit.Message, "could not check that the SSH key is not provisioning's operator key") {
+		t.Fatalf("fit: %v", err)
+	}
+}

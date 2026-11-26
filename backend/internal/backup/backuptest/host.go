@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -170,6 +171,48 @@ func (f *Host) ServeAgent(t *testing.T, keyring agent.Agent) string {
 		}
 	}()
 	return path
+}
+
+// StalledAgent serves an SSH agent that accepts each connection, reads its
+// requests and never replies, on a new Unix socket, and returns its path.
+func StalledAgent(t *testing.T) string {
+	t.Helper()
+	sock, err := os.MkdirTemp("", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sock) })
+	path := filepath.Join(sock, AgentSocketName)
+	al, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = al.Close() })
+	go func() {
+		for {
+			c, err := al.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(io.Discard, c); _ = c.Close() }()
+		}
+	}()
+	return path
+}
+
+// Within runs f and returns its error, failing the test when f has not
+// returned within d.
+func Within(t *testing.T, d time.Duration, f func() error) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- f() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		t.Fatalf("still waiting after %s", d)
+		return nil
+	}
 }
 
 // WriteKnownHosts writes a known_hosts file that names key for the server.

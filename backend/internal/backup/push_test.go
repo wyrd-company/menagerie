@@ -225,6 +225,26 @@ func TestAgentKeyAuthOffersOnlyTheRepositorysKey(t *testing.T) {
 	}
 }
 
+func TestAStalledAgentFailsTheTransferInTime(t *testing.T) {
+	socket := backuptest.StalledAgent(t)
+	key := backuptest.AuthorizedKey(sampleKey(t, agent.NewKeyring(), "sample-repository-key"))
+	url := "ssh://git@git.example.invalid/example-org/backups.git"
+	auth := func(ctx context.Context) error { _, _, err := AgentKeyAuth(socket, key)(ctx, url); return err }
+	// Each request waits at most the agent wait for its reply.
+	defer func(wait time.Duration) { agentWait = wait }(agentWait)
+	agentWait = 50 * time.Millisecond
+	if err := backuptest.Within(t, 2*time.Second, func() error { return auth(context.Background()) }); err == nil {
+		t.Fatal("a stalled agent gave the repository's key")
+	}
+	// And the operation's end closes the connection, with a longer wait.
+	agentWait = time.Hour
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := backuptest.Within(t, 2*time.Second, func() error { return auth(ctx) }); err == nil {
+		t.Fatal("a stalled agent gave the repository's key")
+	}
+}
+
 // sampleKey adds a generated key to keyring under name and returns its
 // public key.
 func sampleKey(t *testing.T, keyring agent.Agent, name string) ssh.PublicKey {
