@@ -489,7 +489,7 @@ func TestAMovedTagRefusesCreatesAndUpgradesUntilTakenAgain(t *testing.T) {
 	w.createWorkspace(t, "alpha")
 	w.newVersion(t)
 	moved := "2b00000000000000000000000000000000000002"
-	tpl, err := w.data.RecordCheck(ctx, "sample", store.Credential{}, []store.Version{
+	tpl, err := w.data.RecordCheck(ctx, "sample", 0, []store.Version{
 		{Version: "1.0.0", Tag: "1.0.0", Commit: sampleTemplate.CurrentCommit},
 		{Version: "2.0.0", Tag: "v2.0.0", Commit: moved},
 	}, time.Now())

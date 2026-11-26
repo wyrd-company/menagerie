@@ -148,7 +148,7 @@ func TestApplyBranchMovesTheAppliedRecordOnlyForward(t *testing.T) {
 			moved := sampleVersions[:]
 			moved = append([]store.Version{}, moved...)
 			moved[1].Commit = "1b00000000000000000000000000000000000001"
-			if _, err := w.data.RecordCheck(context.Background(), "sample", store.Credential{}, moved, time.Now()); err != nil {
+			if _, err := w.data.RecordCheck(context.Background(), "sample", 0, moved, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 		}, record: toha(src, "1.0.0", "1b00000000000000000000000000000000000001"), refused: []string{"version 1.0.0", "moved"}},
@@ -160,7 +160,7 @@ func TestApplyBranchMovesTheAppliedRecordOnlyForward(t *testing.T) {
 		{name: "same version", record: toha(src, "1.0.0", appliedCommit), want: store.AppliedVersion{Version: "1.0.0", Commit: appliedCommit}},
 		{name: "newer version", record: toha(src, "1.1.0", laterCommit), want: store.AppliedVersion{Version: "1.1.0", Commit: laterCommit}},
 		{name: "version at its commit", prepare: func(t *testing.T, w *world) {
-			if _, err := w.data.RecordCheck(context.Background(), "sample", store.Credential{}, []store.Version{
+			if _, err := w.data.RecordCheck(context.Background(), "sample", 0, []store.Version{
 				{Version: "1.0.0", Tag: "1.0.0", Commit: appliedCommit}, {Version: "1.1.0", Tag: "1.1.0", Commit: laterCommit},
 			}, time.Now()); err != nil {
 				t.Fatal(err)

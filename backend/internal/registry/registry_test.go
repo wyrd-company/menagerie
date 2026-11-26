@@ -663,13 +663,19 @@ func TestATemplatesCredentialChangesOnceItsChecksPass(t *testing.T) {
 	}
 	// The change records its own listing as the version check, so a failed
 	// check with the earlier credential no longer shows.
-	if _, err := r.Data.RecordCheckFailure(ctx, tpl.ID, tpl.Credential, store.CheckTemplateResolve, time.Unix(1, 0)); err != nil {
+	if _, err := r.Data.RecordCheckFailure(ctx, tpl.ID, tpl.CredentialChanges, store.CheckTemplateResolve, time.Unix(1, 0)); err != nil {
 		t.Fatal(err)
 	}
 	changed, err := r.SetCredential(ctx, tpl.ID, key, false)
 	if err != nil || changed.Credential != key || changed.CheckFailure != "" || len(changed.Versions) != len(f.versions[kit]) {
 		t.Fatalf("%+v %v", changed, err)
 	}
+	// A version check after the change records its outcome.
+	f.refuse["versions "+kit] = &templates.Error{Status: 422, Kind: "template-resolve-failed", Message: "refused"}
+	if checked, err := r.CheckVersions(ctx, tpl.ID); err != nil || checked.CheckFailure != store.CheckTemplateResolve {
+		t.Fatalf("a check after the change: %+v %v", checked, err)
+	}
+	delete(f.refuse, "versions "+kit)
 	// The current version's tag gone, the change is refused.
 	f.versions[kit] = f.versions[kit][:1]
 	if check := checkOf(t, errOf(r.SetCredential(ctx, tpl.ID, store.Credential{App: "sample-org"}, false))); check.Check != CheckVersion {

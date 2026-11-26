@@ -435,7 +435,7 @@ func newWorldWith(t *testing.T, opts jobs.Options) *world {
 		t.Fatal(err)
 	}
 	// The sample's versions, as its last check found them.
-	if _, err := w.data.RecordCheck(context.Background(), "sample", store.Credential{}, sampleVersions, time.Now()); err != nil {
+	if _, err := w.data.RecordCheck(context.Background(), "sample", 0, sampleVersions, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	// The only registered backup repository, which a create that names
