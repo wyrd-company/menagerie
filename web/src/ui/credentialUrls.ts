@@ -3,7 +3,8 @@ import type { GitHubAppChoice } from "../api/types.ts";
 // The URL rules below are the backend's: go-git's endpoint parsing for the
 // kind of URL, and githubapp's Minter.Repository for the Apps serving it.
 const schemePattern = /^[^:]+:\/\//;
-const scpLikePattern = /^(?:[^@]+@)?[^:\s]+:(?:[0-9]{1,5}:)?[^\\].*$/;
+// Go's regexp: \s is ASCII space alone, and . matches all but "\n".
+const scpLikePattern = /^(?:[^@]+@)?[^:\t\n\f\r ]+:(?:[0-9]{1,5}:)?[^\\][^\n]*$/;
 const ownerPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const namePattern = /^[A-Za-z0-9._-]+$/;
 
@@ -41,8 +42,14 @@ function decodeHost(raw: string): string {
     i += char.length;
   }
   // Go keeps bytes that are not UTF-8, and its lower case makes each U+FFFD.
-  return new TextDecoder("utf-8").decode(new Uint8Array(bytes));
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(bytes));
 }
+
+/**
+ * s in lower case as Go's strings.ToLower makes it: each character alone,
+ * so a final "Σ" is "σ", as it is mid-word, not "ς".
+ */
+const goLower = (s: string) => Array.from(s, (c) => c.toLowerCase()).join("");
 
 /**
  * An https URL's parts as Go's net/url reads them, from the raw text: no
@@ -56,7 +63,7 @@ function httpsParts(raw: string): { host: string; path: string; rest: string } |
   const tail = m[3]!;
   const end = tail.search(/[?#]/);
   return {
-    host: host.toLowerCase().replace(/:443$/, ""),
+    host: goLower(host).replace(/:443$/, ""),
     path: end < 0 ? tail : tail.slice(0, end),
     rest: end < 0 ? "" : tail.slice(end),
   };
