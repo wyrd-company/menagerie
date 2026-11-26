@@ -112,7 +112,10 @@ only one fits, the form chooses it. **Validate** waits until the address is
 read. Every Git operation on the template's repository uses that credential
 alone: the checks, version checks, creating and upgrading workspaces, and
 **Apply branch**. A refused fetch names the credential, such as `the template
-could not be fetched with SSH key SHA256:…`.
+could not be fetched with SSH key SHA256:…`, and so does the row's line for a
+failed version check. The Git host of a public repository asks for no
+credential, so its fetches offer none; **Validate** still has the App get a
+token for the repository, so an App that cannot is refused.
 
 Menagerie refuses the template at the first check that fails, naming that
 check under the form. The message never repeats the address:
@@ -120,7 +123,7 @@ check under the form. The message never repeats the address:
 | Check        | Refused when                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `address`    | The address is not one of those forms: a folder, `file://`, a template name, `git://`, `http://`, or a password, even one holding `/`. Or it is not written plainly: in an `https://` or `ssh://` address a `:` before an `@`, as a port before a ref is (register it without the ref); a ref that holds `/` or `:`, or more than one `@` after the host; or a ref that holds a `.`, or follows `git@host:path`, but is not a version's tag |
-| `credential` | The credential does not fit the address: an SSH address needs an SSH key, an `https` address on an App's server an App that serves it, and no other `https` address takes one; or the key is provisioning's operator key |
+| `credential` | The credential does not fit the address: an SSH address needs an SSH key, an `https` address on an App's server an App that serves it, and no other `https` address takes one; or the key is provisioning's operator key; or the App cannot get a token for the repository, even a public one |
 | `fetch`      | The repository's versions cannot be listed: it does not exist, or the Git host refuses the credentials                                                                                                                                                                                                                                                                                                                                      |
 | `version`    | The repository has no version, the address's ref is not a version's tag, where the `address` check did not refuse it first, or the version's tag moved between the listing and the fetch (register again)                                                                                                                                                                                                                                                                                                              |
 | `fetch`      | The current version cannot be fetched                                                                                                                                                                                                                                                                                                                                                                                                       |

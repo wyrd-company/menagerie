@@ -127,6 +127,7 @@ fetch names the credential it used:
 | --- | --- |
 | the template could not be fetched with SSH key SHA256:… | The Git host knows that key: add the public key that **Change credential** shows to the template's repository as a deploy key, or to an account that can read it. Menagerie's Wyrwood policy still offers the key: a key the agent no longer offers fails before the host is reached. Then the Wyrwood binding and the known hosts. |
 | the template could not be fetched with GitHub App NAME | The App is installed on the template's repository with Contents read, and is still in `github-apps` under that name; see the GitHub App reasons below. |
+| GitHub App NAME could not get a token for the repository: REASON | Check `credential`: the App could not get a token, even for a public repository, whose fetches need none. REASON is one of the GitHub App reasons below. |
 | the template could not be fetched (no credential named) | A template that shows **Credential chosen by URL**: choose its credential with **Change credential**. |
 
 A workspace job that fetches the template, such as a create or an upgrade,

@@ -277,8 +277,8 @@ paths:
     put:
       operationId: setTemplateCredential
       summary: >-
-        Change a template's credential once the credential fits its URL and
-        its current version passes the fetch, read and definition checks
+        Change a template's credential once the credential fits its URL, an
+        App mints a token for the repository, and its current version passes the fetch, read and definition checks
         with it; with check, run the checks alone.
       requestBody:
         required: true

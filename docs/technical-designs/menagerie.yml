@@ -1326,7 +1326,9 @@ proposed-design:
     reaches no network and answers the Git URL a fetch connects to, a `gh:`
     address expanded and an `https` URL without its user name. The
     credential check, the one backup repositories use, runs on that URL
-    before any fetch, and the form offers the credentials that fit it,
+    before any fetch, and with an App it also mints a read token for the
+    repository from that App, since a public repository's fetch never asks
+    for one and so would never try it; the form offers the credentials that fit it,
     reading the URL through `POST /api/templates/addresses`. Every template
     service request about a registered template names its credential: the
     version listing, the checks, create, upgrade and Apply branch's descent
@@ -1343,7 +1345,12 @@ proposed-design:
     `ssh -G` check, which Menagerie's image, setting no SSH configuration,
     does not need; [Toha #94](https://github.com/wyrd-company/toha/issues/94)
     would list tags through Toha. A refused fetch names the credential by
-    the App's name or the key's fingerprint. A change of a template's
+    the App's name or the key's fingerprint, as do a refused descent check
+    of an upgrade or Apply branch and the Templates screen's line for a
+    failed version check. A fetch that the Git host does not ask a
+    credential for, a public repository's, offers none: Toha answers
+    challenges only, so a public template keeps working after its App is
+    removed, and its next credential change refuses that App. A change of a template's
     credential is saved only after its current version, at the commit the
     listing finds for its tag, passes the fetch, read and definition checks
     with it.
