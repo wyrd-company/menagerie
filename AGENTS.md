@@ -23,8 +23,8 @@ Use `task` verbs: `task --list`. `task check` is CI. The live suites
   removes only objects carrying the run's own label.
 - Test fixtures use generic names and generated keys. Never read real
   credentials.
-- Versions live in Intentional tags without a `v`. Before 0.1.0 there is one
-  intent; do not add another.
+- Versions live in Intentional tags without a `v`. Every pull request with a
+  user-visible change carries its own intent, written with `intentional add`.
 
 ## Do not touch
 
