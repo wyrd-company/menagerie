@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"time"
 
@@ -60,18 +59,36 @@ type Source struct {
 	// operator key, as its configuration selects it: by name, public key or
 	// SHA256 fingerprint. Empty excludes none.
 	Excluded string
-	// AgentWait is how long one request to the agent may wait for its
-	// reply; zero is backup.DefaultAgentWait.
-	AgentWait time.Duration
+	// ListWait is how long the agent may take to list its keys, for the
+	// key list and the operator-key check; zero is DefaultListWait.
+	// Transfers wait as backup.DefaultAgentWait says.
+	ListWait time.Duration
 }
 
-// dial dials the agent for an operation of ctx; see backup.DialAgent.
-func (s *Source) dial(ctx context.Context) (net.Conn, error) {
-	wait := s.AgentWait
+// DefaultListWait is how long the agent may take to list its keys before
+// the key list and the operator-key check fail. Wyrwood fetches each
+// Transit key's public key from OpenBao in turn, which a healthy OpenBao
+// answers well within it; a manager waits on the list, so it is kept
+// short, and Validate can be tried again.
+const DefaultListWait = 15 * time.Second
+
+// list lists the agent's keys for an operation of ctx, within the list
+// wait; see backup.DialAgent.
+func (s *Source) list(ctx context.Context) ([]*agent.Key, error) {
+	wait := s.ListWait
 	if wait == 0 {
-		wait = backup.DefaultAgentWait
+		wait = DefaultListWait
 	}
-	return backup.DialAgent(ctx, s.Socket, wait)
+	keyring, release, err := backup.DialAgent(ctx, s.Socket, wait)
+	if err != nil {
+		return nil, errors.New("the SSH agent could not be reached")
+	}
+	defer release()
+	listed, err := keyring.List()
+	if err != nil {
+		return nil, errors.New("the SSH agent did not list its keys")
+	}
+	return listed, nil
 }
 
 // FitError refuses a credential for a URL. Its message names what to
@@ -92,14 +109,9 @@ func (s *Source) AppChoices() []App {
 // Keys lists the keys the agent offers, in the agent's order, without the
 // excluded key.
 func (s *Source) Keys(ctx context.Context) ([]Key, error) {
-	conn, err := s.dial(ctx)
+	listed, err := s.list(ctx)
 	if err != nil {
-		return nil, errors.New("the SSH agent could not be reached")
-	}
-	defer conn.Close()
-	listed, err := agent.NewClient(conn).List()
-	if err != nil {
-		return nil, errors.New("the SSH agent did not list its keys")
+		return nil, err
 	}
 	out := []Key{}
 	for _, k := range listed {
@@ -133,14 +145,9 @@ func (s *Source) excluded(ctx context.Context, key ssh.PublicKey) (bool, error) 
 	if selects(s.Excluded, &agent.Key{Format: key.Type(), Blob: key.Marshal()}) {
 		return true, nil
 	}
-	conn, err := s.dial(ctx)
+	listed, err := s.list(ctx)
 	if err != nil {
-		return false, errors.New("the SSH agent could not be reached")
-	}
-	defer conn.Close()
-	listed, err := agent.NewClient(conn).List()
-	if err != nil {
-		return false, errors.New("the SSH agent did not list its keys")
+		return false, err
 	}
 	for _, k := range listed {
 		if bytes.Equal(k.Marshal(), key.Marshal()) && selects(s.Excluded, k) {
@@ -220,7 +227,7 @@ func (s *Source) Fit(ctx context.Context, url string, c store.Credential) error 
 func (s *Source) Auth(c store.Credential) backup.Auth {
 	switch {
 	case c.Key != "":
-		return backup.AgentKeyAuth(s.Socket, c.Key, s.KnownHosts...)
+		return backup.AgentKeyAuthRefusing(s.Socket, c.Key, s.refuse, s.KnownHosts...)
 	case c.App != "":
 		return s.appAuth(c.App)
 	}
@@ -229,6 +236,16 @@ func (s *Source) Auth(c store.Credential) backup.Auth {
 		auth = backup.TokenAuth(s.Apps.Tokens(githubapp.Write), auth)
 	}
 	return auth
+}
+
+// refuse refuses the excluded key as a transfer's agent lists it: a key a
+// repository recorded before the configuration excluded it is no Git
+// credential either.
+func (s *Source) refuse(key *agent.Key) error {
+	if s.Excluded != "" && selects(s.Excluded, key) {
+		return errors.New("is provisioning's operator key, which no Git host is given; change the repository's credential")
+	}
+	return nil
 }
 
 // appAuth sends a contents write token of the App name, and fails a URL

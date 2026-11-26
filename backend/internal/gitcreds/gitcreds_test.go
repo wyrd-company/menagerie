@@ -7,15 +7,18 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"golang.org/x/crypto/ssh"
@@ -205,7 +208,7 @@ func TestAuthUsesOnlyTheCredentialsApp(t *testing.T) {
 }
 
 func TestAStalledAgentFailsDiscoveryAndTheFitInTime(t *testing.T) {
-	s := &Source{Socket: backuptest.StalledAgent(t), Excluded: "provisioning.wyrwood.operator-key", AgentWait: 50 * time.Millisecond}
+	s := &Source{Socket: backuptest.StalledAgent(t), Excluded: "provisioning.wyrwood.operator-key", ListWait: 50 * time.Millisecond}
 	key := backuptest.AuthorizedKey(sampleKey(t, agent.NewKeyring(), "sample-git-key"))
 	ctx := context.Background()
 	err := backuptest.Within(t, 2*time.Second, func() error { _, err := s.Keys(ctx); return err })
@@ -219,5 +222,68 @@ func TestAStalledAgentFailsDiscoveryAndTheFitInTime(t *testing.T) {
 	var fit *FitError
 	if !errors.As(err, &fit) || !strings.Contains(fit.Message, "could not check that the SSH key is not provisioning's operator key") {
 		t.Fatalf("fit: %v", err)
+	}
+}
+
+// A saved key that the configuration has since excluded, as provisioning's
+// operator key, is refused at each transfer, before any connection, by
+// its name in the agent; the repository's other keys still reach the host.
+func TestAuthRefusesASavedKeyThatIsNowTheOperatorKey(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	git := sampleKey(t, keyring, "sample-git-key")
+	operator := sampleKey(t, keyring, "sample-operator-key")
+	s := &Source{Socket: f.ServeAgent(t, keyring), Excluded: "sample-operator-key"}
+	url := "ssh://git@git.example.invalid/example-org/backups.git"
+	_, _, err := s.Auth(store.Credential{Key: authorized(operator)})(context.Background(), url)
+	if err == nil || !strings.Contains(err.Error(), "the repository's key "+ssh.FingerprintSHA256(operator)+" is provisioning's operator key") {
+		t.Fatalf("the operator key: %v", err)
+	}
+	_, release, err := s.Auth(store.Credential{Key: authorized(git)})(context.Background(), url)
+	if err != nil {
+		t.Fatalf("a Git key: %v", err)
+	}
+	release()
+}
+
+// The service reads each URL form in the shared table as the backups
+// screen's picker does; web/test/contract/credential-urls.test.ts reads the same
+// table.
+func TestTheServiceReadsURLFormsAsThePickerDoes(t *testing.T) {
+	data, err := os.ReadFile("../../../docs/specifications/assets/workspace-api/credential-url-cases.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Server string `json:"server"`
+		Cases  []struct {
+			URL    string  `json:"url"`
+			Kind   *string `json:"kind"`
+			Served bool    `json:"served"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &table); err != nil {
+		t.Fatal(err)
+	}
+	m, err := githubapp.New(githubapp.Options{AppID: 1, Signer: keySigner{}, Server: table.Server})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apps := githubapp.Apps{{Name: "sample-org", Server: table.Server, Minter: m}}
+	for _, c := range table.Cases {
+		kind := ""
+		if e, err := transport.NewEndpoint(c.URL); err == nil && (e.Protocol == "ssh" || e.Protocol == "https") {
+			kind = e.Protocol
+		}
+		want := ""
+		if c.Kind != nil {
+			want = *c.Kind
+		}
+		if kind != want {
+			t.Errorf("%s: kind %q, the table says %q", c.URL, kind, want)
+		}
+		if _, _, served := apps.Serving(c.URL); served != c.Served {
+			t.Errorf("%s: served %v, the table says %v", c.URL, served, c.Served)
+		}
 	}
 }

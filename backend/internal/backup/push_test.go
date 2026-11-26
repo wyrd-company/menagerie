@@ -245,6 +245,46 @@ func TestAStalledAgentFailsTheTransferInTime(t *testing.T) {
 	}
 }
 
+// slowAgent is an agent whose signatures each take delay, as Wyrwood's do
+// while OpenBao signs.
+type slowAgent struct {
+	agent.Agent
+	delay time.Duration
+}
+
+func (a slowAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
+	time.Sleep(a.delay)
+	return a.Agent.Sign(key, data)
+}
+
+// The agent wait bounds a request's reply alone: a connection idle between
+// requests for longer than the wait still makes the next request, and a
+// signature that takes most of the wait still arrives.
+func TestAgentWaitBoundsEachRequestAlone(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	key := sampleKey(t, keyring, "sample-repository-key")
+	wait := 300 * time.Millisecond
+	client, release, err := DialAgent(context.Background(), f.ServeAgent(t, slowAgent{keyring, wait / 2}), wait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := client.List(); err != nil {
+		t.Fatal(err)
+	}
+	// Idle for twice the wait, as a handshake is between listing the keys
+	// and signing.
+	time.Sleep(2 * wait)
+	err = backuptest.Within(t, 5*time.Second, func() error {
+		_, err := client.Sign(key, []byte("sample data"))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("a signature after an idle wait: %v", err)
+	}
+}
+
 // sampleKey adds a generated key to keyring under name and returns its
 // public key.
 func sampleKey(t *testing.T, keyring agent.Agent, name string) ssh.PublicKey {
