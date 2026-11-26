@@ -27,13 +27,16 @@ oidc:
 # Menagerie's own image.
 # runner-image: ghcr.io/example-org/workspace-runner:1.0.0
 
-# The GitHub App Menagerie authenticates to GitHub with: installation tokens
-# for the backup repository and private https templates. Its private key is
-# the Transit key transit-key, used through the Wyrwood vault socket. Without
-# this section, only the SSH identity authenticates.
-github-app:
-  app-id: 123456
-  transit-key: menagerie-github-app
+# The GitHub Apps Menagerie authenticates to GitHub with: installation tokens
+# for the backup repositories that name an App, and for private https
+# templates, from the first App on their server. Each App's private key is
+# its Transit key transit-key, used through the Wyrwood vault socket. Add an
+# entry for each organization's App. Without this section, only the SSH
+# identity authenticates.
+github-apps:
+  - name: example-org
+    app-id: 123456
+    transit-key: menagerie-github-app
 
 # Registry credentials read from OpenBao through the Wyrwood vault socket.
 # Without this section every registry is anonymous.

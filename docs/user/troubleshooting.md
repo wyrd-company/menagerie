@@ -23,7 +23,7 @@ is stable; the message names what failed and what was left behind.
 | `not-applied` | Toha reported that it wrote nothing. The workspace is unchanged. |
 | `upgrade-failed` | Toha or a template hook failed while applying an upgrade. Files written before the failure remain; the state before the upgrade is on the backup branch, and the message names its commit. Recovery is manual. An upgrade's hooks run in Toha's candidate, so a failed hook wrote nothing to the workspace folder. A container failure has the same console line as for `generation-failed`. |
 | `merge-conflicted` | The upgrade wrote conflict markers. Resolve them in the named files, then **Rebuild**. |
-| `backup-failed` | A commit or push of the workspace failed. The message says what was changed: before an upgrade, nothing; after it, the devcontainer was not rebuilt. Check the workspace repository, that Menagerie's SSH key, or the [GitHub App](configuration.md#github-app) for an `https` repository, may push to it, and the Wyrwood binding. |
+| `backup-failed` | A commit or push of the workspace failed. The message says what was changed: before an upgrade, nothing; after it, the devcontainer was not rebuilt. Check the workspace repository, that its credential, the SSH key or the [GitHub App](configuration.md#github-app) that **Backups** names for it, may push to it, and the Wyrwood binding; see [Backup repository credentials](#backup-repository-credentials). |
 | `backup-move-failed` | A [move of a workspace's backups](usage.md#move-a-workspaces-backups) could not check, write or read back the destination, or the workspace's create has not finished. The message names the step and says the workspace still backs up to its earlier repository. Fix the cause and move again. |
 | `backup-branch-conflict` | The destination already has a branch with the workspace's name, from another history, such as another host's workspace of that name. Nothing was pushed. Rename or remove that branch in the destination, or choose another repository. |
 | `timed-out` | The job passed a configured [time limit](configuration.md#job-time-limits); the message names the phase and the limit. A hook still running was stopped and its container removed before the job ended. A create keeps its folder, as every failed create does. A build or up can leave a half-created container: **Start** reuses it and **Rebuild** removes it. |
@@ -61,6 +61,31 @@ values and OpenBao's response text never appear.
 | the Wyrwood vault socket could not be reached | The binding exists and the consumer directory is mounted at `wyrwood-directory`. |
 | the operation ended before OpenBao answered | The job ended first, for example at a restart. |
 | the credential source failed | Any other failure of the credential source. |
+
+## Backup repository credentials
+
+**Validate** on a registration or on **Change credential** refuses a
+credential that does not fit the URL, with the check `credential`:
+
+| Refusal | What to do |
+| --- | --- |
+| choose the SSH key that reaches the repository | An SSH URL needs one of the keys the agent offers. With none listed, offer one in Menagerie's [Wyrwood policy](install.md#policy). |
+| an SSH URL takes an SSH key as its credential, not a GitHub App | Choose a key, or register the repository's `https` URL to use an App. |
+| choose the GitHub App for the repository | The URL is on a configured App's server: choose the App that is installed on the repository. |
+| an https URL takes a GitHub App as its credential, not an SSH key | Choose an App, or register the repository's SSH URL to use a key. |
+| GitHub App NAME does not serve the URL | The App's `server` is another; the message names the one it serves. |
+| no GitHub App named NAME is configured | Add the App to `github-apps`, or choose another. |
+| the SSH key is provisioning's operator key | Choose a Git key; no Git host is given the operator key. |
+
+A backup, a move or an Apply branch fetch of a repository whose credential no
+longer works fails with one of these:
+
+| Message | What to check |
+| --- | --- |
+| ssh agent: the agent does not offer the repository's key SHA256:… | Menagerie's Wyrwood policy still offers that key, by its Transit key name. If the key was replaced, use **Change credential** to choose the new one, and give its public key to the Git host. |
+| ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey] | The Git host does not know the repository's key: add the public key that **Change credential** shows to the repository as a deploy key with write access, or to an account that can write to it. For a repository that shows **Credential chosen by URL**, every key the agent offers was refused: choose the repository's key with **Change credential**. |
+| workspace repository credentials: no GitHub App named NAME is configured | The App was renamed or removed in the configuration: restore it, or use **Change credential**. |
+| workspace repository credentials: GitHub App NAME does not serve the repository's URL | The App's `server` changed: use **Change credential**. |
 
 ## GitHub App credentials
 

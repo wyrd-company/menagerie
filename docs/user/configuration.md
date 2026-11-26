@@ -73,16 +73,17 @@ the container, `/run/wyrwood` in the deployment example.
 Backup repositories are registered in the interface, not in configuration;
 see [Backup repositories](usage.md#backup-repositories). Each workspace is
 pushed, by force, to an orphan branch named after its folder in the backup
-repository chosen when it was created. A repository URL takes these forms:
+repository chosen when it was created. A repository URL takes these forms,
+each with the credential its registration names:
 
-- `ssh://` or scp-like `git@host:path`, through the Wyrwood agent and the
-  known hosts in `/etc/ssh/ssh_known_hosts`;
-- `https://` on the [GitHub App](#github-app)'s server, with an
-  installation token.
+- `ssh://` or scp-like `git@host:path`, with one of the keys the Wyrwood
+  agent offers, and the known hosts in `/etc/ssh/ssh_known_hosts`;
+- `https://` on a [GitHub App](#github-app)'s server, with an installation
+  token of the App the registration names;
+- any other `https://` URL, with no credential.
 
 A local path, a `file://` URL, plain `http` and a URL with a password are
-refused. The Git key, or the App, needs write access on every backup
-repository.
+refused. Each repository's key, or App, needs write access on it.
 
 ### The workspace-repository key
 
@@ -240,34 +241,55 @@ of the reasons in [Troubleshooting](troubleshooting.md#registry-credentials).
 
 ## GitHub App
 
-With `github-app`, Menagerie authenticates to GitHub with a GitHub App's
-installation tokens, for repositories on the App's server whose path is
-`/<owner>/<repository>` or `/<owner>/<repository>.git`:
+With `github-apps`, or `github-app` for one App, Menagerie authenticates to
+GitHub with GitHub Apps' installation tokens, for repositories on an App's
+server whose path is `/<owner>/<repository>` or `/<owner>/<repository>.git`:
 
 - Backups, with `contents: write` on the repository, when a backup
-  repository's URL is such an `https` URL with no user information, query
-  or fragment. A backup repository URL with a user name gets no token and
-  no other credential.
+  repository's credential names the App and its URL is such an `https` URL
+  with no user information, query or fragment. A backup repository URL with
+  a user name gets no token and no other credential.
 - Template fetches, with `contents: read` on the repository, from every
-  `https` address of such a repository. A user name in the address does
-  not opt out: the template service asks for the token by the address
-  without it, and the fetch sends the token in its place.
+  `https` address of such a repository, with the first App whose server
+  holds it. A user name in the address does not opt out: the template
+  service asks for the token by the address without it, and the fetch sends
+  the token in its place.
 
 Every other URL keeps its own authentication: SSH URLs use the Wyrwood
 agent, and Menagerie gives other `https` URLs no credential. Both can be
 configured, for example backups and templates on GitHub through the App
 and templates on another host over SSH.
 
+List one entry for each App, for example one for each GitHub organization
+whose repositories Menagerie backs up to:
+
+```yaml
+github-apps:
+  - name: example-org
+    app-id: 123456
+    transit-key: example-org-github-app
+  - name: client-org
+    app-id: 654321
+    transit-key: client-org-github-app
+```
+
+`github-app` takes one App, as earlier releases configured it, with the same
+keys; a configuration gives `github-app` or `github-apps`, not both. A backup
+repository registered by an earlier release, which names no App, uses the
+first App whose server holds its URL, so moving `github-app` into
+`github-apps` as the first entry changes nothing.
+
 | Key | Value |
 | --- | --- |
+| `name` | The name a backup repository's credential gives the App: letters, digits, `_`, `.` and `-`, compared without regard to case. Required in `github-apps`; in `github-app`, without it, `github-app`. Renaming an App fails the backups of the repositories that name it until you change their credential. |
 | `app-id` | The App's id. |
 | `transit-key` | The Transit key, at the mount `transit`, that holds the App's private key: letters, digits, `_`, `.` and `-`. |
 | `installations` | Optional. The App's installation id by account name, compared in lower case. A repository whose owner is not listed has its installation looked up. |
 | `server` | Optional. The GitHub server's `https` origin; without it, `https://github.com`. The API is `https://api.github.com` for GitHub, `<server>/api/v3` for GitHub Enterprise Server. |
 
-Install the App on each backup repository with Contents read and write, and
-on each private template repository with Contents read. Import its private
-key into OpenBao's Transit engine as an RSA key, as
+Install each App on the backup repositories that name it with Contents read
+and write, and on each private template repository with Contents read.
+Import its private key into OpenBao's Transit engine as an RSA key, as
 [Installation](install.md#github-app) shows; the Wyrwood policy grants
 `update` on `transit/sign/<transit-key>/sha2-256`. For a `server` whose
 certificate a private authority signed, see
