@@ -203,7 +203,7 @@ func agentAuth(socket, publicKey string, refuse func(*agent.Key) error, knownHos
 				return nil, nil, errors.New("ssh agent: the repository's key is not a public key")
 			}
 		}
-		keyring, release, err := DialAgent(ctx, socket, agentWait)
+		keyring, release, err := DialAgent(ctx, socket, 0)
 		if err != nil {
 			return nil, nil, fmt.Errorf("ssh agent: %w", err)
 		}
@@ -233,24 +233,18 @@ func agentAuth(socket, publicKey string, refuse func(*agent.Key) error, knownHos
 	}
 }
 
-// DefaultAgentWait is how long one request to the SSH agent may wait for
-// its reply during a transfer. Wyrwood bounds each request itself: a
-// signature waits for OpenBao up to its sign timeout, 30 seconds by
-// default and 2 minutes at most. The wait is longer, so a healthy agent
-// answers or fails each request first, and only an agent that will not
-// answer reaches it. The transfer's own deadline still ends it sooner.
-const DefaultAgentWait = 150 * time.Second
-
-// agentWait is the wait AgentAuth and AgentKeyAuth give the agent; tests
-// shorten it.
-var agentWait = DefaultAgentWait
-
 // DialAgent dials the SSH agent at socket for an operation of ctx, and
-// returns its client and the release that closes the connection. Each
-// request waits at most wait for its reply, and the connection closes when
-// ctx ends, so a stalled agent fails the request rather than holding the
-// operation past its deadline. Between requests nothing reads the
-// connection, so an idle connection never times out.
+// returns its client and the release that closes the connection. The
+// connection closes when ctx ends, so a stalled agent fails the request
+// rather than holding the operation past its deadline or its cancel. When
+// wait is positive, each request also waits at most wait for its reply.
+// Between requests nothing reads the connection, so an idle connection
+// never times out.
+//
+// A transfer gives no wait: Menagerie cannot tell a stalled agent from a
+// slow one. Wyrwood looks up every identity it offers in OpenBao before it
+// signs, each lookup within its own timeout, so a healthy signature can take
+// minutes. The transfer's job ends a stall, by its time limit or a cancel.
 func DialAgent(ctx context.Context, socket string, wait time.Duration) (agent.ExtendedAgent, func(), error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", socket)
@@ -276,8 +270,10 @@ type agentRequests struct {
 }
 
 func (c *agentRequests) Write(p []byte) (int, error) {
-	if err := c.conn.SetDeadline(time.Now().Add(c.wait)); err != nil {
-		return 0, err
+	if c.wait > 0 {
+		if err := c.conn.SetDeadline(time.Now().Add(c.wait)); err != nil {
+			return 0, err
+		}
 	}
 	return c.conn.Write(p)
 }
@@ -286,30 +282,31 @@ func (c *agentRequests) Read(p []byte) (int, error) { return c.conn.Read(p) }
 
 // agentSigner is the signer of keyring's key wanted, or an error naming
 // wanted's fingerprint when keyring does not offer it or refuse, if not
-// nil, gives an error for the key as keyring lists it.
+// nil, gives an error for the key as keyring lists it. One listing gives
+// both the signer and the key refuse checks, so the agent cannot offer a
+// key to the transfer that it did not offer to the check.
 func agentSigner(keyring agent.ExtendedAgent, wanted ssh.PublicKey, refuse func(*agent.Key) error) (ssh.Signer, error) {
 	fingerprint := ssh.FingerprintSHA256(wanted)
-	if refuse != nil {
-		listed, err := keyring.List()
-		if err != nil {
-			return nil, fmt.Errorf("ssh agent: %w", err)
-		}
-		for _, k := range listed {
-			if bytes.Equal(k.Marshal(), wanted.Marshal()) {
-				if err := refuse(k); err != nil {
-					return nil, fmt.Errorf("ssh agent: the repository's key %s %w", fingerprint, err)
-				}
-			}
-		}
-	}
 	signers, err := keyring.Signers()
 	if err != nil {
 		return nil, fmt.Errorf("ssh agent: %w", err)
 	}
 	for _, signer := range signers {
-		if bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {
-			return signer, nil
+		if !bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {
+			continue
 		}
+		if refuse != nil {
+			// The client's signers hold the key as the agent listed it,
+			// with its comment.
+			listed, ok := signer.PublicKey().(*agent.Key)
+			if !ok {
+				return nil, fmt.Errorf("ssh agent: the repository's key %s could not be checked against provisioning's operator key", fingerprint)
+			}
+			if err := refuse(listed); err != nil {
+				return nil, fmt.Errorf("ssh agent: the repository's key %s %w", fingerprint, err)
+			}
+		}
+		return signer, nil
 	}
 	return nil, fmt.Errorf("ssh agent: the agent does not offer the repository's key %s; check that Menagerie's Wyrwood policy offers it, or change the repository's credential", fingerprint)
 }

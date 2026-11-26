@@ -8,11 +8,13 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
@@ -229,19 +231,79 @@ func TestAStalledAgentFailsTheTransferInTime(t *testing.T) {
 	socket := backuptest.StalledAgent(t)
 	key := backuptest.AuthorizedKey(sampleKey(t, agent.NewKeyring(), "sample-repository-key"))
 	url := "ssh://git@git.example.invalid/example-org/backups.git"
-	auth := func(ctx context.Context) error { _, _, err := AgentKeyAuth(socket, key)(ctx, url); return err }
-	// Each request waits at most the agent wait for its reply.
-	defer func(wait time.Duration) { agentWait = wait }(agentWait)
-	agentWait = 50 * time.Millisecond
-	if err := backuptest.Within(t, 2*time.Second, func() error { return auth(context.Background()) }); err == nil {
-		t.Fatal("a stalled agent gave the repository's key")
-	}
-	// And the operation's end closes the connection, with a longer wait.
-	agentWait = time.Hour
+	// The operation's end closes the connection.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := backuptest.Within(t, 2*time.Second, func() error { return auth(ctx) }); err == nil {
+	err := backuptest.Within(t, 2*time.Second, func() error { _, _, err := AgentKeyAuth(socket, key)(ctx, url); return err })
+	if err == nil {
 		t.Fatal("a stalled agent gave the repository's key")
+	}
+}
+
+// A transfer has no wait of its own: a slow agent's keys and signature
+// arrive whenever the agent gives them, within the operation.
+func TestATransferWaitsForASlowAgent(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	key := sampleKey(t, keyring, "sample-repository-key")
+	socket := f.ServeAgent(t, slowAgent{keyring, 2 * time.Second})
+	err := backuptest.Within(t, 30*time.Second, func() error {
+		method, release, err := AgentKeyAuth(socket, backuptest.AuthorizedKey(key))(context.Background(), "ssh://git@git.example.invalid/example-org/backups.git")
+		if err != nil {
+			return err
+		}
+		defer release()
+		signers, err := method.(*gitssh.PublicKeysCallback).Callback()
+		if err != nil {
+			return err
+		}
+		_, err = signers[0].Sign(rand.Reader, []byte("sample data"))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("a slow agent's signature: %v", err)
+	}
+}
+
+// changingAgent lists its keys without hidden on the first listing only,
+// as Wyrwood may when one OpenBao lookup fails.
+type changingAgent struct {
+	agent.Agent
+	hidden ssh.PublicKey
+	lists  *atomic.Int32
+}
+
+func (a changingAgent) List() ([]*agent.Key, error) {
+	keys, err := a.Agent.List()
+	if a.lists.Add(1) > 1 || err != nil {
+		return keys, err
+	}
+	var shown []*agent.Key
+	for _, k := range keys {
+		if !bytes.Equal(k.Marshal(), a.hidden.Marshal()) {
+			shown = append(shown, k)
+		}
+	}
+	return shown, nil
+}
+
+// The refusal checks the key the transfer signs with, from the same
+// listing: a key the first listing omits is not offered by a later one.
+func TestTheRefusalChecksTheListingThatGivesTheSigner(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	key := sampleKey(t, keyring, "sample-operator-key")
+	socket := f.ServeAgent(t, changingAgent{keyring, key, new(atomic.Int32)})
+	refuse := func(k *agent.Key) error {
+		if k.Comment == "sample-operator-key" {
+			return errors.New("is the operator key")
+		}
+		return nil
+	}
+	_, release, err := AgentKeyAuthRefusing(socket, backuptest.AuthorizedKey(key), refuse)(context.Background(), "ssh://git@git.example.invalid/example-org/backups.git")
+	if err == nil {
+		release()
+		t.Fatal("the transfer signed with a key its check never saw")
 	}
 }
 
@@ -257,7 +319,7 @@ func (a slowAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) 
 	return a.Agent.Sign(key, data)
 }
 
-// The agent wait bounds a request's reply alone: a connection idle between
+// A wait, as the key list gives one, bounds a request's reply alone: a connection idle between
 // requests for longer than the wait still makes the next request, and a
 // signature that takes most of the wait still arrives.
 func TestAgentWaitBoundsEachRequestAlone(t *testing.T) {

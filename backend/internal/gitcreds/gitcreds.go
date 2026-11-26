@@ -61,7 +61,7 @@ type Source struct {
 	Excluded string
 	// ListWait is how long the agent may take to list its keys, for the
 	// key list and the operator-key check; zero is DefaultListWait.
-	// Transfers wait as backup.DefaultAgentWait says.
+	// Transfers wait as long as their job: see backup.DialAgent.
 	ListWait time.Duration
 }
 
