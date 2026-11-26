@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -87,16 +88,24 @@ func TestTheCredentialRouteRefusals(t *testing.T) {
 
 func TestTheCredentialRouteMintsFromTheNamedAppOnly(t *testing.T) {
 	g := newGitHub(t, newClock())
-	m, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation})
+	// Each App has its own installation, so the token request tells which
+	// App minted.
+	first, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation})
+	second, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation + 1})
 	url := g.server.URL + "/example-org/sample-repo"
 	// The first App serves the URL too, so only the name chooses the second.
 	apps := Apps{
-		{Name: "sample-first", Minter: m},
-		{Name: "sample-second", Minter: m},
+		{Name: "sample-first", Minter: first},
+		{Name: "sample-second", Minter: second},
 	}
 	status, doc, _ := post(t, Handler(apps), http.MethodPost, `{"url":"`+url+`","githubApp":"SAMPLE-second"}`)
 	if status != http.StatusOK || !strings.HasPrefix(doc["password"], "sample-token-") {
 		t.Fatalf("%d %v", status, doc)
+	}
+	for _, r := range g.seen() {
+		if m := tokenRoute.FindStringSubmatch(r.path); m != nil && m[1] != strconv.FormatInt(sampleInstallation+1, 10) {
+			t.Fatalf("installation %s minted, not the named App's", m[1])
+		}
 	}
 	cases := []struct {
 		name, body string
