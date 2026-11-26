@@ -114,6 +114,19 @@ func TestKeysLeaveOutTheOperatorKeyUnderEveryName(t *testing.T) {
 	}
 }
 
+// A key the agent lists under two names is one choice, with both names.
+func TestKeysListAKeyUnderTwoNamesOnce(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	git := sampleKey(t, keyring, "sample-git-key")
+	socket := f.ServeAgent(t, backuptest.AliasAgent(keyring, git, "sample-alias"))
+	keys, err := (&Source{Socket: socket}).Keys(context.Background())
+	want := Key{Name: "sample-alias, sample-git-key", Fingerprint: ssh.FingerprintSHA256(git), PublicKey: authorized(git)}
+	if err != nil || len(keys) != 1 || keys[0] != want {
+		t.Fatalf("a key under two names: %+v %v", keys, err)
+	}
+}
+
 func TestNormalKeyDropsTheComment(t *testing.T) {
 	key := sampleKey(t, agent.NewKeyring(), "k")
 	for _, given := range []string{authorized(key), authorized(key) + " some comment", " " + authorized(key) + "\n"} {

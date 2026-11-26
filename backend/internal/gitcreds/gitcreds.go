@@ -121,11 +121,20 @@ func (s *Source) Keys(ctx context.Context) ([]Key, error) {
 			excluded[string(k.Marshal())] = true
 		}
 	}
+	// A key listed under several names is one choice: a credential is a
+	// public key. Its names join in the agent's order.
 	out := []Key{}
+	at := map[string]int{}
 	for _, k := range listed {
-		if excluded[string(k.Marshal())] {
+		blob := string(k.Marshal())
+		if excluded[blob] {
 			continue
 		}
+		if i, ok := at[blob]; ok {
+			out[i].Name += ", " + k.Comment
+			continue
+		}
+		at[blob] = len(out)
 		out = append(out, Key{Name: k.Comment, Fingerprint: ssh.FingerprintSHA256(k), PublicKey: authorized(k)})
 	}
 	return out, nil
