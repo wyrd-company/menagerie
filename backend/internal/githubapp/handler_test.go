@@ -85,6 +85,44 @@ func TestTheCredentialRouteRefusals(t *testing.T) {
 	}
 }
 
+func TestTheCredentialRouteMintsFromTheNamedAppOnly(t *testing.T) {
+	g := newGitHub(t, newClock())
+	m, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation})
+	url := g.server.URL + "/example-org/sample-repo"
+	// The first App serves the URL too, so only the name chooses the second.
+	apps := Apps{
+		{Name: "sample-first", Minter: m},
+		{Name: "sample-second", Minter: m},
+	}
+	status, doc, _ := post(t, Handler(apps), http.MethodPost, `{"url":"`+url+`","githubApp":"SAMPLE-second"}`)
+	if status != http.StatusOK || !strings.HasPrefix(doc["password"], "sample-token-") {
+		t.Fatalf("%d %v", status, doc)
+	}
+	cases := []struct {
+		name, body string
+		apps       Apps
+		status     int
+		reason     string
+	}{
+		{"not configured", `{"url":"` + url + `","githubApp":"sample-gone"}`, apps, http.StatusBadGateway, "no GitHub App named sample-gone is configured"},
+		{"none configured", `{"url":"` + url + `","githubApp":"sample-gone"}`, nil, http.StatusBadGateway, "no GitHub App named sample-gone is configured"},
+		{"another server", `{"url":"https://elsewhere.example.invalid/example-org/sample-repo","githubApp":"sample-second"}`, apps, http.StatusBadGateway, "GitHub App sample-second does not serve the URL"},
+		{"not a name", `{"url":"` + url + `","githubApp":"sample app"}`, apps, http.StatusBadRequest, "the request is not a credential request"},
+		{"empty name", `{"url":"` + url + `","githubApp":""}`, apps, http.StatusBadRequest, "the request is not a credential request"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			status, doc, _ := post(t, Handler(c.apps), http.MethodPost, c.body)
+			if status != c.status || doc["reason"] != c.reason || len(doc) != 1 {
+				t.Fatalf("%d %v", status, doc)
+			}
+		})
+	}
+	if g.count(http.MethodPost) != 1 {
+		t.Fatalf("token requests %d", g.count(http.MethodPost))
+	}
+}
+
 func TestTheCredentialRouteAnswers502WithAFixedReason(t *testing.T) {
 	g := newGitHub(t, newClock())
 	g.answer = func(w http.ResponseWriter, _ *http.Request) bool {

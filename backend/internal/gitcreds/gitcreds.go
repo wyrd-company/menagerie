@@ -189,6 +189,39 @@ func NormalKey(publicKey string) (string, bool) {
 	return authorized(parsed), true
 }
 
+// NormalCredential is c with its key in the form a credential records, or
+// a *FitError for one that names an App and a key, or a key that is not a
+// public key.
+func NormalCredential(c store.Credential) (store.Credential, error) {
+	if c.App != "" && c.Key != "" {
+		return c, &FitError{Message: "a credential is a GitHub App or an SSH key, not both"}
+	}
+	if c.Key != "" {
+		key, ok := NormalKey(c.Key)
+		if !ok {
+			return c, &FitError{Message: "the SSH key is not a public key in authorized-keys form"}
+		}
+		c.Key = key
+	}
+	return c, nil
+}
+
+// Phrase names c in a refusal, so a manager knows which credential the Git
+// host refused: " with GitHub App {name}", or " with SSH key
+// {fingerprint}". The zero credential, chosen by URL, is "". Neither names
+// a secret.
+func Phrase(c store.Credential) string {
+	switch {
+	case c.App != "":
+		return " with GitHub App " + c.App
+	case c.Key != "":
+		if key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.Key)); err == nil {
+			return " with SSH key " + ssh.FingerprintSHA256(key)
+		}
+	}
+	return ""
+}
+
 // Fit checks that c is a credential a new registration of url can have: an
 // SSH URL takes an SSH key that is not the excluded key; an https URL that
 // an App's server holds takes an App that serves it; any other https URL

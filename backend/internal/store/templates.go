@@ -25,7 +25,11 @@ type Template struct {
 	Address string
 	Source  string
 	// RunnerImage is the image of its hooks' throwaway containers, or "".
-	RunnerImage    string
+	RunnerImage string
+	// Credential is the one credential its Git connections use, or the
+	// zero Credential for a template an earlier release registered or
+	// imported, whose URL chooses it.
+	Credential     Credential
 	CurrentVersion string
 	CurrentTag     string
 	// CurrentCommit is "" for an imported template no check has fetched.
@@ -122,13 +126,13 @@ var ErrNoTemplate = errors.New("no registered template has this id")
 var ErrNotNewer = errors.New("the version is not newer than the current version")
 
 const templateColumns = `id, name, address, source, coalesce(runner_image, ''), current_version, current_tag, coalesce(current_commit, ''),
-	coalesce(checked_at, ''), coalesce(check_failure, '')`
+	coalesce(checked_at, ''), coalesce(check_failure, ''), coalesce(credential_app, ''), coalesce(credential_key, '')`
 
 func scanTemplate(row interface{ Scan(...any) error }) (Template, error) {
 	var t Template
 	var checked string
 	err := row.Scan(&t.ID, &t.Name, &t.Address, &t.Source, &t.RunnerImage, &t.CurrentVersion, &t.CurrentTag, &t.CurrentCommit,
-		&checked, &t.CheckFailure)
+		&checked, &t.CheckFailure, &t.Credential.App, &t.Credential.Key)
 	if err == nil && checked != "" {
 		if t.CheckedAt, err = time.Parse(time.RFC3339Nano, checked); err != nil {
 			err = fmt.Errorf("the last version check's time: %w", err)
@@ -280,9 +284,10 @@ func (t *Tx) RegisterTemplate(tpl Template, joins map[string]AppliedVersion) (Te
 			tpl.ID = fmt.Sprintf("%s-%d", base, n)
 		}
 	}
-	if _, err := t.exec(`INSERT INTO templates (id, name, address, source, runner_image, current_version, current_tag, current_commit)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		tpl.ID, tpl.Name, tpl.Address, tpl.Source, nullable(tpl.RunnerImage), tpl.CurrentVersion, tpl.CurrentTag, nullable(tpl.CurrentCommit)); err != nil {
+	if _, err := t.exec(`INSERT INTO templates (id, name, address, source, runner_image, current_version, current_tag, current_commit, credential_app, credential_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tpl.ID, tpl.Name, tpl.Address, tpl.Source, nullable(tpl.RunnerImage), tpl.CurrentVersion, tpl.CurrentTag, nullable(tpl.CurrentCommit),
+		nullable(tpl.Credential.App), nullable(tpl.Credential.Key)); err != nil {
 		return Template{}, err
 	}
 	if !tpl.CheckedAt.IsZero() {
@@ -490,6 +495,22 @@ func (s *Store) EditTemplate(ctx context.Context, id string, name, runnerImage *
 			if _, err := t.exec(`UPDATE templates SET runner_image = ? WHERE id = ?`, nullable(*runnerImage), id); err != nil {
 				return err
 			}
+		}
+		tpl, err = t.Template(id)
+		return err
+	})
+	return tpl, err
+}
+
+// SetTemplateCredential records the credential of the registered template
+// id, or is ErrNoTemplate, and returns the template as recorded.
+func (s *Store) SetTemplateCredential(ctx context.Context, id string, c Credential) (tpl Template, err error) {
+	err = s.Update(ctx, func(t *Tx) error {
+		if _, err := t.Template(id); err != nil {
+			return err
+		}
+		if _, err := t.exec(`UPDATE templates SET credential_app = ?, credential_key = ? WHERE id = ?`, nullable(c.App), nullable(c.Key), id); err != nil {
+			return err
 		}
 		tpl, err = t.Template(id)
 		return err

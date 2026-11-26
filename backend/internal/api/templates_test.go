@@ -37,20 +37,20 @@ func (s *templateService) ReadAddress(_ context.Context, address string) (*templ
 	if base != kitAddress {
 		return nil, &templates.Error{Status: 400, Kind: "invalid-address", Message: "the address is not a remote Git address"}
 	}
-	read := &templates.Address{Source: kitAddress, Base: kitAddress}
+	read := &templates.Address{Source: kitAddress, Base: kitAddress, URL: kitAddress}
 	if ref != "" {
 		read.Reference = &ref
 	}
 	return read, nil
 }
 
-func (s *templateService) ListVersions(context.Context, string) (*templates.Versions, error) {
+func (s *templateService) ListVersions(context.Context, string, *templates.Credential) (*templates.Versions, error) {
 	return &templates.Versions{Source: kitAddress, Versions: []templates.Version{
 		{Version: "1.0.0", Tag: "1.0.0", Commit: commitOf("1.0.0")}, {Version: "1.1.0", Tag: "1.1.0", Commit: commitOf("1.1.0")},
 	}}, nil
 }
 
-func (s *templateService) Check(_ context.Context, _, ref string) (*templates.Checked, error) {
+func (s *templateService) Check(_ context.Context, _, ref string, _ *templates.Credential) (*templates.Checked, error) {
 	return &templates.Checked{Source: kitAddress, Commit: commitOf(ref), Definition: s.definition[ref]}, nil
 }
 
@@ -410,5 +410,57 @@ func TestTheWorkspaceListShowsAppliedVersionsAndUpgrades(t *testing.T) {
 	}
 	if r := list()["delta"]; r.NeedsUpgrade || *r.AppliedVersion != "1.1.0" {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// acceptAll is a credential check that every credential passes.
+type acceptAll struct{}
+
+func (acceptAll) Fit(context.Context, string, store.Credential) error { return nil }
+
+func TestATemplatesCredentialIsRegisteredShownAndChanged(t *testing.T) {
+	f, _ := templateFixture(t)
+	f.server.opts.Registry.(*registry.Registry).Credentials = acceptAll{}
+	resp, data := f.do(t, "POST", "/api/templates/addresses", `{"address":"`+kitAddress+`@1.0.0"}`)
+	if resp.StatusCode != 200 || strings.TrimSpace(string(data)) != `{"url":"`+kitAddress+`"}` {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	resp, data = f.do(t, "POST", "/api/templates/addresses", `{"address":"./kit"}`)
+	if body := decode[checkBody](t, data); resp.StatusCode != 422 || body.Error.Check != "address" {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	resp, data = f.do(t, "POST", "/api/templates", `{"name":"Kit","address":"`+kitAddress+`","credential":{"githubApp":"sample-org","fingerprint":"SHA256:x"}}`)
+	if body := decode[checkBody](t, data); resp.StatusCode != 400 || body.Error.Kind != "invalid-request" {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	resp, data = f.do(t, "POST", "/api/templates", `{"name":"Kit","address":"`+kitAddress+`","credential":{"githubApp":"sample-org"}}`)
+	if resp.StatusCode != http.StatusCreated || !strings.Contains(string(data), `"credential":{"githubApp":"sample-org"}`) {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	resp, data = f.do(t, "PUT", "/api/templates/kit/credential", `{}`)
+	if resp.StatusCode != 400 {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBHK2Ry9R6NHMnm7k0aS9sH1cKXqXlCgS2tJ1x0m2Zq1"
+	resp, data = f.do(t, "PUT", "/api/templates/kit/credential", `{"credential":{"sshKey":"`+key+` sample-comment"},"check":true}`)
+	if resp.StatusCode != 200 || !strings.Contains(string(data), `"sshKey":"`+key+`","fingerprint":"SHA256:`) {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	if _, data = f.do(t, "GET", "/api/templates", ""); !strings.Contains(string(data), `"credential":{"githubApp":"sample-org"}`) {
+		t.Fatalf("a check changed the credential: %s", data)
+	}
+	resp, data = f.do(t, "PUT", "/api/templates/kit/credential", `{"credential":{"sshKey":"`+key+`"}}`)
+	if resp.StatusCode != 200 || !strings.Contains(string(data), `"sshKey":"`+key+`"`) {
+		t.Fatalf("%d %s", resp.StatusCode, data)
+	}
+	resp, _ = f.do(t, "PUT", "/api/templates/absent/credential", `{"credential":{"sshKey":"`+key+`"}}`)
+	if resp.StatusCode != 404 {
+		t.Fatalf("absent %d", resp.StatusCode)
+	}
+	if _, err := f.data.RegisterTemplate(context.Background(), store.Template{ID: "zulu", Name: "Zulu", Address: "gh:o/z", Source: "gh:o/z", CurrentVersion: "1.0.0", CurrentTag: "1.0.0"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, data = f.do(t, "GET", "/api/templates", ""); !strings.Contains(string(data), `"id":"zulu","name":"Zulu","address":"gh:o/z","currentVersion":"1.0.0","runnerImage":null,"credential":null`) {
+		t.Fatalf("an earlier template's credential: %s", data)
 	}
 }

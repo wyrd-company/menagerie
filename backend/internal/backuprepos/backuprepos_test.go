@@ -138,10 +138,10 @@ func TestAFailedWriteCheckNamesItsCredential(t *testing.T) {
 	if !errors.As(err, &check) || check.Check != CheckWrite || !strings.HasPrefix(check.Message, want) {
 		t.Fatalf("a key the host refuses: %v", err)
 	}
-	if got := credentialPhrase(store.Credential{App: "sample-org"}); got != " with GitHub App sample-org" {
+	if got := gitcreds.Phrase(store.Credential{App: "sample-org"}); got != " with GitHub App sample-org" {
 		t.Errorf("an App: %q", got)
 	}
-	if got := credentialPhrase(store.Credential{}); got != "" {
+	if got := gitcreds.Phrase(store.Credential{}); got != "" {
 		t.Errorf("chosen by URL: %q", got)
 	}
 }

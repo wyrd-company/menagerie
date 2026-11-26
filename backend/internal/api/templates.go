@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/wyrd-company/menagerie/backend/internal/backuprepos"
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
@@ -23,7 +24,11 @@ import (
 // versions. *registry.Registry satisfies it.
 type Registry interface {
 	// With check, each runs its checks alone and stores nothing.
-	Register(ctx context.Context, name, address, runnerImage string, check bool) (store.Template, error)
+	Register(ctx context.Context, name, address, runnerImage string, credential store.Credential, check bool) (store.Template, error)
+	SetCredential(ctx context.Context, id string, credential store.Credential, check bool) (store.Template, error)
+	// URL is the Git URL a template's credential has to fit, read from an
+	// address reaching no network.
+	URL(ctx context.Context, address string) (string, error)
 	Upgrade(ctx context.Context, id, version string, check bool) (store.Template, error)
 	Edit(ctx context.Context, id string, name, runnerImage *string) (store.Template, error)
 	// CheckVersions answers the template with its version check's record,
@@ -33,12 +38,15 @@ type Registry interface {
 
 // Template is a registered template as the browser sees it.
 type Template struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	Address        string   `json:"address"`
-	CurrentVersion string   `json:"currentVersion"`
-	RunnerImage    *string  `json:"runnerImage"`
-	Workspaces     []string `json:"workspaces"`
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	Address        string  `json:"address"`
+	CurrentVersion string  `json:"currentVersion"`
+	RunnerImage    *string `json:"runnerImage"`
+	// Credential is null for a template an earlier release registered or
+	// imported, whose URL chooses its credential.
+	Credential *BackupCredential `json:"credential"`
+	Workspaces []string          `json:"workspaces"`
 	// NewestVersion is the newest found version, or null when none is.
 	NewestVersion *string `json:"newestVersion"`
 	// Versions are the found versions, in ascending order.
@@ -66,7 +74,7 @@ type LastCheck struct {
 
 func templateOf(t store.Template) Template {
 	out := Template{ID: t.ID, Name: t.Name, Address: t.Address, CurrentVersion: t.CurrentVersion, Workspaces: t.Workspaces,
-		Versions: []TemplateVersion{}, CurrentMoved: t.CurrentMoved()}
+		Versions: []TemplateVersion{}, CurrentMoved: t.CurrentMoved(), Credential: credentialOf(t.Credential)}
 	if t.RunnerImage != "" {
 		image := t.RunnerImage
 		out.RunnerImage = &image
@@ -148,10 +156,11 @@ func (s *Server) registerTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name        *string `json:"name"`
-		Address     *string `json:"address"`
-		RunnerImage *string `json:"runnerImage"`
-		Check       bool    `json:"check"`
+		Name        *string           `json:"name"`
+		Address     *string           `json:"address"`
+		RunnerImage *string           `json:"runnerImage"`
+		Credential  *BackupCredential `json:"credential"`
+		Check       bool              `json:"check"`
 	}
 	if !decodeOne(w, r, &req) {
 		return
@@ -164,7 +173,12 @@ func (s *Server) registerTemplate(w http.ResponseWriter, r *http.Request) {
 	if req.RunnerImage != nil {
 		image = *req.RunnerImage
 	}
-	tpl, err := s.opts.Registry.Register(r.Context(), *req.Name, *req.Address, image, req.Check)
+	credential, err := templateCredential(req.Credential)
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	tpl, err := s.opts.Registry.Register(r.Context(), *req.Name, *req.Address, image, credential, req.Check)
 	if err != nil {
 		writeRegistryError(w, err)
 		return
@@ -176,6 +190,71 @@ func (s *Server) registerTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", "/api/templates/"+tpl.ID)
 	writeJSON(w, http.StatusCreated, templateOf(tpl))
+}
+
+// templateCredential is the credential a template request names, or a
+// refusal, as a backup repository's is.
+func templateCredential(c *BackupCredential) (store.Credential, error) {
+	credential, err := requestedCredential(c)
+	var invalid *backuprepos.InvalidError
+	if errors.As(err, &invalid) {
+		return credential, &registry.InvalidError{Message: invalid.Message}
+	}
+	return credential, err
+}
+
+// setTemplateCredential changes a template's credential once its checks
+// pass; with check, it runs them alone.
+func (s *Server) setTemplateCredential(w http.ResponseWriter, r *http.Request) {
+	if !s.registering(w) {
+		return
+	}
+	var req struct {
+		Credential *BackupCredential `json:"credential"`
+		Check      bool              `json:"check"`
+	}
+	if !decodeOne(w, r, &req) {
+		return
+	}
+	if req.Credential == nil {
+		writeError(w, http.StatusBadRequest, apiError{Kind: "invalid-request", Message: "credential is required"})
+		return
+	}
+	credential, err := templateCredential(req.Credential)
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	tpl, err := s.opts.Registry.SetCredential(r.Context(), r.PathValue("id"), credential, req.Check)
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, templateOf(tpl))
+}
+
+// readTemplateAddress answers the Git URL of an address, for the form
+// that offers the credentials fitting it; it reaches no network.
+func (s *Server) readTemplateAddress(w http.ResponseWriter, r *http.Request) {
+	if !s.registering(w) {
+		return
+	}
+	var req struct {
+		Address *string `json:"address"`
+	}
+	if !decodeOne(w, r, &req) {
+		return
+	}
+	if req.Address == nil {
+		writeError(w, http.StatusBadRequest, apiError{Kind: "invalid-request", Message: "address is required"})
+		return
+	}
+	url, err := s.opts.Registry.URL(r.Context(), *req.Address)
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
 func (s *Server) upgradeTemplate(w http.ResponseWriter, r *http.Request) {

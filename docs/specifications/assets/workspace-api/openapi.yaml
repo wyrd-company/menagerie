@@ -227,6 +227,91 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/templates/addresses:
+    post:
+      operationId: readTemplateAddress
+      summary: >-
+        The Git URL a template address names, the URL its credential has to
+        fit, read by the template service without reaching the network.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              additionalProperties: false
+              properties:
+                address:
+                  type: string
+                  description: A template address, as a registration takes it.
+      responses:
+        "200":
+          description: >-
+            The URL: a gh: address expanded, and an https URL without its
+            user name.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url]
+                additionalProperties: false
+                properties:
+                  url:
+                    type: string
+        "400":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/templates/{id}/credential:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      operationId: setTemplateCredential
+      summary: >-
+        Change a template's credential once the credential fits its URL and
+        its current version passes the fetch, read and definition checks
+        with it; with check, run the checks alone.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [credential]
+              additionalProperties: false
+              properties:
+                credential:
+                  $ref: "#/components/schemas/BackupCredentialChoice"
+                check:
+                  type: boolean
+                  default: false
+                  description: Run the checks alone, as a change would, and store nothing.
+      responses:
+        "200":
+          description: The template with its new credential; with check, as a change would record it, and nothing was stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/templates/{id}:
     parameters:
       - name: id
@@ -870,7 +955,7 @@ components:
           format: date-time
     Template:
       type: object
-      required: [id, name, address, currentVersion, runnerImage, workspaces, newestVersion, versions, currentMoved, lastCheck]
+      required: [id, name, address, currentVersion, runnerImage, credential, workspaces, newestVersion, versions, currentMoved, lastCheck]
       additionalProperties: false
       properties:
         id:
@@ -890,6 +975,14 @@ components:
         runnerImage:
           type: [string, "null"]
           description: The image of the throwaway containers that run its hooks; null for the default.
+        credential:
+          description: >-
+            What every Git operation on its repository authenticates with.
+            Null for a template an earlier release registered or imported,
+            which keeps the credential its URL chooses: the first GitHub App
+            whose server holds an https URL, and every key the SSH agent
+            offers for an SSH URL.
+          $ref: "#/components/schemas/RecordedCredential"
         workspaces:
           type: array
           description: The names of the workspaces that use it.
@@ -959,30 +1052,35 @@ components:
             an earlier release made, which keeps the credential its URL
             chooses: the first GitHub App whose server holds an https URL,
             and every key the SSH agent offers for an SSH URL.
-          oneOf:
-            - type: "null"
-            - type: object
-              required: [githubApp]
-              additionalProperties: false
-              properties:
-                githubApp:
-                  type: string
-                  description: The configured name of the App.
-            - type: object
-              required: [sshKey, fingerprint]
-              additionalProperties: false
-              properties:
-                sshKey:
-                  type: string
-                  description: The key's public key in authorized-keys form with no comment.
-                fingerprint:
-                  type: string
-                  description: The key's SHA256 fingerprint.
+          $ref: "#/components/schemas/RecordedCredential"
         workspaces:
           type: array
           description: The workspaces that back up to it, in name order.
           items:
             type: string
+    RecordedCredential:
+      description: >-
+        A recorded credential: a GitHub App by its configured name, or an
+        SSH key with its fingerprint; null for none recorded.
+      oneOf:
+        - type: "null"
+        - type: object
+          required: [githubApp]
+          additionalProperties: false
+          properties:
+            githubApp:
+              type: string
+              description: The configured name of the App.
+        - type: object
+          required: [sshKey, fingerprint]
+          additionalProperties: false
+          properties:
+            sshKey:
+              type: string
+              description: The key's public key in authorized-keys form with no comment.
+            fingerprint:
+              type: string
+              description: The key's SHA256 fingerprint.
     BackupCredentialChoice:
       description: >-
         A GitHub App by its configured name, for an https URL on its
@@ -1051,6 +1149,16 @@ components:
         runnerImage:
           type: string
           description: A Docker image reference.
+        credential:
+          description: >-
+            As a backup repository's, for the Git URL the address names
+            (POST /api/templates/addresses): required for an SSH URL, an
+            SSH key, and for an https URL that a configured App's server
+            holds, an App that serves it. Absent or null only for any other
+            https URL, which gets no credential.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/BackupCredentialChoice"
         check:
           type: boolean
           default: false

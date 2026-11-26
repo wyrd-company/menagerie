@@ -79,7 +79,7 @@ type fakeTemplates struct {
 	checkSince func(address, ref, since string) (*templates.Checked, error)
 }
 
-func (f *fakeTemplates) CheckSince(_ context.Context, address, ref, since string) (*templates.Checked, error) {
+func (f *fakeTemplates) CheckSince(_ context.Context, address, ref, since string, _ *templates.Credential) (*templates.Checked, error) {
 	f.record("check-since "+ref+" "+since, nil)
 	if f.checkSince == nil {
 		return nil, &templates.Error{Status: 500, Kind: "internal-error", Message: "no check was expected"}

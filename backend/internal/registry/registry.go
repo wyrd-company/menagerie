@@ -28,6 +28,7 @@ import (
 
 	"github.com/distribution/reference"
 
+	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/templates"
 	"github.com/wyrd-company/menagerie/backend/internal/workspace"
@@ -39,6 +40,7 @@ const Definition = ".devcontainer/devcontainer.json"
 // The registration checks, in the order they run.
 const (
 	CheckAddress    = "address"
+	CheckCredential = "credential"
 	CheckFetch      = "fetch"
 	CheckVersion    = "version"
 	CheckRead       = "read"
@@ -48,8 +50,16 @@ const (
 // TemplateService is the template service. *templates.Client satisfies it.
 type TemplateService interface {
 	ReadAddress(ctx context.Context, address string) (*templates.Address, error)
-	ListVersions(ctx context.Context, address string) (*templates.Versions, error)
-	Check(ctx context.Context, address, ref string) (*templates.Checked, error)
+	ListVersions(ctx context.Context, address string, credential *templates.Credential) (*templates.Versions, error)
+	Check(ctx context.Context, address, ref string, credential *templates.Credential) (*templates.Checked, error)
+}
+
+// Credentials checks that a credential fits a template's URL.
+// *gitcreds.Source satisfies it.
+type Credentials interface {
+	// Fit refuses, with a *gitcreds.FitError, a credential a template at
+	// url cannot have.
+	Fit(ctx context.Context, url string, c store.Credential) error
 }
 
 // CheckError refuses a template that failed a check. Its message names what
@@ -76,7 +86,11 @@ var ErrNotNewer = errors.New("the version is not a found version of the template
 type Registry struct {
 	Data      *store.Store
 	Templates TemplateService
-	Root      *workspace.Root
+	// Credentials checks a registration's credential; nil, which only a
+	// version check's Registry has, refuses every credential but the zero
+	// one.
+	Credentials Credentials
+	Root        *workspace.Root
 	// Now is the clock of the version checks; nil is time.Now.
 	Now func() time.Time
 	// CheckWait bounds one version check; zero is DefaultCheckWait.
@@ -115,20 +129,23 @@ func ValidRunnerImage(image string) error {
 	return nil
 }
 
-// Register checks the template at address and records it: address, the
-// template service reads and admits the address; fetch, the repository's
+// Register checks the template at address and records it with its
+// credential: address, the template service reads and admits the address;
+// credential, the credential fits the address's URL (Credentials.Fit);
+// fetch, the repository's
 // versions can be listed; version, the list holds a version and an
 // address's ref is a version's tag; fetch again, the current version can be
 // fetched; read, Toha loads the template and its folder holds no link
 // outside its checkout; definition, the content folder holds the
 // definition. The current version is the address's tag, else the newest
 // version, and the versions listed are its found versions, as of a version
-// check. A template whose source is registered is a
-// *store.TemplateExistsError. It joins each workspace that has no template
+// check. Every fetch uses the credential, and a refused fetch names it. A
+// template whose source is registered is a *store.TemplateExistsError. It
+// joins each workspace that has no template
 // and whose applied record names the template's source. With check, it runs
 // the same checks and refuses the same way, and answers the template it
 // would record, storing nothing; without, it trusts no earlier check.
-func (r *Registry) Register(ctx context.Context, name, address, runnerImage string, check bool) (store.Template, error) {
+func (r *Registry) Register(ctx context.Context, name, address, runnerImage string, credential store.Credential, check bool) (store.Template, error) {
 	if err := ValidName(name); err != nil {
 		return store.Template{}, err
 	}
@@ -137,7 +154,10 @@ func (r *Registry) Register(ctx context.Context, name, address, runnerImage stri
 	}
 	read, err := r.Templates.ReadAddress(ctx, address)
 	if err != nil {
-		return store.Template{}, refusal(CheckAddress, err)
+		return store.Template{}, refusal(CheckAddress, err, "")
+	}
+	if credential, err = r.fit(ctx, read.URL, credential); err != nil {
+		return store.Template{}, err
 	}
 	existing, err := r.Data.Templates(ctx)
 	if err != nil {
@@ -148,9 +168,9 @@ func (r *Registry) Register(ctx context.Context, name, address, runnerImage stri
 			return store.Template{}, &store.TemplateExistsError{ID: t.ID, Name: t.Name}
 		}
 	}
-	versions, err := r.Templates.ListVersions(ctx, read.Base)
+	versions, err := r.Templates.ListVersions(ctx, read.Base, requested(credential))
 	if err != nil {
-		return store.Template{}, refusal(CheckFetch, err)
+		return store.Template{}, refusal(CheckFetch, err, gitcreds.Phrase(credential))
 	}
 	if len(versions.Versions) == 0 {
 		return store.Template{}, &CheckError{Check: CheckVersion, Message: "the repository has no version: a version is a tag MAJOR.MINOR.PATCH, with an optional leading v"}
@@ -167,12 +187,12 @@ func (r *Registry) Register(ctx context.Context, name, address, runnerImage stri
 			return store.Template{}, &CheckError{Check: CheckVersion, Message: "the address's ref is not a version's tag: a version is a tag MAJOR.MINOR.PATCH, with an optional leading v"}
 		}
 	}
-	checked, err := r.checkVersion(ctx, read.Base, current, "register the template again")
+	checked, err := r.checkVersion(ctx, read.Base, credential, current, "register the template again")
 	if err != nil {
 		return store.Template{}, err
 	}
 	tpl := store.Template{
-		Name: name, Address: read.Base, Source: read.Source, RunnerImage: runnerImage,
+		Name: name, Address: read.Base, Source: read.Source, RunnerImage: runnerImage, Credential: credential,
 		CurrentVersion: current.Version, CurrentTag: current.Tag, CurrentCommit: checked.Commit,
 		Versions: found(versions.Versions), CheckedAt: r.now(),
 	}
@@ -185,6 +205,29 @@ func (r *Registry) Register(ctx context.Context, name, address, runnerImage stri
 		record = r.Data.TryRegisterTemplate
 	}
 	return record(ctx, tpl, joins)
+}
+
+// fit is credential in the form a template records, once it fits url, or
+// a *CheckError of the credential check.
+func (r *Registry) fit(ctx context.Context, url string, credential store.Credential) (store.Credential, error) {
+	credential, err := gitcreds.NormalCredential(credential)
+	switch {
+	case err != nil:
+	case r.Credentials != nil:
+		err = r.Credentials.Fit(ctx, url, credential)
+	case !credential.IsZero():
+		err = &gitcreds.FitError{Message: "Menagerie cannot check credentials here"}
+	}
+	var fit *gitcreds.FitError
+	if errors.As(err, &fit) {
+		return credential, &CheckError{Check: CheckCredential, Message: fit.Message}
+	}
+	return credential, err
+}
+
+// requested is c as the template service's requests name it.
+func requested(c store.Credential) *templates.Credential {
+	return templates.CredentialOf(c.App, c.Key)
 }
 
 // found is the template service's versions as Menagerie's data keeps them.
@@ -207,10 +250,10 @@ func (r *Registry) now() time.Time {
 // the commit its listing found: a fetch that resolves the tag to another
 // commit means the tag moved since, which fails version, and again says
 // what to do then.
-func (r *Registry) checkVersion(ctx context.Context, address string, v templates.Version, again string) (*templates.Checked, error) {
-	checked, err := r.Templates.Check(ctx, address, v.Tag)
+func (r *Registry) checkVersion(ctx context.Context, address string, credential store.Credential, v templates.Version, again string) (*templates.Checked, error) {
+	checked, err := r.Templates.Check(ctx, address, v.Tag, requested(credential))
 	if err != nil {
-		return nil, refusal(CheckFetch, err)
+		return nil, refusal(CheckFetch, err, gitcreds.Phrase(credential))
 	}
 	if checked.Commit != v.Commit {
 		return nil, &CheckError{Check: CheckVersion, Message: fmt.Sprintf("the tag of version %s moved after its versions were listed: it was at commit %s and is now at %s; %s", v.Version, v.Commit, checked.Commit, again)}
@@ -258,7 +301,7 @@ func (r *Registry) Upgrade(ctx context.Context, id, version string, check bool) 
 	if !ok || !again && !Newer(target.Version, tpl.CurrentVersion) {
 		return store.Template{}, ErrNotNewer
 	}
-	checked, err := r.checkVersion(ctx, tpl.Address, templates.Version{Version: target.Version, Tag: target.Tag, Commit: target.Commit},
+	checked, err := r.checkVersion(ctx, tpl.Address, tpl.Credential, templates.Version{Version: target.Version, Tag: target.Tag, Commit: target.Commit},
 		"check the template's versions, then upgrade it again")
 	if err != nil {
 		return store.Template{}, err
@@ -290,14 +333,66 @@ func (r *Registry) Edit(ctx context.Context, id string, name, runnerImage *strin
 	return r.Data.EditTemplate(ctx, id, name, runnerImage)
 }
 
+// URL is the Git URL of address, the URL a template's credential has to
+// fit, once the template service admits it, reaching no network; a refused
+// address fails the address check.
+func (r *Registry) URL(ctx context.Context, address string) (string, error) {
+	read, err := r.Templates.ReadAddress(ctx, address)
+	if err != nil {
+		return "", refusal(CheckAddress, err, "")
+	}
+	return read.URL, nil
+}
+
+// SetCredential checks the template id with credential, as Register checks
+// a new one: the credential fits the template's URL, its versions can be
+// listed, and its current version, at the commit the listing finds for
+// its tag, passes the fetch, read and definition checks. It then records
+// credential as the template's. With check, it runs the checks alone,
+// answers the template it would record, and stores nothing.
+func (r *Registry) SetCredential(ctx context.Context, id string, credential store.Credential, check bool) (store.Template, error) {
+	tpl, err := r.Data.Template(ctx, id)
+	if err != nil {
+		return store.Template{}, err
+	}
+	read, err := r.Templates.ReadAddress(ctx, tpl.Address)
+	if err != nil {
+		return store.Template{}, refusal(CheckAddress, err, "")
+	}
+	if tpl.Credential, err = r.fit(ctx, read.URL, credential); err != nil {
+		return store.Template{}, err
+	}
+	versions, err := r.Templates.ListVersions(ctx, tpl.Address, requested(tpl.Credential))
+	if err != nil {
+		return store.Template{}, refusal(CheckFetch, err, gitcreds.Phrase(tpl.Credential))
+	}
+	var current *templates.Version
+	for i, v := range versions.Versions {
+		if v.Tag == tpl.CurrentTag {
+			current = &versions.Versions[i]
+		}
+	}
+	if current == nil {
+		return store.Template{}, &CheckError{Check: CheckVersion, Message: fmt.Sprintf("the repository no longer has the tag %s of the current version %s", tpl.CurrentTag, tpl.CurrentVersion)}
+	}
+	if _, err := r.checkVersion(ctx, tpl.Address, tpl.Credential, *current, "change the credential again"); err != nil {
+		return store.Template{}, err
+	}
+	if check {
+		return tpl, nil
+	}
+	return r.Data.SetTemplateCredential(ctx, id, tpl.Credential)
+}
+
 // refusal is the check a template service failure fails: a refused address
 // fails address; a template Toha cannot load, or whose folder or link
 // leaves its checkout, fails read; anything else the template service
 // refuses fails check. Its message is chosen here for the refusal's kind,
 // so it never quotes the address. An unreachable template service is its
 // *templates.UnavailableError, unchanged, and a fault, a 5xx reply, is no
-// failed check but one too, naming the status and kind alone.
-func refusal(check string, err error) error {
+// failed check but one too, naming the status and kind alone. A refused
+// fetch names the credential it used by phrase, gitcreds.Phrase's.
+func refusal(check string, err error, phrase string) error {
 	var unavailable *templates.UnavailableError
 	if errors.As(err, &unavailable) {
 		return err
@@ -319,10 +414,10 @@ func refusal(check string, err error) error {
 	case "unsafe-template-link":
 		return &CheckError{Check: CheckRead, Message: "the template could not be read: its folder, or a symbolic link in it, leads outside its repository"}
 	case "template-not-found":
-		return &CheckError{Check: check, Message: "the template could not be fetched: the Git host has no such repository"}
+		return &CheckError{Check: check, Message: "the template could not be fetched" + phrase + ": the Git host has no such repository"}
 	}
 	if check == CheckAddress {
 		return &CheckError{Check: CheckAddress, Message: "the address could not be read (" + refused.Kind + ")"}
 	}
-	return &CheckError{Check: check, Message: "the template could not be fetched: the Git host refused or failed the request (" + refused.Kind + ")"}
+	return &CheckError{Check: check, Message: "the template could not be fetched" + phrase + ": the Git host refused or failed the request (" + refused.Kind + ")"}
 }

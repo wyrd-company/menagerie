@@ -21,15 +21,19 @@ const CredentialPath = "/v1/credentials/github"
 const maxCredentialRequest = 8 << 10
 
 // Handler serves CredentialPath: a contents read token for the one
-// repository an https URL names, from the first of apps whose server holds
-// it. No Apps, which is no github-app or github-apps configuration, serves
-// no URL.
+// repository an https URL names, from the App githubApp names, a
+// template's credential, or without it from the first of apps whose server
+// holds it. No Apps, which is no github-app or github-apps configuration,
+// serves no URL.
 //
-//	POST {"url": "https://github.com/{owner}/{repo}[.git]"}
+//	POST {"url": "https://github.com/{owner}/{repo}[.git]", "githubApp"?: name}
 //	200 {"username": "x-access-token", "password": token}
 //	400, 405 {"reason"}  not a credential request
-//	404 {"reason"}       no github-app, or not a repository URL on its server
-//	502 {"reason"}       the token could not be minted; a fixed reason
+//	404 {"reason"}       without githubApp: no github-app, or not a
+//	                     repository URL on its server
+//	502 {"reason"}       the named App is not configured or does not serve
+//	                     the URL, or the token could not be minted; a fixed
+//	                     reason, naming the App
 func Handler(apps Apps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -38,7 +42,8 @@ func Handler(apps Apps) http.Handler {
 			return
 		}
 		var req struct {
-			URL string `json:"url"`
+			URL       string  `json:"url"`
+			GitHubApp *string `json:"githubApp"`
 		}
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCredentialRequest))
 		dec.DisallowUnknownFields()
@@ -46,14 +51,36 @@ func Handler(apps Apps) http.Handler {
 			reply(w, http.StatusBadRequest, map[string]string{"reason": "the request is not a credential request"})
 			return
 		}
-		if len(apps) == 0 {
+		var (
+			app  App
+			repo Repository
+			ok   bool
+		)
+		switch {
+		case req.GitHubApp != nil:
+			// A template that names its App fails without it, rather than
+			// fetching as Toha does by default.
+			name := *req.GitHubApp
+			if !ValidName(name) {
+				reply(w, http.StatusBadRequest, map[string]string{"reason": "the request is not a credential request"})
+				return
+			}
+			if app, ok = apps.Named(name); !ok {
+				reply(w, http.StatusBadGateway, map[string]string{"reason": "no GitHub App named " + name + " is configured"})
+				return
+			}
+			if repo, ok = app.Repository(req.URL); !ok {
+				reply(w, http.StatusBadGateway, map[string]string{"reason": "GitHub App " + app.Name + " does not serve the URL"})
+				return
+			}
+		case len(apps) == 0:
 			reply(w, http.StatusNotFound, map[string]string{"reason": "no GitHub App is configured"})
 			return
-		}
-		app, repo, ok := apps.Serving(req.URL)
-		if !ok {
-			reply(w, http.StatusNotFound, map[string]string{"reason": "the URL is not an https repository URL on the GitHub App's server"})
-			return
+		default:
+			if app, repo, ok = apps.Serving(req.URL); !ok {
+				reply(w, http.StatusNotFound, map[string]string{"reason": "the URL is not an https repository URL on the GitHub App's server"})
+				return
+			}
 		}
 		token, err := app.Token(r.Context(), repo, Read)
 		if err != nil {

@@ -160,7 +160,7 @@ func (u *upgrading) forward(ctx context.Context, run *jobs.Run, tpl store.Templa
 		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("neither the version nor the commit last applied to the workspace is known, so the upgrade cannot tell that version %s moves it forward; nothing was upgraded", tpl.CurrentVersion)}
 	}
 	fmt.Fprintf(run.Log(""), "the workspace's applied version is unknown; asking whether version %s's commit descends from its applied commit %q\n", tpl.CurrentVersion, applied.Commit)
-	checked, err := u.w.opts.Templates.CheckSince(ctx, tpl.Address, tpl.CurrentTag, applied.Commit)
+	checked, err := u.w.opts.Templates.CheckSince(ctx, tpl.Address, tpl.CurrentTag, applied.Commit, templates.CredentialOf(tpl.Credential.App, tpl.Credential.Key))
 	var unavailable *templates.UnavailableError
 	switch {
 	case errors.As(err, &unavailable):

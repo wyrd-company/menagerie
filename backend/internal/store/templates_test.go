@@ -248,3 +248,68 @@ func TestAnUnknownAppliedVersionIsCompletedFromItsCommit(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// A template keeps its credential, an App or a key, through a list and a
+// change, and the data refuses an App and a key together.
+func TestATemplateKeepsItsCredential(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	tpl, err := s.RegisterTemplate(ctx, Template{Name: "kit", Address: "gh:example-org/kit", Source: "gh:example-org/kit",
+		CurrentVersion: "1.0.0", CurrentTag: "1.0.0", Credential: Credential{App: "sample-org"}}, nil)
+	if err != nil || tpl.Credential != (Credential{App: "sample-org"}) {
+		t.Fatalf("%+v %v", tpl, err)
+	}
+	key := Credential{Key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSampleKeyFakeSampleKeyFakeSampleKeyFake"}
+	if _, err := s.SetTemplateCredential(ctx, "absent", key); !errors.Is(err, ErrNoTemplate) {
+		t.Fatalf("absent: %v", err)
+	}
+	changed, err := s.SetTemplateCredential(ctx, tpl.ID, key)
+	if err != nil || changed.Credential != key {
+		t.Fatalf("%+v %v", changed, err)
+	}
+	listed, err := s.Templates(ctx)
+	if err != nil || len(listed) != 1 || listed[0].Credential != key {
+		t.Fatalf("%+v %v", listed, err)
+	}
+	err = s.Update(ctx, func(tx *Tx) error {
+		_, err := tx.exec(`UPDATE templates SET credential_app = 'a', credential_key = 'k' WHERE id = ?`, tpl.ID)
+		return err
+	})
+	if err == nil {
+		t.Fatal("an App and a key were stored together")
+	}
+}
+
+// A database of schema 7, which a release with template registrations and
+// no template credentials wrote, upgrades with each template kept and
+// naming no credential, so its URL keeps choosing one.
+func TestSchemaSevenUpgradesKeepingTemplatesWithNoCredential(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "menagerie.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations[:7] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 7`,
+		`INSERT INTO templates (id, name, address, source, current_version, current_tag) VALUES ('kit', 'Kit', 'gh:example-org/kit', 'gh:example-org/kit', '1.0.0', '1.0.0')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	tpl, err := s.Template(context.Background(), "kit")
+	if err != nil || tpl.Address != "gh:example-org/kit" || !tpl.Credential.IsZero() {
+		t.Fatalf("%+v %v", tpl, err)
+	}
+}

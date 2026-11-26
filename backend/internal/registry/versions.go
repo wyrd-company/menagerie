@@ -78,7 +78,7 @@ func (r *Registry) checkVersions(ctx context.Context, id string) (store.Template
 	if err != nil {
 		return store.Template{}, err
 	}
-	versions, err := r.Templates.ListVersions(ctx, tpl.Address)
+	versions, err := r.Templates.ListVersions(ctx, tpl.Address, requested(tpl.Credential))
 	// The outcome is recorded even when the check's wait has ended.
 	record := context.WithoutCancel(ctx)
 	if err != nil {

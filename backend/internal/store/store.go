@@ -145,6 +145,12 @@ var migrations = []string{
 	// release made, whose credential its URL chooses.
 	`ALTER TABLE backup_repositories ADD COLUMN credential_app TEXT CHECK (credential_app != '');
 	ALTER TABLE backup_repositories ADD COLUMN credential_key TEXT CHECK (credential_key IS NULL OR (credential_key != '' AND credential_app IS NULL));`,
+	// 8: each template's credential, as a backup repository's: the name of
+	// a GitHub App, or an SSH key's public key, or neither for a template
+	// an earlier release registered or imported, whose credential its URL
+	// chooses.
+	`ALTER TABLE templates ADD COLUMN credential_app TEXT CHECK (credential_app != '');
+	ALTER TABLE templates ADD COLUMN credential_key TEXT CHECK (credential_key IS NULL OR (credential_key != '' AND credential_app IS NULL));`,
 }
 
 // SchemaVersion is the version of the schema this Menagerie reads and writes.

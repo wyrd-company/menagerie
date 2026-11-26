@@ -349,7 +349,7 @@ func (a *applying) forward(ctx context.Context, plan *backup.Plan) (*store.Appli
 	if applied.Commit == "" {
 		return nil, refuse("the branch's applied record names version %s at commit %q, and the workspace's applied version and commit are not known, so it cannot be told to move forward", found.Version, record.Commit)
 	}
-	checked, err := a.w.opts.Templates.CheckSince(ctx, tpl.Address, found.Tag, applied.Commit)
+	checked, err := a.w.opts.Templates.CheckSince(ctx, tpl.Address, found.Tag, applied.Commit, templates.CredentialOf(tpl.Credential.App, tpl.Credential.Key))
 	var unavailable *templates.UnavailableError
 	switch {
 	case errors.As(err, &unavailable):

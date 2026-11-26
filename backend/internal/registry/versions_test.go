@@ -28,7 +28,7 @@ func registered(t *testing.T, r *Registry, ref string) store.Template {
 	if ref != "" {
 		address += "@" + ref
 	}
-	tpl, err := r.Register(context.Background(), "Sample kit", address, "", false)
+	tpl, err := r.Register(context.Background(), "Sample kit", address, "", store.Credential{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestACheckThatGetsNoAnswerFailsWithinItsWait(t *testing.T) {
 
 type stalled struct{ TemplateService }
 
-func (stalled) ListVersions(ctx context.Context, _ string) (*templates.Versions, error) {
+func (stalled) ListVersions(ctx context.Context, _ string, _ *templates.Credential) (*templates.Versions, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
@@ -423,7 +423,7 @@ type heldService struct {
 	release  chan struct{}
 }
 
-func (h *heldService) ListVersions(ctx context.Context, address string) (*templates.Versions, error) {
+func (h *heldService) ListVersions(ctx context.Context, address string, credential *templates.Credential) (*templates.Versions, error) {
 	h.listings.Add(1)
 	h.started <- struct{}{}
 	select {
@@ -431,7 +431,7 @@ func (h *heldService) ListVersions(ctx context.Context, address string) (*templa
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return h.TemplateService.ListVersions(ctx, address)
+	return h.TemplateService.ListVersions(ctx, address, credential)
 }
 
 // Two checks of one template at once share one run, and a caller that
@@ -560,7 +560,7 @@ func TestATemplateTakesAVersionOnlyAtTheCommitItsListingFound(t *testing.T) {
 		r, f, _ := world(t)
 		f.staleCheck("1.2.0", moved)
 		for _, checkOnly := range []bool{true, false} {
-			_, err := r.Register(ctx, "Sample kit", kit, "", checkOnly)
+			_, err := r.Register(ctx, "Sample kit", kit, "", store.Credential{}, checkOnly)
 			refusedVersion(t, err, at120, moved)
 		}
 		if list, _ := r.Data.Templates(ctx); len(list) != 0 {
