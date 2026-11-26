@@ -202,3 +202,47 @@
   overflow-wrap: anywhere;
   min-width: 0;
 }
+
+/* A backup repository's credential select, as the version select. */
+.template-panel select {
+  font: inherit;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 8px;
+  min-height: 36px;
+  max-width: 640px;
+}
+
+.template-panel select:focus-visible {
+  border-color: var(--accent);
+}
+
+/* The chosen key's public key, to give the Git host. */
+.credential-key {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 640px;
+  font-size: 0.875rem;
+}
+
+.credential-key p {
+  margin: 0;
+}
+
+.credential-key code {
+  overflow-wrap: anywhere;
+  user-select: all;
+  padding: 8px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+
+.credential-key button {
+  justify-self: start;
+}
+
+.template-entry .template-panel {
+  margin-top: 0.75rem;
+}

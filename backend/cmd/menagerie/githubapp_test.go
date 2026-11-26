@@ -22,6 +22,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
@@ -133,7 +134,7 @@ func TestBackupsUseAWriteTokenOnTheAppsServerAndSSHElsewhere(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	https := github.URL + "/example-org/backups.git"
-	auth, release, err := backupAuth(&config.Config{WyrwoodDirectory: dir}, sampleApps(m))(context.Background(), https)
+	auth, release, err := gitCredentials(&config.Config{WyrwoodDirectory: dir}, sampleApps(m)).Auth(store.Credential{})(context.Background(), https)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func TestBackupsUseAWriteTokenOnTheAppsServerAndSSHElsewhere(t *testing.T) {
 	}
 	defer l.Close()
 	ssh := "git@example.invalid:sample/backups.git"
-	auth, release, err = backupAuth(&config.Config{WyrwoodDirectory: dir}, sampleApps(m))(context.Background(), ssh)
+	auth, release, err = gitCredentials(&config.Config{WyrwoodDirectory: dir}, sampleApps(m)).Auth(store.Credential{})(context.Background(), ssh)
 	if err != nil {
 		t.Fatal(err)
 	}

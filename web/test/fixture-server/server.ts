@@ -16,6 +16,9 @@ import { answer, run } from "./scenarios.ts";
 import {
   commitOf,
   initialBackupRepositories,
+  fixtureCredentials,
+  type FixtureBackupRepository,
+  type FixtureCredential,
   initialTemplates,
   initialWorkspaces,
   newer,
@@ -386,10 +389,60 @@ export function createFixture(options: { distDir: string }) {
           ? { at: new Date(Date.now() - 3_600_000).toISOString(), failure: null }
           : t.lastCheck,
     });
-    const backupBody = (r: { id: string; name: string; url: string }) => ({
+    const credentialBody = (c: FixtureCredential) => {
+      if (c === null) return null;
+      if ("githubApp" in c) return { githubApp: c.githubApp };
+      const key = fixtureCredentials.sshKeys.find((k) => k.publicKey === c.sshKey);
+      return { sshKey: c.sshKey, fingerprint: key?.fingerprint ?? "SHA256:unknown" };
+    };
+    // The fixture's credential check stands in for Menagerie's: an SSH URL
+    // takes the agent's key, an https URL on the App's server its App, any
+    // other https URL none. It answers the refusal's message, or null.
+    const credentialRefusal = (url: string, c: unknown): string | null => {
+      const ssh = !url.startsWith("https://");
+      const pick = c as { githubApp?: unknown; sshKey?: unknown } | null | undefined;
+      if (ssh) {
+        if (!pick || typeof pick.sshKey !== "string")
+          return pick?.githubApp !== undefined
+            ? "an SSH URL takes an SSH key as its credential, not a GitHub App"
+            : "choose the SSH key that reaches the repository";
+        return null;
+      }
+      if (pick && pick.sshKey !== undefined)
+        return "an https URL takes a GitHub App as its credential, not an SSH key";
+      const serving = fixtureCredentials.githubApps.find((a) => url.startsWith(`${a.server}/`));
+      if (!pick || pick.githubApp === undefined)
+        return serving
+          ? `choose the GitHub App for the repository: ${serving.name}, or another App on its server`
+          : null;
+      if (pick.githubApp !== serving?.name)
+        return `GitHub App ${String(pick.githubApp)} does not serve the URL`;
+      return null;
+    };
+    const normalCredential = (c: unknown): FixtureCredential => {
+      const pick = c as { githubApp?: string; sshKey?: string } | null | undefined;
+      if (!pick) return null;
+      if (pick.sshKey !== undefined)
+        return { sshKey: pick.sshKey.trim().split(/\s+/).slice(0, 2).join(" ") };
+      return { githubApp: pick.githubApp! };
+    };
+    const validCredential = (c: unknown) => {
+      if (c === undefined || c === null) return true;
+      if (typeof c !== "object") return false;
+      const keys = Object.keys(c);
+      return (
+        keys.length === 1 &&
+        (keys[0] === "githubApp" || keys[0] === "sshKey") &&
+        typeof (c as Record<string, unknown>)[keys[0]] === "string"
+      );
+    };
+    if (pathname === "/api/credentials" && method === "GET")
+      return json(res, 200, fixtureCredentials);
+    const backupBody = (r: FixtureBackupRepository) => ({
       id: r.id,
       name: r.name,
       url: r.url,
+      credential: credentialBody(r.credential),
       workspaces: world.workspaces
         .filter((w) => backupsOf(w)?.id === r.id)
         .map((w) => w.name)
@@ -415,10 +468,18 @@ export function createFixture(options: { distDir: string }) {
       const input = JSON.parse(await readBody(req)) as {
         name?: unknown;
         url?: unknown;
+        credential?: unknown;
         check?: unknown;
       };
       if (!validName(input.name) || typeof input.url !== "string")
         return fail(res, 400, "invalid-request", "name must be one line of 1 to 100 characters");
+      if (!validCredential(input.credential))
+        return fail(
+          res,
+          400,
+          "invalid-request",
+          "a credential names exactly one of githubApp and sshKey",
+        );
       if (input.check !== undefined && typeof input.check !== "boolean")
         return fail(res, 400, "invalid-request", "member check has the wrong type");
       const url = input.url;
@@ -429,12 +490,16 @@ export function createFixture(options: { distDir: string }) {
           "url",
           "the URL must be an ssh, scp-like or https Git URL; a local path, a file URL and plain http are refused",
         );
-      if (url.includes("readonly") || url.includes("missing"))
+      const existing = world.backupRepositories.find((r) => r.url === url);
+      if (!existing) {
+        const refused = credentialRefusal(url, input.credential);
+        if (refused) return check("credential", refused);
+      }
+      if (!existing && (url.includes("readonly") || url.includes("missing")))
         return check(
           "write",
           "Menagerie could not write to the repository: the workspace repository denied access",
         );
-      const existing = world.backupRepositories.find((r) => r.url === url);
       if (existing)
         return fail(
           res,
@@ -450,12 +515,43 @@ export function createFixture(options: { distDir: string }) {
           .join("-") || "backups";
       let id = stem;
       for (let n = 2; world.backupRepositories.some((r) => r.id === id); n++) id = `${stem}-${n}`;
-      const repository = { id, name: (input.name as string).trim(), url };
+      const repository: FixtureBackupRepository = {
+        id,
+        name: (input.name as string).trim(),
+        url,
+        credential: normalCredential(input.credential),
+      };
       if (input.check === true) return json(res, 200, backupBody(repository));
       world.backupRepositories.push(repository);
       return json(res, 201, backupBody(repository), {
         Location: `/api/backup-repositories/${id}`,
       });
+    }
+    const credentialMatch = /^\/api\/backup-repositories\/([^/]+)\/credential$/.exec(pathname);
+    if (credentialMatch && method === "PUT") {
+      const input = JSON.parse(await readBody(req)) as { credential?: unknown; check?: unknown };
+      if (
+        input.credential === undefined ||
+        input.credential === null ||
+        !validCredential(input.credential)
+      )
+        return fail(res, 400, "invalid-request", "credential is required");
+      const repository = world.backupRepositories.find(
+        (r) => r.id === decodeURIComponent(credentialMatch[1]!),
+      );
+      if (!repository)
+        return fail(
+          res,
+          404,
+          "unknown-backup-repository",
+          "no registered backup repository has this id",
+        );
+      const refused = credentialRefusal(repository.url, input.credential);
+      if (refused)
+        return fail(res, 422, "backup-repository-check-failed", refused, { check: "credential" });
+      const changed = { ...repository, credential: normalCredential(input.credential) };
+      if (input.check !== true) repository.credential = changed.credential;
+      return json(res, 200, backupBody(changed));
     }
     const backupMatch = /^\/api\/backup-repositories\/([^/]+)$/.exec(pathname);
     if (backupMatch && method === "DELETE") {

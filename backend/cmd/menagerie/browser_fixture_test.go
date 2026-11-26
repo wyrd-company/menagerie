@@ -191,7 +191,7 @@ runner-image: busybox:1.37
 		t.Fatal(err)
 	}
 	t.Cleanup(stopHooks)
-	handler, err := newHandler(cfg, root, data, backupAuth(cfg, nil), devcontainer.New(docker, opts), provisioning.Clients{}, manager, parts.hooks, parts.images, nil)
+	handler, err := newHandler(cfg, root, data, gitCredentials(cfg, nil), devcontainer.New(docker, opts), provisioning.Clients{}, manager, parts.hooks, parts.images, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

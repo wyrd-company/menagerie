@@ -48,7 +48,7 @@ func TestPairingTokenRouteIsWiredBehindManagerSignIn(t *testing.T) {
 		TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")},
 		OIDC:            config.OIDC{Issuer: issuer.URL(), ClientID: clientID, RedirectURL: srv.URL + auth.CallbackPath},
 	}
-	h, err = newHandler(cfg, root, testData(t), backupAuth(cfg, nil), devcontainer.New(docker, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil, nil)
+	h, err = newHandler(cfg, root, testData(t), gitCredentials(cfg, nil), devcontainer.New(docker, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,8 @@
 import { objectFromRaw, stringifyJson, topLevelMembers, type RawJson } from "./rawJson.ts";
 import type {
+  BackupCredentialChoice,
   BackupRepository,
+  Credentials,
   ErrorBody,
   InterviewReply,
   Job,
@@ -141,6 +143,8 @@ export async function listBackupRepositories(): Promise<BackupRepository[]> {
 export interface BackupRepositoryRegistration {
   name: string;
   url: string;
+  /** Required for an SSH URL and for an https URL an App's server holds. */
+  credential?: BackupCredentialChoice | null;
   /** Run the checks alone and store nothing. */
   check?: boolean;
 }
@@ -151,6 +155,20 @@ export const registerBackupRepository = (registration: BackupRepositoryRegistrat
     method: "POST",
     body: JSON.stringify(registration),
   });
+
+/** Changes a backup repository's credential once its checks pass; with check, runs them alone. */
+export const setBackupRepositoryCredential = (
+  id: string,
+  credential: BackupCredentialChoice,
+  check?: boolean,
+) =>
+  json<BackupRepository>(`/api/backup-repositories/${encodeURIComponent(id)}/credential`, {
+    method: "PUT",
+    body: JSON.stringify({ credential, ...(check ? { check } : {}) }),
+  });
+
+/** The credentials a backup repository can name. */
+export const listCredentials = () => json<Credentials>("/api/credentials");
 
 /** Removes a backup repository no workspace backs up to; the repository itself is left as it is. */
 export async function removeBackupRepository(id: string): Promise<void> {

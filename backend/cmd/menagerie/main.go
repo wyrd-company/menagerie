@@ -34,6 +34,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/commits"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/openbaokv"
@@ -126,9 +127,9 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	auth := backupAuth(cfg, apps)
+	credentials := gitCredentials(cfg, apps)
 	manager := jobs.NewManager(ctx, jobOpts)
-	commitJobs := commits.New(commits.Options{Root: root, Remote: &backuprepos.Registry{Data: data, Auth: auth}, Jobs: manager})
+	commitJobs := commits.New(commits.Options{Root: root, Remote: &backuprepos.Registry{Data: data, Credentials: credentials}, Jobs: manager})
 	client, err := clientPath()
 	if err != nil {
 		return err
@@ -172,7 +173,7 @@ func run(configPath string) error {
 		return err
 	}
 	policyServer := api.New(api.Options{Root: root, Data: data, Jobs: manager, Policies: func() api.PolicySource { source, _ := clients.Bindings.(api.PolicySource); return source }(), PolicyApplication: policySteps})
-	handler, err := newHandler(cfg, root, data, auth, runtime, clients, manager, parts.hooks, parts.images, versions)
+	handler, err := newHandler(cfg, root, data, credentials, runtime, clients, manager, parts.hooks, parts.images, versions)
 	if err != nil {
 		return err
 	}
@@ -470,8 +471,8 @@ func hookRoutes(hooks *throwaway.HookRunner, apps githubapp.Apps) http.Handler {
 
 // newHandler is the workspace service's whole HTTP surface: the workspace
 // API behind manager sign-in.
-func newHandler(cfg *config.Config, root *workspace.Root, data *store.Store, auth backup.Auth, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) (http.Handler, error) {
-	return signedIn(newServer(cfg, root, data, auth, runtime, clients, manager, hooks, images, versions), cfg.OIDC)
+func newHandler(cfg *config.Config, root *workspace.Root, data *store.Store, credentials *gitcreds.Source, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) (http.Handler, error) {
+	return signedIn(newServer(cfg, root, data, credentials, runtime, clients, manager, hooks, images, versions), cfg.OIDC)
 }
 
 // signedIn serves server behind manager sign-in: the sign-in routes are
@@ -488,13 +489,13 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 // newServer composes the workspace API: the container operations, create
 // and upgrade with their interviews, commit, and the web UI embedded at build time.
 // Each workspace backs up to its backup repository in data, reached with
-// auth. Template hooks run through hooks in the template's
+// the credential it names, from credentials. Template hooks run through hooks in the template's
 // runner image; nil hooks refuse every hook. Every job that can create a
 // container runs through the provisioning steps, which keep what they provision
 // in data.
-func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, auth backup.Auth, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) *api.Server {
+func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, credentials *gitcreds.Source, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) *api.Server {
 	service := templates.New(cfg.TemplateService.Socket)
-	backups := &backuprepos.Registry{Data: data, Auth: auth}
+	backups := &backuprepos.Registry{Data: data, Credentials: credentials}
 	if versions == nil {
 		versions = &registry.Registry{Data: data, Templates: service, Root: root}
 	}
@@ -550,22 +551,25 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, auth
 		PairingTokens: t3code.NewMinter(runtime.Docker()),
 		Registry:      versions,
 		Backups:       backups,
+		Credentials:   credentials,
 		AppliedRecord: registry.Join,
 		UI:            web.FS,
 	})
 	return server
 }
 
-// backupAuth is the credentials of every backup repository: over https on
-// a GitHub App's server, a contents write token of the first of apps that
-// serves it; over SSH, the SSH agent socket in the Wyrwood consumer
-// directory.
-func backupAuth(cfg *config.Config, apps githubapp.Apps) backup.Auth {
-	auth := backup.AgentAuth(filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName))
-	if len(apps) > 0 {
-		auth = backup.TokenAuth(apps.Tokens(githubapp.Write), auth)
+// gitCredentials are the credentials a backup repository can name: the
+// configured apps, and the keys the SSH agent socket in the Wyrwood
+// consumer directory offers, without provisioning's operator key. A
+// registration that names none keeps the earlier rule: over https on an
+// App's server, a contents write token of the first App that serves it;
+// over SSH, every key the agent offers.
+func gitCredentials(cfg *config.Config, apps githubapp.Apps) *gitcreds.Source {
+	source := &gitcreds.Source{Apps: apps, Socket: filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName)}
+	if p := cfg.Provisioning; p != nil && p.Wyrwood != nil {
+		source.Excluded = p.Wyrwood.OperatorKey
 	}
-	return auth
+	return source
 }
 
 // gitHubApps are the configured GitHub Apps' token minters, in

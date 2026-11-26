@@ -10,12 +10,14 @@ const own: BackupRepository = {
   id: "example-backups",
   name: "Example backups",
   url: "git@git.example.test:example-org/backups.git",
+  credential: null,
   workspaces: ["sample"],
 };
 const client: BackupRepository = {
   id: "client-backups",
   name: "Client backups",
   url: "https://git.example.test/client-org/backups.git",
+  credential: { githubApp: "client-org" },
   workspaces: [],
 };
 const workspace = {

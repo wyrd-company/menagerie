@@ -38,9 +38,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
-	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
 	"github.com/wyrd-company/menagerie/backend/internal/backuprepos"
+	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
@@ -433,7 +433,7 @@ func newAcceptWith(t *testing.T, runtime Runtime, opts acceptOptions) *accept {
 		Root:      root,
 		Data:      data,
 		Templates: service,
-		Remotes:   &backuprepos.Registry{Data: data, Auth: backup.AgentAuth(a.host.AgentPath)},
+		Remotes:   &backuprepos.Registry{Data: data, Credentials: &gitcreds.Source{Socket: a.host.AgentPath}},
 		Runtime:   runtime,
 		Hooks:     hooks,
 		RunnerImage: func(context.Context, string) (string, error) {

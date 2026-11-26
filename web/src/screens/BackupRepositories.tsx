@@ -2,10 +2,13 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   ApiError,
   listBackupRepositories,
+  listCredentials,
   registerBackupRepository,
   removeBackupRepository,
+  setBackupRepositoryCredential,
 } from "../api/client.ts";
-import type { BackupRepository } from "../api/types.ts";
+import type { BackupCredentialChoice, BackupRepository, Credentials } from "../api/types.ts";
+import { CredentialPicker, describeCredential, effectiveChoice } from "../ui/CredentialPicker.tsx";
 import { useValidated } from "../ui/useValidated.ts";
 
 const asError = (e: unknown) => (e instanceof ApiError ? e : new ApiError(0, null, String(e)));
@@ -16,15 +19,27 @@ function refusal(error: ApiError): string {
   return check ? `${check}: ${error.message}` : error.message;
 }
 
+/** The credentials a repository can name, read once for the screen. */
+function useCredentials() {
+  const [credentials, setCredentials] = useState<Credentials | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    listCredentials().then(setCredentials, (e: unknown) => setError(asError(e).message));
+  }, []);
+  return { credentials, error };
+}
+
 /**
- * The registered backup repositories: register one, validating that
- * Menagerie can write to it before it saves, see which workspaces back up
- * to each, and remove one no workspace backs up to.
+ * The registered backup repositories: register one with its credential,
+ * validating that Menagerie can write to it with that credential before it
+ * saves, see which workspaces back up to each and what each authenticates
+ * with, change that, and remove one no workspace backs up to.
  */
 export function BackupRepositoriesScreen() {
   const [repositories, setRepositories] = useState<BackupRepository[] | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [registering, setRegistering] = useState(false);
+  const { credentials, error: credentialsError } = useCredentials();
 
   const load = () =>
     listBackupRepositories()
@@ -52,6 +67,8 @@ export function BackupRepositoriesScreen() {
       </p>
       {registering ? (
         <Registration
+          credentials={credentials}
+          credentialsError={credentialsError}
           onRegistered={() => {
             setRegistering(false);
             void load();
@@ -85,6 +102,13 @@ export function BackupRepositoriesScreen() {
             <RepositoryEntry
               key={r.id}
               repository={r}
+              credentials={credentials}
+              credentialsError={credentialsError}
+              onChanged={(changed) =>
+                setRepositories((list) =>
+                  (list ?? []).map((x) => (x.id === changed.id ? changed : x)),
+                )
+              }
               onRemoved={() => setRepositories((list) => (list ?? []).filter((x) => x.id !== r.id))}
             />
           ))}
@@ -94,12 +118,23 @@ export function BackupRepositoriesScreen() {
   );
 }
 
-function Registration({ onRegistered }: { onRegistered: () => void }) {
+function Registration({
+  credentials,
+  credentialsError,
+  onRegistered,
+}: {
+  credentials: Credentials | null;
+  credentialsError: string | null;
+  onRegistered: () => void;
+}) {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  const [chosen, setChosen] = useState<BackupCredentialChoice | null>(null);
+  const credential = effectiveChoice(url, credentials, chosen);
   const registration = (check: boolean) => ({
     name: name.trim(),
     url: url.trim(),
+    ...(credential ? { credential } : {}),
     ...(check ? { check } : {}),
   });
   const { error, validated, busy, edited, run } = useValidated<BackupRepository>(
@@ -162,6 +197,17 @@ function Registration({ onRegistered }: { onRegistered: () => void }) {
           }}
         />
       </div>
+      <CredentialPicker
+        id="backup-credential"
+        url={url}
+        credentials={credentials}
+        loadError={credentialsError}
+        value={credential}
+        onChange={(choice) => {
+          setChosen(choice);
+          edited();
+        }}
+      />
       <p className="form-error" id="backup-registration-error" role="alert">
         {error ? refusal(error) : null}
       </p>
@@ -186,13 +232,20 @@ function Registration({ onRegistered }: { onRegistered: () => void }) {
 
 function RepositoryEntry({
   repository: r,
+  credentials,
+  credentialsError,
+  onChanged,
   onRemoved,
 }: {
   repository: BackupRepository;
+  credentials: Credentials | null;
+  credentialsError: string | null;
+  onChanged: (changed: BackupRepository) => void;
   onRemoved: () => void;
 }) {
   const [removeError, setRemoveError] = useState<ApiError | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [changing, setChanging] = useState(false);
   const remove = async () => {
     setRemoving(true);
     setRemoveError(null);
@@ -209,11 +262,24 @@ function RepositoryEntry({
       <div>
         <h2 id={`backup-${r.id}`}>{r.name}</h2>
         <p className="muted mono template-address">{r.url}</p>
+        <p className="muted">{describeCredential(r.credential, r.url, credentials)}</p>
         <p className="muted">
           {r.workspaces.length
             ? `Backs up ${r.workspaces.join(", ")}`
             : "No workspace backs up to it"}
         </p>
+        {changing ? (
+          <CredentialChange
+            repository={r}
+            credentials={credentials}
+            credentialsError={credentialsError}
+            onChanged={(changed) => {
+              setChanging(false);
+              onChanged(changed);
+            }}
+            onCancel={() => setChanging(false)}
+          />
+        ) : null}
         {removeError ? (
           <p className="form-error" role="alert">
             {removeError.message}
@@ -221,6 +287,9 @@ function RepositoryEntry({
         ) : null}
       </div>
       <div className="template-actions" role="group" aria-label={`Actions for ${r.name}`}>
+        <button type="button" aria-expanded={changing} onClick={() => setChanging(!changing)}>
+          Change credential
+        </button>
         <button
           type="button"
           disabled={removing || r.workspaces.length > 0}
@@ -235,5 +304,82 @@ function RepositoryEntry({
         </button>
       </div>
     </li>
+  );
+}
+
+/** The current credential as a choice, so a change starts from it. */
+function choiceOf(r: BackupRepository): BackupCredentialChoice | null {
+  if (r.credential === null) return null;
+  return "githubApp" in r.credential
+    ? { githubApp: r.credential.githubApp }
+    : { sshKey: r.credential.sshKey };
+}
+
+/** Change a repository's credential: Validate checks writing with it, Save records it. */
+function CredentialChange({
+  repository: r,
+  credentials,
+  credentialsError,
+  onChanged,
+  onCancel,
+}: {
+  repository: BackupRepository;
+  credentials: Credentials | null;
+  credentialsError: string | null;
+  onChanged: (changed: BackupRepository) => void;
+  onCancel: () => void;
+}) {
+  const [chosen, setChosen] = useState<BackupCredentialChoice | null>(choiceOf(r));
+  const credential = effectiveChoice(r.url, credentials, chosen);
+  const { error, validated, busy, edited, run } = useValidated<BackupRepository>(
+    JSON.stringify(credential),
+  );
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!validated || !credential) return;
+    const changed = await run("saving", () => setBackupRepositoryCredential(r.id, credential));
+    if (changed) onChanged(changed);
+  };
+  return (
+    <form
+      className="template-panel"
+      aria-label={`Change the credential of ${r.name}`}
+      onSubmit={(e) => void submit(e)}
+    >
+      <CredentialPicker
+        id={`credential-${r.id}`}
+        url={r.url}
+        credentials={credentials}
+        loadError={credentialsError}
+        value={credential}
+        onChange={(choice) => {
+          setChosen(choice);
+          edited();
+        }}
+      />
+      <p className="form-error" role="alert">
+        {error ? refusal(error) : null}
+      </p>
+      <p className="form-success" role="status">
+        {validated ? "Checks passed · Menagerie can write to it with this credential" : null}
+      </p>
+      <div className="form-actions">
+        <button
+          type="button"
+          disabled={busy !== null || !credential}
+          onClick={() =>
+            void run("validating", () => setBackupRepositoryCredential(r.id, credential!, true))
+          }
+        >
+          {busy === "validating" ? "Checking…" : "Validate"}
+        </button>
+        <button type="submit" className="primary" disabled={busy !== null || !validated}>
+          {busy === "saving" ? "Saving…" : "Save"}
+        </button>
+        <button type="button" className="ghost" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
