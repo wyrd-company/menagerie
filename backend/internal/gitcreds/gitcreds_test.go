@@ -258,6 +258,7 @@ func TestTheServiceReadsURLFormsAsThePickerDoes(t *testing.T) {
 		Server string `json:"server"`
 		Cases  []struct {
 			URL    string  `json:"url"`
+			Server string  `json:"server"`
 			Kind   *string `json:"kind"`
 			Served bool    `json:"served"`
 		} `json:"cases"`
@@ -265,12 +266,16 @@ func TestTheServiceReadsURLFormsAsThePickerDoes(t *testing.T) {
 	if err := json.Unmarshal(data, &table); err != nil {
 		t.Fatal(err)
 	}
-	m, err := githubapp.New(githubapp.Options{AppID: 1, Signer: keySigner{}, Server: table.Server})
-	if err != nil {
-		t.Fatal(err)
-	}
-	apps := githubapp.Apps{{Name: "sample-org", Server: table.Server, Minter: m}}
 	for _, c := range table.Cases {
+		server := c.Server
+		if server == "" {
+			server = table.Server
+		}
+		m, err := githubapp.New(githubapp.Options{AppID: 1, Signer: keySigner{}, Server: server})
+		if err != nil {
+			t.Fatalf("%s: %v", server, err)
+		}
+		apps := githubapp.Apps{{Name: "sample-org", Server: server, Minter: m}}
 		kind := ""
 		if e, err := transport.NewEndpoint(c.URL); err == nil && (e.Protocol == "ssh" || e.Protocol == "https") {
 			kind = e.Protocol
