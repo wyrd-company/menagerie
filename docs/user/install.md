@@ -114,8 +114,9 @@ repository. GitHub accepts a deploy key on one repository only, and the
 same key cannot be registered twice.
 
 - **Only backup repositories are on SSH**: add one Transit key for each
-  repository, or one for all of them through a machine user, and add its
-  public key to the repository as a deploy key with write access.
+  repository, and add its public key to that repository as a deploy key
+  with write access. Or add one key for all of them as a machine user's
+  SSH key, and give the machine user write access to each repository.
 - **A private template is on SSH too**: the agent must offer one Git key,
   and it must reach every SSH repository. Create a machine user, an account
   for automation, and add the Transit key's public key as that account's

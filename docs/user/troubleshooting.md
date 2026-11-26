@@ -77,8 +77,8 @@ credential that does not fit the URL, with the check `credential`:
 | no GitHub App named NAME is configured | Add the App to `github-apps`, or choose another. |
 | the SSH key is provisioning's operator key | Choose a Git key; no Git host is given the operator key. |
 
-A backup, a move or an Apply branch fetch of a repository whose credential no
-longer works fails with one of these:
+A backup or a move to a repository whose credential no longer works fails
+with one of these:
 
 | Message | What to check |
 | --- | --- |
@@ -86,6 +86,17 @@ longer works fails with one of these:
 | ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey] | The Git host does not know the repository's key: add the public key that **Change credential** shows to the repository as a deploy key with write access, or to an account that can write to it. For a repository that shows **Credential chosen by URL**, every key the agent offers was refused: choose the repository's key with **Change credential**. |
 | workspace repository credentials: no GitHub App named NAME is configured | The App was renamed or removed in the configuration: restore it, or use **Change credential**. |
 | workspace repository credentials: GitHub App NAME does not serve the repository's URL | The App's `server` changed: use **Change credential**. |
+
+An Apply branch fetch fails with
+`fetching branch BRANCH from the workspace repository failed; nothing was changed`
+and no reason. To find it, open **Backups**, choose **Change credential** on
+the workspace's repository, keep its credential and choose **Validate**: the
+refusal names the credential and the reason, and Validate changes nothing.
+
+A failed **Validate** names the credential the Git host refused, as in
+`Menagerie could not write to the repository with SSH key SHA256:…` or
+`with GitHub App NAME`. A repository that shows **Credential chosen by URL**
+names none.
 
 ## GitHub App credentials
 

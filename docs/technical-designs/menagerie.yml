@@ -1282,8 +1282,15 @@ proposed-design:
     and every key the agent offers for an SSH URL. A manager can change a
     repository's credential; the `credential` and `write` checks run with
     the new one, and it is recorded only after they pass, while the
-    repository is still registered at the URL checked. Template fetches
-    keep the rule chosen by URL.
+    repository is still registered at the URL checked. A failed write
+    check names the credential the Git host refused, by the App's name or
+    the key's fingerprint, so a manager can tell which one to fix. Each
+    request to the agent waits at most five seconds for its reply, and the
+    connection closes when its operation ends, so a stalled agent fails the
+    key list, the operator-key check and a transfer rather than holding
+    them: the key list fails alone and the Apps still load, and an
+    operator-key check that the agent cannot answer refuses the key, which
+    may be the operator key. Template fetches keep the rule chosen by URL.
   git-and-credentials: >-
     The workspace repository, a workspace's backup repository (see
     backup-repositories), is a backup, not a synchronized copy. The local

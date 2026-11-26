@@ -1144,5 +1144,8 @@ validation-criteria: >-
   of a credential that does not fit its URL, the key recorded without its
   comment, the write check with the credential given, a checked change
   storing nothing, a change landing only at the URL checked, the operator
-  key left out of the list and the screen's Apps for an https URL, and
+  key left out of the list, an operator-key check the agent cannot answer
+  refused, each agent request's wait and the connection's close at its
+  operation's end, the write check's refusal naming its credential, and
+  the screen's Apps and keys for the URL forms the service accepts, and
   requires its test to fail.
