@@ -71,6 +71,9 @@ TESTS = {
     "template-kept": ("./backend/internal/store", "TestATemplateKeepsItsCredential"),
     "template-requests": ("./backend/internal/workflows", "TestEveryTemplateRequestNamesTheTemplatesCredential"),
     "named-app": ("./backend/internal/githubapp", "TestTheCredentialRouteMintsFromTheNamedAppOnly"),
+    "authenticate": ("./backend/internal/gitcreds", "TestAuthenticateMintsFromTheNamedApp"),
+    "refusal-named": ("./backend/internal/workflows", "TestARefusedDescentCheckNamesTheTemplatesCredential"),
+    "check-line": ("web/src/api/versions.test.ts", "names the credential the Git host refused"),
     "template-form": ("web/src/screens/Templates.test.tsx",
                       "is chosen from those that fit the URL the address names"),
     "template-change-form": ("web/src/screens/Templates.test.tsx",
@@ -88,6 +91,8 @@ TEMPLATE_DATA = "backend/internal/store/templates.go"
 FLOWS = "backend/internal/workflows/workflows.go"
 DESCENT = "backend/internal/workflows/upgrade.go"
 ROUTE = "backend/internal/githubapp/handler.go"
+APPLY = "backend/internal/workflows/applybranch.go"
+CHECK_LINE = "web/src/api/versions.ts"
 TEMPLATES_SCREEN = "web/src/screens/Templates.tsx"
 URLS = "web/src/ui/credentialUrls.ts"
 
@@ -213,8 +218,11 @@ MUTANTS = [
      "r.Templates.Check(ctx, address, v.Tag, requested(credential))",
      "r.Templates.Check(ctx, address, v.Tag, nil)", ["template-fetches", "template-change"]),
     ("template-credential-must-fit", TEMPLATES,
-     "\tcase r.Credentials != nil:\n\t\terr = r.Credentials.Fit(ctx, url, credential)\n",
-     "\tcase r.Credentials != nil:\n", ["template-fetches"]),
+     "\t\tif err = r.Credentials.Fit(ctx, url, credential); err == nil {\n",
+     "\t\tif err = nil; err == nil {\n", ["template-fetches"]),
+    ("template-app-must-authenticate", TEMPLATES,
+     "\t\t\terr = r.Credentials.Authenticate(ctx, url, credential)\n",
+     "\t\t\terr = nil\n", ["template-fetches"]),
     ("template-checked-change-stores-nothing", TEMPLATES,
      "\tif check {\n\t\treturn tpl, nil\n\t}\n", "", ["template-change"]),
     ("version-check-with-its-credential", VERSIONS,
@@ -231,6 +239,22 @@ MUTANTS = [
      "applied.Commit, nil)", ["template-requests"]),
     ("route-mints-from-the-named-app", ROUTE,
      "\t\tcase req.GitHubApp != nil:\n", "\t\tcase false:\n", ["named-app"]),
+    ("route-mints-from-the-named-app-alone", ROUTE,
+     "\t\ttoken, err := app.Token(r.Context(), repo, Read)\n",
+     "\t\tif len(apps) > 0 {\n\t\t\tapp = apps[0]\n\t\t}\n\t\ttoken, err := app.Token(r.Context(), repo, Read)\n",
+     ["named-app"]),
+    ("authenticate-mints-a-token", CREDS,
+     "\tif _, err := app.Token(ctx, repo, githubapp.Read); err != nil {\n",
+     "\tif _, err := repo, error(nil); err != nil {\n", ["authenticate"]),
+    ("upgrade-refusal-names-the-credential", DESCENT,
+     "applied.Commit, gitcreds.Phrase(tpl.Credential), refusalKind(err))",
+     "applied.Commit, gitcreds.Phrase(store.Credential{}), refusalKind(err))", ["refusal-named"]),
+    ("apply-refusal-names-the-credential", APPLY,
+     "applied.Commit, gitcreds.Phrase(tpl.Credential), refusalKind(err))",
+     "applied.Commit, gitcreds.Phrase(store.Credential{}), refusalKind(err))", ["refusal-named"]),
+    ("check-line-names-the-credential", CHECK_LINE,
+     "hostRefused.has(t.lastCheck.failure) ? phrase(t.credential) : \"\"",
+     "\"\"", ["check-line"]),
     ("template-form-fits-the-address-url", TEMPLATES_SCREEN,
      "  const credential = effectiveChoice(url, credentials, chosen);\n",
      "  const credential = effectiveChoice(\"\", credentials, chosen);\n", ["template-form"]),
