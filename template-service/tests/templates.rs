@@ -43,17 +43,19 @@ fn commit_of<'a>(commits: &'a [(&str, String)], tag: &str) -> &'a str {
 async fn an_address_is_read_without_reaching_the_network() {
     let world = World::new();
     let service = Running::start(&world).await;
-    for (address, source, reference, base) in [
+    for (address, source, reference, base, url) in [
         (
             "https://github.com/example-org/kit.git@1.2.0#templates/kit",
             "gh:example-org/kit#templates/kit",
             json!("1.2.0"),
             "https://github.com/example-org/kit.git#templates/kit",
+            "https://github.com/example-org/kit.git",
         ),
         (
             "https://sample-user@git.example.invalid/example-org/kit",
             "https://git.example.invalid/example-org/kit",
             Value::Null,
+            "https://git.example.invalid/example-org/kit",
             "https://git.example.invalid/example-org/kit",
         ),
         (
@@ -61,11 +63,13 @@ async fn an_address_is_read_without_reaching_the_network() {
             "gh:example-org/kit",
             json!("v2.0.0"),
             "gh:example-org/kit",
+            "https://github.com/example-org/kit",
         ),
         (
             "git@git.example.invalid:example-org/kit.git@1.0.0",
             "ssh://git.example.invalid/example-org/kit",
             json!("1.0.0"),
+            "git@git.example.invalid:example-org/kit.git",
             "git@git.example.invalid:example-org/kit.git",
         ),
     ] {
@@ -75,7 +79,7 @@ async fn an_address_is_read_without_reaching_the_network() {
         assert_eq!(reply.status, 200, "{address}: {}", reply.json);
         assert_eq!(
             reply.json,
-            json!({"source": source, "reference": reference, "base": base}),
+            json!({"source": source, "reference": reference, "base": base, "url": url}),
             "{address}"
         );
     }

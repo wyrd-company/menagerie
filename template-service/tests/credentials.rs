@@ -147,6 +147,114 @@ fn a_private_https_template_is_fetched_with_the_routes_token() {
 }
 
 #[test]
+fn a_named_app_goes_with_every_credential_request_of_the_operation() {
+    run(async {
+        let host = GitHost::start();
+        let world = world(&host);
+        let repo = host.url("example-org/kit-a.git");
+        host.admit(TOKEN_A, "example-org/kit-a.git");
+        world
+            .hooks
+            .answer_credentials(grants(vec![(repo.clone(), TOKEN_A)]));
+        let service = Running::start(&world).await;
+        let credential = json!({"credential": {"githubApp": "sample-app"}});
+        let start = service
+            .post(
+                "/v1/interviews",
+                &with(world.select("alpha", "private-a"), credential.clone()),
+            )
+            .await;
+        assert_eq!(start.status, 200, "{}", start.json);
+        let versions = service
+            .post(
+                "/v1/templates/versions",
+                &with(json!({"address": repo}), credential),
+            )
+            .await;
+        assert_eq!(versions.status, 200, "{}", versions.json);
+        token_free(&versions);
+        let requests = world.hooks.credential_requests();
+        assert!(
+            !requests.is_empty()
+                && requests
+                    .iter()
+                    .all(|r| *r == json!({"url": repo, "githubApp": "sample-app"})),
+            "{requests:?}"
+        );
+        service.stop().await;
+    });
+}
+
+#[test]
+fn a_template_whose_credential_is_an_ssh_key_asks_no_app() {
+    run(async {
+        let host = GitHost::start();
+        let world = world(&host);
+        let repo = host.url("example-org/kit-a.git");
+        host.admit(TOKEN_A, "example-org/kit-a.git");
+        world
+            .hooks
+            .answer_credentials(grants(vec![(repo.clone(), TOKEN_A)]));
+        let service = Running::start(&world).await;
+        let credential = json!({"credential": {"sshKey": SAMPLE_KEY}});
+        let start = service
+            .post(
+                "/v1/interviews",
+                &with(world.select("alpha", "private-a"), credential.clone()),
+            )
+            .await;
+        assert_eq!(start.status, 422, "{}", start.json);
+        let versions = service
+            .post(
+                "/v1/templates/versions",
+                &with(json!({"address": repo}), credential),
+            )
+            .await;
+        assert_eq!(versions.status, 422, "{}", versions.json);
+        assert_eq!(world.hooks.credential_requests(), Vec::<Value>::new());
+        service.stop().await;
+    });
+}
+
+/// A generated public key in authorized-keys form.
+const SAMPLE_KEY: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBHK2Ry9R6NHMnm7k0aS9sH1cKXqXlCgS2tJ1x0m2Zq1 sample-key";
+
+#[test]
+fn a_credential_that_names_neither_or_both_or_no_key_is_refused() {
+    run(async {
+        let host = GitHost::start();
+        let world = world(&host);
+        let service = Running::start(&world).await;
+        for credential in [
+            json!({}),
+            json!({"githubApp": ""}),
+            json!({"githubApp": "sample-app", "sshKey": SAMPLE_KEY}),
+            json!({"sshKey": "ssh-ed25519 not-base64"}),
+            json!({"sshKey": SAMPLE_KEY, "fingerprint": "SHA256:x"}),
+        ] {
+            let reply = service
+                .post(
+                    "/v1/interviews",
+                    &with(
+                        world.select("alpha", "private-a"),
+                        json!({"credential": credential}),
+                    ),
+                )
+                .await;
+            assert_eq!(reply.status, 400, "{credential} {}", reply.json);
+            assert!(
+                ["invalid-credential", "malformed-request"].contains(&reply.kind()),
+                "{credential} {}",
+                reply.json
+            );
+        }
+        assert!(host.seen().is_empty());
+        service.stop().await;
+    });
+}
+
+#[test]
 fn a_url_the_route_does_not_serve_gets_no_credential() {
     run(async {
         let host = GitHost::start();

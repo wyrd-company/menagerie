@@ -9,7 +9,14 @@
 //! read without fetching its history, an HTTPS challenge is answered by the
 //! request's credential route as a Toha fetch's is, and an annotated tag is
 //! peeled to its commit.
-use crate::credentials::{Ended, Handed};
+//!
+//! Toha's SSH key scope does not reach this connection, so a request that
+//! names an SSH key pins it here: the agent must hold the key, and `ssh`
+//! runs with `IdentitiesOnly`, `IdentityFile` and `IdentityAgent` naming
+//! only that key and agent. Unlike Toha, this does not run `ssh -G` to
+//! check that no SSH configuration adds another identity; Menagerie's
+//! container sets none (wyrd-company/toha#94 would list tags through Toha).
+use crate::credentials::{Ended, Handed, Scope};
 use crate::error::ServiceError;
 use serde::Serialize;
 use std::path::Path;
@@ -85,6 +92,9 @@ pub enum ListError {
     NotFound,
     /// Any other failure.
     Failed,
+    /// The request's SSH key could not be offered: the message says why and
+    /// names the key.
+    Key(String),
     /// The caller went away.
     Stopped,
 }
@@ -100,6 +110,7 @@ impl From<ListError> for ServiceError {
                 "template-resolve-failed",
                 "the template's repository could not be listed; the Git host refused or failed the request",
             ),
+            ListError::Key(message) => ServiceError::refused("template-resolve-failed", message),
             ListError::Stopped => ServiceError::stopped(),
         }
     }
@@ -116,21 +127,29 @@ const POLL: Duration = Duration::from_millis(50);
 pub fn list_tags(
     repo: &str,
     hook_runner_socket: &Path,
+    scope: &Scope,
     ended: &Ended,
     handed: &Handed,
 ) -> Result<Vec<(String, String)>, ListError> {
     ended.check().map_err(|_| ListError::Stopped)?;
     let (sent, received) = mpsc::channel();
-    let (repo, socket, ended_for_listing, handed) = (
+    let (repo, socket, scope, ended_for_listing, handed) = (
         repo.to_owned(),
         hook_runner_socket.to_owned(),
+        scope.clone(),
         ended.clone(),
         handed.clone(),
     );
     std::thread::Builder::new()
         .name("version listing".into())
         .spawn(move || {
-            let _ = sent.send(remote_tags(&repo, &socket, &ended_for_listing, &handed));
+            let _ = sent.send(remote_tags(
+                &repo,
+                &socket,
+                &scope,
+                &ended_for_listing,
+                &handed,
+            ));
         })
         .map_err(|_| ListError::Failed)?;
     loop {
@@ -149,6 +168,7 @@ pub fn list_tags(
 fn remote_tags(
     repo: &str,
     socket: &Path,
+    scope: &Scope,
     ended: &Ended,
     handed: &Handed,
 ) -> Result<Vec<(String, String)>, ListError> {
@@ -156,7 +176,12 @@ fn remote_tags(
     // The listing needs a repository for gix's configuration; an empty
     // bare one, opened as a clone's is, receives nothing.
     let scratch = tempfile::tempdir().map_err(|_| ListError::Failed)?;
-    let local = gix::init_bare(scratch.path()).map_err(|_| ListError::Failed)?;
+    let mut local = gix::init_bare(scratch.path()).map_err(|_| ListError::Failed)?;
+    // Kept until the listing ends: the file `IdentityFile` names.
+    let _pinned = match &scope.key {
+        Some(key) => pin(&mut local, repo, key)?,
+        None => None,
+    };
     let remote = local
         .remote_at(repo)
         .and_then(|remote| {
@@ -167,7 +192,7 @@ fn remote_tags(
         .connect(gix::remote::Direction::Fetch)
         .map_err(|_| ListError::Failed)?;
     let fallback = connection.configured_credentials_for_current_url();
-    connection.set_credentials(authenticate(socket, ended, handed, fallback));
+    connection.set_credentials(authenticate(socket, scope, ended, handed, fallback));
     quiet(&mut connection);
     let (map, _) = connection
         .ref_map(
@@ -207,6 +232,152 @@ fn remote_tags(
         tags.push((tag, commit.to_string()));
     }
     Ok(tags)
+}
+
+/// Make `local`'s SSH connections to `repo` offer only `key`, once the agent
+/// at `SSH_AUTH_SOCK` has shown that it holds it, and return the public key
+/// file `IdentityFile` names. A `repo` that is not SSH, after Git's
+/// `url.<base>.insteadOf` rewrites, needs nothing.
+fn pin(
+    local: &mut gix::Repository,
+    repo: &str,
+    key: &toha::source::SshKey,
+) -> Result<Option<tempfile::NamedTempFile>, ListError> {
+    use std::io::Write;
+    let ssh = local
+        .remote_at(repo)
+        .ok()
+        .and_then(|remote| remote.url(gix::remote::Direction::Fetch).cloned())
+        .is_some_and(|url| url.scheme == gix::url::Scheme::Ssh);
+    if !ssh {
+        return Ok(None);
+    }
+    let failed = |why: String| ListError::Key(format!("the SSH key {key} {why}"));
+    let agent = std::env::var_os("SSH_AUTH_SOCK")
+        .filter(|socket| !socket.is_empty())
+        .ok_or_else(|| failed("has no agent to come from: SSH_AUTH_SOCK is not set".into()))?;
+    let blob = agent_key(Path::new(&agent), &key.fingerprint())
+        .map_err(|e| failed(format!("could not be read from the SSH agent: {e}")))?
+        .ok_or_else(|| failed("is not offered by the SSH agent".into()))?;
+    let mut file = tempfile::Builder::new()
+        .prefix("menagerie_ssh_key")
+        .suffix(".pub")
+        .tempfile()
+        .map_err(|e| failed(format!("could not be written: {e}")))?;
+    {
+        use base64::Engine;
+        writeln!(
+            file,
+            "{} {}",
+            key.algorithm(),
+            base64::engine::general_purpose::STANDARD.encode(&blob)
+        )
+        .and_then(|()| file.flush())
+        .map_err(|e| failed(format!("could not be written: {e}")))?;
+    }
+    let configured = local
+        .ssh_connect_options()
+        .map_err(|e| failed(format!("could not be offered: {e}")))?;
+    let program = match configured.command.as_ref().filter(|c| !c.is_empty()) {
+        Some(command) => {
+            let command = command.to_str().ok_or_else(|| {
+                failed("could not be offered: the SSH command is not UTF-8".into())
+            })?;
+            // `GIT_SSH` names a program, which runs without a shell.
+            if configured.disallow_shell {
+                quoted(command)
+            } else {
+                command.to_owned()
+            }
+        }
+        None => "ssh".to_owned(),
+    };
+    let utf8 = |path: &Path| {
+        path.to_str().map(str::to_owned).ok_or_else(|| {
+            failed(format!(
+                "could not be offered: the path {} is not UTF-8",
+                path.display()
+            ))
+        })
+    };
+    let command = format!(
+        "{program} -o IdentitiesOnly=yes -o {} -o {}",
+        quoted(&format!("IdentityFile={}", utf8(file.path())?)),
+        quoted(&format!("IdentityAgent={}", utf8(Path::new(&agent))?)),
+    );
+    let mut config = local.config_snapshot_mut();
+    config
+        .append_config(
+            [
+                format!("core.sshCommand={command}"),
+                "ssh.variant=ssh".into(),
+            ],
+            gix::config::Source::Api,
+        )
+        .map_err(|e| failed(format!("could not be offered: {e}")))?;
+    config
+        .commit()
+        .map_err(|e| failed(format!("could not be offered: {e}")))?;
+    Ok(Some(file))
+}
+
+/// `value` quoted for `sh`.
+fn quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// The key blob among the identities the agent at `socket` lists whose
+/// SHA-256 fingerprint is `fingerprint`, or `None` when it lists none.
+fn agent_key(socket: &Path, fingerprint: &str) -> Result<Option<Vec<u8>>, String> {
+    use base64::Engine;
+    use std::io::{Read, Write};
+    const REQUEST_IDENTITIES: u8 = 11;
+    const IDENTITIES_ANSWER: u8 = 12;
+    const LONGEST_ANSWER: usize = 256 << 10;
+    let mut agent = std::os::unix::net::UnixStream::connect(socket).map_err(|e| e.to_string())?;
+    agent
+        .write_all(&[0, 0, 0, 1, REQUEST_IDENTITIES])
+        .map_err(|e| e.to_string())?;
+    let mut length = [0; 4];
+    agent.read_exact(&mut length).map_err(|e| e.to_string())?;
+    let length = u32::from_be_bytes(length) as usize;
+    if length == 0 || length > LONGEST_ANSWER {
+        return Err("the agent's answer has no usable length".into());
+    }
+    let mut answer = vec![0; length];
+    agent.read_exact(&mut answer).map_err(|e| e.to_string())?;
+    let malformed = || "the agent's answer is malformed".to_owned();
+    let (&kind, mut rest) = answer.split_first().ok_or_else(malformed)?;
+    if kind != IDENTITIES_ANSWER {
+        return Err("the agent refused to list its keys".into());
+    }
+    let take = |rest: &mut &[u8]| -> Option<Vec<u8>> {
+        let (length, tail) = rest.split_first_chunk::<4>()?;
+        let length = u32::from_be_bytes(*length) as usize;
+        let (value, tail) = (tail.get(..length)?, tail.get(length..)?);
+        *rest = tail;
+        Some(value.to_vec())
+    };
+    let count = rest
+        .split_first_chunk::<4>()
+        .map(|(count, tail)| {
+            rest = tail;
+            u32::from_be_bytes(*count)
+        })
+        .ok_or_else(malformed)?;
+    for _ in 0..count {
+        let blob = take(&mut rest).ok_or_else(malformed)?;
+        take(&mut rest).ok_or_else(malformed)?;
+        let digest = ring::digest::digest(&ring::digest::SHA256, &blob);
+        let listed = format!(
+            "SHA256:{}",
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest.as_ref())
+        );
+        if listed == fingerprint {
+            return Ok(Some(blob));
+        }
+    }
+    Ok(None)
 }
 
 /// Whether a listing failure is the remote's answer that the repository
@@ -289,6 +460,7 @@ fn native_roots() -> Option<&'static Path> {
 #[allow(clippy::result_large_err)]
 fn authenticate(
     socket: &Path,
+    scope: &Scope,
     ended: &Ended,
     handed: &Handed,
     mut fallback: gix::remote::AuthenticateFn<'static>,
@@ -297,6 +469,10 @@ fn authenticate(
 ) -> gix::Result<Option<gix::credentials::protocol::Outcome>>
 + use<> {
     let (socket, ended, handed) = (socket.to_owned(), ended.clone(), handed.clone());
+    // A template whose credential is an SSH key has no App, as in Toha's
+    // fetches (`credentials::RouteResolver`).
+    let asks = scope.key.is_none();
+    let app = scope.app.clone();
     let mut answered = false;
     move |action| {
         if let gix::credentials::helper::Action::Get(context) = &action {
@@ -306,7 +482,7 @@ fn authenticate(
                 .clone()
                 .or_else(|| context.to_url())
                 .and_then(|url| gix::url::parse(gix::bstr::BStr::new(url.as_slice())).ok())
-                .filter(|url| url.scheme == gix::url::Scheme::Https)
+                .filter(|url| asks && url.scheme == gix::url::Scheme::Https)
                 .and_then(|url| {
                     let path = String::from_utf8_lossy(&url.path).into_owned();
                     crate::credentials::url(
@@ -317,7 +493,7 @@ fn authenticate(
                     )
                 });
             if let Some(url) = url {
-                match crate::credentials::ask_pair(&socket, &url, &ended, &handed) {
+                match crate::credentials::ask_pair(&socket, &url, app.as_deref(), &ended, &handed) {
                     Ok(Some((username, password))) => {
                         answered = true;
                         return Ok(Some(gix::credentials::protocol::Outcome {

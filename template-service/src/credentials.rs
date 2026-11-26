@@ -15,6 +15,12 @@
 //! every written form of what `Handed` holds from each reply before it
 //! leaves the service (`Handed::scrub`).
 //!
+//! A request that names its template's credential narrows this: a GitHub
+//! App's name goes with each credential request, so the route mints from
+//! that App only, and an SSH key leaves HTTPS challenges unanswered here.
+//! `Scope` is that credential, which `server` also puts in Toha's SSH key
+//! scope.
+//!
 //! An operation's `Ended` signal fires when its caller goes away: the job
 //! was cancelled or reached its limit. A credential request races it, and
 //! loses its connection when it fires.
@@ -40,13 +46,60 @@ pub const MAX_REASON: usize = 200;
 /// What replaces a credential in a reply.
 pub const REDACTED: &str = "<redacted>";
 
-/// The resolver for one operation: it asks the route behind `socket`, keeps
-/// what it hands out in `handed`, and stops asking when `ended` fires.
-pub fn resolver(socket: &Path, handed: Handed, ended: Ended) -> Arc<dyn CredentialResolver> {
+/// The credential one operation's Git connections use: the GitHub App its
+/// HTTPS challenges are answered from, or the one SSH key its SSH
+/// connections offer. The default, no credential, is the rule chosen by
+/// URL.
+#[derive(Debug, Clone, Default)]
+pub struct Scope {
+    pub app: Option<String>,
+    pub key: Option<toha::source::SshKey>,
+}
+
+impl Scope {
+    /// The scope of a request's credential, which names exactly one App or
+    /// one key.
+    pub fn of(credential: Option<&crate::api::Credential>) -> Result<Self, ServiceError> {
+        let Some(credential) = credential else {
+            return Ok(Self::default());
+        };
+        let invalid = |message: &str| {
+            ServiceError::bad_request("invalid-credential", format!("the credential {message}"))
+        };
+        match (
+            credential.github_app.as_deref(),
+            credential.ssh_key.as_deref(),
+        ) {
+            (Some(app), None) if !app.is_empty() => Ok(Self {
+                app: Some(app.to_owned()),
+                key: None,
+            }),
+            (None, Some(key)) => Ok(Self {
+                app: None,
+                key: Some(
+                    toha::source::SshKey::parse(key)
+                        .map_err(|e| invalid(&format!("is not usable: {e}")))?,
+                ),
+            }),
+            _ => Err(invalid("names neither or both of githubApp and sshKey")),
+        }
+    }
+}
+
+/// The resolver for one operation: it asks the route behind `socket` for a
+/// credential of `scope`'s App, keeps what it hands out in `handed`, and
+/// stops asking when `ended` fires.
+pub fn resolver(
+    socket: &Path,
+    handed: Handed,
+    ended: Ended,
+    scope: Scope,
+) -> Arc<dyn CredentialResolver> {
     Arc::new(RouteResolver {
         socket: socket.to_owned(),
         handed,
         ended,
+        scope,
     })
 }
 
@@ -56,6 +109,7 @@ pub struct RouteResolver {
     socket: PathBuf,
     handed: Handed,
     ended: Ended,
+    scope: Scope,
 }
 
 /// The credentials one operation's resolver handed out.
@@ -250,8 +304,11 @@ impl Ended {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Request<'a> {
     url: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    github_app: Option<&'a str>,
 }
 
 /// A 200 answer. Its `Debug` output is never needed, so it has none.
@@ -283,14 +340,25 @@ fn refused(reason: &str) -> String {
 
 impl CredentialResolver for RouteResolver {
     fn resolve(&self, request: &CredentialRequest) -> Result<Option<Credential>, String> {
+        // A template whose credential is an SSH key has no App.
+        if self.scope.key.is_some() {
+            return Ok(None);
+        }
         let Some(url) = url(&request.scheme, &request.host, request.port, &request.path) else {
             return Ok(None);
         };
-        ask(&self.socket, &url, &self.ended, &self.handed)
+        ask(
+            &self.socket,
+            &url,
+            self.scope.app.as_deref(),
+            &self.ended,
+            &self.handed,
+        )
     }
 }
 
-/// Ask the route behind `socket` for a credential for `url`, unless
+/// Ask the route behind `socket` for a credential for `url`, from the App
+/// named `app` when one is, unless
 /// `ended` fires first; then the request's connection is closed. A granted
 /// credential is kept in `handed`. The resolver runs on the operation's
 /// blocking worker, so the request runs on a runtime of its own, as a
@@ -298,10 +366,11 @@ impl CredentialResolver for RouteResolver {
 pub fn ask(
     socket: &Path,
     url: &str,
+    app: Option<&str>,
     ended: &Ended,
     handed: &Handed,
 ) -> Result<Option<Credential>, String> {
-    Ok(ask_pair(socket, url, ended, handed)?
+    Ok(ask_pair(socket, url, app, ended, handed)?
         .map(|(username, password)| Credential::new(username, password)))
 }
 
@@ -310,10 +379,15 @@ pub fn ask(
 pub(crate) fn ask_pair(
     socket: &Path,
     url: &str,
+    app: Option<&str>,
     ended: &Ended,
     handed: &Handed,
 ) -> Result<Option<(String, String)>, String> {
-    let body = serde_json::to_vec(&Request { url }).map_err(|_| refused(MALFORMED))?;
+    let body = serde_json::to_vec(&Request {
+        url,
+        github_app: app,
+    })
+    .map_err(|_| refused(MALFORMED))?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .build()
@@ -429,7 +503,7 @@ mod tests {
     /// Ask with a caller that stays.
     fn asked(socket: &Path, url: &str) -> Result<Option<Credential>, String> {
         let (_alive, ended) = lifetime();
-        ask(socket, url, &ended, &Handed::default())
+        ask(socket, url, None, &ended, &Handed::default())
     }
 
     fn free_of_token(result: &Result<Option<Credential>, String>) {
@@ -590,7 +664,9 @@ mod tests {
         );
         let (_alive, ended) = lifetime();
         let handed = Handed::default();
-        ask(&route.socket, URL, &ended, &handed).unwrap().unwrap();
+        ask(&route.socket, URL, None, &ended, &handed)
+            .unwrap()
+            .unwrap();
         let echoed = format!(
             "{:?}",
             format!(
@@ -775,7 +851,7 @@ mod tests {
         let (alive, ended) = lifetime();
         drop(alive);
         assert_eq!(
-            ask(&route.socket, URL, &ended, &Handed::default()),
+            ask(&route.socket, URL, None, &ended, &Handed::default()),
             Err("GitHub App credentials are unavailable: the operation ended before credentials arrived".into())
         );
         assert!(route.requests().is_empty());
@@ -790,7 +866,8 @@ mod tests {
         let socket = dir.path().join("hook-runner.sock");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         let (alive, ended) = lifetime();
-        let asking = std::thread::spawn(move || ask(&socket, URL, &ended, &Handed::default()));
+        let asking =
+            std::thread::spawn(move || ask(&socket, URL, None, &ended, &Handed::default()));
         let (mut held, _) = listener.accept().unwrap();
         held.set_read_timeout(Some(std::time::Duration::from_secs(10)))
             .unwrap();
@@ -820,6 +897,7 @@ mod tests {
             socket: "/run/sample/hook-runner.sock".into(),
             handed: Handed::default(),
             ended,
+            scope: Scope::default(),
         };
         resolver.handed.keep("x-access-token", TOKEN);
         assert!(!format!("{resolver:?}").contains(TOKEN));

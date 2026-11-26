@@ -52,7 +52,9 @@ description: >-
   `"submission"`. `/v1/workspaces/generate` and `/v1/upgrades/apply` add
   `"session"` and an optional `"hookToken"`, the workspace service's grant
   for that request's hooks. `/v1/upgrades` also takes an optional boolean
-  `"reanswer"`, false when absent. Other members are refused, a `templateId`
+  `"reanswer"`, false when absent. Every route but
+  `/v1/templates/addresses` also takes an optional `"credential"`, the
+  template's credential (below). Other members are refused, a `templateId`
   included, and a missing member, a missing `ref` included, is
   `malformed-request` (400). `workspace` is the folder name, `target` is
   that folder under the workspace root, `address` is the template's address
@@ -93,11 +95,13 @@ description: >-
   password.
   No refusal quotes the address, so a password given by mistake is shown
   nowhere. `/v1/templates/addresses`
-  answers 200 `{"source","reference","base"}`: `source` is Toha's formal name
+  answers 200 `{"source","reference","base","url"}`: `source` is Toha's formal name
   of the repository and folder without a ref, the source an applied record
   names; `reference` is the ref the address names, or null; and `base` is the
   address the strict writer writes without its ref, and for an `https`
-  address also without its user name.
+  address also without its user name; and `url` is the Git URL a fetch of
+  the address connects to, a `gh:` address expanded, which is the URL a
+  template's credential has to fit.
 
 
   Versions. `/v1/templates/versions` lists the tags of the repository an
@@ -324,19 +328,50 @@ description: >-
   in Menagerie's own image.
 
 
+  Template credentials. A request's `credential` is the one credential its
+  Git connections use, as the template's registration records it:
+  `{"githubApp"}`, a GitHub App by its configured name, or `{"sshKey"}`, a
+  public key in authorized-keys form, a comment allowed. A credential that
+  names neither or both, an empty App name, a key Toha's `SshKey::parse`
+  refuses or another member is `invalid-credential` (400), before any
+  network is reached. With an App, every credential request of the
+  operation names it (below). With a key, the credential route is never
+  asked, and the operation runs inside Toha's `with_ssh_key` scope, so each
+  SSH connection of its Toha fetches offers only that key from the agent at
+  `SSH_AUTH_SOCK`, once that agent has listed it; a key the agent does not
+  list fails the fetch with a message naming the key's type and
+  fingerprint, and no other key is tried. The version listing does not go
+  through Toha, so it pins the key itself: it fails with
+  `template-resolve-failed`, naming the key's fingerprint, unless the agent
+  lists the key, and runs the configured `ssh` command with
+  `-o IdentitiesOnly=yes`, `IdentityFile` naming a file that holds the
+  public key, and `IdentityAgent` naming the agent. Unlike Toha it does not
+  run `ssh -G` first to check that no SSH configuration adds another
+  identity; Menagerie's image sets none
+  ([Toha #94](https://github.com/wyrd-company/toha/issues/94) would list
+  tags through Toha). A request without a credential keeps the rule chosen
+  by URL: the route picks the App, and SSH offers every key the agent
+  holds.
+
+
   Credentials. The hook runner socket also serves `POST
   /v1/credentials/github`, the GitHub App credentials of a template fetch
   over `https`. The request is `{"url"}`, the repository's `https` URL
-  without user information; an unknown member, a second value or a body
-  over 8 KiB is refused. For a URL on the configured GitHub App's server
-  whose path is exactly `/{owner}/{repo}` or `/{owner}/{repo}.git`, with no
-  query or fragment, the answer is 200
-  `{"username":"x-access-token","password"}`, where `password` is an
-  installation token with contents read on that one repository. Every
-  other answer is `{"reason"}`, a fixed sentence: 404 when no `github-app`
-  is configured or the URL is any other, and this service then fetches as
-  Toha does by default; 502 when the token could not be minted, the reason
-  naming the cause without a token, URL or GitHub answer; 400 for a body
+  without user information, and, when the template's credential is an
+  App, `"githubApp"`, its name; an unknown member, a second value or a body
+  over 8 KiB is refused. Without `githubApp`, for a URL on a configured
+  GitHub App's server whose path is exactly `/{owner}/{repo}` or
+  `/{owner}/{repo}.git`, with no query or fragment, the first such App
+  answers 200 `{"username":"x-access-token","password"}`, where
+  `password` is an installation token with contents read on that one
+  repository. With `githubApp`, only the App of that name, matched in any
+  case, answers, and for that same form of URL on its own server. Every
+  other answer is `{"reason"}`, a fixed sentence: 404 when, without
+  `githubApp`, no `github-app` is configured or the URL is any other, and
+  this service then fetches as Toha does by default; 502 when the named App
+  is not configured or does not serve the URL, the reason naming the App,
+  or when the token could not be minted, the reason naming the cause
+  without a token, URL or GitHub answer; 400 for a body
   that is not a credential request; 405 for a method other than POST. The
   answer carries `Cache-Control: no-store`. This service keeps the token
   in memory for the one fetch and never writes it to disk.
@@ -458,7 +493,7 @@ description: >-
   `malformed-submission` (400),
   `submission-template-mismatch` (400), `number-not-representable` (400),
   `nesting-too-deep` (400),
-  `invalid-address` (400), `invalid-workspace` (400), `target-mismatch`
+  `invalid-address` (400), `invalid-credential` (400), `invalid-workspace` (400), `target-mismatch`
   (400), `workspace-not-found` (404), `not-found` (404),
   `method-not-allowed` (405), `target-outside-root` (409),
   `session-mismatch` (409). Interview state: `interview-complete` (409),

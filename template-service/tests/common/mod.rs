@@ -475,6 +475,7 @@ pub struct HookHost {
     pub socket: PathBuf,
     pub calls: Arc<std::sync::Mutex<Vec<Value>>>,
     credential_urls: Arc<std::sync::Mutex<Vec<String>>>,
+    credential_requests: Arc<std::sync::Mutex<Vec<Value>>>,
     credential_answer: Arc<std::sync::Mutex<CredentialAnswer>>,
     hold: Arc<Hold>,
     hold_hooks: Arc<std::sync::atomic::AtomicBool>,
@@ -491,6 +492,8 @@ impl HookHost {
         let path = socket.to_owned();
         let recorded = calls.clone();
         let credential_urls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let credential_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let requests = credential_requests.clone();
         let no_app: CredentialAnswer =
             Arc::new(|_: &str| (404, json!({"reason": "no GitHub App is configured"})));
         let credential_answer = Arc::new(std::sync::Mutex::new(no_app));
@@ -529,6 +532,7 @@ impl HookHost {
                             let request: Value = serde_json::from_slice(&body).unwrap();
                             let url = request["url"].as_str().unwrap().to_owned();
                             urls.lock().unwrap().push(url.clone());
+                            requests.lock().unwrap().push(request);
                             let respond = answer.lock().unwrap().clone();
                             let (status, reply) = respond(&url);
                             let holding = holding.clone();
@@ -557,6 +561,7 @@ impl HookHost {
             socket: socket.to_owned(),
             calls,
             credential_urls,
+            credential_requests,
             credential_answer,
             hold,
             hold_hooks,
@@ -599,6 +604,11 @@ impl HookHost {
     /// the connection.
     pub fn released(&self) -> usize {
         self.hold.released.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Every credential request body, in order.
+    pub fn credential_requests(&self) -> Vec<Value> {
+        self.credential_requests.lock().unwrap().clone()
     }
 
     /// The URL of every credential request, in order.
