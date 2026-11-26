@@ -1284,13 +1284,23 @@ proposed-design:
     the new one, and it is recorded only after they pass, while the
     repository is still registered at the URL checked. A failed write
     check names the credential the Git host refused, by the App's name or
-    the key's fingerprint, so a manager can tell which one to fix. Each
-    request to the agent waits at most five seconds for its reply, and the
-    connection closes when its operation ends, so a stalled agent fails the
-    key list, the operator-key check and a transfer rather than holding
-    them: the key list fails alone and the Apps still load, and an
-    operator-key check that the agent cannot answer refuses the key, which
-    may be the operator key. Template fetches keep the rule chosen by URL.
+    the key's fingerprint, so a manager can tell which one to fix. The
+    agent client makes one request at a time on a connection it cannot
+    close, so nothing reads between requests, and each request's deadline
+    bounds its own reply: an idle connection never times out. Listing the
+    keys, for the key list and the operator-key check, waits 15 seconds; a
+    manager waits on it, and Wyrwood fetches each Transit key's public key
+    in turn. A transfer's request waits 150 seconds, longer than Wyrwood's
+    longest sign timeout of 2 minutes, so Wyrwood answers or fails a
+    healthy signature first. The connection closes when its operation
+    ends, so a stalled agent never holds an operation past its deadline.
+    The key list fails alone and the Apps still load. An operator-key check
+    the agent cannot answer refuses the key, which may be the operator key,
+    and each transfer with a key refuses it when the configuration has
+    since excluded it, by the agent's listing. Template fetches keep the
+    rule chosen by URL. The URL forms and the credential each takes are a
+    shared table, docs/specifications/assets/workspace-api/credential-url-cases.json,
+    which the service's tests and the picker's both read.
   git-and-credentials: >-
     The workspace repository, a workspace's backup repository (see
     backup-repositories), is a backup, not a synchronized copy. The local

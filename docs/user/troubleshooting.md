@@ -89,9 +89,20 @@ with one of these:
 
 An Apply branch fetch fails with
 `fetching branch BRANCH from the workspace repository failed; nothing was changed`
-and no reason. To find it, open **Backups**, choose **Change credential** on
-the workspace's repository, keep its credential and choose **Validate**: the
-refusal names the credential and the reason, and Validate changes nothing.
+and no reason. To find it, open **Backups** and read the credential on the
+workspace's repository:
+
+- **The App's name, or the key's name with its fingerprint**: the
+  credential is still offered. Choose **Change credential**, keep it, and
+  choose **Validate**. The refusal gives the reason, and Validate changes
+  nothing.
+- **A key's fingerprint alone, "which the SSH agent no longer offers"**:
+  the key is gone from the agent. Change credential would offer another
+  key, so do not use it to diagnose. Offer the key again in Menagerie's
+  [Wyrwood policy](install.md#policy), or choose its replacement with
+  **Change credential** and give its public key to the Git host.
+- **An App "which is no longer configured"**: restore the App in
+  `github-apps`, or choose another with **Change credential**.
 
 A failed **Validate** names the credential the Git host refused, as in
 `Menagerie could not write to the repository with SSH key SHA256:…` or

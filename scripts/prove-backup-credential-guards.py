@@ -27,7 +27,8 @@ import subprocess
 ROOT = Path(__file__).resolve().parent.parent
 
 # Each test: a name, then the package and the one test it runs; a package
-# under web/ is a Vitest file, run from web/.
+# under web/ is a Vitest file, run from web/, and its name selects every
+# test whose name holds it, such as each row of the URL table.
 TESTS = {
     "key-alone": ("./backend/internal/backup", "TestAgentKeyAuthOffersOnlyTheRepositorysKey"),
     "fit": ("./backend/internal/gitcreds", "TestFitRefusesACredentialThatDoesNotFitTheURL"),
@@ -39,8 +40,12 @@ TESTS = {
     "stalled-transfer": ("./backend/internal/backup", "TestAStalledAgentFailsTheTransferInTime"),
     "stalled-discovery": ("./backend/internal/gitcreds", "TestAStalledAgentFailsDiscoveryAndTheFitInTime"),
     "write-check-names-credential": ("./backend/internal/backuprepos", "TestAFailedWriteCheckNamesItsCredential"),
-    "picker-kind": ("web/src/ui/CredentialPicker.test.ts", "reads a URL's kind as the service does"),
-    "picker-apps": ("web/src/ui/CredentialPicker.test.ts", "finds the Apps that serve an https URL as the service does"),
+    "wait-per-request": ("./backend/internal/backup", "TestAgentWaitBoundsEachRequestAlone"),
+    "saved-operator-key": ("./backend/internal/gitcreds", "TestAuthRefusesASavedKeyThatIsNowTheOperatorKey"),
+    "service-url-table": ("./backend/internal/gitcreds", "TestTheServiceReadsURLFormsAsThePickerDoes"),
+    "picker-url-table": ("web/test/contract/credential-urls.test.ts", "URL table: "),
+    "picker-kind": ("web/src/ui/credentialUrls.test.ts", "reads a URL's kind as the service does"),
+    "picker-apps": ("web/src/ui/credentialUrls.test.ts", "finds the Apps that serve an https URL as the service does"),
     "screen-url-forms": ("web/src/screens/BackupRepositories.test.tsx",
                          "offers credentials for the URL forms the service accepts"),
     "screen-apps": ("web/src/screens/BackupRepositories.test.tsx",
@@ -52,6 +57,7 @@ CREDS = "backend/internal/gitcreds/gitcreds.go"
 REGISTRY = "backend/internal/backuprepos/backuprepos.go"
 BACKUPS = "backend/internal/store/backups.go"
 PICKER = "web/src/ui/CredentialPicker.tsx"
+URLS = "web/src/ui/credentialUrls.ts"
 
 # Each mutant: a name, the source file, the text it replaces (exactly once),
 # its replacement, and the tests that must each fail.
@@ -70,8 +76,17 @@ MUTANTS = [
      "\t\tif false {\n\t\t\treturn &FitError{Message: err.Error() + \", so Menagerie",
      ["stalled-discovery"]),
     ("agent-request-waits", PUSH,
-     "\tif err := c.Conn.SetDeadline(time.Now().Add(c.wait)); err != nil {\n",
+     "\tif err := c.conn.SetDeadline(time.Now().Add(c.wait)); err != nil {\n",
      "\tif err := error(nil); err != nil {\n", ["stalled-transfer", "stalled-discovery"]),
+    ("agent-idle-between-requests", PUSH,
+     "\treturn agent.NewClient(&agentRequests{conn: conn, wait: wait}), release, nil\n",
+     "\treturn agent.NewClient(struct {\n\t\t*agentRequests\n\t\tio.Closer\n\t}{&agentRequests{conn: conn, wait: wait}, conn}), release, nil\n",
+     ["wait-per-request"]),
+    ("saved-key-refused-when-excluded", CREDS,
+     "\tif s.Excluded != \"\" && selects(s.Excluded, key) {\n", "\tif false {\n", ["saved-operator-key"]),
+    ("transfer-applies-the-refusal", PUSH,
+     "\t\t\t\tif err := refuse(k); err != nil {\n", "\t\t\t\tif err := refuse(k); err != nil && false {\n",
+     ["saved-operator-key"]),
     ("agent-closes-with-its-operation", PUSH,
      "\tstop := context.AfterFunc(ctx, func() { _ = conn.Close() })\n",
      "\tstop := func() bool { return false }\n", ["stalled-transfer"]),
@@ -101,13 +116,19 @@ MUTANTS = [
      "\t\treturn &CheckError{Check: CheckWrite, Message: \"Menagerie could not write to the repository\" + credentialPhrase(repo.Credential) + \": \"",
      "\t\treturn &CheckError{Check: CheckWrite, Message: \"Menagerie could not write to the repository\" + \": \"",
      ["write-check-names-credential"]),
-    ("picker-scp-like-without-user", PICKER,
+    ("picker-scp-like-without-user", URLS,
      "const scpLikePattern = /^(?:[^@]+@)?",
      "const scpLikePattern = /^(?:[^@]+@)", ["picker-kind", "screen-url-forms"]),
-    ("picker-default-port", PICKER,
-     "  if (u.host !== hostOf(server)) return false;\n",
-     "  if (!url.toLowerCase().startsWith(server.toLowerCase().replace(/\\/+$/, \"\") + \"/\")) return false;\n",
-     ["picker-apps", "screen-url-forms"]),
+    ("picker-default-port", URLS,
+     "    host: m[2]!.toLowerCase().replace(/:443$/, \"\"),\n",
+     "    host: m[2]!.toLowerCase(),\n", ["picker-url-table", "screen-url-forms"]),
+    ("picker-empty-fragment", URLS,
+     "  if (u.rest.startsWith(\"?\") || u.rest.length > 1) return false;\n",
+     "  if (u.rest.length > 0) return false;\n", ["picker-url-table"]),
+    ("picker-raw-path", URLS,
+     "    path: end < 0 ? tail : tail.slice(0, end),\n",
+     "    path: new URL(\"https://h\" + (end < 0 ? tail : tail.slice(0, end))).pathname,\n",
+     ["picker-url-table"]),
 ]
 
 
@@ -134,8 +155,8 @@ def outcome(package, test, output):
     """The marker of the one test's own pass and fail, not a build's."""
     output = re.sub(r"\x1b\[[0-9;]*m", "", output)
     if package.startswith("web/"):
-        return (re.search(r"Tests +1 passed", output) is not None,
-                re.search(r"Tests +1 failed", output) is not None)
+        failed = re.search(r"Tests +\d+ failed", output) is not None
+        return (not failed and re.search(r"Tests +\d+ passed", output) is not None, failed)
     return f"--- PASS: {test}" in output, f"--- FAIL: {test}" in output
 
 

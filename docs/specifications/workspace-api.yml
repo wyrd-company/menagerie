@@ -1145,7 +1145,8 @@ validation-criteria: >-
   comment, the write check with the credential given, a checked change
   storing nothing, a change landing only at the URL checked, the operator
   key left out of the list, an operator-key check the agent cannot answer
-  refused, each agent request's wait and the connection's close at its
-  operation's end, the write check's refusal naming its credential, and
-  the screen's Apps and keys for the URL forms the service accepts, and
-  requires its test to fail.
+  refused, each agent request's wait, a connection idle between requests,
+  the connection's close at its operation's end, a saved key refused once
+  excluded, the write check's refusal naming its credential, and the
+  screen's Apps and keys for each URL form of the shared table
+  `credential-url-cases.json`, and requires its test to fail.
