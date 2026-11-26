@@ -66,6 +66,7 @@ function stubApi(
               address: "gh:example-org/kit",
               currentVersion: "1.1.0",
               runnerImage: null,
+              credential: null,
               workspaces: ["sample"],
               newestVersion: "1.1.0",
               versions: [

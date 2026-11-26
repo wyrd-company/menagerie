@@ -376,6 +376,7 @@ export function createFixture(options: { distDir: string }) {
       address: t.address,
       currentVersion: t.currentVersion,
       runnerImage: t.runnerImage,
+      credential: credentialBody(t.credential ?? null),
       workspaces: world.workspaces.filter((w) => w.template === t.id).map((w) => w.name),
       newestVersion: found(t).at(-1) ?? null,
       versions: found(t).map((v) => ({
@@ -587,6 +588,31 @@ export function createFixture(options: { distDir: string }) {
       );
       return json(res, 200, { templates: sorted.map(templateBody) });
     }
+    // The Git URL a template address names, as the template service reads
+    // it: gh: on github.com, without the ref and folder; null for an
+    // address it refuses.
+    const templateURL = (address: string): string | null => {
+      if (!/^(gh:|git@|ssh:\/\/|https:\/\/)/.test(address) || /:\/\/[^/@]*:[^/@]*@/.test(address))
+        return null;
+      const bare = address.replace(/#.*$/, "").replace(/@[^@/#]*$/, "");
+      if (bare.startsWith("gh:")) return `https://github.com/${bare.slice(3)}`;
+      return bare.replace(/^https:\/\/[^/@]*@/, "https://");
+    };
+    if (pathname === "/api/templates/addresses" && method === "POST") {
+      const { address } = JSON.parse(await readBody(req)) as { address?: unknown };
+      if (typeof address !== "string")
+        return fail(res, 400, "invalid-request", "address is required");
+      const url = templateURL(address);
+      if (url === null)
+        return fail(
+          res,
+          422,
+          "template-check-failed",
+          "the address is refused: it must be gh:owner/repository, git@host:path, ssh:// or https://, with no password",
+          { check: "address" },
+        );
+      return json(res, 200, { url });
+    }
     if (pathname === "/api/templates" && method === "POST") {
       // The fixture's checks stand in for the template service's: an address
       // naming a repository below gives that refusal, by its check.
@@ -594,10 +620,18 @@ export function createFixture(options: { distDir: string }) {
         name?: unknown;
         address?: unknown;
         runnerImage?: unknown;
+        credential?: unknown;
         check?: unknown;
       };
       if (!validName(input.name) || typeof input.address !== "string")
         return fail(res, 400, "invalid-request", "name must be one line of 1 to 100 characters");
+      if (!validCredential(input.credential))
+        return fail(
+          res,
+          400,
+          "invalid-request",
+          "a credential names exactly one of githubApp and sshKey",
+        );
       if (input.check !== undefined && typeof input.check !== "boolean")
         return fail(res, 400, "invalid-request", "member check has the wrong type");
       const address = input.address;
@@ -608,6 +642,8 @@ export function createFixture(options: { distDir: string }) {
           "address",
           "the address is refused: it must be gh:owner/repository, git@host:path, ssh:// or https://, with no password",
         );
+      const refused = credentialRefusal(templateURL(address)!, input.credential);
+      if (refused) return check("credential", refused);
       if (address.includes("missing"))
         return check(
           "fetch",
@@ -646,6 +682,7 @@ export function createFixture(options: { distDir: string }) {
         address: base,
         currentVersion: "1.0.0",
         runnerImage: typeof input.runnerImage === "string" ? input.runnerImage : null,
+        credential: normalCredential(input.credential),
         versions: ["1.0.0"],
         found: ["1.0.0"],
         lastCheck: { at: new Date().toISOString(), failure: null },
@@ -655,9 +692,8 @@ export function createFixture(options: { distDir: string }) {
       world.templates.push(template);
       return json(res, 201, templateBody(template), { Location: `/api/templates/${id}` });
     }
-    const templateMatch = /^\/api\/templates\/([^/]+)(\/upgrades|\/version-checks)?$/.exec(
-      pathname,
-    );
+    const templateMatch =
+      /^\/api\/templates\/([^/]+)(\/upgrades|\/version-checks|\/credential)?$/.exec(pathname);
     if (templateMatch) {
       const template = world.templates.find((t) => t.id === decodeURIComponent(templateMatch[1]!));
       if (!template)
@@ -673,6 +709,25 @@ export function createFixture(options: { distDir: string }) {
         template.currentMoved = template.tagMoved === true;
         template.lastCheck = { at, failure: null };
         return json(res, 200, templateBody(template));
+      }
+      if (templateMatch[2] === "/credential" && method === "PUT") {
+        const { credential, check } = JSON.parse(await readBody(req)) as {
+          credential?: unknown;
+          check?: unknown;
+        };
+        if (credential == null || !validCredential(credential))
+          return fail(
+            res,
+            400,
+            "invalid-request",
+            "a credential names exactly one of githubApp and sshKey",
+          );
+        const refused = credentialRefusal(templateURL(template.address)!, credential);
+        if (refused)
+          return fail(res, 422, "template-check-failed", refused, { check: "credential" });
+        const changed = { ...template, credential: normalCredential(credential) };
+        if (check !== true) template.credential = changed.credential;
+        return json(res, 200, templateBody(changed));
       }
       if (templateMatch[2] === "/upgrades" && method === "POST") {
         const { version, check } = JSON.parse(await readBody(req)) as {

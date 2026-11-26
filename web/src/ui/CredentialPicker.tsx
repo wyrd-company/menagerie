@@ -44,22 +44,28 @@ export function effectiveChoice(
   return null;
 }
 
-/** One line that names a repository's credential, for its entry. */
+/**
+ * One line that names a repository's credential, for its entry. A
+ * template's entry has no URL, only its kind, so an App's server goes
+ * unchecked there.
+ */
 export function describeCredential(
   credential: BackupCredential | null,
-  url: string,
+  url: string | null,
   credentials: Credentials | null,
+  kind: "ssh" | "https" | null = url === null ? null : urlKind(url),
 ): string {
   if (credential === null) {
-    return urlKind(url) === "ssh"
-      ? "Credential chosen by URL: every key the SSH agent offers"
-      : "Credential chosen by URL: the first GitHub App on its server, if any";
+    if (kind === "ssh") return "Credential chosen by URL: every key the SSH agent offers";
+    if (kind === "https")
+      return "Credential chosen by URL: the first GitHub App on its server, if any";
+    return "Credential chosen by URL: the first GitHub App on its server, or every key the SSH agent offers";
   }
   if ("githubApp" in credential) {
     if (!credentials) return `GitHub App ${credential.githubApp}`;
     const app = credentials.githubApps.find((a) => sameApp(a.name, credential.githubApp));
     if (!app) return `GitHub App ${credential.githubApp}, which is no longer configured`;
-    if (servingApps(url, [app]).length === 0)
+    if (url !== null && servingApps(url, [app]).length === 0)
       return `GitHub App ${app.name}, which no longer serves this repository's server`;
     return `GitHub App ${app.name}`;
   }
@@ -72,10 +78,14 @@ export function describeCredential(
 
 const keyLabel = (k: SSHKeyChoice) => `${k.name || "(unnamed)"} · ${k.fingerprint}`;
 
+/** What a credential is for: a backup repository Menagerie writes to, or a template it reads. */
+export type CredentialPurpose = "backup" | "template";
+
 /**
- * The credential field of a backup repository form: the agent's keys for
- * an SSH URL, with the chosen key's public key to give the Git host, and
- * the Apps that serve an https URL.
+ * The credential field of a backup repository or template form: the
+ * agent's keys for an SSH URL, with the chosen key's public key to give
+ * the Git host, and the Apps that serve an https URL. A template form
+ * gives the URL its address names, and why that could not be read.
  */
 export function CredentialPicker({
   id,
@@ -84,6 +94,8 @@ export function CredentialPicker({
   loadError,
   value,
   onChange,
+  purpose = "backup",
+  urlError = null,
 }: {
   id: string;
   url: string;
@@ -91,6 +103,8 @@ export function CredentialPicker({
   loadError: string | null;
   value: BackupCredentialChoice | null;
   onChange: (choice: BackupCredentialChoice | null) => void;
+  purpose?: CredentialPurpose;
+  urlError?: string | null;
 }) {
   const { kind, keys, apps } = choicesFor(url, credentials);
   const describedBy = `${id}-desc`;
@@ -100,7 +114,14 @@ export function CredentialPicker({
   } else if (credentials === null) {
     body = <p className="muted">Reading credentials…</p>;
   } else if (kind === null) {
-    body = <p className="muted">Give the Git URL first.</p>;
+    body =
+      purpose === "template" ? (
+        <p className={urlError ? "form-error" : "muted"}>
+          {urlError ? `The address could not be read: ${urlError}` : "Give the address first."}
+        </p>
+      ) : (
+        <p className="muted">Give the Git URL first.</p>
+      );
   } else if (kind === "ssh") {
     body =
       keys.length === 0 ? (
@@ -123,7 +144,9 @@ export function CredentialPicker({
               </option>
             ))}
           </select>
-          {value && "sshKey" in value ? <PublicKey publicKey={value.sshKey} /> : null}
+          {value && "sshKey" in value ? (
+            <PublicKey publicKey={value.sshKey} purpose={purpose} />
+          ) : null}
         </>
       );
   } else {
@@ -154,8 +177,9 @@ export function CredentialPicker({
         <span className="field-title">Credential</span>
       </label>
       <p className="field-description" id={describedBy}>
-        Menagerie offers the repository this credential alone: an SSH key from Wyrwood&apos;s agent
-        for an SSH URL, or a GitHub App that serves an https URL.
+        {purpose === "template"
+          ? "Every Git operation on the template's repository uses this credential alone: an SSH key from Wyrwood's agent for an SSH address, or a GitHub App that serves an https address."
+          : "Menagerie offers the repository this credential alone: an SSH key from Wyrwood's agent for an SSH URL, or a GitHub App that serves an https URL."}
       </p>
       {body}
     </div>
@@ -163,7 +187,7 @@ export function CredentialPicker({
 }
 
 /** A key's public key, ready to give the Git host. */
-function PublicKey({ publicKey }: { publicKey: string }) {
+function PublicKey({ publicKey, purpose }: { publicKey: string; purpose: CredentialPurpose }) {
   const [copied, setCopied] = useState<string | null>(null);
   // The clipboard needs a secure context. Without one the key stays selectable.
   const copy = () => {
@@ -175,8 +199,9 @@ function PublicKey({ publicKey }: { publicKey: string }) {
   return (
     <div className="credential-key" role="group" aria-label="Public key">
       <p>
-        Add this public key to the repository as a deploy key with write access, or to an account
-        that can write to it, before you validate.
+        {purpose === "template"
+          ? "Add this public key to the template's repository as a deploy key, or to an account that can read it, before you validate."
+          : "Add this public key to the repository as a deploy key with write access, or to an account that can write to it, before you validate."}
       </p>
       <code className="mono">{publicKey}</code>
       <button type="button" onClick={copy}>

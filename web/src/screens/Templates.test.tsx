@@ -18,6 +18,7 @@ const kit: Template = {
   address: "https://git.example.invalid/example-org/kit",
   currentVersion: "1.0.0",
   runnerImage: null,
+  credential: null,
   workspaces: ["alpha"],
   newestVersion: "1.3.0",
   versions: found("1.0.0", "1.1.0", "1.2.0", "1.3.0"),
@@ -89,6 +90,115 @@ const refused = (check: string, message: string) =>
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+const agentKey = {
+  name: "sample-template-key",
+  fingerprint: "SHA256:sampleTemplateKey",
+  publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISampleTemplateKey",
+};
+const credentials = () =>
+  Response.json({
+    githubApps: [{ name: "example-org", server: "https://git.example.invalid" }],
+    sshKeys: [
+      agentKey,
+      {
+        ...agentKey,
+        name: "sample-other",
+        publicKey: "ssh-ed25519 BBBB",
+        fingerprint: "SHA256:other",
+      },
+    ],
+    sshAgent: null,
+  });
+
+describe("a template's credential", () => {
+  it("is chosen from those that fit the URL the address names, and sent with the registration", async () => {
+    const tools: Template = { ...kit, id: "tools", name: "Tools", workspaces: [] };
+    const calls = stubApi({
+      "GET /api/credentials": credentials,
+      "POST /api/templates/addresses": () =>
+        Response.json({ url: "git@git.example.invalid:example-org/tools.git" }),
+      "POST /api/templates": (body) =>
+        body?.check ? Response.json(tools) : Response.json(tools, { status: 201 }),
+    });
+    render(<TemplatesScreen />);
+    await userEvent.click(await screen.findByRole("button", { name: "Register template" }));
+    expect(screen.getByText("Give the address first.")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Display name"), "Tools");
+    await userEvent.type(
+      screen.getByLabelText("Address"),
+      "git@git.example.invalid:example-org/tools.git",
+    );
+    const picker = await screen.findByLabelText("Credential");
+    // An SSH URL offers the agent's keys, and no App.
+    expect(
+      within(picker)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual([
+      "Choose an SSH key…",
+      "sample-template-key · SHA256:sampleTemplateKey",
+      "sample-other · SHA256:other",
+    ]);
+    await userEvent.selectOptions(picker, agentKey.publicKey);
+    expect(screen.getByRole("group", { name: "Public key" })).toHaveTextContent(
+      "to an account that can read it",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("heading", { name: "Tools" })).toBeInTheDocument();
+    const address = "git@git.example.invalid:example-org/tools.git";
+    expect(
+      calls.filter((c) => c.method === "POST" && c.path === "/api/templates").map((c) => c.body),
+    ).toEqual([
+      { name: "Tools", address, credential: { sshKey: agentKey.publicKey }, check: true },
+      { name: "Tools", address, credential: { sshKey: agentKey.publicKey } },
+    ]);
+  });
+
+  it("says why the address could not be read", async () => {
+    stubApi({
+      "GET /api/credentials": credentials,
+      "POST /api/templates/addresses": () => refused("address", "the address is refused: no"),
+    });
+    render(<TemplatesScreen />);
+    await userEvent.click(await screen.findByRole("button", { name: "Register template" }));
+    await userEvent.type(screen.getByLabelText("Address"), "./kit");
+    expect(
+      await screen.findByText("The address could not be read: the address is refused: no"),
+    ).toBeInTheDocument();
+  });
+
+  it("is shown on its entry, and changes only after a Validate with it passes", async () => {
+    const calls = stubApi({
+      "GET /api/credentials": credentials,
+      "POST /api/templates/addresses": () => Response.json({ url: kit.address }),
+      "PUT /api/templates/sample-kit/credential": () =>
+        Response.json({ ...kit, credential: { githubApp: "example-org" } }),
+    });
+    render(<TemplatesScreen />);
+    expect(
+      await screen.findByText(
+        "Credential chosen by URL: the first GitHub App on its server, if any",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Change credential" }));
+    const form = screen.getByRole("form", { name: "Change the credential of Sample kit" });
+    // The only App that serves the URL is chosen.
+    expect(await within(form).findByLabelText("Credential")).toHaveValue("example-org");
+    expect(within(form).getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.click(within(form).getByRole("button", { name: "Validate" }));
+    expect(
+      await within(form).findByText("Checks passed · version 1.0.0 fetches with this credential"),
+    ).toBeInTheDocument();
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("GitHub App example-org")).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "PUT").map((c) => c.body)).toEqual([
+      { credential: { githubApp: "example-org" }, check: true },
+      { credential: { githubApp: "example-org" } },
+    ]);
+  });
 });
 
 describe("the templates screen", () => {

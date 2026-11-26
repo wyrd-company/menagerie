@@ -298,28 +298,77 @@ describe("the fixture server keeps the workspace API contract", () => {
 
   it("registers, upgrades, edits and removes templates", async () => {
     await post("/__fixture/reset", {});
+    const credential = { githubApp: "example-org" };
+    expect(
+      await expectResponse(
+        "/api/templates/addresses",
+        "post",
+        await post("/api/templates/addresses", {
+          address: "https://git.example.test/example-org/sample-tools@1.0.0",
+        }),
+      ),
+    ).toEqual({ url: "https://git.example.test/example-org/sample-tools" });
+    expect(
+      await expectResponse(
+        "/api/templates/addresses",
+        "post",
+        await post("/api/templates/addresses", { address: "/srv/templates/kit" }),
+      ),
+    ).toMatchObject({ error: { kind: "template-check-failed", check: "address" } });
     const registered = await post("/api/templates", {
       name: "Sample tools",
       address: "https://git.example.test/example-org/sample-tools@1.0.0",
       runnerImage: "alpine:3.22",
+      credential,
     });
     expect(registered.headers.get("location")).toBe("/api/templates/sample-tools");
     expect(await expectResponse("/api/templates", "post", registered)).toMatchObject({
       id: "sample-tools",
       address: "https://git.example.test/example-org/sample-tools",
       currentVersion: "1.0.0",
+      credential,
     });
-    for (const [address, check] of [
-      ["/srv/templates/kit", "address"],
-      ["https://git.example.test/example-org/bare", "definition"],
+    for (const [address, check, body] of [
+      ["/srv/templates/kit", "address", { credential }],
+      ["https://git.example.test/example-org/kit", "credential", {}],
+      ["https://git.example.test/example-org/bare", "definition", { credential }],
     ] as const) {
       const refused = await expectResponse(
         "/api/templates",
         "post",
-        await post("/api/templates", { name: "Kit", address }),
+        await post("/api/templates", { name: "Kit", address, ...body }),
       );
       expect(refused).toMatchObject({ error: { kind: "template-check-failed", check } });
     }
+    const change = "/api/templates/{id}/credential";
+    const put = (path: string, body: unknown) =>
+      call(path, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const key = { sshKey: "ssh-ed25519 AAAA" };
+    expect(
+      await expectResponse(
+        change,
+        "put",
+        await put("/api/templates/sample-tools/credential", { credential: key }),
+      ),
+    ).toMatchObject({ error: { kind: "template-check-failed", check: "credential" } });
+    expect(
+      await expectResponse(
+        change,
+        "put",
+        await put("/api/templates/sample-tools/credential", { credential, check: true }),
+      ),
+    ).toMatchObject({ credential });
+    expect(
+      await expectResponse(
+        change,
+        "put",
+        await put("/api/templates/absent/credential", { credential }),
+      ),
+    ).toMatchObject({ error: { kind: "unknown-template" } });
     expect(
       await expectResponse(
         "/api/templates",
@@ -327,6 +376,7 @@ describe("the fixture server keeps the workspace API contract", () => {
         await post("/api/templates", {
           name: "Again",
           address: "https://git.example.test/example-org/sample-tools",
+          credential,
         }),
       ),
     ).toMatchObject({ error: { kind: "template-exists" } });
