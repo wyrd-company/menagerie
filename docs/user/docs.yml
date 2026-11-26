@@ -20,7 +20,7 @@ products:
   menagerie:
     name: menagerie
     version: 0.5.1
-    docs-version: 0.2.7
+    docs-version: 0.2.8
     tagline: Manage workspaces and fleets of development containers through a web UI.
     blurb: >-
       One container that creates workspaces from Toha templates through their
