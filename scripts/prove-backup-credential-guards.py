@@ -11,8 +11,10 @@ its URL (an SSH URL with no key, an App that does not serve the URL, the
 operator key), records a key without its comment, and checks writing with
 the credential given, not every key; a checked change stores nothing; a
 change lands only at the URL it checked; the key list leaves out the
-operator key; the backups screen offers an https URL only the Apps that
-serve it. Each mutation changes one guard in place, and its tests must
+operator key; a transfer waits for a slow agent and refuses its key by
+the listing that gives its signer; the backups screen offers an https URL
+only the Apps that serve it, reads hosts as Go does, matches App names in
+any case and never swaps a saved credential for another. Each mutation changes one guard in place, and its tests must
 fail; the source is restored even on interruption. The report starts
 failed and passes only after every baseline test passes and every mutant
 compiles and fails each of its tests.
@@ -41,9 +43,14 @@ TESTS = {
     "stalled-discovery": ("./backend/internal/gitcreds", "TestAStalledAgentFailsDiscoveryAndTheFitInTime"),
     "write-check-names-credential": ("./backend/internal/backuprepos", "TestAFailedWriteCheckNamesItsCredential"),
     "wait-per-request": ("./backend/internal/backup", "TestAgentWaitBoundsEachRequestAlone"),
+    "slow-transfer": ("./backend/internal/backup", "TestATransferWaitsForASlowAgent"),
+    "one-listing": ("./backend/internal/backup", "TestTheRefusalChecksTheListingThatGivesTheSigner"),
     "saved-operator-key": ("./backend/internal/gitcreds", "TestAuthRefusesASavedKeyThatIsNowTheOperatorKey"),
     "service-url-table": ("./backend/internal/gitcreds", "TestTheServiceReadsURLFormsAsThePickerDoes"),
     "picker-url-table": ("web/test/contract/credential-urls.test.ts", "URL table: "),
+    "picker-app-case": ("web/src/ui/CredentialPicker.test.ts", "matches a saved App's name in any case"),
+    "picker-app-moved": ("web/src/ui/CredentialPicker.test.ts", "says when a saved App no longer serves the repository"),
+    "picker-key-kept": ("web/src/ui/CredentialPicker.test.ts", "does not swap a saved key"),
     "picker-kind": ("web/src/ui/credentialUrls.test.ts", "reads a URL's kind as the service does"),
     "picker-apps": ("web/src/ui/credentialUrls.test.ts", "finds the Apps that serve an https URL as the service does"),
     "screen-url-forms": ("web/src/screens/BackupRepositories.test.tsx",
@@ -76,8 +83,23 @@ MUTANTS = [
      "\t\tif false {\n\t\t\treturn &FitError{Message: err.Error() + \", so Menagerie",
      ["stalled-discovery"]),
     ("agent-request-waits", PUSH,
-     "\tif err := c.conn.SetDeadline(time.Now().Add(c.wait)); err != nil {\n",
-     "\tif err := error(nil); err != nil {\n", ["stalled-transfer", "stalled-discovery"]),
+     "\t\tif err := c.conn.SetDeadline(time.Now().Add(c.wait)); err != nil {\n",
+     "\t\tif err := error(nil); err != nil {\n", ["stalled-discovery"]),
+    ("transfer-has-no-wait", PUSH,
+     "\t\tkeyring, release, err := DialAgent(ctx, socket, 0)\n",
+     "\t\tkeyring, release, err := DialAgent(ctx, socket, time.Second)\n", ["slow-transfer"]),
+    ("refusal-reads-the-signers-listing", PUSH,
+     "\tsigners, err := keyring.Signers()\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"ssh agent: %w\", err)\n\t}\n"
+     "\tfor _, signer := range signers {\n\t\tif !bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {\n"
+     "\t\t\tcontinue\n\t\t}\n\t\tif refuse != nil {\n",
+     "\tfirst, _ := keyring.List()\n"
+     "\tsigners, err := keyring.Signers()\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"ssh agent: %w\", err)\n\t}\n"
+     "\tfor _, signer := range signers {\n\t\tif !bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {\n"
+     "\t\t\tcontinue\n\t\t}\n"
+     "\t\tif refuse != nil && func() bool {\n\t\t\tfor _, k := range first {\n"
+     "\t\t\t\tif bytes.Equal(k.Marshal(), wanted.Marshal()) {\n\t\t\t\t\treturn true\n\t\t\t\t}\n"
+     "\t\t\t}\n\t\t\treturn false\n\t\t}() {\n",
+     ["one-listing"]),
     ("agent-idle-between-requests", PUSH,
      "\treturn agent.NewClient(&agentRequests{conn: conn, wait: wait}), release, nil\n",
      "\treturn agent.NewClient(struct {\n\t\t*agentRequests\n\t\tio.Closer\n\t}{&agentRequests{conn: conn, wait: wait}, conn}), release, nil\n",
@@ -85,7 +107,7 @@ MUTANTS = [
     ("saved-key-refused-when-excluded", CREDS,
      "\tif s.Excluded != \"\" && selects(s.Excluded, key) {\n", "\tif false {\n", ["saved-operator-key"]),
     ("transfer-applies-the-refusal", PUSH,
-     "\t\t\t\tif err := refuse(k); err != nil {\n", "\t\t\t\tif err := refuse(k); err != nil && false {\n",
+     "\t\t\tif err := refuse(listed); err != nil {\n", "\t\t\tif err := refuse(listed); err != nil && false {\n",
      ["saved-operator-key"]),
     ("agent-closes-with-its-operation", PUSH,
      "\tstop := context.AfterFunc(ctx, func() { _ = conn.Close() })\n",
@@ -120,8 +142,24 @@ MUTANTS = [
      "const scpLikePattern = /^(?:[^@]+@)?",
      "const scpLikePattern = /^(?:[^@]+@)", ["picker-kind", "screen-url-forms"]),
     ("picker-default-port", URLS,
-     "    host: m[2]!.toLowerCase().replace(/:443$/, \"\"),\n",
-     "    host: m[2]!.toLowerCase(),\n", ["picker-url-table", "screen-url-forms"]),
+     "    host: host.toLowerCase().replace(/:443$/, \"\"),\n",
+     "    host: host.toLowerCase(),\n", ["picker-url-table", "screen-url-forms"]),
+    ("picker-unescaped-host", URLS,
+     "  const host = decodeHost(m[2]!);\n", "  const host = m[2]!;\n", ["picker-url-table"]),
+    ("picker-kind-refuses-a-bad-host", URLS,
+     "    return decodeHost(hostOf(u)) === null ? null : scheme;\n", "    return scheme;\n",
+     ["picker-url-table"]),
+    ("picker-app-names-in-any-case", PICKER,
+     "const sameApp = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();\n",
+     "const sameApp = (a: string, b: string) => a === b;\n", ["picker-app-case"]),
+    ("picker-keeps-a-saved-app", PICKER,
+     "    return app ? { githubApp: app.name } : null;\n",
+     "    if (app) return { githubApp: app.name };\n", ["picker-app-moved"]),
+    ("picker-keeps-a-saved-key", PICKER,
+     "    return keys.some((k) => k.publicKey === chosen.sshKey) ? chosen : null;\n",
+     "    if (keys.some((k) => k.publicKey === chosen.sshKey)) return chosen;\n", ["picker-key-kept"]),
+    ("picker-says-an-app-moved", PICKER,
+     "    if (servingApps(url, [app]).length === 0)\n", "    if (false)\n", ["picker-app-moved"]),
     ("picker-empty-fragment", URLS,
      "  if (u.rest.startsWith(\"?\") || u.rest.length > 1) return false;\n",
      "  if (u.rest.length > 0) return false;\n", ["picker-url-table"]),

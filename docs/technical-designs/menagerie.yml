@@ -1273,7 +1273,9 @@ proposed-design:
     Transit key's name, their fingerprint and their public key, so the
     Wyrwood policy stays the one place that grants a key. A transfer with
     a key dials the agent, finds that key among its signers, and offers the
-    Git host that key alone; an agent that no longer offers it fails the
+    Git host that key alone; one listing gives both the signer and the key
+    the operator-key check reads, so the agent cannot sign with a key the
+    check did not see. An agent that no longer offers it fails the
     transfer naming its fingerprint, before any connection. A transfer with
     an App sends that App's contents write token, and fails, naming the
     App, a URL the App does not serve or an App no longer configured. A
@@ -1282,7 +1284,11 @@ proposed-design:
     and every key the agent offers for an SSH URL. A manager can change a
     repository's credential; the `credential` and `write` checks run with
     the new one, and it is recorded only after they pass, while the
-    repository is still registered at the URL checked. A failed write
+    repository is still registered at the URL checked. The form starts
+    from the saved credential and never swaps it for another unasked: a
+    saved key the agent no longer offers, or a saved App that is gone or
+    no longer serves the URL, leaves the choice to the manager. App names
+    match in any case, as the configuration compares them. A failed write
     check names the credential the Git host refused, by the App's name or
     the key's fingerprint, so a manager can tell which one to fix. The
     agent client makes one request at a time on a connection it cannot
@@ -1290,10 +1296,14 @@ proposed-design:
     bounds its own reply: an idle connection never times out. Listing the
     keys, for the key list and the operator-key check, waits 15 seconds; a
     manager waits on it, and Wyrwood fetches each Transit key's public key
-    in turn. A transfer's request waits 150 seconds, longer than Wyrwood's
-    longest sign timeout of 2 minutes, so Wyrwood answers or fails a
-    healthy signature first. The connection closes when its operation
-    ends, so a stalled agent never holds an operation past its deadline.
+    in turn. A transfer's requests have no wait of their own: Menagerie
+    cannot tell a stalled agent from a slow one, and Wyrwood looks up every
+    identity it offers in OpenBao, each within its own timeout, before it
+    signs, so a healthy signature can take minutes. The connection closes
+    when its operation ends, so a stalled agent holds an operation only
+    until its job's time limit or a cancel, as
+    job-without-timeout-blocks-workspace describes for every transfer; a
+    registration's write check ends within its own minute.
     The key list fails alone and the Apps still load. An operator-key check
     the agent cannot answer refuses the key, which may be the operator key,
     and each transfer with a key refuses it when the configuration has
