@@ -113,9 +113,17 @@ func (s *Source) Keys(ctx context.Context) ([]Key, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []Key{}
+	// The agent may list one key under several names: leave out every
+	// entry of a key the selection names under any of them.
+	excluded := map[string]bool{}
 	for _, k := range listed {
 		if s.Excluded != "" && selects(s.Excluded, k) {
+			excluded[string(k.Marshal())] = true
+		}
+	}
+	out := []Key{}
+	for _, k := range listed {
+		if excluded[string(k.Marshal())] {
 			continue
 		}
 		out = append(out, Key{Name: k.Comment, Fingerprint: ssh.FingerprintSHA256(k), PublicKey: authorized(k)})

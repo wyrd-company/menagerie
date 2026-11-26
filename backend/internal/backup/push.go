@@ -283,14 +283,17 @@ func (c *agentRequests) Read(p []byte) (int, error) { return c.conn.Read(p) }
 // agentSigner is the signer of keyring's key wanted, or an error naming
 // wanted's fingerprint when keyring does not offer it or refuse, if not
 // nil, gives an error for the key as keyring lists it. One listing gives
-// both the signer and the key refuse checks, so the agent cannot offer a
-// key to the transfer that it did not offer to the check.
+// both the signer and the keys refuse checks, so the agent cannot offer a
+// key to the transfer that it did not offer to the check, and refuse
+// checks every entry the listing gives for the key: an agent may list one
+// key under several names.
 func agentSigner(keyring agent.ExtendedAgent, wanted ssh.PublicKey, refuse func(*agent.Key) error) (ssh.Signer, error) {
 	fingerprint := ssh.FingerprintSHA256(wanted)
 	signers, err := keyring.Signers()
 	if err != nil {
 		return nil, fmt.Errorf("ssh agent: %w", err)
 	}
+	var found ssh.Signer
 	for _, signer := range signers {
 		if !bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {
 			continue
@@ -306,9 +309,14 @@ func agentSigner(keyring agent.ExtendedAgent, wanted ssh.PublicKey, refuse func(
 				return nil, fmt.Errorf("ssh agent: the repository's key %s %w", fingerprint, err)
 			}
 		}
-		return signer, nil
+		if found == nil {
+			found = signer
+		}
 	}
-	return nil, fmt.Errorf("ssh agent: the agent does not offer the repository's key %s; check that Menagerie's Wyrwood policy offers it, or change the repository's credential", fingerprint)
+	if found == nil {
+		return nil, fmt.Errorf("ssh agent: the agent does not offer the repository's key %s; check that Menagerie's Wyrwood policy offers it, or change the repository's credential", fingerprint)
+	}
+	return found, nil
 }
 
 // CredentialsError reports that tokens had no credentials for the

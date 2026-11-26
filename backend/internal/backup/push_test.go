@@ -287,6 +287,32 @@ func (a changingAgent) List() ([]*agent.Key, error) {
 	return shown, nil
 }
 
+// The refusal checks every name the listing gives the key: an alias listed
+// first does not hide the operator key's own name.
+func TestTheRefusalChecksEveryNameOfTheKey(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	key := sampleKey(t, keyring, "sample-operator-key")
+	socket := f.ServeAgent(t, backuptest.AliasAgent(keyring, key, "sample-alias"))
+	refuse := func(k *agent.Key) error {
+		if k.Comment == "sample-operator-key" {
+			return errors.New("is the operator key")
+		}
+		return nil
+	}
+	_, release, err := AgentKeyAuthRefusing(socket, backuptest.AuthorizedKey(key), refuse)(context.Background(), "ssh://git@git.example.invalid/example-org/backups.git")
+	if err == nil {
+		release()
+		t.Fatal("the transfer signed with the operator key under another name")
+	}
+	// A key with no refused name still signs under its alias.
+	_, release, err = AgentKeyAuthRefusing(socket, backuptest.AuthorizedKey(key), func(*agent.Key) error { return nil })(context.Background(), "ssh://git@git.example.invalid/example-org/backups.git")
+	if err != nil {
+		t.Fatalf("a key with an alias: %v", err)
+	}
+	release()
+}
+
 // The refusal checks the key the transfer signs with, from the same
 // listing: a key the first listing omits is not offered by a later one.
 func TestTheRefusalChecksTheListingThatGivesTheSigner(t *testing.T) {

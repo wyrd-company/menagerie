@@ -320,3 +320,23 @@ func (f *Host) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 		return
 	}
 }
+
+// AliasAgent is keyring listing key a second time, first, under the name
+// alias, as Wyrwood lists one Transit key that two identities name.
+func AliasAgent(keyring agent.Agent, key ssh.PublicKey, alias string) agent.Agent {
+	return aliasAgent{keyring, key, alias}
+}
+
+type aliasAgent struct {
+	agent.Agent
+	key   ssh.PublicKey
+	alias string
+}
+
+func (a aliasAgent) List() ([]*agent.Key, error) {
+	keys, err := a.Agent.List()
+	if err != nil {
+		return nil, err
+	}
+	return append([]*agent.Key{{Format: a.key.Type(), Blob: a.key.Marshal(), Comment: a.alias}}, keys...), nil
+}
