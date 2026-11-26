@@ -137,7 +137,9 @@ applied record, `.toha.json`, names it.
 Each template's row shows its credential. **Change credential** chooses
 another, in the same way as a backup repository's: it starts from the saved
 credential, **Validate** fetches the current version with the new one, and
-**Save** records it only after that passes. A template registered by an
+**Save** records it only after that passes. Saving also records that fetch
+as the template's version check, so a check that failed with the earlier
+credential no longer shows. A template registered by an
 earlier release, or imported from the `templates` key, shows **Credential
 chosen by URL**: it uses the first App whose server holds an `https`
 address, or every key the agent offers for an SSH address, as before, until

@@ -1353,7 +1353,10 @@ proposed-design:
     removed, and its next credential change refuses that App. A change of a template's
     credential is saved only after its current version, at the commit the
     listing finds for its tag, passes the fetch, read and definition checks
-    with it.
+    with it. Its listing is then recorded as the template's version check,
+    so a failed check with the earlier credential no longer shows as the
+    new one's, and a version check that started with the earlier credential
+    records nothing when it ends.
   git-and-credentials: >-
     The workspace repository, a workspace's backup repository (see
     backup-repositories), is a backup, not a synchronized copy. The local
