@@ -416,7 +416,8 @@ func TestTheWorkspaceListShowsAppliedVersionsAndUpgrades(t *testing.T) {
 // acceptAll is a credential check that every credential passes.
 type acceptAll struct{}
 
-func (acceptAll) Fit(context.Context, string, store.Credential) error { return nil }
+func (acceptAll) Fit(context.Context, string, store.Credential) error          { return nil }
+func (acceptAll) Authenticate(context.Context, string, store.Credential) error { return nil }
 
 func TestATemplatesCredentialIsRegisteredShownAndChanged(t *testing.T) {
 	f, _ := templateFixture(t)

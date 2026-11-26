@@ -324,3 +324,45 @@ func TestTheServiceReadsURLFormsAsThePickerDoes(t *testing.T) {
 		}
 	}
 }
+
+// Authenticate mints from the named App alone, refusing one GitHub refuses
+// by its fixed reason, and asks nothing of a key or the zero credential.
+func TestAuthenticateMintsFromTheNamedApp(t *testing.T) {
+	first := sampleApp(t, "first-org")
+	minted := 0
+	github := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		minted++
+		http.Error(w, `{"message":"sample refusal"}`, http.StatusUnprocessableEntity)
+	}))
+	t.Cleanup(github.Close)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := githubapp.New(githubapp.Options{AppID: 1, Signer: keySigner{key}, Installations: map[string]int64{"example-org": 2}, Server: github.URL, Client: github.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := githubapp.App{Name: "refused-org", Server: github.URL, Minter: m}
+	s := &Source{Apps: githubapp.Apps{first, refused}}
+	ctx := context.Background()
+	if err := s.Authenticate(ctx, first.Server+"/example-org/kit.git", store.Credential{App: "first-org"}); err != nil {
+		t.Fatalf("an App that mints: %v", err)
+	}
+	err = s.Authenticate(ctx, github.URL+"/example-org/kit.git", store.Credential{App: "refused-org"})
+	var fit *FitError
+	if !errors.As(err, &fit) || !strings.HasPrefix(err.Error(), "GitHub App refused-org could not get a token for the repository: ") || strings.Contains(err.Error(), "sample refusal") || minted != 1 {
+		t.Fatalf("an App GitHub refuses: %v, %d token requests", err, minted)
+	}
+	if err := s.Authenticate(ctx, github.URL+"/example-org/kit.git", store.Credential{App: "absent-org"}); !errors.As(err, &fit) || !strings.Contains(err.Error(), "no GitHub App named absent-org") {
+		t.Fatalf("an App not configured: %v", err)
+	}
+	for _, c := range []store.Credential{{}, {Key: "ssh-ed25519 AAAA"}} {
+		if err := s.Authenticate(ctx, "git@git.example.invalid:example-org/kit.git", c); err != nil {
+			t.Fatalf("%+v: %v", c, err)
+		}
+	}
+	if minted != 1 {
+		t.Fatalf("token requests %d", minted)
+	}
+}

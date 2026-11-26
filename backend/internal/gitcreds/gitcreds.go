@@ -271,6 +271,39 @@ func (s *Source) Fit(ctx context.Context, url string, c store.Credential) error 
 	return nil
 }
 
+// Authenticate checks that c authenticates to url before a check depends
+// on it: a GitHub App mints a read token for the repository, so an App
+// that cannot sign, or whose installation does not cover the repository,
+// fails even where the Git host asks no credential, as a public
+// repository's does not. An SSH key, and the zero credential, need no
+// such check: an SSH host always asks for a key. c fits url (Fit). A
+// *FitError refuses it, naming the App and GitHub's fixed reason.
+func (s *Source) Authenticate(ctx context.Context, url string, c store.Credential) error {
+	if c.App == "" {
+		return nil
+	}
+	app, ok := s.Apps.Named(c.App)
+	if !ok {
+		return &FitError{Message: fmt.Sprintf("no GitHub App named %s is configured", c.App)}
+	}
+	repo, ok := app.Repository(url)
+	if !ok {
+		return &FitError{Message: fmt.Sprintf("GitHub App %s does not serve the URL", app.Name)}
+	}
+	if _, err := app.Token(ctx, repo, githubapp.Read); err != nil {
+		reason := "the token could not be minted"
+		var e *githubapp.Error
+		if errors.As(err, &e) {
+			reason = e.Reason
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &FitError{Message: fmt.Sprintf("GitHub App %s could not get a token for the repository: %s", app.Name, reason)}
+	}
+	return nil
+}
+
 // Auth is the authentication of every transfer with c: only the App it
 // names, only the key it names, or for the zero credential the earlier
 // rule chosen by URL.

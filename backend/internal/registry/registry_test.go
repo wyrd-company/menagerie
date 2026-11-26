@@ -541,16 +541,26 @@ func TestAnUpgradeRefusesAnOlderVersionBeforeAnyCheck(t *testing.T) {
 	}
 }
 
-// fakeFit plays the credential checks: it records each and refuses the
-// credentials of refuse.
+// fakeFit plays the credential checks: it records each, refuses the
+// credentials of refuse, and fails to authenticate the Apps of
+// unauthenticated.
 type fakeFit struct {
-	fits   []string
-	refuse map[store.Credential]string
+	fits            []string
+	refuse          map[store.Credential]string
+	unauthenticated map[string]string
 }
 
 func (f *fakeFit) Fit(_ context.Context, url string, c store.Credential) error {
 	f.fits = append(f.fits, url+" "+c.App+c.Key)
 	if message, ok := f.refuse[c]; ok {
+		return &gitcreds.FitError{Message: message}
+	}
+	return nil
+}
+
+func (f *fakeFit) Authenticate(_ context.Context, url string, c store.Credential) error {
+	f.fits = append(f.fits, "authenticate "+url+" "+c.App+c.Key)
+	if message, ok := f.unauthenticated[c.App]; ok {
 		return &gitcreds.FitError{Message: message}
 	}
 	return nil
@@ -571,7 +581,7 @@ func TestATemplateFetchesWithItsCredential(t *testing.T) {
 	if err != nil || tpl.Credential != app {
 		t.Fatalf("%+v %v", tpl, err)
 	}
-	if want := []string{kit + " sample-org"}; !reflect.DeepEqual(fit.fits, want) {
+	if want := []string{kit + " sample-org", "authenticate " + kit + " sample-org"}; !reflect.DeepEqual(fit.fits, want) {
 		t.Fatalf("fits %v", fit.fits)
 	}
 	if _, err := r.Upgrade(ctx, tpl.ID, "1.2.0", false); err != nil {
@@ -599,6 +609,18 @@ func TestATemplateFetchesWithItsCredential(t *testing.T) {
 	if check.Check != CheckCredential {
 		t.Fatalf("%+v", check)
 	}
+	// An App that fits but cannot authenticate fails the credential check
+	// before any fetch, as a public repository's fetch would never try it.
+	fit.unauthenticated = map[string]string{"sample-org": "GitHub App sample-org could not get a token for the repository: sample reason"}
+	for _, err := range []error{
+		errOf(r.Register(ctx, "Other", kit+"@main", "", app, true)),
+		errOf(r.SetCredential(ctx, tpl.ID, app, true)),
+	} {
+		if check := checkOf(t, err); check.Check != CheckCredential || check.Message != fit.unauthenticated["sample-org"] || len(f.credentials) != 0 {
+			t.Fatalf("%+v %v", check, f.credentials)
+		}
+	}
+	fit.unauthenticated = nil
 	// A refused fetch names the credential.
 	f.refuse["check "+kit+"@1.2.0"] = &templates.Error{Status: 422, Kind: "template-resolve-failed", Message: "refused"}
 	key := store.Credential{Key: sampleKey}

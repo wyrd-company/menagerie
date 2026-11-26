@@ -54,12 +54,17 @@ type TemplateService interface {
 	Check(ctx context.Context, address, ref string, credential *templates.Credential) (*templates.Checked, error)
 }
 
-// Credentials checks that a credential fits a template's URL.
-// *gitcreds.Source satisfies it.
+// Credentials checks that a credential fits a template's URL and
+// authenticates to it. *gitcreds.Source satisfies it.
 type Credentials interface {
 	// Fit refuses, with a *gitcreds.FitError, a credential a template at
 	// url cannot have.
 	Fit(ctx context.Context, url string, c store.Credential) error
+	// Authenticate refuses, with a *gitcreds.FitError, a credential that
+	// fits url but cannot authenticate to it: a GitHub App that cannot
+	// mint a token for the repository, which a public repository's fetch
+	// never asks it for.
+	Authenticate(ctx context.Context, url string, c store.Credential) error
 }
 
 // CheckError refuses a template that failed a check. Its message names what
@@ -131,7 +136,8 @@ func ValidRunnerImage(image string) error {
 
 // Register checks the template at address and records it with its
 // credential: address, the template service reads and admits the address;
-// credential, the credential fits the address's URL (Credentials.Fit);
+// credential, the credential fits the address's URL and authenticates to
+// it (Credentials.Fit, Credentials.Authenticate);
 // fetch, the repository's
 // versions can be listed; version, the list holds a version and an
 // address's ref is a version's tag; fetch again, the current version can be
@@ -214,7 +220,9 @@ func (r *Registry) fit(ctx context.Context, url string, credential store.Credent
 	switch {
 	case err != nil:
 	case r.Credentials != nil:
-		err = r.Credentials.Fit(ctx, url, credential)
+		if err = r.Credentials.Fit(ctx, url, credential); err == nil {
+			err = r.Credentials.Authenticate(ctx, url, credential)
+		}
 	case !credential.IsZero():
 		err = &gitcreds.FitError{Message: "Menagerie cannot check credentials here"}
 	}
