@@ -701,3 +701,30 @@ func TestEveryTemplateRequestNamesTheTemplatesCredential(t *testing.T) {
 		}
 	}
 }
+
+// An upgrade's and an Apply branch's descent check that the template
+// service refuses names the template's credential, so a manager knows
+// which one the Git host refused.
+func TestARefusedDescentCheckNamesTheTemplatesCredential(t *testing.T) {
+	w := newWorld(t)
+	if _, err := w.data.SetTemplateCredential(context.Background(), "sample", store.Credential{App: "sample-org"}); err != nil {
+		t.Fatal(err)
+	}
+	w.createWorkspace(t, "alpha")
+	w.newVersion(t)
+	w.uncheckedTemplate(t)
+	w.unknown(t, "alpha")
+	w.tmpl.checkSince = func(_, _, _ string) (*templates.Checked, error) {
+		return nil, &templates.Error{Status: 422, Kind: "template-resolve-failed", Message: "refused"}
+	}
+	const named = " with GitHub App sample-org (template-resolve-failed)"
+	job := w.startJobBody(t, `{"operation":"upgrade","workspace":"alpha"}`)
+	if snap := endsWithin(t, job, 10*time.Second); snap.State != jobs.Failed || snap.Error.Kind != KindTemplateRefused || !strings.Contains(snap.Error.Message, named) {
+		t.Fatalf("upgrade: %+v %+v", snap, snap.Error)
+	}
+	w.contributeRecord(t, "alpha", "review/record", toha(sampleTemplate.Source, "1.1.0", laterCommit))
+	job, snap := w.applyBranch(t, "alpha", "review/record")
+	if snap.State != jobs.Failed || !strings.Contains(snap.Error.Message, named) {
+		t.Fatalf("apply branch: %+v %+v\n%s", snap, snap.Error, logText(job))
+	}
+}

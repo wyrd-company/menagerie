@@ -15,6 +15,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
@@ -166,7 +167,7 @@ func (u *upgrading) forward(ctx context.Context, run *jobs.Run, tpl store.Templa
 	case errors.As(err, &unavailable):
 		return "", "", &jobs.Failure{Kind: KindTemplateUnavailable, Err: fmt.Errorf("the template service could not say whether version %s descends from the applied commit %q: %w; nothing was upgraded", tpl.CurrentVersion, applied.Commit, err)}
 	case err != nil:
-		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the template service refused to check version %s against the applied commit %q (%s); nothing was upgraded", tpl.CurrentVersion, applied.Commit, refusalKind(err))}
+		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the template service refused to check version %s against the applied commit %q%s (%s); nothing was upgraded", tpl.CurrentVersion, applied.Commit, gitcreds.Phrase(tpl.Credential), refusalKind(err))}
 	case tpl.CurrentCommit != "" && checked.Commit != tpl.CurrentCommit:
 		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("version %s's tag is at commit %q, not the recorded %q; nothing was upgraded", tpl.CurrentVersion, checked.Commit, tpl.CurrentCommit)}
 	case !*checked.Descends:
