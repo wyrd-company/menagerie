@@ -20,9 +20,14 @@ const READ_AFTER_MS = 300;
 /**
  * The Git URL the template service reads from address, the URL a
  * template's credential has to fit: "" while none is read, with why the
- * address could not be read, if it could not.
+ * address could not be read, if it could not, and whether a reading of
+ * this address is still to come.
  */
-export function useTemplateURL(address: string): { url: string; error: string | null } {
+export function useTemplateURL(address: string): {
+  url: string;
+  error: string | null;
+  pending: boolean;
+} {
   const [read, setRead] = useState<{ address: string; url: string; error: string | null }>({
     address: "",
     url: "",
@@ -44,5 +49,8 @@ export function useTemplateURL(address: string): { url: string; error: string | 
     };
   }, [wanted]);
   // A reading of another address is no reading of this one.
-  return read.address === wanted && wanted !== "" ? read : { url: "", error: null };
+  if (wanted === "") return { url: "", error: null, pending: false };
+  return read.address === wanted
+    ? { url: read.url, error: read.error, pending: false }
+    : { url: "", error: null, pending: true };
 }

@@ -124,7 +124,7 @@ function Registration({
   const [address, setAddress] = useState("");
   const [runnerImage, setRunnerImage] = useState("");
   const [chosen, setChosen] = useState<BackupCredentialChoice | null>(null);
-  const { url, error: urlError } = useTemplateURL(address);
+  const { url, error: urlError, pending } = useTemplateURL(address);
   const credential = effectiveChoice(url, credentials, chosen);
   const registration = (check: boolean) => ({
     name: name.trim(),
@@ -136,7 +136,8 @@ function Registration({
   const { error, validated, busy, edited, run } = useValidated<Template>(
     JSON.stringify(registration(false)),
   );
-  const filled = name.trim() !== "" && address.trim() !== "";
+  // Validate waits for the address's reading, which decides the credential.
+  const filled = name.trim() !== "" && address.trim() !== "" && !pending;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();

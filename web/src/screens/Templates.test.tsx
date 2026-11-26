@@ -76,13 +76,22 @@ function holdReplies() {
   };
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_path: string, init?: RequestInit) => {
+    vi.fn(async (path: string, init?: RequestInit) => {
       if ((init?.method ?? "GET") === "GET") return Response.json({ templates: [kit] });
+      // An address's reading, which reaches no network, is never held.
+      if (path === "/api/templates/addresses") return Response.json({ url: kit.address });
       bodies.push(init?.body ? JSON.parse(String(init.body)) : null);
       return new Promise<Response>((resolve) => releases.push(resolve));
     }),
   );
   return { release, bodies };
+}
+
+/** Clicks the registration's Validate once the address's reading lets it. */
+async function validate() {
+  const button = screen.getByRole("button", { name: "Validate" });
+  await waitFor(() => expect(button).toBeEnabled());
+  await userEvent.click(button);
 }
 
 const refused = (check: string, message: string) =>
@@ -130,6 +139,8 @@ describe("a template's credential", () => {
       screen.getByLabelText("Address"),
       "git@git.example.invalid:example-org/tools.git",
     );
+    // Validate waits for the address's reading, which decides the credential.
+    expect(screen.getByRole("button", { name: "Validate" })).toBeDisabled();
     const picker = await screen.findByLabelText("Credential");
     // An SSH URL offers the agent's keys, and no App.
     expect(
@@ -145,7 +156,7 @@ describe("a template's credential", () => {
     expect(screen.getByRole("group", { name: "Public key" })).toHaveTextContent(
       "to an account that can read it",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    await validate();
     await userEvent.click(await screen.findByRole("button", { name: "Save" }));
     expect(await screen.findByRole("heading", { name: "Tools" })).toBeInTheDocument();
     const address = "git@git.example.invalid:example-org/tools.git";
@@ -216,12 +227,14 @@ describe("the templates screen", () => {
     await userEvent.type(screen.getByLabelText("Display name"), "Tools");
     await userEvent.type(screen.getByLabelText("Address"), "gh:example-org/tools");
     expect(save).toBeDisabled();
-    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    await validate();
     expect(await screen.findByText("Checks passed · 1.0.0")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("heading", { name: "Tools" })).toBeInTheDocument();
-    expect(calls.filter((c) => c.method === "POST").map((c) => c.body)).toEqual([
+    expect(
+      calls.filter((c) => c.method === "POST" && c.path === "/api/templates").map((c) => c.body),
+    ).toEqual([
       { name: "Tools", address: "gh:example-org/tools", check: true },
       { name: "Tools", address: "gh:example-org/tools" },
     ]);
@@ -235,7 +248,7 @@ describe("the templates screen", () => {
     await userEvent.type(screen.getByLabelText("Display name"), "Kit");
     await userEvent.type(screen.getByLabelText("Address"), "gh:example-org/kit");
     for (const field of ["Display name", "Address", /Runner image/]) {
-      await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+      await validate();
       expect(await screen.findByText("Checks passed · 1.0.0")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
       await userEvent.type(screen.getByLabelText(field), "x");
@@ -260,7 +273,7 @@ describe("the templates screen", () => {
     await userEvent.type(screen.getByLabelText("Display name"), "Bare");
     await userEvent.type(screen.getByLabelText("Address"), "gh:example-org/bare");
     await userEvent.type(screen.getByLabelText(/Runner image/), "alpine:3.22");
-    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    await validate();
     expect(
       await screen.findByText(/^definition: .*\.devcontainer\/devcontainer\.json/),
     ).toBeInTheDocument();
@@ -268,7 +281,7 @@ describe("the templates screen", () => {
     expect(screen.getByLabelText("Address")).not.toHaveAttribute("aria-invalid");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     check = "address";
-    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    await validate();
     expect(await screen.findByText(/^address: /)).toBeInTheDocument();
     expect(screen.getByLabelText("Address")).toHaveAttribute("aria-invalid", "true");
     // An edit clears the refusal.
@@ -290,7 +303,7 @@ describe("the templates screen", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Register template" }));
     await userEvent.type(screen.getByLabelText("Display name"), "Kit");
     await userEvent.type(screen.getByLabelText("Address"), "gh:example-org/kit");
-    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    await validate();
     await userEvent.click(await screen.findByRole("button", { name: "Save" }));
     expect(await screen.findByText(/^fetch: /)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
@@ -303,15 +316,15 @@ describe("the templates screen", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Register template" }));
     await userEvent.type(screen.getByLabelText("Display name"), "Tools");
     await userEvent.type(screen.getByLabelText("Address"), "gh:example-org/tools");
-    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    await validate();
     // While the check of gh:example-org/tools runs, the address changes.
     await userEvent.type(screen.getByLabelText("Address"), "-other");
     release(Response.json(tools));
-    expect(await screen.findByRole("button", { name: "Validate" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Validate" })).toBeEnabled());
     expect(screen.queryByText("Checks passed · 1.0.0")).toBeNull();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     // A Validate of the values the form holds counts.
-    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
+    await validate();
     release(Response.json(tools));
     expect(await screen.findByText("Checks passed · 1.0.0")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
