@@ -1355,8 +1355,10 @@ proposed-design:
     listing finds for its tag, passes the fetch, read and definition checks
     with it. Its listing is then recorded as the template's version check,
     so a failed check with the earlier credential no longer shows as the
-    new one's, and a version check that started with the earlier credential
-    records nothing when it ends.
+    new one's. Each change is counted with the template, and a version
+    check records its outcome only while the count is the one it started
+    with, so a check that started before a change records nothing, even
+    after a change back to the credential it used.
   git-and-credentials: >-
     The workspace repository, a workspace's backup repository (see
     backup-repositories), is a backup, not a synchronized copy. The local
