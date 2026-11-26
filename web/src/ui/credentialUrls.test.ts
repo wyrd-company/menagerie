@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 
-import { servingApps, urlKind } from "./CredentialPicker.tsx";
+import { servingApps, urlKind } from "./credentialUrls.ts";
 
 // The cases mirror the backend's: go-git's endpoint parsing decides the
 // kind, and githubapp's Minter.Repository decides the Apps serving a URL.
