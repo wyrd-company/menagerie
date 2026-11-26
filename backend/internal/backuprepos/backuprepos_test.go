@@ -124,6 +124,28 @@ func TestRegisterChecksWritingWithItsOwnCredential(t *testing.T) {
 	}
 }
 
+// A write check that fails names the credential the Git host refused: the
+// key's fingerprint or the App's name, and for a registration from an
+// earlier release, none.
+func TestAFailedWriteCheckNamesItsCredential(t *testing.T) {
+	f, r := host(t)
+	keyring := agent.NewKeyring()
+	refused := sampleKey(t, keyring)
+	r.Credentials = &gitcreds.Source{Socket: f.ServeAgent(t, keyring), KnownHosts: []string{f.KnownHosts}}
+	_, err := r.Register(context.Background(), "Unknown key", f.URL("backups.git"), store.Credential{Key: backuptest.AuthorizedKey(refused)}, true)
+	var check *CheckError
+	want := "Menagerie could not write to the repository with SSH key " + ssh.FingerprintSHA256(refused) + ": "
+	if !errors.As(err, &check) || check.Check != CheckWrite || !strings.HasPrefix(check.Message, want) {
+		t.Fatalf("a key the host refuses: %v", err)
+	}
+	if got := credentialPhrase(store.Credential{App: "sample-org"}); got != " with GitHub App sample-org" {
+		t.Errorf("an App: %q", got)
+	}
+	if got := credentialPhrase(store.Credential{}); got != "" {
+		t.Errorf("chosen by URL: %q", got)
+	}
+}
+
 // A credential change is checked as a registration is, and recorded only
 // when its checks pass and check is false.
 func TestSetCredentialChecksBeforeItRecords(t *testing.T) {
