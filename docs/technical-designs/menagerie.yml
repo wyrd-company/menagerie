@@ -1277,7 +1277,8 @@ proposed-design:
     the operator-key check reads, so the agent cannot sign with a key the
     check did not see, and the check reads every name the listing gives
     the key: Wyrwood lists one Transit key once for each identity that
-    names it. The key list leaves out the operator key under every name. An agent that no longer offers it fails the
+    names it. The key list leaves out the operator key under every name,
+    and lists any other key once, with all its names. An agent that no longer offers it fails the
     transfer naming its fingerprint, before any connection. A transfer with
     an App sends that App's contents write token, and fails, naming the
     App, a URL the App does not serve or an App no longer configured. A

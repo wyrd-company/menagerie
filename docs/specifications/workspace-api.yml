@@ -1151,8 +1151,9 @@ validation-criteria: >-
   connection idle between requests, the connection's close at its
   operation's end, a saved key refused once excluded, by the listing that
   gives its signer and under every name it lists, the key list's operator
-  key under every name, the write check's refusal naming its credential, the
+  key under every name and each other key listed once, the write check's refusal naming its credential, the
   picker's App names in any case and its saved credential never swapped,
   and the screen's Apps and keys for each URL form of the shared table
-  `credential-url-cases.json`, its hosts unescaped as Go does, IPv6
-  zones included, and requires its test to fail.
+  `credential-url-cases.json`, its hosts unescaped and put in lower case
+  as Go does, IPv6 zones included, and its paths read with Go's regexp
+  classes, and requires its test to fail.
