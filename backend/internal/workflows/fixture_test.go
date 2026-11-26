@@ -67,6 +67,8 @@ type fakeTemplates struct {
 	tokens map[string]string
 	// reanswered holds the reanswer flag of each upgrade start.
 	reanswered []bool
+	// credentials holds the credential each call named, "" for none.
+	credentials []string
 
 	startInterview  func(templates.Selector) (*templates.Reply, error)
 	answerInterview func(templates.Selector, json.RawMessage, json.RawMessage) (*templates.Reply, error)
@@ -79,12 +81,23 @@ type fakeTemplates struct {
 	checkSince func(address, ref, since string) (*templates.Checked, error)
 }
 
-func (f *fakeTemplates) CheckSince(_ context.Context, address, ref, since string, _ *templates.Credential) (*templates.Checked, error) {
+func (f *fakeTemplates) CheckSince(_ context.Context, address, ref, since string, credential *templates.Credential) (*templates.Checked, error) {
 	f.record("check-since "+ref+" "+since, nil)
+	f.named(credential)
 	if f.checkSince == nil {
 		return nil, &templates.Error{Status: 500, Kind: "internal-error", Message: "no check was expected"}
 	}
 	return f.checkSince(address, ref, since)
+}
+
+func (f *fakeTemplates) named(c *templates.Credential) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c == nil {
+		f.credentials = append(f.credentials, "")
+		return
+	}
+	f.credentials = append(f.credentials, c.GitHubApp+c.SSHKey)
 }
 
 func (f *fakeTemplates) record(call string, session json.RawMessage) {
@@ -110,19 +123,23 @@ func (f *fakeTemplates) session(call string) string {
 
 func (f *fakeTemplates) StartInterview(_ context.Context, s templates.Selector) (*templates.Reply, error) {
 	f.record("start-interview", nil)
+	f.named(s.Credential)
 	return f.startInterview(s)
 }
 func (f *fakeTemplates) AnswerInterview(_ context.Context, s templates.Selector, session, submission json.RawMessage) (*templates.Reply, error) {
 	f.record("answer-interview", session)
+	f.named(s.Credential)
 	return f.answerInterview(s, session, submission)
 }
 func (f *fakeTemplates) Generate(_ context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error) {
 	f.record("generate", session)
+	f.named(s.Credential)
 	f.keepToken("generate", hookToken)
 	return f.generate(s)
 }
 func (f *fakeTemplates) StartUpgrade(_ context.Context, s templates.Selector, reanswer bool) (*templates.Reply, error) {
 	f.record("start-upgrade", nil)
+	f.named(s.Credential)
 	f.mu.Lock()
 	f.reanswered = append(f.reanswered, reanswer)
 	f.mu.Unlock()
@@ -130,10 +147,12 @@ func (f *fakeTemplates) StartUpgrade(_ context.Context, s templates.Selector, re
 }
 func (f *fakeTemplates) AnswerUpgrade(_ context.Context, s templates.Selector, session, submission json.RawMessage) (*templates.Reply, error) {
 	f.record("answer-upgrade", session)
+	f.named(s.Credential)
 	return f.answerUpgrade(s, session, submission)
 }
 func (f *fakeTemplates) ApplyUpgrade(_ context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error) {
 	f.record("apply-upgrade", session)
+	f.named(s.Credential)
 	f.keepToken("apply-upgrade", hookToken)
 	return f.applyUpgrade(s)
 }

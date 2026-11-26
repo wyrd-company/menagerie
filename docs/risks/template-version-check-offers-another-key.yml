@@ -1,0 +1,26 @@
+$schema: https://refinery.systems/ontology/risk
+relationships:
+  mitigated-by:
+    - menagerie
+slug: template-version-check-offers-another-key
+title: A template's version check offers an SSH key the configuration adds
+description: >-
+  A template whose credential is an SSH key is fetched through Toha, which
+  offers that key alone and refuses, after reading the configuration with
+  `ssh -G`, an SSH configuration that adds another identity. Toha lists no
+  tags, so the template service lists a template's versions itself: it
+  checks that the agent offers the key, and runs `ssh` with
+  `IdentitiesOnly`, `IdentityFile` and `IdentityAgent` naming that key
+  alone, but does not read the configuration with `ssh -G`. An SSH
+  configuration in the container that named another `IdentityFile` for the
+  host would have that file offered too, and a Git host could sign the
+  version check in with it. Menagerie's image sets no SSH configuration, so
+  this needs an operator to add one. The operator accepted this limit
+  instead of a Toha release; wyrd-company/toha#94 asks Toha for a tag
+  listing that follows its fetch's rules, which would remove it.
+categories:
+  - security
+likelihood: 1
+impact: 1
+response-strategy: accept
+status: accepted

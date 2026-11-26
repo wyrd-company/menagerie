@@ -194,7 +194,9 @@ description: >-
   restart. `GET /api/templates` lists them sorted by name, as letters
   without regard to case, then by name and `id`,
   each with `id`, `name`, `address`, the address without a ref,
-  `currentVersion`, `runnerImage`, null for the default, `workspaces`,
+  `currentVersion`, `runnerImage`, null for the default, `credential`, as
+  a backup repository's below, or null for a template an earlier release
+  registered or imported, whose URL chooses its credential, `workspaces`,
   the names of the workspaces that use it, `versions`, the found versions,
   each `{version, tag, commit}`, in ascending order, `newestVersion`, the
   last of them or null when none is found, `currentMoved`, whether the last
@@ -236,8 +238,8 @@ description: >-
   failure's kind, and each moved tag, never an address.
 
 
-  `POST /api/templates` takes `{"name","address","runnerImage","check"}`,
-  `runnerImage` and `check` optional, and no other member. `name` is one line of 1 to
+  `POST /api/templates` takes `{"name","address","runnerImage","credential","check"}`,
+  `runnerImage`, `credential` and `check` optional, and no other member. `name` is one line of 1 to
   100 characters, `runnerImage` a Docker image reference, else 400
   `invalid-request`; a body that is not that one object is 400
   `invalid-request` too, and no refusal quotes a value. The address takes
@@ -251,7 +253,10 @@ description: >-
   more than one way, as a password holding `/` does, and an `https://` or
   `ssh://` address with both a port and a ref, are refused before any
   fetch; such an address registers without its ref, at the newest version;
-  `fetch`, the repository's versions can be listed; `version`, the list
+  `credential`, the credential fits the Git URL the address names, by the
+  rules a backup repository's credential follows below, and is refused
+  before any fetch when it does not; `fetch`, the repository's versions can
+  be listed; `version`, the list
   holds at least one version and an address's ref is a version's tag;
   `fetch` again, the current version can be fetched, at the commit the
   listing found, else the tag moved meanwhile and the registration is
@@ -271,6 +276,30 @@ description: >-
   name has none, with `-2`, `-3` and on added while it is taken.
   Registering a template joins it to each workspace that has no template and
   whose applied record names its source.
+
+
+  Template credentials. Every Git operation on a registered template's
+  repository uses its credential alone: registration's and a change's
+  checks, version checks, create, upgrade and Apply branch's descent
+  check. A refused fetch names the credential, by the App's name or the
+  key's fingerprint, as "the template could not be fetched with SSH key
+  SHA256:…"; a key the SSH agent does not list fails it without reaching
+  the Git host. `POST /api/templates/addresses` takes `{"address"}` and
+  answers 200 `{"url"}`, the Git URL the template service reads from the
+  address without reaching the network: a `gh:` address expanded, an
+  `https` URL without its user name, and no ref or folder. The URL is
+  what a template's credential has to fit, so a form offers the
+  credentials that fit it. An address the template service refuses is 422
+  `template-check-failed` under `address`, an unreachable template
+  service 503 `template-service-unavailable`. `PUT
+  /api/templates/{id}/credential` takes `{"credential","check"}`,
+  `credential` required, and changes the template's credential once it
+  fits the template's URL, its versions can be listed with it, and its
+  current version, at the commit that listing finds for its tag, passes
+  the `fetch`, `read` and `definition` checks with it: 200 with the
+  template. A listing without the current version's tag is refused under
+  `version`. With `check` true it runs the same checks and stores
+  nothing. It answers 404 `unknown-template` for an id no template has.
 
 
   `check`, a boolean, false when absent, asks for the checks alone. With
@@ -1156,4 +1185,15 @@ validation-criteria: >-
   and the screen's Apps and keys for each URL form of the shared table
   `credential-url-cases.json`, its hosts unescaped and put in lower case
   as Go does, IPv6 zones included, and its paths read with Go's regexp
-  classes, and requires its test to fail.
+  classes, and requires its test to fail. It also breaks, for templates,
+  the registration's listing and checks with its credential, the
+  credential's fit, a checked credential change storing nothing, the
+  version check's credential, the credential recorded, every create and
+  upgrade request naming it, the descent check naming it, the credential
+  route minting from the named App only, the form fitting the URL the
+  address names and waiting for its reading, and the change validating
+  first, and requires its test to fail. `go test -tags templateservice
+  ./backend/internal/workflows/` registers and checks an SSH template
+  through the template service binary offering the test's SSH host only
+  the template's key from an agent whose first key is another, and refuses
+  a key the agent does not hold without reaching the host.

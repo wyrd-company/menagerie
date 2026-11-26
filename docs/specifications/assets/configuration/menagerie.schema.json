@@ -437,7 +437,7 @@
     "github-app": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One GitHub App, as earlier releases configured it; github-apps lists any number, and a configuration gives one key or the other. The App's installation tokens authenticate the backups of a backup repository whose credential names it, and template fetches to https repository URLs on its server: /{owner}/{repo} or /{owner}/{repo}.git, with no user information, query or fragment. A backup repository registered by an earlier release, with no credential, and a template fetch use the first App whose server holds the URL. Its private key is an RSA Transit key in OpenBao, used through the Wyrwood vault socket. Absent, no token is minted.",
+      "description": "One GitHub App, as earlier releases configured it; github-apps lists any number, and a configuration gives one key or the other. The App's installation tokens authenticate the backups of a backup repository, and the fetches of a template, whose credential names it, to https repository URLs on its server: /{owner}/{repo} or /{owner}/{repo}.git, with no user information, query or fragment. A backup repository or template registered by an earlier release, with no credential, uses the first App whose server holds the URL. Its private key is an RSA Transit key in OpenBao, used through the Wyrwood vault socket. Absent, no token is minted.",
       "required": [
         "app-id",
         "transit-key"
@@ -481,7 +481,7 @@
     },
     "github-apps": {
       "type": "array",
-      "description": "The GitHub Apps, in order, each named. The first App whose server holds an https URL serves a template fetch and a backup repository registered with no credential; a backup repository with a credential uses only the App it names. Absent, the App of github-app, if any.",
+      "description": "The GitHub Apps, in order, each named. The first App whose server holds an https URL serves a backup repository or template registered with no credential; one with a credential uses only the App it names. Absent, the App of github-app, if any.",
       "items": {
         "type": "object",
         "additionalProperties": false,

@@ -54,7 +54,8 @@ container a directory of sockets:
   when `registry-credentials` is configured. Both use the binding's own
   token.
 - `ssh-agent.sock` signs Toha's SSH template fetches and Menagerie's SSH
-  backup pushes with Menagerie's SSH key, when the policy offers one. With
+  backup pushes with the SSH key each template or backup repository names,
+  when the policy offers it. With
   [provisioning](#provisioning) it also signs with the operator key.
 
 ### Git identity
@@ -64,14 +65,14 @@ Choose how Menagerie authenticates to its Git hosts:
 - **GitHub App**: the recommended way for GitHub. Install an App on the
   backup repositories and on each private template repository, with the
   Contents permission set to read and write. Each organization can have an
-  App of its own; each backup repository names the App it uses. Menagerie
+  App of its own; each backup repository and template names the App it
+  uses. Menagerie
   mints a short-lived token for one repository at a time: write for
   backups, read for templates. No machine user is needed. Backups and
   private templates use `https://` URLs. See
   [Configuration](configuration.md#github-app).
 - **SSH identity**: for other Git hosts, or for GitHub without an App. Each
-  backup repository names the SSH key it uses; template fetches need one
-  key that reaches every SSH template repository; see below.
+  backup repository and template names the SSH key it uses; see below.
 - **Both**: the App for repositories on GitHub, and SSH for other hosts.
   Each URL uses the identity its scheme and host select.
 
@@ -99,30 +100,30 @@ these steps for each further App, under a Transit key of its own.
 
 #### SSH identity
 
-Each backup repository names the key it is reached with, chosen from the
-keys Wyrwood's agent offers, and Menagerie offers that repository its key
-alone. So each backup repository can have a key of its own, such as a
-deploy key with write access on that repository: offer each key in the
-policy below, and choose it when you register the repository. The
-registration form shows the key's public key to give the Git host.
+Each backup repository and each template names the key it is reached with,
+chosen from the keys Wyrwood's agent offers, and Menagerie offers that
+repository its key alone. So each repository can have a key of its own,
+such as a deploy key with write access on a backup repository, or a read-only
+deploy key on a template's: offer each key in the policy below, and choose it
+when you register the repository or template. The registration form shows
+the key's public key to give the Git host. GitHub accepts a deploy key on one
+repository only, and the same key cannot be registered twice, so give each
+repository its own Transit key. One key can also serve several repositories
+as a machine user's SSH key, with the machine user given write access to the
+backup repositories and read access to the template repositories.
 
-Toha's template fetches are offered every key the agent holds, as is a
-backup repository registered by an earlier release until you choose its
-key. An SSH client offers its keys in turn, and the Git host signs it in
-with the first key it knows, whether or not that key can reach the
-repository. GitHub accepts a deploy key on one repository only, and the
-same key cannot be registered twice.
+A backup repository or template registered by an earlier release is offered
+every key the agent holds until you choose its key. An SSH client offers its
+keys in turn, and the Git host signs it in with the first key it knows,
+whether or not that key can reach the repository. So while one remains, the
+agent must offer one Git key, which reaches every such repository: a machine
+user's key, not a deploy key.
 
-- **Only backup repositories are on SSH**: add one Transit key for each
-  repository, and add its public key to that repository as a deploy key
-  with write access. Or add one key for all of them as a machine user's
-  SSH key, and give the machine user write access to each repository.
-- **A private template is on SSH too**: the agent must offer one Git key,
-  and it must reach every SSH repository. Create a machine user, an account
-  for automation, and add the Transit key's public key as that account's
-  SSH key. Give the machine user write access to the backup repositories
-  and read access to each private template repository. Do not also add the
-  key as a deploy key.
+Menagerie's template version check pins the template's key on the `ssh`
+command itself, and does not check, as Toha's fetches do, that the SSH
+configuration adds no other identity. Menagerie's image sets no SSH
+configuration, so this holds unless you add one, such as an `IdentityFile`
+in the container's SSH configuration.
 
 ### Policy
 

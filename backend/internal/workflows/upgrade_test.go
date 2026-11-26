@@ -665,3 +665,39 @@ func TestAnUpgradeOfAnUncheckedTemplateRecordsTheRecordsCommit(t *testing.T) {
 		})
 	}
 }
+
+// Every template service request of a create and an upgrade, the descent
+// check included, names the template's credential.
+func TestEveryTemplateRequestNamesTheTemplatesCredential(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	if _, err := w.data.SetTemplateCredential(ctx, "sample", store.Credential{App: "sample-org"}); err != nil {
+		t.Fatal(err)
+	}
+	w.createWorkspace(t, "alpha")
+	w.newVersion(t)
+	w.uncheckedTemplate(t)
+	w.unknown(t, "alpha")
+	approved := "2000000000000000000000000000000000000002"
+	w.tmpl.checkSince = func(_, ref, since string) (*templates.Checked, error) {
+		return &templates.Checked{Source: sampleTemplate.Source, Commit: approved, Definition: true, Descends: ptr(true)}, nil
+	}
+	w.selectors(t, approved)
+	job := w.startJobBody(t, `{"operation":"upgrade","workspace":"alpha"}`)
+	waitWaiting(t, job, 0)
+	w.answer(t, job, sessionAsking)
+	if snap := endsWithin(t, job, 10*time.Second); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	w.tmpl.mu.Lock()
+	named := append([]string(nil), w.tmpl.credentials...)
+	w.tmpl.mu.Unlock()
+	if len(named) < 5 {
+		t.Fatalf("calls %v", w.tmpl.seen())
+	}
+	for _, c := range named {
+		if c != "sample-org" {
+			t.Fatalf("a request named %q, not the template's App: %v", c, named)
+		}
+	}
+}

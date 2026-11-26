@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove the backup repository credential guards by breaking them one at a time.
+"""Prove the backup repository and template credential guards by breaking them one at a time.
 
 Run from any directory:
   python3 scripts/prove-backup-credential-guards.py --report report.json
@@ -14,7 +14,13 @@ change lands only at the URL it checked; the key list leaves out the
 operator key; a transfer waits for a slow agent and refuses its key by
 the listing that gives its signer, under every name it lists the key; the backups screen offers an https URL
 only the Apps that serve it, reads hosts as Go does, matches App names in
-any case and never swaps a saved credential for another. Each mutation changes one guard in place, and its tests must
+any case and never swaps a saved credential for another. A template
+records its credential, which must fit its URL; its registration, change,
+version check, create and upgrade name it to the template service; a
+change stores nothing with check; the credential route mints from a named
+App only; and the templates screen offers the credentials that fit the URL
+its address names, once that is read, and changes one only after a
+Validate. Each mutation changes one guard in place, and its tests must
 fail; the source is restored even on interruption. The report starts
 failed and passes only after every baseline test passes and every mutant
 compiles and fails each of its tests.
@@ -60,6 +66,15 @@ TESTS = {
                          "offers credentials for the URL forms the service accepts"),
     "screen-apps": ("web/src/screens/BackupRepositories.test.tsx",
                     "offers an https URL only the Apps that serve it, and none off their servers"),
+    "template-fetches": ("./backend/internal/registry", "TestATemplateFetchesWithItsCredential"),
+    "template-change": ("./backend/internal/registry", "TestATemplatesCredentialChangesOnceItsChecksPass"),
+    "template-kept": ("./backend/internal/store", "TestATemplateKeepsItsCredential"),
+    "template-requests": ("./backend/internal/workflows", "TestEveryTemplateRequestNamesTheTemplatesCredential"),
+    "named-app": ("./backend/internal/githubapp", "TestTheCredentialRouteMintsFromTheNamedAppOnly"),
+    "template-form": ("web/src/screens/Templates.test.tsx",
+                      "is chosen from those that fit the URL the address names"),
+    "template-change-form": ("web/src/screens/Templates.test.tsx",
+                             "changes only after a Validate with it passes"),
 }
 
 PUSH = "backend/internal/backup/push.go"
@@ -67,6 +82,13 @@ CREDS = "backend/internal/gitcreds/gitcreds.go"
 REGISTRY = "backend/internal/backuprepos/backuprepos.go"
 BACKUPS = "backend/internal/store/backups.go"
 PICKER = "web/src/ui/CredentialPicker.tsx"
+TEMPLATES = "backend/internal/registry/registry.go"
+VERSIONS = "backend/internal/registry/versions.go"
+TEMPLATE_DATA = "backend/internal/store/templates.go"
+FLOWS = "backend/internal/workflows/workflows.go"
+DESCENT = "backend/internal/workflows/upgrade.go"
+ROUTE = "backend/internal/githubapp/handler.go"
+TEMPLATES_SCREEN = "web/src/screens/Templates.tsx"
 URLS = "web/src/ui/credentialUrls.ts"
 
 # Each mutant: a name, the source file, the text it replaces (exactly once),
@@ -119,7 +141,7 @@ MUTANTS = [
      "\t\tif !tokens.Serves(url) {\n", "\t\tif false {\n", ["app-alone"]),
     ("keys-leave-out-the-operator-key", CREDS,
      "\t\tif s.Excluded != \"\" && selects(s.Excluded, k) {\n", "\t\tif false {\n", ["keys-listed"]),
-    ("key-recorded-without-comment", REGISTRY,
+    ("key-recorded-without-comment", CREDS,
      "\t\tc.Key = key\n", "\t\t_ = key\n", ["register-own-credential"]),
     ("write-check-with-the-credential", REGISTRY,
      "\treturn &backup.Remote{URL: repo.URL, Auth: r.Credentials.Auth(repo.Credential)}\n",
@@ -138,7 +160,7 @@ MUTANTS = [
      "    apps: kind === \"https\" ? servingApps(url, credentials?.githubApps ?? []) : [],\n",
      "    apps: kind === \"https\" ? (credentials?.githubApps ?? []) : [],\n", ["screen-apps"]),
     ("write-check-names-its-credential", REGISTRY,
-     "\t\treturn &CheckError{Check: CheckWrite, Message: \"Menagerie could not write to the repository\" + credentialPhrase(repo.Credential) + \": \"",
+     "\t\treturn &CheckError{Check: CheckWrite, Message: \"Menagerie could not write to the repository\" + gitcreds.Phrase(repo.Credential) + \": \"",
      "\t\treturn &CheckError{Check: CheckWrite, Message: \"Menagerie could not write to the repository\" + \": \"",
      ["write-check-names-credential"]),
     ("picker-scp-like-without-user", URLS,
@@ -176,7 +198,7 @@ MUTANTS = [
      "    return keys.some((k) => k.publicKey === chosen.sshKey) ? chosen : null;\n",
      "    if (keys.some((k) => k.publicKey === chosen.sshKey)) return chosen;\n", ["picker-key-kept"]),
     ("picker-says-an-app-moved", PICKER,
-     "    if (servingApps(url, [app]).length === 0)\n", "    if (false)\n", ["picker-app-moved"]),
+     "    if (url !== null && servingApps(url, [app]).length === 0)\n", "    if (false)\n", ["picker-app-moved"]),
     ("picker-empty-fragment", URLS,
      "  if (u.rest.startsWith(\"?\") || u.rest.length > 1) return false;\n",
      "  if (u.rest.length > 0) return false;\n", ["picker-url-table"]),
@@ -184,6 +206,39 @@ MUTANTS = [
      "    path: end < 0 ? tail : tail.slice(0, end),\n",
      "    path: new URL(\"https://h\" + (end < 0 ? tail : tail.slice(0, end))).pathname,\n",
      ["picker-url-table"]),
+    ("template-lists-with-its-credential", TEMPLATES,
+     "ListVersions(ctx, read.Base, requested(credential))", "ListVersions(ctx, read.Base, nil)",
+     ["template-fetches"]),
+    ("template-checks-with-its-credential", TEMPLATES,
+     "r.Templates.Check(ctx, address, v.Tag, requested(credential))",
+     "r.Templates.Check(ctx, address, v.Tag, nil)", ["template-fetches", "template-change"]),
+    ("template-credential-must-fit", TEMPLATES,
+     "\tcase r.Credentials != nil:\n\t\terr = r.Credentials.Fit(ctx, url, credential)\n",
+     "\tcase r.Credentials != nil:\n", ["template-fetches"]),
+    ("template-checked-change-stores-nothing", TEMPLATES,
+     "\tif check {\n\t\treturn tpl, nil\n\t}\n", "", ["template-change"]),
+    ("version-check-with-its-credential", VERSIONS,
+     "ListVersions(ctx, tpl.Address, requested(tpl.Credential))", "ListVersions(ctx, tpl.Address, nil)",
+     ["template-fetches"]),
+    ("template-credential-recorded", TEMPLATE_DATA,
+     "nullable(tpl.Credential.App), nullable(tpl.Credential.Key)); err != nil {",
+     "nil, nil); err != nil {", ["template-kept"]),
+    ("job-requests-name-the-credential", FLOWS,
+     ",\n\t\tCredential: templates.CredentialOf(tpl.Credential.App, tpl.Credential.Key)}", "}",
+     ["template-requests"]),
+    ("descent-check-names-the-credential", DESCENT,
+     "applied.Commit, templates.CredentialOf(tpl.Credential.App, tpl.Credential.Key))",
+     "applied.Commit, nil)", ["template-requests"]),
+    ("route-mints-from-the-named-app", ROUTE,
+     "\t\tcase req.GitHubApp != nil:\n", "\t\tcase false:\n", ["named-app"]),
+    ("template-form-fits-the-address-url", TEMPLATES_SCREEN,
+     "  const credential = effectiveChoice(url, credentials, chosen);\n",
+     "  const credential = effectiveChoice(\"\", credentials, chosen);\n", ["template-form"]),
+    ("template-validate-waits-for-the-url", TEMPLATES_SCREEN,
+     " && !pending;\n", ";\n", ["template-form"]),
+    ("template-change-validates-first", TEMPLATES_SCREEN,
+     "setTemplateCredential(t.id, credential, check)", "setTemplateCredential(t.id, credential, false)",
+     ["template-change-form"]),
 ]
 
 
@@ -253,7 +308,7 @@ def main():
             source.write_text(original)
     report["outcome"] = "passed"
     save()
-    print(f"BACKUP_CREDENTIAL_GUARDS_PASSED: {len(report['mutants'])} mutant runs rejected")
+    print(f"CREDENTIAL_GUARDS_PASSED: {len(report['mutants'])} mutant runs rejected")
 
 
 if __name__ == "__main__":

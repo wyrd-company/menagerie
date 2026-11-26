@@ -16,7 +16,7 @@ is stable; the message names what failed and what was left behind.
 
 | Kind | Meaning |
 | --- | --- |
-| `template-refused` | Toha refused the template, for example because the template could not be fetched (`template-resolve-failed`), with its own reason, or Menagerie refused to apply it: the template is no longer registered, or an upgrade would not move the workspace forward (the workspace already has that version, its applied version and commit cannot be compared with the current version, the version's tag moved, or its commit does not descend from the applied one). The message says which. Nothing was written. For a private template over SSH, check the Wyrwood binding, that Menagerie's SSH key reaches the repository, and the known hosts. Over `https` with a [GitHub App](configuration.md#github-app), check that the App is installed on the repository with Contents read. |
+| `template-refused` | Toha refused the template, for example because the template could not be fetched (`template-resolve-failed`), with its own reason, or Menagerie refused to apply it: the template is no longer registered, or an upgrade would not move the workspace forward (the workspace already has that version, its applied version and commit cannot be compared with the current version, the version's tag moved, or its commit does not descend from the applied one). The message says which. Nothing was written. For a private template, see [Template credentials](#template-credentials). |
 | `template-service-unavailable` | The template service did not answer. Its own log is in the container's log. |
 | `workspace-exists` | Another job created the folder while this interview ran, or Menagerie holds a workspace of that name: one being created, or one whose folder is gone and that still holds a binding or a key, which its **Delete** removes. Nothing was written. |
 | `generation-failed` | Toha or a template hook failed while writing a new workspace. The folder holds what was written. A hook that cannot find a program needs a [runner image](configuration.md#runner-images) that has it; the hook's own output is in the console, prefixed `hook: `. When the hook's container itself failed, the console line `a template hook's throwaway container failed:` names the stage that failed and the class of the Engine's error. |
@@ -115,6 +115,25 @@ A failed **Validate** names the credential the Git host refused, as in
 `with GitHub App NAME`. A repository that shows **Credential chosen by URL**
 names none.
 
+## Template credentials
+
+**Validate** on **Register template** or on a template's **Change
+credential** refuses a credential that does not fit the address's Git URL
+with the check `credential`, with the refusals of
+[Backup repository credentials](#backup-repository-credentials). A refused
+fetch names the credential it used:
+
+| Message | What to check |
+| --- | --- |
+| the template could not be fetched with SSH key SHA256:… | The Git host knows that key: add the public key that **Change credential** shows to the template's repository as a deploy key, or to an account that can read it. Menagerie's Wyrwood policy still offers the key: a key the agent no longer offers fails before the host is reached. Then the Wyrwood binding and the known hosts. |
+| the template could not be fetched with GitHub App NAME | The App is installed on the template's repository with Contents read, and is still in `github-apps` under that name; see the GitHub App reasons below. |
+| the template could not be fetched (no credential named) | A template that shows **Credential chosen by URL**: choose its credential with **Change credential**. |
+
+A workspace job that fetches the template, such as a create or an upgrade,
+fails as `template-refused` with the same cause. A template's row shows
+its credential as a backup repository's does, with "which is no longer
+configured" for an App the configuration lost.
+
 ## GitHub App credentials
 
 A backup, an Apply branch fetch or a template fetch that uses the
@@ -141,6 +160,8 @@ the App's JWT, a URL and GitHub's or OpenBao's response text never appear.
 | the workspace service's credential route could not be reached | A template fetch: the workspace service is running, and `template-service.hook-runner-socket` names its socket. |
 | the workspace service's credential route answered with an unexpected status | A template fetch: the template service and the workspace service come from the same image. |
 | the workspace service's credential route gave a malformed answer | As for an unexpected status. |
+| no GitHub App named NAME is configured | A template fetch: the template's App was renamed or removed in the configuration. Restore it, or use **Change credential**. |
+| GitHub App NAME does not serve the URL | A template fetch: the App's `server` is not the template's host. Use **Change credential**. |
 | the token could not be minted | A template fetch: the workspace service's log. |
 | the operation ended before credentials arrived | A template fetch: the job was cancelled or reached its time limit while its token was minted. |
 
