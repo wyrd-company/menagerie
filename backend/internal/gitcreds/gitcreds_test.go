@@ -100,6 +100,20 @@ func TestKeysListsTheAgentsKeysWithoutTheOperatorKey(t *testing.T) {
 	}
 }
 
+// The agent may list the operator key under another name too: the list
+// leaves out the key under every name.
+func TestKeysLeaveOutTheOperatorKeyUnderEveryName(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	git := sampleKey(t, keyring, "sample-git-key")
+	operator := sampleKey(t, keyring, "sample-operator-key")
+	socket := f.ServeAgent(t, backuptest.AliasAgent(keyring, operator, "sample-alias"))
+	keys, err := (&Source{Socket: socket, Excluded: "sample-operator-key"}).Keys(context.Background())
+	if err != nil || len(keys) != 1 || keys[0].PublicKey != authorized(git) {
+		t.Fatalf("the operator key under an alias: %+v %v", keys, err)
+	}
+}
+
 func TestNormalKeyDropsTheComment(t *testing.T) {
 	key := sampleKey(t, agent.NewKeyring(), "k")
 	for _, given := range []string{authorized(key), authorized(key) + " some comment", " " + authorized(key) + "\n"} {
@@ -257,10 +271,11 @@ func TestTheServiceReadsURLFormsAsThePickerDoes(t *testing.T) {
 	var table struct {
 		Server string `json:"server"`
 		Cases  []struct {
-			URL    string  `json:"url"`
-			Server string  `json:"server"`
-			Kind   *string `json:"kind"`
-			Served bool    `json:"served"`
+			URL     string  `json:"url"`
+			Server  string  `json:"server"`
+			Kind    *string `json:"kind"`
+			Served  bool    `json:"served"`
+			Refused bool    `json:"refused"`
 		} `json:"cases"`
 	}
 	if err := json.Unmarshal(data, &table); err != nil {
@@ -277,8 +292,12 @@ func TestTheServiceReadsURLFormsAsThePickerDoes(t *testing.T) {
 		}
 		apps := githubapp.Apps{{Name: "sample-org", Server: server, Minter: m}}
 		kind := ""
-		if e, err := transport.NewEndpoint(c.URL); err == nil && (e.Protocol == "ssh" || e.Protocol == "https") {
+		e, err := transport.NewEndpoint(c.URL)
+		if err == nil && (e.Protocol == "ssh" || e.Protocol == "https") {
 			kind = e.Protocol
+		}
+		if refused := err != nil; refused != c.Refused {
+			t.Errorf("%s: refused %v (%v), the table says %v", c.URL, refused, err, c.Refused)
 		}
 		want := ""
 		if c.Kind != nil {

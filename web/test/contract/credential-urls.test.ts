@@ -3,7 +3,9 @@
 // Holds the backups screen's picker to the Git URL forms the service reads
 // (docs/specifications/assets/workspace-api/credential-url-cases.json): the
 // kind of credential each URL takes, and whether an App on the case's
-// server, or else the table's, serves it. The service's gitcreds tests read the same table, so a
+// server, or else the table's, serves it. A URL the service refuses
+// outright the picker may read more loosely: it is never to be stricter
+// than the service, whose refusal on save explains the URL. The service's gitcreds tests read the same table, so a
 // rule that drifts on either side fails here or there.
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
@@ -20,10 +22,16 @@ const table = JSON.parse(
   ),
 ) as {
   server: string;
-  cases: { url: string; server?: string; kind: "ssh" | "https" | null; served: boolean }[];
+  cases: {
+    url: string;
+    server?: string;
+    refused?: boolean;
+    kind: "ssh" | "https" | null;
+    served: boolean;
+  }[];
 };
 
-it.each(table.cases)(
+it.each(table.cases.filter((c) => !c.refused))(
   "URL table: reads $url as the service does",
   ({ url, server, kind, served }) => {
     expect(urlKind(url)).toBe(kind);
