@@ -16,12 +16,30 @@ export interface FixtureWorkspace {
   backups?: string | null;
 }
 
+/** A backup repository's credential: an App by name, or an SSH key by its public key. */
+export type FixtureCredential = { githubApp: string } | { sshKey: string } | null;
+
 /** A registered backup repository. */
 export interface FixtureBackupRepository {
   id: string;
   name: string;
   url: string;
+  /** Null for a registration an earlier release made. */
+  credential: FixtureCredential;
 }
+
+/** The fixture's credentials: one App on git.example.test, and the agent's one Git key. */
+export const fixtureCredentials = {
+  githubApps: [{ name: "example-org", server: "https://git.example.test" }],
+  sshKeys: [
+    {
+      name: "menagerie-ssh",
+      fingerprint: "SHA256:fixtureMenagerieSshKeyFingerprint0000000000",
+      publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureMenagerieSshPublicKey000000000000",
+    },
+  ],
+  sshAgent: null as string | null,
+};
 
 /** A registered template, the versions its repository has and those its checks found. */
 export interface FixtureTemplate {
@@ -131,6 +149,7 @@ export function initialBackupRepositories(): FixtureBackupRepository[] {
       id: "example-backups",
       name: "Example backups",
       url: "ssh://git@git.example.test/example-org/workspace-backups.git",
+      credential: null,
     },
   ];
 }

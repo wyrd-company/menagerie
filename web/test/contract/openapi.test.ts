@@ -13,7 +13,13 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { answerJob, parseInterviewReply, startJob } from "../../src/api/client.ts";
+import {
+  answerJob,
+  parseInterviewReply,
+  registerBackupRepository,
+  setBackupRepositoryCredential,
+  startJob,
+} from "../../src/api/client.ts";
 import { createFixture } from "../fixture-server/server.ts";
 
 const specPath = new URL(
@@ -173,23 +179,37 @@ describe("the fixture server keeps the workspace API contract", () => {
   it("registers and removes backup repositories, and creates to a chosen one", async () => {
     await post("/__fixture/reset", {});
     const url = "git@git.example.test:client-org/backups.git";
+    const offered = await expectResponse("/api/credentials", "get", await call("/api/credentials"));
+    const key = (offered as { sshKeys: { publicKey: string }[] }).sshKeys[0]!.publicKey;
+    const credential = { sshKey: key };
     const checked = await post("/api/backup-repositories", {
       name: "Client backups",
       url,
+      credential,
       check: true,
     });
     expect(await expectResponse("/api/backup-repositories", "post", checked)).toMatchObject({
       id: "client-backups",
+      credential: { sshKey: key },
       workspaces: [],
     });
-    const registered = await post("/api/backup-repositories", { name: "Client backups", url });
+    const registered = await post("/api/backup-repositories", {
+      name: "Client backups",
+      url,
+      credential,
+    });
     expect(registered.headers.get("location")).toBe("/api/backup-repositories/client-backups");
     await expectResponse("/api/backup-repositories", "post", registered);
     for (const [refused, kind, check] of [
-      [{ name: "Again", url }, "backup-repository-exists", undefined],
+      [{ name: "Again", url, credential }, "backup-repository-exists", undefined],
       [{ name: "Local", url: "/srv/backups.git" }, "backup-repository-check-failed", "url"],
       [
-        { name: "Read only", url: "git@git.example.test:o/readonly.git" },
+        { name: "No key", url: "git@git.example.test:o/other.git" },
+        "backup-repository-check-failed",
+        "credential",
+      ],
+      [
+        { name: "Read only", url: "git@git.example.test:o/readonly.git", credential },
         "backup-repository-check-failed",
         "write",
       ],
@@ -236,12 +256,38 @@ describe("the fixture server keeps the workspace API contract", () => {
       backupRepositoryId: "client-backups",
     });
     expect(moving.status).toBe(202);
+    const put = (path: string, body: unknown) =>
+      call(path, { method: "PUT", body: JSON.stringify(body) });
+    const changePath = "/api/backup-repositories/{id}/credential";
+    const changed = await put("/api/backup-repositories/example-backups/credential", {
+      credential,
+      check: true,
+    });
+    expect(await expectResponse(changePath, "put", changed)).toMatchObject({
+      credential: { sshKey: key },
+    });
+    for (const [path, body, kind] of [
+      [
+        "example-backups",
+        { credential: { githubApp: "example-org" } },
+        "backup-repository-check-failed",
+      ],
+      ["absent", { credential }, "unknown-backup-repository"],
+      ["example-backups", {}, "invalid-request"],
+    ] as const) {
+      const refused = await expectResponse(
+        changePath,
+        "put",
+        await put(`/api/backup-repositories/${path}/credential`, body),
+      );
+      expect(refused).toMatchObject({ error: { kind } });
+    }
     const inUse = await call("/api/backup-repositories/example-backups", { method: "DELETE" });
     expect(await expectResponse("/api/backup-repositories/{id}", "delete", inUse)).toMatchObject({
       error: { kind: "backup-repository-in-use" },
     });
     await post("/__fixture/reset", {});
-    await post("/api/backup-repositories", { name: "Spare", url });
+    await post("/api/backup-repositories", { name: "Spare", url, credential });
     const removed = await call("/api/backup-repositories/spare", { method: "DELETE" });
     expect(removed.status).toBe(204);
     const missing = await call("/api/backup-repositories/spare", { method: "DELETE" });
@@ -587,6 +633,43 @@ describe("the UI client sends request bodies the contract accepts", () => {
     }
     for (const body of bodies) expectValid(schema("JobRequest"), body);
     expect(bodies).toHaveLength(7);
+  });
+
+  it("registers a backup repository and changes its credential with bodies the contract accepts", async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", async (_: string, init: RequestInit) => {
+      bodies.push(JSON.parse(init.body as string));
+      return Response.json({}, { status: 200 });
+    });
+    try {
+      await registerBackupRepository({
+        name: "Sample",
+        url: "git@git.example.test:o/r.git",
+        credential: { sshKey: "ssh-ed25519 AAAA" },
+        check: true,
+      });
+      await registerBackupRepository({
+        name: "Sample",
+        url: "https://elsewhere.example.test/o/r.git",
+      });
+      await setBackupRepositoryCredential("sample", { githubApp: "example-org" }, true);
+      await setBackupRepositoryCredential("sample", { sshKey: "ssh-ed25519 AAAA" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expectValid(schema("BackupRepositoryRegistration"), bodies[0]);
+    expectValid(schema("BackupRepositoryRegistration"), bodies[1]);
+    const change = pointer(
+      "paths",
+      "/api/backup-repositories/{id}/credential",
+      "put",
+      "requestBody",
+      "content",
+      "application/json",
+      "schema",
+    );
+    expectValid(change, bodies[2]);
+    expectValid(change, bodies[3]);
   });
 
   it("answers with an AnswerRequest that carries the session as received", async () => {

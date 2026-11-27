@@ -2,6 +2,8 @@ package backuprepos
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -10,8 +12,11 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 
-	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
+	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 )
 
@@ -31,7 +36,12 @@ func host(t *testing.T) (*backuptest.Host, *Registry) {
 	if _, err := git.PlainInit(filepath.Join(f.Dir, "backups.git"), true); err != nil {
 		t.Fatal(err)
 	}
-	return f, &Registry{Data: open(t), Auth: backup.AgentAuth(f.AgentPath, f.KnownHosts)}
+	return f, &Registry{Data: open(t), Credentials: &gitcreds.Source{Socket: f.AgentPath, KnownHosts: []string{f.KnownHosts}}}
+}
+
+// keyOf is the credential of the host's own agent key.
+func keyOf(f *backuptest.Host) store.Credential {
+	return store.Credential{Key: backuptest.AuthorizedKey(f.UserKey)}
 }
 
 // A registration checks its name, its URL and that Menagerie can write to
@@ -41,18 +51,18 @@ func TestRegisterChecksTheRepositoryBeforeItRecordsIt(t *testing.T) {
 	f, r := host(t)
 	ctx := context.Background()
 	url := f.URL("backups.git")
-	tried, err := r.Register(ctx, "  Example backups ", url, true)
+	tried, err := r.Register(ctx, "  Example backups ", url, keyOf(f), true)
 	if err != nil || tried.ID != "example-backups" || tried.Name != "Example backups" {
 		t.Fatalf("%+v %v", tried, err)
 	}
 	if list, _ := r.Data.BackupRepositories(ctx); len(list) != 0 {
 		t.Fatalf("a checked registration was stored: %+v", list)
 	}
-	saved, err := r.Register(ctx, "Example backups", url, false)
+	saved, err := r.Register(ctx, "Example backups", url, keyOf(f), false)
 	if err != nil || saved.ID != "example-backups" || saved.URL != url {
 		t.Fatalf("%+v %v", saved, err)
 	}
-	if _, err := r.Register(ctx, "Again", url, true); !errors.Is(err, store.ErrBackupRepositoryExists) {
+	if _, err := r.Register(ctx, "Again", url, keyOf(f), true); !errors.Is(err, store.ErrBackupRepositoryExists) {
 		t.Fatalf("%v", err)
 	}
 }
@@ -73,7 +83,7 @@ func TestRegisterRefusals(t *testing.T) {
 		{"Password", "https://user:secret@git.example.invalid/example-org/backups.git", CheckURL},
 		{"Absent", f.URL("absent.git"), CheckWrite},
 	} {
-		_, err := r.Register(ctx, c.name, c.url, true)
+		_, err := r.Register(ctx, c.name, c.url, keyOf(f), true)
 		var check *CheckError
 		var invalid *InvalidError
 		switch {
@@ -85,12 +95,119 @@ func TestRegisterRefusals(t *testing.T) {
 	}
 }
 
+// A registration records the credential it was checked with, in the form
+// a credential records it, refuses one that does not fit the URL, and
+// checks writing with that credential alone: a key the host refuses fails
+// though the agent's other key would be accepted.
+func TestRegisterChecksWritingWithItsOwnCredential(t *testing.T) {
+	f, r := host(t)
+	ctx := context.Background()
+	url := f.URL("backups.git")
+	withComment := store.Credential{Key: backuptest.AuthorizedKey(f.UserKey) + " a-comment"}
+	saved, err := r.Register(ctx, "Example backups", url, withComment, false)
+	if err != nil || saved.Credential != keyOf(f) {
+		t.Fatalf("%+v %v", saved, err)
+	}
+	keyring := agent.NewKeyring()
+	refused := sampleKey(t, keyring)
+	r.Credentials = &gitcreds.Source{Socket: f.ServeAgent(t, keyring), KnownHosts: []string{f.KnownHosts}}
+	_ = r.Data.RemoveBackupRepository(ctx, saved.ID)
+	_, err = r.Register(ctx, "Unknown key", url, store.Credential{Key: backuptest.AuthorizedKey(refused)}, true)
+	var check *CheckError
+	if !errors.As(err, &check) || check.Check != CheckWrite {
+		t.Fatalf("a key the host refuses: %v", err)
+	}
+	for _, c := range []store.Credential{{}, {App: "sample-org"}, {App: "a", Key: backuptest.AuthorizedKey(f.UserKey)}, {Key: "not a key"}} {
+		if _, err := r.Register(ctx, "Example backups", url, c, true); !errors.As(err, &check) || check.Check != CheckCredential {
+			t.Errorf("%+v: %v", c, err)
+		}
+	}
+}
+
+// A write check that fails names the credential the Git host refused: the
+// key's fingerprint or the App's name, and for a registration from an
+// earlier release, none.
+func TestAFailedWriteCheckNamesItsCredential(t *testing.T) {
+	f, r := host(t)
+	keyring := agent.NewKeyring()
+	refused := sampleKey(t, keyring)
+	r.Credentials = &gitcreds.Source{Socket: f.ServeAgent(t, keyring), KnownHosts: []string{f.KnownHosts}}
+	_, err := r.Register(context.Background(), "Unknown key", f.URL("backups.git"), store.Credential{Key: backuptest.AuthorizedKey(refused)}, true)
+	var check *CheckError
+	want := "Menagerie could not write to the repository with SSH key " + ssh.FingerprintSHA256(refused) + ": "
+	if !errors.As(err, &check) || check.Check != CheckWrite || !strings.HasPrefix(check.Message, want) {
+		t.Fatalf("a key the host refuses: %v", err)
+	}
+	if got := credentialPhrase(store.Credential{App: "sample-org"}); got != " with GitHub App sample-org" {
+		t.Errorf("an App: %q", got)
+	}
+	if got := credentialPhrase(store.Credential{}); got != "" {
+		t.Errorf("chosen by URL: %q", got)
+	}
+}
+
+// A credential change is checked as a registration is, and recorded only
+// when its checks pass and check is false.
+func TestSetCredentialChecksBeforeItRecords(t *testing.T) {
+	f, r := host(t)
+	ctx := context.Background()
+	repo, err := r.Register(ctx, "Example backups", f.URL("backups.git"), keyOf(f), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring := agent.NewKeyring()
+	other := sampleKey(t, keyring)
+	f.Authorize(other)
+	r.Credentials = &gitcreds.Source{Socket: f.ServeAgent(t, keyring), KnownHosts: []string{f.KnownHosts}}
+	otherKey := store.Credential{Key: backuptest.AuthorizedKey(other)}
+	tried, err := r.SetCredential(ctx, repo.ID, otherKey, true)
+	if err != nil || tried.Credential != otherKey {
+		t.Fatalf("%+v %v", tried, err)
+	}
+	if got, _ := r.Data.BackupRepository(ctx, repo.ID); got.Credential != keyOf(f) {
+		t.Fatalf("a checked change was stored: %+v", got)
+	}
+	// The host's own key is not in this agent: the change is refused and
+	// the repository keeps its credential.
+	var check *CheckError
+	if _, err := r.SetCredential(ctx, repo.ID, keyOf(f), false); !errors.As(err, &check) || check.Check != CheckWrite {
+		t.Fatalf("a key the agent does not offer: %v", err)
+	}
+	if _, err := r.SetCredential(ctx, repo.ID, store.Credential{App: "sample-org"}, false); !errors.As(err, &check) || check.Check != CheckCredential {
+		t.Fatalf("an App for an SSH URL: %v", err)
+	}
+	if _, err := r.SetCredential(ctx, "absent", otherKey, false); !errors.Is(err, store.ErrNoBackupRepository) {
+		t.Fatalf("absent: %v", err)
+	}
+	saved, err := r.SetCredential(ctx, repo.ID, otherKey, false)
+	if err != nil || saved.Credential != otherKey {
+		t.Fatalf("%+v %v", saved, err)
+	}
+	if got, _ := r.Data.BackupRepository(ctx, repo.ID); got.Credential != otherKey {
+		t.Fatalf("not stored: %+v", got)
+	}
+}
+
+// sampleKey adds a generated key to keyring and returns its public key.
+func sampleKey(t *testing.T, keyring agent.Agent) ssh.PublicKey {
+	t.Helper()
+	_, private, _ := ed25519.GenerateKey(rand.Reader)
+	signer, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keyring.Add(agent.AddedKey{PrivateKey: private, Comment: "sample-other-key"}); err != nil {
+		t.Fatal(err)
+	}
+	return signer.PublicKey()
+}
+
 // A workspace backs up to the repository its data names, and one with
 // none fails before any transfer.
 func TestPushGoesToTheWorkspacesOwnRepository(t *testing.T) {
 	f, r := host(t)
 	ctx := context.Background()
-	repo, err := r.Register(ctx, "Example backups", f.URL("backups.git"), false)
+	repo, err := r.Register(ctx, "Example backups", f.URL("backups.git"), keyOf(f), false)
 	if err != nil {
 		t.Fatal(err)
 	}

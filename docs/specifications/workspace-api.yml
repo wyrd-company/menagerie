@@ -10,6 +10,7 @@ relationships:
     - backup-force-push-overwrites-branch
     - workspace-fills-its-backup-branch
     - choose-a-backup-repository-per-workspace
+    - choose-a-credential-per-backup-repository
 format: openapi
 description: >-
   The workspace service serves a JSON API to the browser, defined by
@@ -307,21 +308,39 @@ description: >-
 
   Backup repositories. `GET /api/backup-repositories` lists the registered
   backup repositories sorted by name as letters without regard to case,
-  then by name and id, each `{id, name, url, workspaces}`, `workspaces` the
-  names of the workspaces that back up to it. Every `url` a reply holds,
-  here and on a workspace's row, has no password, query or fragment, and
-  an `https` one no user name.
+  then by name and id, each `{id, name, url, credential, workspaces}`,
+  `workspaces` the names of the workspaces that back up to it. Every `url`
+  a reply holds, here and on a workspace's row, has no password, query or
+  fragment, and an `https` one no user name. `credential` is
+  `{"githubApp"}`, an App's configured name, `{"sshKey","fingerprint"}`, a
+  public key in authorized-keys form with no comment and its SHA256
+  fingerprint, or null for a registration an earlier release made, whose
+  URL chooses its credential.
   `POST /api/backup-repositories`
-  takes `{"name","url","check"}`, `check` optional and false by default,
-  and runs the checks of the design's `backup-repositories` in order:
-  `url`, then `write`, which pushes a ref under `refs/menagerie/` and
-  deletes it. A name that is not one line of 1 to 100 characters is 400
+  takes `{"name","url","credential","check"}`, `check` optional and false
+  by default, `credential` `{"githubApp"}` or `{"sshKey"}`, a public key
+  with or without a comment, which is recorded without it. It runs the
+  checks of the design's `backup-repositories` in order: `url`, then
+  `credential`, then `write`, which pushes a ref under `refs/menagerie/`
+  with that credential and deletes it. A name that is not one line of 1 to
+  100 characters, and a credential that names neither or both of
+  `githubApp` and `sshKey`, or names `fingerprint`, is 400
   `invalid-request`; a failed check is 422 `backup-repository-check-failed`
   with `check` naming it; a URL that is registered is 409
   `backup-repository-exists`, naming that registration. It answers 201 with
   the repository and `Location: /api/backup-repositories/{id}`, or, with
   `check`, 200 with the repository a registration would store, storing
-  nothing. `DELETE /api/backup-repositories/{id}` answers 204, leaving the
+  nothing. `PUT /api/backup-repositories/{id}/credential` takes
+  `{"credential","check"}`, `credential` required, runs the `credential`
+  and `write` checks with it, and answers 200 with the repository and its
+  new credential, or, with `check`, the repository as the change would
+  record it, storing nothing; it refuses as a registration does, 404
+  `unknown-backup-repository` for an id none has. `GET /api/credentials`
+  answers `{githubApps, sshKeys, sshAgent}`: each configured App as
+  `{name, server}`, in configuration order; each key Wyrwood's SSH agent
+  offers as `{name, fingerprint, publicKey}`, `name` the agent's comment,
+  in the agent's order, without provisioning's operator key; and
+  `sshAgent` null, or the fixed reason the agent listed no key. `DELETE /api/backup-repositories/{id}` answers 204, leaving the
   repository and its branches as they are and its id never given to another
   repository, 409 `backup-repository-in-use`
   while a workspace backs up to it, naming those workspaces, and 404
@@ -1100,9 +1119,19 @@ validation-criteria: >-
   single container and a Compose primary created without the socket, with
   the same container id, until a rebuild gives it the socket. `go test
   ./backend/internal/backuprepos/ ./backend/internal/api/` registers a
-  backup repository over the test's SSH host, refuses each URL form the
-  routes refuse and a repository Menagerie cannot write to, stores nothing
-  for a check, and refuses removing one a workspace backs up to; `go test
+  backup repository over the test's SSH host with its key, refuses each
+  URL form the routes refuse, a credential that does not fit the URL and a
+  repository Menagerie cannot write to with the credential given though
+  the agent's other key could, stores nothing for a check, changes a
+  credential only after its checks pass, lists the credentials, and
+  refuses removing one a workspace backs up to; `go test
+  ./backend/internal/gitcreds/` lists the agent's keys without the
+  operator key, refuses each credential that does not fit a URL, and sends
+  only the named App's token; `go test ./backend/internal/backup/` offers
+  the test's SSH host only the repository's key from an agent whose first
+  key is another, waits for a slow agent's signature, and refuses a key
+  that a later listing offers and the check's listing did not, or that
+  the listing names under an alias too; `go test
   ./backend/internal/workflows/` has a create record its repository from
   its start and take the only registered one, and moves a workspace's
   backups to an empty repository, refuses one whose branch holds another
@@ -1112,3 +1141,19 @@ validation-criteria: >-
   `scripts/prove-backup-repository-guards.py` breaks each of those guards,
   the write check's deletion of its ref and the data's foreign key in turn
   and requires its test to fail.
+  `scripts/prove-backup-credential-guards.py` breaks in turn the key
+  offered alone, the App's token sent only where it serves, each refusal
+  of a credential that does not fit its URL, the key recorded without its
+  comment, the write check with the credential given, a checked change
+  storing nothing, a change landing only at the URL checked, the operator
+  key left out of the list, an operator-key check the agent cannot answer
+  refused, the key list's request wait, a transfer's lack of one, a
+  connection idle between requests, the connection's close at its
+  operation's end, a saved key refused once excluded, by the listing that
+  gives its signer and under every name it lists, the key list's operator
+  key under every name and each other key listed once, the write check's refusal naming its credential, the
+  picker's App names in any case and its saved credential never swapped,
+  and the screen's Apps and keys for each URL form of the shared table
+  `credential-url-cases.json`, its hosts unescaped and put in lower case
+  as Go does, IPv6 zones included, and its paths read with Go's regexp
+  classes, and requires its test to fail.

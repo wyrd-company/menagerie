@@ -1,5 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
+import { fixtureCredentials } from "../fixture-server/state.ts";
 import { expectNoHorizontalScroll, reset, shot } from "./support.ts";
+
+const gitKey = fixtureCredentials.sshKeys[0]!;
 
 test.beforeEach(async ({ request }) => reset(request));
 
@@ -18,6 +21,9 @@ test("registers a backup repository and creates a workspace that backs up to it"
   await expect(page.getByRole("heading", { name: "Backup repositories", level: 1 })).toBeVisible();
   const example = page.getByRole("listitem").filter({ hasText: "Example backups" });
   await expect(example.getByText(/Backs up sample-alpha/)).toBeVisible();
+  await expect(
+    example.getByText("Credential chosen by URL: every key the SSH agent offers"),
+  ).toBeVisible();
   await expect(example.getByRole("button", { name: "Remove" })).toBeDisabled();
   await shot(page, "backups-list");
 
@@ -32,6 +38,9 @@ test("registers a backup repository and creates a workspace that backs up to it"
   await expect(save).toBeDisabled();
   await shot(page, "backups-register-refused");
   await page.getByLabel("Git URL").fill("git@git.example.test:client-org/backups.git");
+  // The agent's one key is chosen, and its public key shown for the Git host.
+  await expect(page.getByRole("combobox", { name: "Credential" })).toHaveValue(gitKey.publicKey);
+  await expect(page.getByRole("group", { name: "Public key" })).toContainText(gitKey.publicKey);
   await page.getByRole("button", { name: "Validate" }).click();
   await expect(page.getByRole("status")).toHaveText(
     "Checks passed · Menagerie can write to it, as client-backups",
@@ -40,6 +49,7 @@ test("registers a backup repository and creates a workspace that backs up to it"
   await save.click();
   const client = page.getByRole("listitem").filter({ hasText: "Client backups" });
   await expect(client.getByText("No workspace backs up to it")).toBeVisible();
+  await expect(client.getByText(`SSH key ${gitKey.name} · ${gitKey.fingerprint}`)).toBeVisible();
 
   await page.getByRole("link", { name: "New workspace" }).click();
   await page.getByRole("radio", { name: /Sample kit/ }).check();
@@ -57,6 +67,40 @@ test("registers a backup repository and creates a workspace that backs up to it"
     backupRepositoryId: "client-backups",
   });
   await expect(page.getByText("Question batch 1")).toBeVisible();
+});
+
+test("changes a repository's credential after a Validate with it", async ({ page }) => {
+  await page.goto("/backup-repositories");
+  const example = page.getByRole("listitem").filter({ hasText: "Example backups" });
+  await example.getByRole("button", { name: "Change credential" }).click();
+  const form = example.getByRole("form", { name: "Change the credential of Example backups" });
+  const save = form.getByRole("button", { name: "Save" });
+  await expect(form.getByRole("combobox", { name: "Credential" })).toHaveValue(gitKey.publicKey);
+  await expect(save).toBeDisabled();
+  await form.getByRole("button", { name: "Validate" }).click();
+  await expect(form.getByRole("status")).toHaveText(
+    "Checks passed · Menagerie can write to it with this credential",
+  );
+  await shot(page, "backups-change-credential");
+  await save.click();
+  await expect(example.getByText(`SSH key ${gitKey.name} · ${gitKey.fingerprint}`)).toBeVisible();
+  await expect(form).toHaveCount(0);
+});
+
+test("offers an https URL the App that serves it", async ({ page }) => {
+  await page.goto("/backup-repositories");
+  await page.getByRole("button", { name: "Register repository" }).first().click();
+  await page.getByLabel("Display name").fill("Org backups");
+  await page.getByLabel("Git URL").fill("https://git.example.test/example-org/backups.git");
+  await expect(page.getByRole("combobox", { name: "Credential" })).toHaveValue("example-org");
+  const posted = page.waitForRequest(
+    (r) => r.url().endsWith("/api/backup-repositories") && r.method() === "POST",
+  );
+  await page.getByRole("button", { name: "Validate" }).click();
+  expect((await posted).postDataJSON()).toMatchObject({ credential: { githubApp: "example-org" } });
+  await page.getByRole("button", { name: "Save" }).click();
+  const org = page.getByRole("listitem").filter({ hasText: "Org backups" });
+  await expect(org.getByText("GitHub App example-org")).toBeVisible();
 });
 
 test.describe("narrow viewport", () => {
@@ -82,7 +126,11 @@ test("moves a workspace's backups, and keeps its repository when the move fails"
     ["Taken backups", "git@git.example.test:client-org/conflict.git"],
   ])
     expect(
-      (await page.request.post("/api/backup-repositories", { data: { name, url } })).ok(),
+      (
+        await page.request.post("/api/backup-repositories", {
+          data: { name, url, credential: { sshKey: gitKey.publicKey } },
+        })
+      ).ok(),
     ).toBe(true);
   await page.goto("/");
   const row = entry(page, "sample-beta");

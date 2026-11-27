@@ -46,13 +46,50 @@ export interface BackupRepositoryRef {
   url: string;
 }
 
+/**
+ * What a backup repository's transfers authenticate with: a GitHub App by
+ * its configured name, or an SSH key by its public key, with its
+ * fingerprint.
+ */
+export type BackupCredential = { githubApp: string } | { sshKey: string; fingerprint: string };
+
+/** A credential a registration or a change names. */
+export type BackupCredentialChoice = { githubApp: string } | { sshKey: string };
+
 /** A registered backup repository, with the names of the workspaces that back up to it. */
 export interface BackupRepository extends BackupRepositoryRef {
+  /**
+   * Null for a registration an earlier release made, whose URL chooses
+   * its credential.
+   */
+  credential: BackupCredential | null;
   workspaces: string[];
 }
 
 /** A backup repository's registration checks, in the order they run. */
-export type BackupCheck = "url" | "write";
+export type BackupCheck = "url" | "credential" | "write";
+
+/** A configured GitHub App: it serves https URLs `{server}/{owner}/{repository}`. */
+export interface GitHubAppChoice {
+  name: string;
+  server: string;
+}
+
+/** An SSH key Wyrwood's agent offers, named by its Transit key. */
+export interface SSHKeyChoice {
+  name: string;
+  fingerprint: string;
+  /** Authorized-keys form with no comment: the line a Git host takes. */
+  publicKey: string;
+}
+
+/** The credentials a backup repository can name. */
+export interface Credentials {
+  githubApps: GitHubAppChoice[];
+  sshKeys: SSHKeyChoice[];
+  /** Null when the agent listed its keys, else why it listed none. */
+  sshAgent: string | null;
+}
 
 /** A registered template. */
 export interface Template {

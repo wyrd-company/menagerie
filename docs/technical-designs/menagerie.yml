@@ -9,6 +9,7 @@ relationships:
     - let-menagerie-decide-each-binding
     - issue-a-key-to-every-provisioned-workspace
     - choose-a-backup-repository-per-workspace
+    - choose-a-credential-per-backup-repository
   mitigates:
     - menagerie-data-loss
 objective: >-
@@ -89,12 +90,14 @@ design-challenges:
     line of 1 to 100 characters, and a Git URL: `ssh://`, scp-like
     `git@host:path` or `https://`, with no password and no surrounding
     space. A local path, a `file://` URL and plain `http` are refused, so a
-    registration never writes into Menagerie's own filesystem. Registration
-    runs two checks in this order and refuses the repository at the first
-    that fails, naming it: `url`, the URL has one of those forms; `write`,
-    Menagerie pushes a ref `refs/menagerie/write-check-<random>` holding one
-    empty commit made in memory, with the credentials the URL gets (see
-    git-and-credentials and github-app), and deletes it, within one minute.
+    registration never writes into Menagerie's own filesystem. Each
+    registration names its credential, which every transfer of the
+    repository uses alone (see repository-credentials). Registration runs
+    three checks in this order and refuses the repository at the first that
+    fails, naming it: `url`, the URL has one of those forms; `credential`,
+    the credential fits the URL; `write`, Menagerie pushes a ref
+    `refs/menagerie/write-check-<random>` holding one empty commit made in
+    memory, with that credential, and deletes it, within one minute.
     The ref is not a branch, an empty repository stays empty, and no
     workspace is read. A failed deletion fails the check and names the ref.
     The check proves the credentials may write to the repository, not that
@@ -1256,6 +1259,64 @@ proposed-design:
     gets only them, `PATH` excepted, so its `PATH` is always the runner
     image's own. A refused reference resolves as an unset variable does and
     is named in the job log.
+  repository-credentials: >-
+    A backup repository's credential is recorded with its registration; the
+    decision choose-a-credential-per-backup-repository explains why. It is a
+    GitHub App, by the name `github-app` or `github-apps` gives it, or an
+    SSH key, by its public key in authorized-keys form with no comment. An
+    SSH URL takes a key; an `https` URL that a configured App's server holds
+    takes an App that serves it; any other `https` URL takes none and
+    pushes without credentials. The operator key that provisioning's
+    `operator-key` selects is never a credential, and is not listed. The
+    keys to choose from are the ones Wyrwood's `ssh-agent.sock` offers,
+    listed from the agent with their comment, which Wyrwood sets to the
+    Transit key's name, their fingerprint and their public key, so the
+    Wyrwood policy stays the one place that grants a key. A transfer with
+    a key dials the agent, finds that key among its signers, and offers the
+    Git host that key alone; one listing gives both the signer and the key
+    the operator-key check reads, so the agent cannot sign with a key the
+    check did not see, and the check reads every name the listing gives
+    the key: Wyrwood lists one Transit key once for each identity that
+    names it. The key list leaves out the operator key under every name,
+    and lists any other key once, with all its names. An agent that no longer offers it fails the
+    transfer naming its fingerprint, before any connection. A transfer with
+    an App sends that App's contents write token, and fails, naming the
+    App, a URL the App does not serve or an App no longer configured. A
+    registration from an earlier release has no credential and keeps the
+    rule chosen by URL: the first App whose server holds an `https` URL,
+    and every key the agent offers for an SSH URL. A manager can change a
+    repository's credential; the `credential` and `write` checks run with
+    the new one, and it is recorded only after they pass, while the
+    repository is still registered at the URL checked. The form starts
+    from the saved credential and never swaps it for another unasked: a
+    saved key the agent no longer offers, or a saved App that is gone or
+    no longer serves the URL, leaves the choice to the manager. App names
+    match in any case, as the configuration compares them. A failed write
+    check names the credential the Git host refused, by the App's name or
+    the key's fingerprint, so a manager can tell which one to fix. The
+    agent client makes one request at a time on a connection it cannot
+    close, so nothing reads between requests, and each request's deadline
+    bounds its own reply: an idle connection never times out. Listing the
+    keys, for the key list and the operator-key check, waits 15 seconds; a
+    manager waits on it, and Wyrwood fetches each Transit key's public key
+    in turn. A transfer's requests have no wait of their own: Menagerie
+    cannot tell a stalled agent from a slow one, and Wyrwood looks up every
+    identity it offers in OpenBao, each within its own timeout, before it
+    signs, so a healthy signature can take minutes. The connection closes
+    when its operation ends, so a stalled agent holds an operation only
+    until its job's time limit or a cancel, as
+    job-without-timeout-blocks-workspace describes for every transfer; a
+    registration's write check ends within its own minute.
+    The key list fails alone and the Apps still load. An operator-key check
+    the agent cannot answer refuses the key, which may be the operator key,
+    and each transfer with a key refuses it when the configuration has
+    since excluded it, by the agent's listing. Template fetches keep the
+    rule chosen by URL. The URL forms and the credential each takes are a
+    shared table, docs/specifications/assets/workspace-api/credential-url-cases.json,
+    which the service's tests and the picker's both read. The picker is
+    never stricter than the service: a URL the service refuses outright,
+    marked refused in the table, it may read more loosely, and the
+    service's refusal on save explains the URL.
   git-and-credentials: >-
     The workspace repository, a workspace's backup repository (see
     backup-repositories), is a backup, not a synchronized copy. The local
@@ -1266,23 +1327,31 @@ proposed-design:
     configuration. Template fetching belongs to Toha. Every credential comes
     through Wyrwood, chosen by URL; no key or token is stored in the
     container. An SSH URL uses the SSH agent at Wyrwood's `ssh-agent.sock`,
-    mounted from the host consumer directory. The agent offers one Git key,
-    an OpenBao Transit key, and with provisioning also the operator key, which
-    no Git host accepts. The Git key must reach every repository Menagerie uses
-    over SSH: a deploy key with write access on the backup repository
-    when there is one repository, else the SSH key of a machine user with write
-    access on every backup repository and read access on the private
+    mounted from the host consumer directory. The agent offers the Git keys
+    the Wyrwood policy grants, OpenBao Transit keys, and with provisioning
+    also the operator key, which no Git host accepts. A backup repository
+    with a key as its credential is offered that key alone (see
+    repository-credentials), so each repository can have a deploy key of its
+    own. A template fetch, and a backup repository registered by an earlier
+    release, are offered every key, and a Git host signs in with the first
+    it knows; for them the agent must offer one Git key, which reaches every
+    such repository: a deploy key with write access on the backup repository
+    when there is one repository, else the SSH key of a machine user with
+    write access on every backup repository and read access on the private
     template repositories. Toha fetches SSH templates through the same
     agent; its git transport runs the image's ssh client with
     `SSH_AUTH_SOCK` set to Wyrwood's socket. Repositories on GitHub can
     use the GitHub App instead (see github-app), which needs no SSH key and
     no machine user; SSH stays for other hosts.
   github-app: >-
-    With `github-app` configured, an `https` URL on the App's server whose
-    path is `/{owner}/{repo}` or `/{owner}/{repo}.git`, with no query or
-    fragment, uses a GitHub App installation token instead: a backup URL
-    only without user information, a template address with or without a
-    user name. The workspace service is the only minter. It signs the App's
+    With `github-app` or `github-apps` configured, an `https` URL on an
+    App's server whose path is `/{owner}/{repo}` or `/{owner}/{repo}.git`,
+    with no query or fragment, uses a GitHub App installation token instead:
+    a backup URL only without user information, a template address with or
+    without a user name. A backup repository whose credential names an App
+    uses that App alone; a template fetch, and a backup repository
+    registered by an earlier release, use the first App whose server holds
+    the URL. Each App mints its own tokens as below. The workspace service is the only minter. It signs the App's
     RS256 JWT, issued 60 seconds in the past and expiring 9 minutes after
     now, with the App's private key, an RSA key in OpenBao's Transit engine,
     through Wyrwood's `vault.sock` with no token of its own. It takes the
@@ -1330,11 +1399,11 @@ proposed-design:
   credential-route: >-
     The hook runner socket also serves the template service's credential
     route, `POST /v1/credentials/github` with the strict body `{"url"}`, an
-    `https` URL without user information. For a repository URL on the
-    GitHub App's server it answers 200 `{"username":"x-access-token",
+    `https` URL without user information. For a repository URL on a
+    configured App's server it answers, from the first such App, 200 `{"username":"x-access-token",
     "password"}` with a contents read token for that one repository. It
-    answers 404 `{"reason"}` when no `github-app` is configured or the URL is
-    any other, and the template service then keeps Toha's default
+    answers 404 `{"reason"}` when no App is configured or the URL is on no
+    App's server, and the template service then keeps Toha's default
     behaviour; 502 `{"reason"}` with the fixed reason when no token could be
     minted; 400 `{"reason"}` for a body that is not one URL, and 405 for a
     method other than POST. Any process that can open the socket, which

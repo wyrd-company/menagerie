@@ -54,6 +54,9 @@ type Options struct {
 	Registry Registry
 	// Backups registers backup repositories. Nil registers none.
 	Backups BackupRegistry
+	// Credentials lists the credentials a backup repository can name. Nil
+	// lists none.
+	Credentials CredentialSource
 	// AppliedRecord is the source a workspace folder's applied record
 	// names, or "", and the applied version it gives a template of that
 	// source; a folder listed for the first time joins the registered
@@ -98,6 +101,8 @@ func (s *Server) routes() []struct {
 		{Route{http.MethodGet, "/api/backup-repositories"}, s.listBackupRepositories},
 		{Route{http.MethodPost, "/api/backup-repositories"}, s.registerBackupRepository},
 		{Route{http.MethodDelete, "/api/backup-repositories/{id}"}, s.removeBackupRepository},
+		{Route{http.MethodPut, "/api/backup-repositories/{id}/credential"}, s.setBackupCredential},
+		{Route{http.MethodGet, "/api/credentials"}, s.listCredentials},
 		{Route{http.MethodGet, "/api/jobs"}, s.listJobs},
 		{Route{http.MethodPost, "/api/jobs"}, s.startJob},
 		{Route{http.MethodGet, "/api/jobs/{id}"}, s.getJob},

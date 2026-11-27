@@ -99,7 +99,7 @@ func (m *moving) run(ctx context.Context, run *jobs.Run) error {
 	if pending {
 		return fail(KindBackupMoveFailed, "the workspace's create has not finished; start the workspace to finish it, then move its backups")
 	}
-	destination := m.w.opts.Remotes.Remote(to.URL)
+	destination := m.w.opts.Remotes.Remote(to)
 	if err := destination.CheckWrite(ctx, run.Log("verify: ")); err != nil {
 		return fail(KindBackupMoveFailed, "Menagerie cannot write to %s: %v", to.Name, err)
 	}

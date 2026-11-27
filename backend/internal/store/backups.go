@@ -16,15 +16,28 @@ import (
 )
 
 // BackupRepository is a registered backup repository: its permanent id, its
-// display name and its Git URL, which holds one backup branch per workspace
-// that backs up to it.
+// display name, its Git URL, which holds one backup branch per workspace
+// that backs up to it, and the credential its transfers use.
 type BackupRepository struct {
-	ID   string
-	Name string
-	URL  string
+	ID         string
+	Name       string
+	URL        string
+	Credential Credential
 	// Workspaces are the workspaces that back up to it, in name order.
 	Workspaces []string
 }
+
+// Credential is what a backup repository's transfers authenticate with: a
+// GitHub App by its configured name, or an SSH key by its public key in
+// authorized-keys form with no comment. The zero Credential is a
+// registration from an earlier release, whose URL chooses its credential.
+type Credential struct {
+	App string
+	Key string
+}
+
+// IsZero reports whether c names no credential.
+func (c Credential) IsZero() bool { return c == Credential{} }
 
 // ErrNoBackupRepository means no backup repository has that id.
 var ErrNoBackupRepository = errors.New("no registered backup repository has this id")
@@ -73,7 +86,9 @@ func BackupRepositoryID(name string) string {
 
 func (t *Tx) backupRepository(id string) (BackupRepository, error) {
 	var r BackupRepository
-	err := t.tx.QueryRowContext(t.ctx, `SELECT id, name, url FROM backup_repositories WHERE id = ? AND removed_at IS NULL`, id).Scan(&r.ID, &r.Name, &r.URL)
+	var app, key sql.NullString
+	err := t.tx.QueryRowContext(t.ctx, `SELECT id, name, url, credential_app, credential_key FROM backup_repositories WHERE id = ? AND removed_at IS NULL`, id).Scan(&r.ID, &r.Name, &r.URL, &app, &key)
+	r.Credential = Credential{App: app.String, Key: key.String}
 	if errors.Is(err, sql.ErrNoRows) {
 		return BackupRepository{}, fmt.Errorf("%w: %s", ErrNoBackupRepository, id)
 	}
@@ -114,7 +129,7 @@ func (t *Tx) RegisterBackupRepository(r BackupRepository) (BackupRepository, err
 		}
 		r.ID = fmt.Sprintf("%s-%d", base, n)
 	}
-	if _, err := t.exec(`INSERT INTO backup_repositories (id, name, url) VALUES (?, ?, ?)`, r.ID, r.Name, r.URL); err != nil {
+	if _, err := t.exec(`INSERT INTO backup_repositories (id, name, url, credential_app, credential_key) VALUES (?, ?, ?, ?, ?)`, r.ID, r.Name, r.URL, nullable(r.Credential.App), nullable(r.Credential.Key)); err != nil {
 		return BackupRepository{}, err
 	}
 	return t.backupRepository(r.ID)
@@ -131,6 +146,29 @@ func (s *Store) RegisterBackupRepository(ctx context.Context, r BackupRepository
 // record, its id included, and its refusals, and stores nothing.
 func (s *Store) TryRegisterBackupRepository(ctx context.Context, r BackupRepository) (recorded BackupRepository, err error) {
 	err = s.Dry(ctx, func(t *Tx) error { recorded, err = t.RegisterBackupRepository(r); return err })
+	return recorded, err
+}
+
+// SetBackupRepositoryCredential records the credential of the registered
+// backup repository id, only while it is still registered at url, read in
+// the same transaction; otherwise it is ErrBackupRepositoryChanged, or
+// ErrNoBackupRepository for an id none has, and changes nothing. It
+// returns the repository as recorded.
+func (s *Store) SetBackupRepositoryCredential(ctx context.Context, id, url string, c Credential) (recorded BackupRepository, err error) {
+	err = s.Update(ctx, func(t *Tx) error {
+		r, err := t.backupRepository(id)
+		if err != nil {
+			return err
+		}
+		if r.URL != url {
+			return fmt.Errorf("%w: %s", ErrBackupRepositoryChanged, id)
+		}
+		if _, err := t.exec(`UPDATE backup_repositories SET credential_app = ?, credential_key = ? WHERE id = ?`, nullable(c.App), nullable(c.Key), id); err != nil {
+			return err
+		}
+		recorded, err = t.backupRepository(id)
+		return err
+	})
 	return recorded, err
 }
 

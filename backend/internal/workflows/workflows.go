@@ -72,8 +72,9 @@ type Runtime interface {
 // *backuprepos.Registry satisfies it.
 type Remotes interface {
 	For(ctx context.Context, workspace string) (*backup.Remote, error)
-	// Remote is the repository at url, with the credentials it gets.
-	Remote(url string) *backup.Remote
+	// Remote is the registered repository repo, reached with its
+	// credential.
+	Remote(repo store.BackupRepository) *backup.Remote
 }
 
 // Options compose the workflows.

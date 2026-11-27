@@ -97,10 +97,12 @@ type Config struct {
 	// WorkspaceSocket gives each workspace's devcontainer a socket that
 	// commits and backs up its own workspace. Absent, no socket.
 	WorkspaceSocket *WorkspaceSocket `yaml:"workspace-socket"`
-	// GitHubApp authenticates backups and template fetches over https to
-	// repositories on its server with installation tokens. Absent, no
-	// token is minted.
-	GitHubApp *GitHubApp `yaml:"github-app"`
+	// GitHubApp is one GitHub App, as earlier releases configured it,
+	// named DefaultGitHubAppName unless it gives a name. GitHubApps lists
+	// any number, each named; a configuration gives one key or the other.
+	// Apps gives them together. Absent, no token is minted.
+	GitHubApp  *GitHubApp  `yaml:"github-app"`
+	GitHubApps []GitHubApp `yaml:"github-apps"`
 	// Provisioning names the host's provisioning services. Absent, a
 	// definition with a provisioning declaration cannot be provisioned.
 	Provisioning *Provisioning `yaml:"provisioning"`
@@ -154,6 +156,10 @@ type KeySecret struct {
 // for https repository URLs on its server. The App's private key is a
 // Transit key in OpenBao, used through the Wyrwood vault socket.
 type GitHubApp struct {
+	// Name is what a backup repository's credential calls the App: one
+	// name of letters, digits, '_', '.' and '-'. Required in github-apps;
+	// in github-app, absent is DefaultGitHubAppName.
+	Name string `yaml:"name"`
 	// AppID is the App's id.
 	AppID int64 `yaml:"app-id"`
 	// TransitKey is the name of the Transit key that holds the App's
@@ -166,6 +172,18 @@ type GitHubApp struct {
 	// Server is the GitHub server's https origin. Absent,
 	// githubapp.DefaultServer.
 	Server string `yaml:"server"`
+}
+
+// DefaultGitHubAppName names the App of github-app when it gives no name.
+const DefaultGitHubAppName = "github-app"
+
+// Apps are the configured GitHub Apps in configuration order: the App of
+// github-app, or those of github-apps.
+func (c *Config) Apps() []GitHubApp {
+	if c.GitHubApp != nil {
+		return []GitHubApp{*c.GitHubApp}
+	}
+	return c.GitHubApps
 }
 
 // AutoCommit is the schedule of automatic commits.
@@ -510,8 +528,18 @@ func (c *Config) applyDefaults() {
 	if c.WorkspaceRoot != "" {
 		c.WorkspaceRoot = filepath.Clean(c.WorkspaceRoot)
 	}
-	if c.GitHubApp != nil && c.GitHubApp.Server == "" {
-		c.GitHubApp.Server = githubapp.DefaultServer
+	if c.GitHubApp != nil {
+		if c.GitHubApp.Name == "" {
+			c.GitHubApp.Name = DefaultGitHubAppName
+		}
+		if c.GitHubApp.Server == "" {
+			c.GitHubApp.Server = githubapp.DefaultServer
+		}
+	}
+	for i := range c.GitHubApps {
+		if c.GitHubApps[i].Server == "" {
+			c.GitHubApps[i].Server = githubapp.DefaultServer
+		}
 	}
 }
 
@@ -609,9 +637,7 @@ func (c *Config) validate() error {
 	if c.WorkspaceSocket != nil {
 		errs = append(errs, c.WorkspaceSocket.validate(c)...)
 	}
-	if c.GitHubApp != nil {
-		errs = append(errs, c.GitHubApp.validate()...)
-	}
+	errs = append(errs, c.validateApps()...)
 	if c.Provisioning != nil {
 		if err := c.Provisioning.ReadinessWait.validate("provisioning.readiness-wait"); err != nil {
 			errs = append(errs, err)
@@ -692,19 +718,47 @@ func (w *WorkspaceSocket) validate(c *Config) []error {
 	return errs
 }
 
-// validate checks the GitHub App block. No error names a value.
-func (g *GitHubApp) validate() []error {
+// validateApps checks github-app and github-apps: one key or the other,
+// each App valid, and no name given twice. No error names a value.
+func (c *Config) validateApps() []error {
+	if c.GitHubApp != nil && c.GitHubApps != nil {
+		return []error{errors.New("github-app and github-apps cannot both be given: list every App under github-apps")}
+	}
+	if c.GitHubApp != nil {
+		return c.GitHubApp.validate("github-app")
+	}
 	var errs []error
+	names := map[string]bool{}
+	for i, g := range c.GitHubApps {
+		field := fmt.Sprintf("github-apps[%d]", i)
+		if g.Name == "" {
+			errs = append(errs, fmt.Errorf("%s.name is required", field))
+		} else if names[strings.ToLower(g.Name)] {
+			errs = append(errs, fmt.Errorf("%s.name is the name of an earlier App; names are compared in lower case", field))
+		}
+		names[strings.ToLower(g.Name)] = true
+		errs = append(errs, g.validate(field)...)
+	}
+	return errs
+}
+
+// validate checks one GitHub App, field naming it in each error. No error
+// names a value.
+func (g *GitHubApp) validate(field string) []error {
+	var errs []error
+	if g.Name != "" && !githubapp.ValidName(g.Name) {
+		errs = append(errs, fmt.Errorf("%s.name must be one name: letters, digits, '_', '.' and '-', starting with a letter or digit, of at most 100 characters", field))
+	}
 	if g.AppID <= 0 {
-		errs = append(errs, errors.New("github-app.app-id must be a positive integer"))
+		errs = append(errs, fmt.Errorf("%s.app-id must be a positive integer", field))
 	}
 	if g.TransitKey == "" {
-		errs = append(errs, errors.New("github-app.transit-key is required"))
+		errs = append(errs, fmt.Errorf("%s.transit-key is required", field))
 	} else if !githubapp.ValidTransitKey(g.TransitKey) {
-		errs = append(errs, errors.New("github-app.transit-key must be one Transit key name: letters, digits, '_', '.' and '-', starting with a letter or digit"))
+		errs = append(errs, fmt.Errorf("%s.transit-key must be one Transit key name: letters, digits, '_', '.' and '-', starting with a letter or digit", field))
 	}
 	if err := githubapp.ValidServer(g.Server); err != nil {
-		errs = append(errs, fmt.Errorf("github-app.server %w", err))
+		errs = append(errs, fmt.Errorf("%s.server %w", field, err))
 	}
 	owners := map[string]bool{}
 	var badOwner, badID, twice bool
@@ -715,13 +769,13 @@ func (g *GitHubApp) validate() []error {
 		owners[strings.ToLower(owner)] = true
 	}
 	if badOwner {
-		errs = append(errs, errors.New("github-app.installations has a key that is not a GitHub account name"))
+		errs = append(errs, fmt.Errorf("%s.installations has a key that is not a GitHub account name", field))
 	}
 	if badID {
-		errs = append(errs, errors.New("github-app.installations has an installation id that is not a positive integer"))
+		errs = append(errs, fmt.Errorf("%s.installations has an installation id that is not a positive integer", field))
 	}
 	if twice {
-		errs = append(errs, errors.New("github-app.installations names one account twice; account names are compared in lower case"))
+		errs = append(errs, fmt.Errorf("%s.installations names one account twice; account names are compared in lower case", field))
 	}
 	return errs
 }

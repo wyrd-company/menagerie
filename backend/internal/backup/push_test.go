@@ -3,13 +3,19 @@ package backup
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"errors"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/wyrd-company/menagerie/backend/internal/backup/backuptest"
@@ -146,4 +152,238 @@ func TestAgentAuthUsesTheDefaultKnownHostsWhenNoneAreGiven(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "knownhosts") && !strings.Contains(err.Error(), "known hosts") {
 		t.Fatalf("push to a host with no known key: %v", err)
 	}
+}
+
+// AgentKeyAuth offers the Git host only the repository's key, whatever
+// else the agent holds, and fails naming the key when the agent does not
+// offer it.
+func TestAgentKeyAuthOffersOnlyTheRepositorysKey(t *testing.T) {
+	f := backuptest.New(t)
+	bare(t, f.Dir, "backups.git")
+	folder := newWorkspace(t, "alpha")
+	if _, err := CommitRoot(folder, "alpha", generate(t, folder), "Create", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// The decoy is the agent's first key, which an agent offering every key
+	// offers before the repository's.
+	keyring := agent.NewKeyring()
+	decoy, repoKey := sampleKey(t, keyring, "sample-decoy-key"), sampleKey(t, keyring, "sample-repository-key")
+	f.Authorize(repoKey)
+	socket := f.ServeAgent(t, keyring)
+	push := func(auth Auth) error {
+		_, err := (&Remote{URL: f.URL("backups.git"), Auth: auth}).Push(ctx, folder, "alpha", nil)
+		return err
+	}
+	// Every key, as a registration from an earlier release has it: the
+	// host sees the decoy first, so the fixture records each offer.
+	f.Offered()
+	if err := push(AgentAuth(socket, f.KnownHosts)); err != nil {
+		t.Fatal(err)
+	}
+	if offered := f.Offered(); len(offered) == 0 || offered[0] != ssh.FingerprintSHA256(decoy) {
+		t.Fatalf("every key offered %v, not the decoy first", offered)
+	}
+	write(t, folder, "later.txt", "a later backup\n")
+	if _, err := CommitAll(folder, "alpha", "Later", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := push(AgentKeyAuth(socket, backuptest.AuthorizedKey(repoKey), f.KnownHosts)); err != nil {
+		t.Fatal(err)
+	}
+	offered := f.Offered()
+	for _, fingerprint := range offered {
+		if fingerprint != ssh.FingerprintSHA256(repoKey) {
+			t.Fatalf("offered %s besides the repository's key", fingerprint)
+		}
+	}
+	if len(offered) == 0 {
+		t.Fatal("no key offered")
+	}
+	err := push(AgentKeyAuth(socket, backuptest.AuthorizedKey(decoy), f.KnownHosts))
+	if err == nil || !strings.Contains(err.Error(), "unable to authenticate") {
+		t.Fatalf("a key the host refuses: %v", err)
+	}
+	for _, fingerprint := range f.Offered() {
+		if fingerprint != ssh.FingerprintSHA256(decoy) {
+			t.Fatalf("offered %s besides the repository's key", fingerprint)
+		}
+	}
+	absent := sampleKey(t, agent.NewKeyring(), "sample-absent-key")
+	err = push(AgentKeyAuth(socket, backuptest.AuthorizedKey(absent), f.KnownHosts))
+	if err == nil || !strings.Contains(err.Error(), "does not offer the repository's key "+ssh.FingerprintSHA256(absent)) {
+		t.Fatalf("a key the agent does not offer: %v", err)
+	}
+	if offered := f.Offered(); len(offered) != 0 {
+		t.Fatalf("a key the agent does not offer reached the host: %v", offered)
+	}
+	if err := push(AgentKeyAuth(socket, "not a key", f.KnownHosts)); err == nil || !strings.Contains(err.Error(), "not a public key") {
+		t.Fatalf("not a key: %v", err)
+	}
+	_, _, err = AgentKeyAuth(socket, backuptest.AuthorizedKey(repoKey))(ctx, "https://git.example.invalid/example-org/backups.git")
+	var credentials *CredentialsError
+	if !errors.As(err, &credentials) {
+		t.Fatalf("an https URL: %v", err)
+	}
+}
+
+func TestAStalledAgentFailsTheTransferInTime(t *testing.T) {
+	socket := backuptest.StalledAgent(t)
+	key := backuptest.AuthorizedKey(sampleKey(t, agent.NewKeyring(), "sample-repository-key"))
+	url := "ssh://git@git.example.invalid/example-org/backups.git"
+	// The operation's end closes the connection.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := backuptest.Within(t, 2*time.Second, func() error { _, _, err := AgentKeyAuth(socket, key)(ctx, url); return err })
+	if err == nil {
+		t.Fatal("a stalled agent gave the repository's key")
+	}
+}
+
+// A transfer has no wait of its own: a slow agent's keys and signature
+// arrive whenever the agent gives them, within the operation.
+func TestATransferWaitsForASlowAgent(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	key := sampleKey(t, keyring, "sample-repository-key")
+	socket := f.ServeAgent(t, slowAgent{keyring, 2 * time.Second})
+	err := backuptest.Within(t, 30*time.Second, func() error {
+		method, release, err := AgentKeyAuth(socket, backuptest.AuthorizedKey(key))(context.Background(), "ssh://git@git.example.invalid/example-org/backups.git")
+		if err != nil {
+			return err
+		}
+		defer release()
+		signers, err := method.(*gitssh.PublicKeysCallback).Callback()
+		if err != nil {
+			return err
+		}
+		_, err = signers[0].Sign(rand.Reader, []byte("sample data"))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("a slow agent's signature: %v", err)
+	}
+}
+
+// changingAgent lists its keys without hidden on the first listing only,
+// as Wyrwood may when one OpenBao lookup fails.
+type changingAgent struct {
+	agent.Agent
+	hidden ssh.PublicKey
+	lists  *atomic.Int32
+}
+
+func (a changingAgent) List() ([]*agent.Key, error) {
+	keys, err := a.Agent.List()
+	if a.lists.Add(1) > 1 || err != nil {
+		return keys, err
+	}
+	var shown []*agent.Key
+	for _, k := range keys {
+		if !bytes.Equal(k.Marshal(), a.hidden.Marshal()) {
+			shown = append(shown, k)
+		}
+	}
+	return shown, nil
+}
+
+// The refusal checks every name the listing gives the key: an alias listed
+// first does not hide the operator key's own name.
+func TestTheRefusalChecksEveryNameOfTheKey(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	key := sampleKey(t, keyring, "sample-operator-key")
+	socket := f.ServeAgent(t, backuptest.AliasAgent(keyring, key, "sample-alias"))
+	refuse := func(k *agent.Key) error {
+		if k.Comment == "sample-operator-key" {
+			return errors.New("is the operator key")
+		}
+		return nil
+	}
+	_, release, err := AgentKeyAuthRefusing(socket, backuptest.AuthorizedKey(key), refuse)(context.Background(), "ssh://git@git.example.invalid/example-org/backups.git")
+	if err == nil {
+		release()
+		t.Fatal("the transfer signed with the operator key under another name")
+	}
+	// A key with no refused name still signs under its alias.
+	_, release, err = AgentKeyAuthRefusing(socket, backuptest.AuthorizedKey(key), func(*agent.Key) error { return nil })(context.Background(), "ssh://git@git.example.invalid/example-org/backups.git")
+	if err != nil {
+		t.Fatalf("a key with an alias: %v", err)
+	}
+	release()
+}
+
+// The refusal checks the key the transfer signs with, from the same
+// listing: a key the first listing omits is not offered by a later one.
+func TestTheRefusalChecksTheListingThatGivesTheSigner(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	key := sampleKey(t, keyring, "sample-operator-key")
+	socket := f.ServeAgent(t, changingAgent{keyring, key, new(atomic.Int32)})
+	refuse := func(k *agent.Key) error {
+		if k.Comment == "sample-operator-key" {
+			return errors.New("is the operator key")
+		}
+		return nil
+	}
+	_, release, err := AgentKeyAuthRefusing(socket, backuptest.AuthorizedKey(key), refuse)(context.Background(), "ssh://git@git.example.invalid/example-org/backups.git")
+	if err == nil {
+		release()
+		t.Fatal("the transfer signed with a key its check never saw")
+	}
+}
+
+// slowAgent is an agent whose signatures each take delay, as Wyrwood's do
+// while OpenBao signs.
+type slowAgent struct {
+	agent.Agent
+	delay time.Duration
+}
+
+func (a slowAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
+	time.Sleep(a.delay)
+	return a.Agent.Sign(key, data)
+}
+
+// A wait, as the key list gives one, bounds a request's reply alone: a connection idle between
+// requests for longer than the wait still makes the next request, and a
+// signature that takes most of the wait still arrives.
+func TestAgentWaitBoundsEachRequestAlone(t *testing.T) {
+	f := backuptest.New(t)
+	keyring := agent.NewKeyring()
+	key := sampleKey(t, keyring, "sample-repository-key")
+	wait := 300 * time.Millisecond
+	client, release, err := DialAgent(context.Background(), f.ServeAgent(t, slowAgent{keyring, wait / 2}), wait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := client.List(); err != nil {
+		t.Fatal(err)
+	}
+	// Idle for twice the wait, as a handshake is between listing the keys
+	// and signing.
+	time.Sleep(2 * wait)
+	err = backuptest.Within(t, 5*time.Second, func() error {
+		_, err := client.Sign(key, []byte("sample data"))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("a signature after an idle wait: %v", err)
+	}
+}
+
+// sampleKey adds a generated key to keyring under name and returns its
+// public key.
+func sampleKey(t *testing.T, keyring agent.Agent, name string) ssh.PublicKey {
+	t.Helper()
+	_, private, _ := ed25519.GenerateKey(rand.Reader)
+	signer, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keyring.Add(agent.AddedKey{PrivateKey: private, Comment: name}); err != nil {
+		t.Fatal(err)
+	}
+	return signer.PublicKey()
 }

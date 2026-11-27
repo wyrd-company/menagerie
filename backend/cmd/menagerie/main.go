@@ -34,6 +34,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/commits"
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/openbaokv"
@@ -122,13 +123,13 @@ func run(configPath string) error {
 		// Queued alerts get the delivery time limit, no more.
 		defer webhook.Close()
 	}
-	app, err := gitHubApp(cfg)
+	apps, err := gitHubApps(cfg)
 	if err != nil {
 		return err
 	}
-	auth := backupAuth(cfg, app)
+	credentials := gitCredentials(cfg, apps)
 	manager := jobs.NewManager(ctx, jobOpts)
-	commitJobs := commits.New(commits.Options{Root: root, Remote: &backuprepos.Registry{Data: data, Auth: auth}, Jobs: manager})
+	commitJobs := commits.New(commits.Options{Root: root, Remote: &backuprepos.Registry{Data: data, Credentials: credentials}, Jobs: manager})
 	client, err := clientPath()
 	if err != nil {
 		return err
@@ -152,7 +153,7 @@ func run(configPath string) error {
 		return err
 	}
 	versions := &registry.Registry{Data: data, Templates: templates.New(cfg.TemplateService.Socket), Root: root}
-	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, app)
+	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, apps)
 	if err != nil {
 		return err
 	}
@@ -172,7 +173,7 @@ func run(configPath string) error {
 		return err
 	}
 	policyServer := api.New(api.Options{Root: root, Data: data, Jobs: manager, Policies: func() api.PolicySource { source, _ := clients.Bindings.(api.PolicySource); return source }(), PolicyApplication: policySteps})
-	handler, err := newHandler(cfg, root, data, auth, runtime, clients, manager, parts.hooks, parts.images, versions)
+	handler, err := newHandler(cfg, root, data, credentials, runtime, clients, manager, parts.hooks, parts.images, versions)
 	if err != nil {
 		return err
 	}
@@ -434,14 +435,14 @@ func throwawayContainers(ctx context.Context, cfg *config.Config, root *workspac
 
 // serveHooks serves the template service's routes on the hook runner
 // socket at path until stop, which also removes the socket: hooks, and
-// GitHub App credentials from app, which may be nil. errs receives a
+// GitHub App credentials from apps, which may be none. errs receives a
 // serving failure.
-func serveHooks(ctx context.Context, path string, hooks *throwaway.HookRunner, app *githubapp.Minter) (errs <-chan error, stop func(), err error) {
+func serveHooks(ctx context.Context, path string, hooks *throwaway.HookRunner, apps githubapp.Apps) (errs <-chan error, stop func(), err error) {
 	listener, err := throwaway.ListenHookRunner(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("hook runner socket: %w", err)
 	}
-	server := &http.Server{Handler: hookRoutes(hooks, app), BaseContext: func(net.Listener) context.Context { return ctx }}
+	server := &http.Server{Handler: hookRoutes(hooks, apps), BaseContext: func(net.Listener) context.Context { return ctx }}
 	failed := make(chan error, 1)
 	go func() {
 		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
@@ -457,8 +458,8 @@ func serveHooks(ctx context.Context, path string, hooks *throwaway.HookRunner, a
 // hookRoutes are the hook runner socket's routes: the credential route,
 // and every other path to hooks, which answers the paths it does not
 // serve.
-func hookRoutes(hooks *throwaway.HookRunner, app *githubapp.Minter) http.Handler {
-	credentials := githubapp.Handler(app)
+func hookRoutes(hooks *throwaway.HookRunner, apps githubapp.Apps) http.Handler {
+	credentials := githubapp.Handler(apps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == githubapp.CredentialPath {
 			credentials.ServeHTTP(w, r)
@@ -470,8 +471,8 @@ func hookRoutes(hooks *throwaway.HookRunner, app *githubapp.Minter) http.Handler
 
 // newHandler is the workspace service's whole HTTP surface: the workspace
 // API behind manager sign-in.
-func newHandler(cfg *config.Config, root *workspace.Root, data *store.Store, auth backup.Auth, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) (http.Handler, error) {
-	return signedIn(newServer(cfg, root, data, auth, runtime, clients, manager, hooks, images, versions), cfg.OIDC)
+func newHandler(cfg *config.Config, root *workspace.Root, data *store.Store, credentials *gitcreds.Source, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) (http.Handler, error) {
+	return signedIn(newServer(cfg, root, data, credentials, runtime, clients, manager, hooks, images, versions), cfg.OIDC)
 }
 
 // signedIn serves server behind manager sign-in: the sign-in routes are
@@ -488,13 +489,13 @@ func signedIn(server *api.Server, c config.OIDC) (http.Handler, error) {
 // newServer composes the workspace API: the container operations, create
 // and upgrade with their interviews, commit, and the web UI embedded at build time.
 // Each workspace backs up to its backup repository in data, reached with
-// auth. Template hooks run through hooks in the template's
+// the credential it names, from credentials. Template hooks run through hooks in the template's
 // runner image; nil hooks refuse every hook. Every job that can create a
 // container runs through the provisioning steps, which keep what they provision
 // in data.
-func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, auth backup.Auth, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) *api.Server {
+func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, credentials *gitcreds.Source, runtime *devcontainer.Runtime, clients provisioning.Clients, manager *jobs.Manager, hooks *throwaway.HookRunner, images *throwaway.Images, versions *registry.Registry) *api.Server {
 	service := templates.New(cfg.TemplateService.Socket)
-	backups := &backuprepos.Registry{Data: data, Auth: auth}
+	backups := &backuprepos.Registry{Data: data, Credentials: credentials}
 	if versions == nil {
 		versions = &registry.Registry{Data: data, Templates: service, Root: root}
 	}
@@ -550,36 +551,44 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, auth
 		PairingTokens: t3code.NewMinter(runtime.Docker()),
 		Registry:      versions,
 		Backups:       backups,
+		Credentials:   credentials,
 		AppliedRecord: registry.Join,
 		UI:            web.FS,
 	})
 	return server
 }
 
-// backupAuth is the credentials of every backup repository: over https on
-// the GitHub App's server, a contents write token of app when app is not
-// nil; over SSH, the SSH agent socket in the Wyrwood consumer directory.
-func backupAuth(cfg *config.Config, app *githubapp.Minter) backup.Auth {
-	auth := backup.AgentAuth(filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName))
-	if app != nil {
-		auth = backup.TokenAuth(app.Tokens(githubapp.Write), auth)
+// gitCredentials are the credentials a backup repository can name: the
+// configured apps, and the keys the SSH agent socket in the Wyrwood
+// consumer directory offers, without provisioning's operator key. A
+// registration that names none keeps the earlier rule: over https on an
+// App's server, a contents write token of the first App that serves it;
+// over SSH, every key the agent offers.
+func gitCredentials(cfg *config.Config, apps githubapp.Apps) *gitcreds.Source {
+	source := &gitcreds.Source{Apps: apps, Socket: filepath.Join(cfg.WyrwoodDirectory, backup.AgentSocketName)}
+	if p := cfg.Provisioning; p != nil && p.Wyrwood != nil {
+		source.Excluded = p.Wyrwood.OperatorKey
 	}
-	return auth
+	return source
 }
 
-// gitHubApp is the GitHub App token minter, signing through the Transit
-// key at the Wyrwood vault socket, or nil when no github-app is
-// configured.
-func gitHubApp(cfg *config.Config) (*githubapp.Minter, error) {
-	g := cfg.GitHubApp
-	if g == nil {
-		return nil, nil
+// gitHubApps are the configured GitHub Apps' token minters, in
+// configuration order, each signing through its Transit key at the Wyrwood
+// vault socket; none when no App is configured.
+func gitHubApps(cfg *config.Config) (githubapp.Apps, error) {
+	var apps githubapp.Apps
+	for _, g := range cfg.Apps() {
+		signer, err := githubapp.NewTransit(registrycreds.SocketAddress(cfg.WyrwoodDirectory), g.TransitKey)
+		if err != nil {
+			return nil, err
+		}
+		m, err := githubapp.New(githubapp.Options{AppID: g.AppID, Signer: signer, Installations: g.Installations, Server: g.Server})
+		if err != nil {
+			return nil, err
+		}
+		apps = append(apps, githubapp.App{Name: g.Name, Server: g.Server, Minter: m})
 	}
-	signer, err := githubapp.NewTransit(registrycreds.SocketAddress(cfg.WyrwoodDirectory), g.TransitKey)
-	if err != nil {
-		return nil, err
-	}
-	return githubapp.New(githubapp.Options{AppID: g.AppID, Signer: signer, Installations: g.Installations, Server: g.Server})
+	return apps, nil
 }
 
 // provisioningClients are the host's provisioning services, as configuration

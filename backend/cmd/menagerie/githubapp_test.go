@@ -22,6 +22,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/config"
 	"github.com/wyrd-company/menagerie/backend/internal/githubapp"
+	"github.com/wyrd-company/menagerie/backend/internal/store"
 	"github.com/wyrd-company/menagerie/backend/internal/throwaway"
 )
 
@@ -59,6 +60,14 @@ func sampleMinter(t *testing.T) (*githubapp.Minter, *httptest.Server, *[]string)
 	return m, github, &permissions
 }
 
+// sampleApps are the Apps of m alone, or none when m is nil.
+func sampleApps(m *githubapp.Minter) githubapp.Apps {
+	if m == nil {
+		return nil
+	}
+	return githubapp.Apps{{Name: "sample-app", Minter: m}}
+}
+
 // hookSocket serves the hook runner socket with app and returns a client
 // for it.
 func hookSocket(t *testing.T, app *githubapp.Minter) *http.Client {
@@ -69,7 +78,7 @@ func hookSocket(t *testing.T, app *githubapp.Minter) *http.Client {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	path := filepath.Join(dir, "hook-runner.sock")
-	_, stop, err := serveHooks(context.Background(), path, throwaway.NewHookRunner(nil, filepath.Join(dir, "candidates")), app)
+	_, stop, err := serveHooks(context.Background(), path, throwaway.NewHookRunner(nil, filepath.Join(dir, "candidates")), sampleApps(app))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +134,7 @@ func TestBackupsUseAWriteTokenOnTheAppsServerAndSSHElsewhere(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	https := github.URL + "/example-org/backups.git"
-	auth, release, err := backupAuth(&config.Config{WyrwoodDirectory: dir}, m)(context.Background(), https)
+	auth, release, err := gitCredentials(&config.Config{WyrwoodDirectory: dir}, sampleApps(m)).Auth(store.Credential{})(context.Background(), https)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +151,7 @@ func TestBackupsUseAWriteTokenOnTheAppsServerAndSSHElsewhere(t *testing.T) {
 	}
 	defer l.Close()
 	ssh := "git@example.invalid:sample/backups.git"
-	auth, release, err = backupAuth(&config.Config{WyrwoodDirectory: dir}, m)(context.Background(), ssh)
+	auth, release, err = gitCredentials(&config.Config{WyrwoodDirectory: dir}, sampleApps(m)).Auth(store.Credential{})(context.Background(), ssh)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,17 +162,34 @@ func TestBackupsUseAWriteTokenOnTheAppsServerAndSSHElsewhere(t *testing.T) {
 }
 
 func TestGitHubAppIsComposedFromConfiguration(t *testing.T) {
-	if m, err := gitHubApp(&config.Config{WyrwoodDirectory: "/run/wyrwood"}); m != nil || err != nil {
-		t.Fatalf("absent: %v %v", m, err)
+	if apps, err := gitHubApps(&config.Config{WyrwoodDirectory: "/run/wyrwood"}); apps != nil || err != nil {
+		t.Fatalf("absent: %v %v", apps, err)
 	}
-	m, err := gitHubApp(&config.Config{WyrwoodDirectory: "/run/wyrwood", GitHubApp: &config.GitHubApp{AppID: 1, TransitKey: "sample-app-key", Server: "https://git.example.invalid"}})
-	if err != nil || m == nil {
-		t.Fatalf("configured: %v", err)
+	apps, err := gitHubApps(&config.Config{WyrwoodDirectory: "/run/wyrwood", GitHubApp: &config.GitHubApp{Name: "sample-app", AppID: 1, TransitKey: "sample-app-key", Server: "https://git.example.invalid"}})
+	if err != nil || len(apps) != 1 || apps[0].Name != "sample-app" || apps[0].Server != "https://git.example.invalid" {
+		t.Fatalf("configured: %+v %v", apps, err)
 	}
+	m := apps[0].Minter
 	if _, ok := m.Repository("https://git.example.invalid/example-org/sample-repo"); !ok {
 		t.Fatal("the configured server is not the minter's")
 	}
 	if _, ok := m.Repository("https://github.com/example-org/sample-repo"); ok {
 		t.Fatal("github.com served for another server")
+	}
+}
+
+func TestEveryListedGitHubAppIsComposedInOrder(t *testing.T) {
+	apps, err := gitHubApps(&config.Config{WyrwoodDirectory: "/run/wyrwood", GitHubApps: []config.GitHubApp{
+		{Name: "first-org", AppID: 1, TransitKey: "first-key", Server: "https://git.example.invalid"},
+		{Name: "second-org", AppID: 2, TransitKey: "second-key", Server: "https://github.com"},
+	}})
+	if err != nil || len(apps) != 2 || apps[0].Name != "first-org" || apps[1].Name != "second-org" {
+		t.Fatalf("%+v %v", apps, err)
+	}
+	if app, _, ok := apps.Serving("https://github.com/example-org/sample-repo"); !ok || app.Name != "second-org" {
+		t.Fatalf("serving: %+v %v", app, ok)
+	}
+	if app, ok := apps.Named("FIRST-ORG"); !ok || app.Name != "first-org" {
+		t.Fatalf("named: %+v %v", app, ok)
 	}
 }

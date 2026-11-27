@@ -416,6 +416,103 @@ paths:
           $ref: "#/components/responses/Error"
         "500":
           $ref: "#/components/responses/Error"
+  /api/backup-repositories/{id}/credential:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      operationId: setBackupRepositoryCredential
+      summary: >-
+        Change a backup repository's credential once the credential fits its
+        URL and Menagerie can write to it with that credential; with check,
+        run the checks alone.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [credential]
+              additionalProperties: false
+              properties:
+                credential:
+                  $ref: "#/components/schemas/BackupCredentialChoice"
+                check:
+                  type: boolean
+                  default: false
+                  description: Run the checks alone, as a change would, and store nothing.
+      responses:
+        "200":
+          description: The repository with its new credential; with check, as a change would record it, and nothing was stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupRepository"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/credentials:
+    get:
+      operationId: listCredentials
+      summary: The credentials a backup repository can name.
+      responses:
+        "200":
+          description: >-
+            The configured GitHub Apps, in configuration order, and the SSH
+            keys Wyrwood's agent offers, in the agent's order, without
+            provisioning's operator key.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [githubApps, sshKeys, sshAgent]
+                additionalProperties: false
+                properties:
+                  githubApps:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, server]
+                      additionalProperties: false
+                      properties:
+                        name:
+                          type: string
+                        server:
+                          type: string
+                          description: The App's GitHub server origin; it serves https URLs {server}/{owner}/{repository}.
+                  sshKeys:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, fingerprint, publicKey]
+                      additionalProperties: false
+                      properties:
+                        name:
+                          type: string
+                          description: The agent's comment on the key, the Transit key's name.
+                        fingerprint:
+                          type: string
+                          description: The key's SHA256 fingerprint.
+                        publicKey:
+                          type: string
+                          description: The public key in authorized-keys form with no comment, the line a Git host takes as a deploy key.
+                  sshAgent:
+                    description: Null when the agent listed its keys, else why it listed none.
+                    oneOf:
+                      - type: "null"
+                      - type: string
+        "500":
+          $ref: "#/components/responses/Error"
   /api/jobs:
     get:
       operationId: listJobs
@@ -844,7 +941,7 @@ components:
                       enum: [template-not-found, template-resolve-failed, invalid-address, template-service-unavailable]
     BackupRepository:
       type: object
-      required: [id, name, url, workspaces]
+      required: [id, name, url, credential, workspaces]
       additionalProperties: false
       properties:
         id:
@@ -856,11 +953,57 @@ components:
         url:
           type: string
           description: The Git URL every backup of its workspaces goes to.
+        credential:
+          description: >-
+            What its transfers authenticate with. Null for a registration
+            an earlier release made, which keeps the credential its URL
+            chooses: the first GitHub App whose server holds an https URL,
+            and every key the SSH agent offers for an SSH URL.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [githubApp]
+              additionalProperties: false
+              properties:
+                githubApp:
+                  type: string
+                  description: The configured name of the App.
+            - type: object
+              required: [sshKey, fingerprint]
+              additionalProperties: false
+              properties:
+                sshKey:
+                  type: string
+                  description: The key's public key in authorized-keys form with no comment.
+                fingerprint:
+                  type: string
+                  description: The key's SHA256 fingerprint.
         workspaces:
           type: array
           description: The workspaces that back up to it, in name order.
           items:
             type: string
+    BackupCredentialChoice:
+      description: >-
+        A GitHub App by its configured name, for an https URL on its
+        server, or an SSH key by its public key in authorized-keys form,
+        with or without a comment, for an SSH URL. The key is recorded with
+        no comment.
+      oneOf:
+        - type: object
+          required: [githubApp]
+          additionalProperties: false
+          properties:
+            githubApp:
+              type: string
+              minLength: 1
+        - type: object
+          required: [sshKey]
+          additionalProperties: false
+          properties:
+            sshKey:
+              type: string
+              minLength: 1
     BackupRepositoryRegistration:
       type: object
       required: [name, url]
@@ -877,6 +1020,14 @@ components:
             An ssh://, scp-like (git@host:path) or https:// Git URL with no
             password. A local path, a file:// URL and plain http are
             refused.
+        credential:
+          description: >-
+            Required for an SSH URL, an SSH key, and for an https URL that a
+            configured App's server holds, an App that serves it. Absent or
+            null only for any other https URL, which gets no credential.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/BackupCredentialChoice"
         check:
           type: boolean
           default: false
@@ -1223,6 +1374,6 @@ components:
                 Present with template-check-failed and
                 backup-repository-check-failed: the first registration
                 check that failed. A template's are address, fetch,
-                version, read and definition; a backup repository's are url
-                and write.
-              enum: [address, fetch, version, read, definition, url, write]
+                version, read and definition; a backup repository's are
+                url, credential and write.
+              enum: [address, fetch, version, read, definition, url, credential, write]

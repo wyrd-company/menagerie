@@ -1,6 +1,6 @@
 // ---
 // relationships:
-//   implements: [menagerie, choose-a-backup-repository-per-workspace]
+//   implements: [menagerie, choose-a-backup-repository-per-workspace, choose-a-credential-per-backup-repository]
 //   references: [workspace-api, configuration]
 // ---
 
@@ -21,7 +21,10 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
 )
 
@@ -30,8 +33,9 @@ const DefaultCheckWait = time.Minute
 
 // The checks a registration runs, as a CheckError names them.
 const (
-	CheckURL   = "url"
-	CheckWrite = "write"
+	CheckURL        = "url"
+	CheckCredential = "credential"
+	CheckWrite      = "write"
 )
 
 // InvalidError refuses a request value, such as a name.
@@ -40,8 +44,8 @@ type InvalidError struct{ Message string }
 func (e *InvalidError) Error() string { return e.Message }
 
 // CheckError refuses a repository that failed a registration check. Check
-// is CheckURL or CheckWrite; the message names what failed and no
-// credential.
+// is CheckURL, CheckCredential or CheckWrite; the message names what
+// failed and no secret.
 type CheckError struct {
 	Check   string
 	Message string
@@ -57,20 +61,30 @@ func (e *NoRepositoryError) Error() string {
 	return fmt.Sprintf("workspace %s has no backup repository; register one and move the workspace's backups to it", e.Workspace)
 }
 
-// Registry is the registered backup repositories, reached with Auth.
+// Credentials gives a credential its transfers' authentication, and
+// checks that a credential fits a URL. *gitcreds.Source satisfies it.
+type Credentials interface {
+	Auth(c store.Credential) backup.Auth
+	// Fit refuses, with a *gitcreds.FitError, a credential a new
+	// registration of url cannot have.
+	Fit(ctx context.Context, url string, c store.Credential) error
+}
+
+// Registry is the registered backup repositories, each reached with its
+// own credential.
 type Registry struct {
 	Data *store.Store
-	// Auth gives each transfer its credentials, chosen by URL.
-	Auth backup.Auth
+	// Credentials gives each repository's transfers the authentication of
+	// its credential.
+	Credentials Credentials
 	// CheckWait bounds a registration's write check; zero is
 	// DefaultCheckWait.
 	CheckWait time.Duration
 }
 
-// Remote is the repository at url, reached with the registry's
-// credentials.
-func (r *Registry) Remote(url string) *backup.Remote {
-	return &backup.Remote{URL: url, Auth: r.Auth}
+// Remote is the registered repository repo, reached with its credential.
+func (r *Registry) Remote(repo store.BackupRepository) *backup.Remote {
+	return &backup.Remote{URL: repo.URL, Auth: r.Credentials.Auth(repo.Credential)}
 }
 
 // ValidName checks a display name: one line of 1 to 100 characters.
@@ -103,12 +117,13 @@ func ValidURL(url string) error {
 	return &CheckError{Check: CheckURL, Message: "the URL must be an ssh, scp-like or https Git URL; a local path, a file URL and plain http are refused"}
 }
 
-// Register checks a repository and records it under the id its name gives.
-// The checks are its name, its URL, that no registration has the URL, and
-// that Menagerie can write to it (backup.Remote.CheckWrite). With check,
-// it runs the checks alone, answers what it would record, and stores
-// nothing.
-func (r *Registry) Register(ctx context.Context, name, url string, check bool) (store.BackupRepository, error) {
+// Register checks a repository and records it under the id its name gives,
+// with its credential. The checks are its name, its URL, that no
+// registration has the URL, that the credential fits the URL
+// (Credentials.Fit), and that Menagerie can write to it with that
+// credential (backup.Remote.CheckWrite). With check, it runs the checks
+// alone, answers what it would record, and stores nothing.
+func (r *Registry) Register(ctx context.Context, name, url string, credential store.Credential, check bool) (store.BackupRepository, error) {
 	name = strings.TrimSpace(name)
 	if err := ValidName(name); err != nil {
 		return store.BackupRepository{}, err
@@ -116,10 +131,71 @@ func (r *Registry) Register(ctx context.Context, name, url string, check bool) (
 	if err := ValidURL(url); err != nil {
 		return store.BackupRepository{}, err
 	}
-	candidate := store.BackupRepository{Name: name, URL: url}
+	credential, err := normalCredential(credential)
+	if err != nil {
+		return store.BackupRepository{}, err
+	}
+	candidate := store.BackupRepository{Name: name, URL: url, Credential: credential}
 	tried, err := r.Data.TryRegisterBackupRepository(ctx, candidate)
 	if err != nil {
 		return store.BackupRepository{}, err
+	}
+	if err := r.check(ctx, candidate); err != nil {
+		return store.BackupRepository{}, err
+	}
+	if check {
+		return tried, nil
+	}
+	return r.Data.RegisterBackupRepository(ctx, candidate)
+}
+
+// SetCredential checks the registered repository id with credential, as
+// Register checks a new one, and then records it as the repository's
+// credential, only while the repository is still registered at the URL it
+// checked. With check, it runs the checks alone, answers what it would
+// record, and stores nothing.
+func (r *Registry) SetCredential(ctx context.Context, id string, credential store.Credential, check bool) (store.BackupRepository, error) {
+	repo, err := r.Data.BackupRepository(ctx, id)
+	if err != nil {
+		return store.BackupRepository{}, err
+	}
+	if repo.Credential, err = normalCredential(credential); err != nil {
+		return store.BackupRepository{}, err
+	}
+	if err := r.check(ctx, repo); err != nil {
+		return store.BackupRepository{}, err
+	}
+	if check {
+		return repo, nil
+	}
+	return r.Data.SetBackupRepositoryCredential(ctx, id, repo.URL, repo.Credential)
+}
+
+// normalCredential is c with its key in the form a credential records, or
+// a *CheckError for one that names an App and a key, or a key that is not
+// a public key.
+func normalCredential(c store.Credential) (store.Credential, error) {
+	if c.App != "" && c.Key != "" {
+		return c, &CheckError{Check: CheckCredential, Message: "a credential is a GitHub App or an SSH key, not both"}
+	}
+	if c.Key != "" {
+		key, ok := gitcreds.NormalKey(c.Key)
+		if !ok {
+			return c, &CheckError{Check: CheckCredential, Message: "the SSH key is not a public key in authorized-keys form"}
+		}
+		c.Key = key
+	}
+	return c, nil
+}
+
+// check runs a registration's credential and write checks on repo.
+func (r *Registry) check(ctx context.Context, repo store.BackupRepository) error {
+	if err := r.Credentials.Fit(ctx, repo.URL, repo.Credential); err != nil {
+		var fit *gitcreds.FitError
+		if errors.As(err, &fit) {
+			return &CheckError{Check: CheckCredential, Message: fit.Message}
+		}
+		return err
 	}
 	wait := r.CheckWait
 	if wait == 0 {
@@ -127,16 +203,29 @@ func (r *Registry) Register(ctx context.Context, name, url string, check bool) (
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	if err := r.Remote(url).CheckWrite(checkCtx, io.Discard); err != nil {
+	if err := r.Remote(repo).CheckWrite(checkCtx, io.Discard); err != nil {
 		if checkCtx.Err() != nil && ctx.Err() == nil {
-			return store.BackupRepository{}, &CheckError{Check: CheckWrite, Message: fmt.Sprintf("the repository did not answer within %s", wait)}
+			return &CheckError{Check: CheckWrite, Message: fmt.Sprintf("the repository did not answer within %s%s", wait, credentialPhrase(repo.Credential))}
 		}
-		return store.BackupRepository{}, &CheckError{Check: CheckWrite, Message: "Menagerie could not write to the repository: " + strings.TrimPrefix(err.Error(), "write check: ")}
+		return &CheckError{Check: CheckWrite, Message: "Menagerie could not write to the repository" + credentialPhrase(repo.Credential) + ": " + strings.TrimPrefix(err.Error(), "write check: ")}
 	}
-	if check {
-		return tried, nil
+	return nil
+}
+
+// credentialPhrase names c in a write check's refusal, so a manager knows
+// which credential the Git host refused: " with GitHub App {name}", or
+// " with SSH key {fingerprint}". The zero credential, chosen by URL, is "".
+// Neither names a secret.
+func credentialPhrase(c store.Credential) string {
+	switch {
+	case c.App != "":
+		return " with GitHub App " + c.App
+	case c.Key != "":
+		if key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.Key)); err == nil {
+			return " with SSH key " + ssh.FingerprintSHA256(key)
+		}
 	}
-	return r.Data.RegisterBackupRepository(ctx, candidate)
+	return ""
 }
 
 // For is the repository a workspace backs up to, or a *NoRepositoryError.
@@ -148,7 +237,7 @@ func (r *Registry) For(ctx context.Context, workspace string) (*backup.Remote, e
 	if !ok {
 		return nil, &NoRepositoryError{Workspace: workspace}
 	}
-	return r.Remote(repo.URL), nil
+	return r.Remote(repo), nil
 }
 
 // Push backs the workspace branch up to the workspace's repository; see

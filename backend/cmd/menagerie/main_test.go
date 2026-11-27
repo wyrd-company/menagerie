@@ -100,7 +100,7 @@ func TestBackupsUseTheWyrwoodAgentSocket(t *testing.T) {
 			c.Close()
 		}
 	}()
-	auth, release, err := backupAuth(&config.Config{WyrwoodDirectory: dir}, nil)(context.Background(), "git@example.invalid:sample/backups.git")
+	auth, release, err := gitCredentials(&config.Config{WyrwoodDirectory: dir}, nil).Auth(store.Credential{})(context.Background(), "git@example.invalid:sample/backups.git")
 	if err != nil || auth == nil {
 		t.Fatalf("auth %v %v", auth, err)
 	}
@@ -121,7 +121,7 @@ func TestServerServesCreateAndUpgrade(t *testing.T) {
 		WorkspaceRoot:   dir,
 		TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")},
 	}
-	server := httptest.NewServer(newServer(cfg, root, sampleData(t), backupAuth(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, sampleData(t), gitCredentials(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil, nil))
 	defer server.Close()
 	for _, tc := range []struct{ path, body, kind string }{
 		{"/api/jobs", `{"operation":"create","workspace":"a..b","templateId":"sample"}`, "invalid-workspace-name"},
@@ -178,7 +178,7 @@ func TestServerTakesInterviewAnswers(t *testing.T) {
 		WorkspaceRoot:   dir,
 		TemplateService: config.TemplateService{Socket: socket},
 	}
-	server := httptest.NewServer(newServer(cfg, root, sampleData(t), backupAuth(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, manager, nil, nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, sampleData(t), gitCredentials(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, manager, nil, nil, nil))
 	defer server.Close()
 	resp, err := http.Post(server.URL+"/api/jobs", "application/json", strings.NewReader(`{"operation":"create","workspace":"alpha","templateId":"sample"}`))
 	if err != nil {
@@ -227,7 +227,7 @@ func TestServerServesTheEmbeddedUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{WorkspaceRoot: dir, TemplateService: config.TemplateService{Socket: filepath.Join(dir, "absent.sock")}}
-	server := httptest.NewServer(newServer(cfg, root, sampleData(t), backupAuth(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil, nil))
+	server := httptest.NewServer(newServer(cfg, root, sampleData(t), gitCredentials(cfg, nil), devcontainer.New(nil, devcontainer.Options{}), provisioning.Clients{}, jobs.NewManager(context.Background(), jobs.Options{}), nil, nil, nil))
 	defer server.Close()
 	for path, want := range map[string]string{
 		"/":                         "ui-index",

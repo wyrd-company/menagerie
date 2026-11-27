@@ -460,17 +460,35 @@ the workspace replaces them.
 
 ## Backup repositories
 
-**Backups** lists the registered backup repositories, each with its URL and
-the workspaces that back up to it. Every workspace backs up to one of them,
-chosen when it is created.
+**Backups** lists the registered backup repositories, each with its URL, the
+credential Menagerie reaches it with, and the workspaces that back up to it.
+Every workspace backs up to one of them, chosen when it is created.
 
 To register one, choose **Register repository**, give it a display name and
 its Git URL, in a form
-[Configuration](configuration.md#backup-repositories) lists, and choose
-**Validate**. Menagerie checks that it can write to the repository: it pushes
-a ref under `refs/menagerie/`, not a branch, and deletes it again, so an empty
-repository stays empty. A refusal names the check that failed, `url` or
-`write`. The check proves Menagerie may write to the repository, not that its
+[Configuration](configuration.md#backup-repositories) lists, and choose its
+**Credential**:
+
+- For an SSH URL, one of the SSH keys Wyrwood's agent offers, by its Transit
+  key name and fingerprint. The form shows the key's public key, with
+  **Copy**: add it to the repository as a deploy key with write access, or
+  to an account that can write to it, before you validate.
+- For an `https` URL on a configured [GitHub App](configuration.md#github-app)'s
+  server, one of the Apps that serve it. An `https` URL no App serves gets no
+  credential.
+
+When only one credential fits the URL and you have chosen none, the form
+chooses it. A credential you chose stays chosen until you choose another:
+if you then change the URL so that it no longer fits, the form chooses
+nothing, even when only one credential fits the new URL, so choose the one
+you want before you validate. Menagerie offers
+the repository that credential alone, so each repository can have a key or
+an App of its own. Then choose **Validate**. Menagerie checks that the
+credential fits the URL, and that it can write to the repository with it: it
+pushes a ref under `refs/menagerie/`, not a branch, and deletes it again, so
+an empty repository stays empty. A refusal names the check that failed,
+`url`, `credential` or `write`. The check proves Menagerie may write to the
+repository, not that its
 branch rules allow it: a repository whose branch protection stops Menagerie
 creating or force-pushing a branch named after a workspace passes Validate,
 and the backup that meets the rule fails as `backup-failed`, whether it is
@@ -478,6 +496,18 @@ the workspace's first or a later one. **Save** stays
 unavailable until a Validate of the form as it is now passes, and checks
 again. A repository whose URL is registered already is
 refused with the registration it has.
+
+**Change credential** chooses another credential for a repository, such as
+a key that replaces one, in the same way. It starts from the saved
+credential, and when that one no longer fits it chooses nothing until you
+do: **Validate** checks writing with the
+new credential, and **Save** records it only after that passes. The
+workspaces that back up to the repository use it from their next backup.
+
+A repository registered by an earlier release shows **Credential chosen by
+URL**: it is reached with the first App whose server holds an `https` URL,
+or with every key the agent offers for an SSH URL, as before. It keeps
+backing up that way until you change its credential.
 
 **Remove** forgets a repository that no workspace backs up to; the
 repository and its branches stay as they are. A URL with a token or a

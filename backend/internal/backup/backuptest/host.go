@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -48,9 +49,13 @@ type Host struct {
 	KnownHosts string
 	// HostKey is the server's public host key.
 	HostKey ssh.PublicKey
+	// UserKey is the public key of the agent's key, which the server
+	// accepts; the agent names it UserKeyName.
+	UserKey ssh.PublicKey
 
 	mu         sync.Mutex
 	commands   []string
+	offered    []string
 	authorized map[string]bool
 	sessions   sync.WaitGroup
 }
@@ -74,12 +79,14 @@ func New(t *testing.T) *Host {
 
 	_, userPriv, _ := ed25519.GenerateKey(rand.Reader)
 	userSigner, _ := ssh.NewSignerFromKey(userPriv)
-	f.Authorize(userSigner.PublicKey())
+	f.UserKey = userSigner.PublicKey()
+	f.Authorize(f.UserKey)
 
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			f.mu.Lock()
 			ok := f.authorized[string(key.Marshal())]
+			f.offered = append(f.offered, ssh.FingerprintSHA256(key))
 			f.mu.Unlock()
 			if meta.User() == "git" && ok {
 				return nil, nil
@@ -102,7 +109,7 @@ func New(t *testing.T) *Host {
 	go f.serve(l, config)
 
 	keyring := agent.NewKeyring()
-	if err := keyring.Add(agent.AddedKey{PrivateKey: userPriv}); err != nil {
+	if err := keyring.Add(agent.AddedKey{PrivateKey: userPriv, Comment: UserKeyName}); err != nil {
 		t.Fatal(err)
 	}
 	f.AgentPath = f.ServeAgent(t, keyring)
@@ -110,6 +117,26 @@ func New(t *testing.T) *Host {
 	f.KnownHosts = filepath.Join(f.Dir, "known_hosts")
 	f.WriteKnownHosts(t, f.KnownHosts, f.HostKey)
 	return f
+}
+
+// UserKeyName is the agent's comment on the host's own key, as Wyrwood
+// names a key by its Transit key.
+const UserKeyName = "sample-git-key"
+
+// AuthorizedKey is key in authorized-keys form with no comment, as a
+// backup repository's credential records it.
+func AuthorizedKey(key ssh.PublicKey) string {
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
+}
+
+// Offered lists the SHA256 fingerprints of the keys clients offered the
+// server, in order, and forgets them.
+func (f *Host) Offered() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.offered
+	f.offered = nil
+	return out
 }
 
 // Authorize lets key sign in as git, beside the host's own agent key: an
@@ -144,6 +171,48 @@ func (f *Host) ServeAgent(t *testing.T, keyring agent.Agent) string {
 		}
 	}()
 	return path
+}
+
+// StalledAgent serves an SSH agent that accepts each connection, reads its
+// requests and never replies, on a new Unix socket, and returns its path.
+func StalledAgent(t *testing.T) string {
+	t.Helper()
+	sock, err := os.MkdirTemp("", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sock) })
+	path := filepath.Join(sock, AgentSocketName)
+	al, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = al.Close() })
+	go func() {
+		for {
+			c, err := al.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(io.Discard, c); _ = c.Close() }()
+		}
+	}()
+	return path
+}
+
+// Within runs f and returns its error, failing the test when f has not
+// returned within d.
+func Within(t *testing.T, d time.Duration, f func() error) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- f() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		t.Fatalf("still waiting after %s", d)
+		return nil
+	}
 }
 
 // WriteKnownHosts writes a known_hosts file that names key for the server.
@@ -250,4 +319,24 @@ func (f *Host) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 		_, _ = channel.SendRequest("exit-status", false, status)
 		return
 	}
+}
+
+// AliasAgent is keyring listing key a second time, first, under the name
+// alias, as Wyrwood lists one Transit key that two identities name.
+func AliasAgent(keyring agent.Agent, key ssh.PublicKey, alias string) agent.Agent {
+	return aliasAgent{keyring, key, alias}
+}
+
+type aliasAgent struct {
+	agent.Agent
+	key   ssh.PublicKey
+	alias string
+}
+
+func (a aliasAgent) List() ([]*agent.Key, error) {
+	keys, err := a.Agent.List()
+	if err != nil {
+		return nil, err
+	}
+	return append([]*agent.Key{{Format: a.key.Type(), Blob: a.key.Marshal(), Comment: a.alias}}, keys...), nil
 }

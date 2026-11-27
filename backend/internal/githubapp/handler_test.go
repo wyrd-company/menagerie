@@ -24,7 +24,7 @@ func TestTheCredentialRouteAnswersAReadTokenForOneRepository(t *testing.T) {
 	g := newGitHub(t, newClock())
 	m, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation})
 	for _, url := range []string{g.server.URL + "/example-org/sample-repo", g.server.URL + "/example-org/sample-repo.git"} {
-		status, doc, header := post(t, Handler(m), http.MethodPost, `{"url":"`+url+`"}`)
+		status, doc, header := post(t, Handler(one(m)), http.MethodPost, `{"url":"`+url+`"}`)
 		if status != http.StatusOK || doc["username"] != "x-access-token" || !strings.HasPrefix(doc["password"], "sample-token-") || len(doc) != 2 {
 			t.Fatalf("%s: %d %v", url, status, doc)
 		}
@@ -71,7 +71,7 @@ func TestTheCredentialRouteRefusals(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			status, doc, _ := post(t, Handler(c.minter), c.method, c.body)
+			status, doc, _ := post(t, Handler(one(c.minter)), c.method, c.body)
 			if status != c.status || doc["reason"] != c.reason || len(doc) != 1 {
 				t.Fatalf("%d %v", status, doc)
 			}
@@ -92,8 +92,16 @@ func TestTheCredentialRouteAnswers502WithAFixedReason(t *testing.T) {
 		return true
 	}
 	m, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation})
-	status, doc, _ := post(t, Handler(m), http.MethodPost, `{"url":"`+g.server.URL+`/example-org/sample-repo"}`)
+	status, doc, _ := post(t, Handler(one(m)), http.MethodPost, `{"url":"`+g.server.URL+`/example-org/sample-repo"}`)
 	if status != http.StatusBadGateway || doc["reason"] != "GitHub refused the token: the repository is not in the installation, or the permission is not granted" || len(doc) != 1 {
 		t.Fatalf("%d %v", status, doc)
 	}
+}
+
+// one is the Apps of m alone, or none when m is nil.
+func one(m *Minter) Apps {
+	if m == nil {
+		return nil
+	}
+	return Apps{{Name: "sample-app", Minter: m}}
 }

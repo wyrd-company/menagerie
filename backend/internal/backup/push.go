@@ -7,6 +7,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/wyrd-company/menagerie/backend/internal/backup/gitclient"
@@ -162,16 +164,46 @@ func TokenAuth(tokens Tokens, otherwise Auth) Auth {
 // /etc/ssh/ssh_known_hosts). A URL that is not SSH pushes without
 // credentials.
 func AgentAuth(socket string, knownHosts ...string) Auth {
+	return agentAuth(socket, "", nil, knownHosts)
+}
+
+// AgentKeyAuth authenticates SSH pushes as AgentAuth does, offering only
+// the agent's key whose public key is publicKey, in authorized-keys form,
+// so that no other key in the agent reaches the Git host. When the agent
+// does not offer that key, the transfer fails naming its fingerprint. A
+// URL that is not SSH is refused: the key is no credential for it.
+func AgentKeyAuth(socket, publicKey string, knownHosts ...string) Auth {
+	return agentAuth(socket, publicKey, nil, knownHosts)
+}
+
+// AgentKeyAuthRefusing is AgentKeyAuth, failing the transfer before any
+// connection when refuse gives an error for the key as the agent lists it,
+// with its comment: a key that has since become one no Git host is given.
+func AgentKeyAuthRefusing(socket, publicKey string, refuse func(*agent.Key) error, knownHosts ...string) Auth {
+	return agentAuth(socket, publicKey, refuse, knownHosts)
+}
+
+// agentAuth is AgentAuth, offering only the key publicKey when it is not
+// "", and refusing it when refuse, if not nil, gives an error for it.
+func agentAuth(socket, publicKey string, refuse func(*agent.Key) error, knownHosts []string) Auth {
 	return func(ctx context.Context, url string) (transport.AuthMethod, func(), error) {
 		endpoint, err := transport.NewEndpoint(url)
 		if err != nil {
 			return nil, nil, fmt.Errorf("workspace repository address: %w", err)
 		}
 		if endpoint.Protocol != "ssh" {
+			if publicKey != "" {
+				return nil, nil, NewCredentialsError(errors.New("an SSH key is the credential of an SSH URL only"))
+			}
 			return nil, func() {}, nil
 		}
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "unix", socket)
+		var wanted ssh.PublicKey
+		if publicKey != "" {
+			if wanted, _, _, _, err = ssh.ParseAuthorizedKey([]byte(publicKey)); err != nil {
+				return nil, nil, errors.New("ssh agent: the repository's key is not a public key")
+			}
+		}
+		keyring, release, err := DialAgent(ctx, socket, 0)
 		if err != nil {
 			return nil, nil, fmt.Errorf("ssh agent: %w", err)
 		}
@@ -179,17 +211,112 @@ func AgentAuth(socket string, knownHosts ...string) Auth {
 		if user == "" {
 			user = "git"
 		}
-		auth := &gitssh.PublicKeysCallback{User: user, Callback: agent.NewClient(conn).Signers}
+		signers := keyring.Signers
+		if wanted != nil {
+			signer, err := agentSigner(keyring, wanted, refuse)
+			if err != nil {
+				release()
+				return nil, nil, err
+			}
+			signers = func() ([]ssh.Signer, error) { return []ssh.Signer{signer}, nil }
+		}
+		auth := &gitssh.PublicKeysCallback{User: user, Callback: signers}
 		if len(knownHosts) > 0 {
 			callback, err := gitssh.NewKnownHostsCallback(knownHosts...)
 			if err != nil {
-				_ = conn.Close()
+				release()
 				return nil, nil, fmt.Errorf("known hosts: %w", err)
 			}
 			auth.HostKeyCallback = callback
 		}
-		return auth, func() { _ = conn.Close() }, nil
+		return auth, release, nil
 	}
+}
+
+// DialAgent dials the SSH agent at socket for an operation of ctx, and
+// returns its client and the release that closes the connection. The
+// connection closes when ctx ends, so a stalled agent fails the request
+// rather than holding the operation past its deadline or its cancel. When
+// wait is positive, each request also waits at most wait for its reply.
+// Between requests nothing reads the connection, so an idle connection
+// never times out.
+//
+// A transfer gives no wait: Menagerie cannot tell a stalled agent from a
+// slow one. Wyrwood looks up every identity it offers in OpenBao before it
+// signs, each lookup within its own timeout, so a healthy signature can take
+// minutes. The transfer's job ends a stall, by its time limit or a cancel.
+func DialAgent(ctx context.Context, socket string, wait time.Duration) (agent.ExtendedAgent, func(), error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", socket)
+	if err != nil {
+		return nil, nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	release := func() {
+		stop()
+		_ = conn.Close()
+	}
+	return agent.NewClient(&agentRequests{conn: conn, wait: wait}), release, nil
+}
+
+// agentRequests is the agent connection as the agent client sees it: a
+// reader and writer with no Close. Given no Close, the client makes each
+// request in turn, writing it and then reading its reply, with no reader
+// left waiting between requests. So the deadline set at each write bounds
+// that request's reply alone.
+type agentRequests struct {
+	conn net.Conn
+	wait time.Duration
+}
+
+func (c *agentRequests) Write(p []byte) (int, error) {
+	if c.wait > 0 {
+		if err := c.conn.SetDeadline(time.Now().Add(c.wait)); err != nil {
+			return 0, err
+		}
+	}
+	return c.conn.Write(p)
+}
+
+func (c *agentRequests) Read(p []byte) (int, error) { return c.conn.Read(p) }
+
+// agentSigner is the signer of keyring's key wanted, or an error naming
+// wanted's fingerprint when keyring does not offer it or refuse, if not
+// nil, gives an error for the key as keyring lists it. One listing gives
+// both the signer and the keys refuse checks, so the agent cannot offer a
+// key to the transfer that it did not offer to the check, and refuse
+// checks every entry the listing gives for the key: an agent may list one
+// key under several names.
+func agentSigner(keyring agent.ExtendedAgent, wanted ssh.PublicKey, refuse func(*agent.Key) error) (ssh.Signer, error) {
+	fingerprint := ssh.FingerprintSHA256(wanted)
+	signers, err := keyring.Signers()
+	if err != nil {
+		return nil, fmt.Errorf("ssh agent: %w", err)
+	}
+	var found ssh.Signer
+	for _, signer := range signers {
+		if !bytes.Equal(signer.PublicKey().Marshal(), wanted.Marshal()) {
+			continue
+		}
+		if refuse != nil {
+			// The client's signers hold the key as the agent listed it,
+			// with its comment.
+			listed, ok := signer.PublicKey().(*agent.Key)
+			if !ok {
+				return nil, fmt.Errorf("ssh agent: the repository's key %s could not be checked against provisioning's operator key", fingerprint)
+			}
+			if err := refuse(listed); err != nil {
+				return nil, fmt.Errorf("ssh agent: the repository's key %s %w", fingerprint, err)
+			}
+		}
+		if found == nil {
+			found = signer
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("ssh agent: the agent does not offer the repository's key %s; check that Menagerie's Wyrwood policy offers it, or change the repository's credential", fingerprint)
+	}
+	return found, nil
 }
 
 // CredentialsError reports that tokens had no credentials for the
@@ -203,6 +330,10 @@ func (e *CredentialsError) Error() string {
 
 // Unwrap returns the Tokens error.
 func (e *CredentialsError) Unwrap() error { return e.cause }
+
+// NewCredentialsError is a *CredentialsError of cause, whose text must
+// name no token and no URL: a failure that keeps its text for any URL.
+func NewCredentialsError(cause error) error { return &CredentialsError{cause: cause} }
 
 // transfer is what one push or fetch uses: its context, credentials and
 // progress writer.
