@@ -167,11 +167,16 @@ func firstInterview(t *testing.T, c *http.Client, site, jobID string) interviewR
 
 // registerTemplate registers the template at address, which names no ref,
 // as a manager's registration does, at its repository's newest version: an
-// address whose host has a port takes no ref.
-func registerTemplate(t *testing.T, c *http.Client, site, name, address string) {
+// address whose host has a port takes no ref. credential is the request's
+// credential object, or empty for an address that takes none.
+func registerTemplate(t *testing.T, c *http.Client, site, name, address, credential string) {
 	t.Helper()
 	header := http.Header{"Content-Type": {"application/json"}, "Sec-Fetch-Site": {"same-origin"}}
-	s := fetch(t, c, http.MethodPost, site+"/api/templates", strings.NewReader(fmt.Sprintf(`{"name":%q,"address":%q}`, name, address)), header)
+	body := fmt.Sprintf(`{"name":%q,"address":%q}`, name, address)
+	if credential != "" {
+		body = fmt.Sprintf(`{"name":%q,"address":%q,"credential":%s}`, name, address, credential)
+	}
+	s := fetch(t, c, http.MethodPost, site+"/api/templates", strings.NewReader(body), header)
 	if s.status != http.StatusCreated {
 		t.Fatalf("the registration of %s answered %d %s", name, s.status, s.body)
 	}
@@ -396,7 +401,7 @@ workspace-socket:
 	if s, _ := p.signIn(t, b, "sample-manager", site+"/"); s.status != http.StatusOK {
 		t.Fatalf("sign-in answered %d", s.status)
 	}
-	registerTemplate(t, b, site, "Sample kit", templates.Address("sample-kit"))
+	registerTemplate(t, b, site, "Sample kit", templates.Address("sample-kit"), "")
 
 	t.Run("services run as the workspace root's owner", func(t *testing.T) {
 		c.t = t

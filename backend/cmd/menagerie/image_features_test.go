@@ -178,7 +178,7 @@ oidc:
 	if s, _ := p.signIn(t, b, "sample-manager", site+"/"); s.status != http.StatusOK {
 		t.Fatalf("sign-in answered %d", s.status)
 	}
-	registerTemplate(t, b, site, "Sample kit with Go", templates.Address("sample-kit"))
+	registerTemplate(t, b, site, "Sample kit with Go", templates.Address("sample-kit"), "")
 
 	var first string
 	t.Run("create installs the feature and the workspace runs with its tool", func(t *testing.T) {

@@ -318,7 +318,7 @@ done`
 		if s := fetch(t, b, http.MethodGet, site+"/api/workspaces", nil, nil); s.status != http.StatusOK || !strings.Contains(s.body, `"name":"alpha"`) {
 			t.Fatalf("workspaces answered %d %s", s.status, s.body)
 		}
-		registerTemplate(t, b, site, "Sample kit", templates.Address("sample-kit"))
+		registerTemplate(t, b, site, "Sample kit", templates.Address("sample-kit"), "")
 		startInterview(t, b, site, "beta")
 	})
 
