@@ -3100,9 +3100,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "toha"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6059cad934a42b85c870ba2c6e34e74139dfd33ea1127877850a59106e3d5047"
+checksum = "1a77c1f00c0dbbfb31ba32754f28c3799d0b1abf02bd90df81ad17ea6c854ac1"
 dependencies = [
  "base64 0.23.1",
  "curl",

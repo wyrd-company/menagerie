@@ -19,6 +19,7 @@ import (
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/devcontainer"
+	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
@@ -349,13 +350,13 @@ func (a *applying) forward(ctx context.Context, plan *backup.Plan) (*store.Appli
 	if applied.Commit == "" {
 		return nil, refuse("the branch's applied record names version %s at commit %q, and the workspace's applied version and commit are not known, so it cannot be told to move forward", found.Version, record.Commit)
 	}
-	checked, err := a.w.opts.Templates.CheckSince(ctx, tpl.Address, found.Tag, applied.Commit)
+	checked, err := a.w.opts.Templates.CheckSince(ctx, tpl.Address, found.Tag, applied.Commit, templates.CredentialOf(tpl.Credential.App, tpl.Credential.Key))
 	var unavailable *templates.UnavailableError
 	switch {
 	case errors.As(err, &unavailable):
 		return nil, &jobs.Failure{Kind: KindTemplateUnavailable, Err: fmt.Errorf("the template service could not say whether version %s descends from the applied commit %q: %w; nothing was applied", found.Version, applied.Commit, err)}
 	case err != nil:
-		return nil, refuse("the template service refused to check version %s against the applied commit %q (%s)", found.Version, applied.Commit, refusalKind(err))
+		return nil, refuse("the template service refused to check version %s against the applied commit %q%s (%s)", found.Version, applied.Commit, gitcreds.Phrase(tpl.Credential), refusalKind(err))
 	case checked.Commit != record.Commit:
 		return nil, refuse("the branch's applied record names version %s at commit %q, but its tag is now at commit %q", found.Version, record.Commit, checked.Commit)
 	case !*checked.Descends:

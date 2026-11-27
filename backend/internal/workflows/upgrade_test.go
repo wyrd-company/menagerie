@@ -489,7 +489,7 @@ func TestAMovedTagRefusesCreatesAndUpgradesUntilTakenAgain(t *testing.T) {
 	w.createWorkspace(t, "alpha")
 	w.newVersion(t)
 	moved := "2b00000000000000000000000000000000000002"
-	tpl, err := w.data.RecordCheck(ctx, "sample", []store.Version{
+	tpl, err := w.data.RecordCheck(ctx, "sample", 0, []store.Version{
 		{Version: "1.0.0", Tag: "1.0.0", Commit: sampleTemplate.CurrentCommit},
 		{Version: "2.0.0", Tag: "v2.0.0", Commit: moved},
 	}, time.Now())
@@ -663,5 +663,68 @@ func TestAnUpgradeOfAnUncheckedTemplateRecordsTheRecordsCommit(t *testing.T) {
 				t.Fatalf("the workspace recorded %+v, not version 2.0.0 at commit %q", got, want)
 			}
 		})
+	}
+}
+
+// Every template service request of a create and an upgrade, the descent
+// check included, names the template's credential.
+func TestEveryTemplateRequestNamesTheTemplatesCredential(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	if _, err := w.data.SetTemplateCredential(ctx, "sample", store.Credential{App: "sample-org"}, sampleVersions, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w.createWorkspace(t, "alpha")
+	w.newVersion(t)
+	w.uncheckedTemplate(t)
+	w.unknown(t, "alpha")
+	approved := "2000000000000000000000000000000000000002"
+	w.tmpl.checkSince = func(_, ref, since string) (*templates.Checked, error) {
+		return &templates.Checked{Source: sampleTemplate.Source, Commit: approved, Definition: true, Descends: ptr(true)}, nil
+	}
+	w.selectors(t, approved)
+	job := w.startJobBody(t, `{"operation":"upgrade","workspace":"alpha"}`)
+	waitWaiting(t, job, 0)
+	w.answer(t, job, sessionAsking)
+	if snap := endsWithin(t, job, 10*time.Second); snap.State != jobs.Succeeded {
+		t.Fatalf("%+v %+v", snap, snap.Error)
+	}
+	w.tmpl.mu.Lock()
+	named := append([]string(nil), w.tmpl.credentials...)
+	w.tmpl.mu.Unlock()
+	if len(named) < 5 {
+		t.Fatalf("calls %v", w.tmpl.seen())
+	}
+	for _, c := range named {
+		if c != "sample-org" {
+			t.Fatalf("a request named %q, not the template's App: %v", c, named)
+		}
+	}
+}
+
+// An upgrade's and an Apply branch's descent check that the template
+// service refuses names the template's credential, so a manager knows
+// which one the Git host refused.
+func TestARefusedDescentCheckNamesTheTemplatesCredential(t *testing.T) {
+	w := newWorld(t)
+	if _, err := w.data.SetTemplateCredential(context.Background(), "sample", store.Credential{App: "sample-org"}, sampleVersions, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w.createWorkspace(t, "alpha")
+	w.newVersion(t)
+	w.uncheckedTemplate(t)
+	w.unknown(t, "alpha")
+	w.tmpl.checkSince = func(_, _, _ string) (*templates.Checked, error) {
+		return nil, &templates.Error{Status: 422, Kind: "template-resolve-failed", Message: "refused"}
+	}
+	const named = " with GitHub App sample-org (template-resolve-failed)"
+	job := w.startJobBody(t, `{"operation":"upgrade","workspace":"alpha"}`)
+	if snap := endsWithin(t, job, 10*time.Second); snap.State != jobs.Failed || snap.Error.Kind != KindTemplateRefused || !strings.Contains(snap.Error.Message, named) {
+		t.Fatalf("upgrade: %+v %+v", snap, snap.Error)
+	}
+	w.contributeRecord(t, "alpha", "review/record", toha(sampleTemplate.Source, "1.1.0", laterCommit))
+	job, snap := w.applyBranch(t, "alpha", "review/record")
+	if snap.State != jobs.Failed || !strings.Contains(snap.Error.Message, named) {
+		t.Fatalf("apply branch: %+v %+v\n%s", snap, snap.Error, logText(job))
 	}
 }

@@ -172,6 +172,11 @@ func transitKey(t *testing.T, w *wyrwoodSite, name string) ssh.PublicKey {
 	return pub
 }
 
+// sshKeyCredential is a template request's credential naming key.
+func sshKeyCredential(key ssh.PublicKey) string {
+	return fmt.Sprintf(`{"sshKey":%q}`, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))))
+}
+
 func TestImageWyrwood(t *testing.T) {
 	ref := requireEnv(t, "MENAGERIE_IMAGE")
 	p := startPocketID(t)
@@ -337,8 +342,9 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 	if s, _ := p.signIn(t, b, "sample-manager", site+"/"); s.status != http.StatusOK {
 		t.Fatalf("sign-in answered %d", s.status)
 	}
-	registerTemplate(t, b, site, "Sample kit", host.URL("sample-kit.git"))
-	registerTemplate(t, b, site, "Operator key check", host.URL("key-check.git"))
+	gitKey := sshKeyCredential(transitKey(t, w, "sample-git"))
+	registerTemplate(t, b, site, "Sample kit", host.URL("sample-kit.git"), gitKey)
+	registerTemplate(t, b, site, "Operator key check", host.URL("key-check.git"), gitKey)
 	alpha := filepath.Join(rootDir, "alpha")
 
 	vault := func(path string) (string, int) {
@@ -554,8 +560,10 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 			t.Fatal(err)
 		}
 		snap = waitJob(t, b, site, snap.JobID)
+		// The template names the Git key, so the fetch asks the agent for that
+		// key alone and is refused for its absence.
 		if snap.State != jobs.Failed || snap.Error == nil || snap.Error.Kind != "template-refused" ||
-			!strings.Contains(snap.Error.Message, "were not accepted by the remote") {
+			!strings.Contains(snap.Error.Message, "does not offer the key") || !strings.Contains(snap.Error.Message, gitFingerprint) {
 			t.Fatalf("create without its Git key ended %s: %+v", snap.State, snap.Error)
 		}
 		if _, err := os.Stat(filepath.Join(rootDir, "beta")); !os.IsNotExist(err) {

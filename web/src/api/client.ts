@@ -104,6 +104,8 @@ export interface TemplateRegistration {
   name: string;
   address: string;
   runnerImage?: string;
+  /** As a backup repository's, for the Git URL the address names. */
+  credential?: BackupCredentialChoice | null;
   /** Run the checks alone and store nothing. */
   check?: boolean;
 }
@@ -111,6 +113,26 @@ export interface TemplateRegistration {
 /** Registers a template once it passes the minimum checks; with check, runs the checks alone. */
 export const registerTemplate = (registration: TemplateRegistration) =>
   json<Template>("/api/templates", { method: "POST", body: JSON.stringify(registration) });
+
+/** The Git URL a template address names, which its credential has to fit; it reaches no network. */
+export const readTemplateAddress = async (address: string) =>
+  (
+    await json<{ url: string }>("/api/templates/addresses", {
+      method: "POST",
+      body: JSON.stringify({ address }),
+    })
+  ).url;
+
+/** Changes a template's credential once its checks pass; with check, runs them alone. */
+export const setTemplateCredential = (
+  id: string,
+  credential: BackupCredentialChoice,
+  check?: boolean,
+) =>
+  json<Template>(`/api/templates/${encodeURIComponent(id)}/credential`, {
+    method: "PUT",
+    body: JSON.stringify({ credential, ...(check ? { check } : {}) }),
+  });
 
 /** Makes a newer version of the template's repository its current version; with check, runs its checks alone. */
 export const upgradeTemplate = (id: string, version: string, check = false) =>
@@ -167,7 +189,7 @@ export const setBackupRepositoryCredential = (
     body: JSON.stringify({ credential, ...(check ? { check } : {}) }),
   });
 
-/** The credentials a backup repository can name. */
+/** The credentials a backup repository or a template can name. */
 export const listCredentials = () => json<Credentials>("/api/credentials");
 
 /** Removes a backup repository no workspace backs up to; the repository itself is left as it is. */

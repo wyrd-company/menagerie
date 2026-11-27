@@ -16,7 +16,7 @@ export interface FixtureWorkspace {
   backups?: string | null;
 }
 
-/** A backup repository's credential: an App by name, or an SSH key by its public key. */
+/** A backup repository's or template's credential: an App by name, or an SSH key by its public key. */
 export type FixtureCredential = { githubApp: string } | { sshKey: string } | null;
 
 /** A registered backup repository. */
@@ -48,6 +48,8 @@ export interface FixtureTemplate {
   address: string;
   currentVersion: string;
   runnerImage: string | null;
+  /** Its credential; absent or null, one an earlier release registered, chosen by URL. */
+  credential?: FixtureCredential;
   /** The versions its repository has: what a version check finds. */
   versions: string[];
   /** The versions its last successful check found; absent, versions. */

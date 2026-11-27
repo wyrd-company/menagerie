@@ -23,10 +23,10 @@ const (
 // checks every ref at that commit.
 type listed struct{ readOnly }
 
-func (*listed) ListVersions(context.Context, string) (*templates.Versions, error) {
+func (*listed) ListVersions(context.Context, string, *templates.Credential) (*templates.Versions, error) {
 	return &templates.Versions{Source: startSource, Versions: []templates.Version{{Version: "1.0.0", Tag: "1.0.0", Commit: startCommit}}}, nil
 }
-func (*listed) Check(context.Context, string, string) (*templates.Checked, error) {
+func (*listed) Check(context.Context, string, string, *templates.Credential) (*templates.Checked, error) {
 	return &templates.Checked{Source: startSource, Commit: startCommit, Definition: true}, nil
 }
 

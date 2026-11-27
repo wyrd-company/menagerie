@@ -6,11 +6,15 @@ import {
   listTemplates,
   registerTemplate,
   removeTemplate,
+  setTemplateCredential,
   upgradeTemplate,
 } from "../api/client.ts";
-import type { Template } from "../api/types.ts";
+import type { BackupCredentialChoice, Credentials, Template } from "../api/types.ts";
 import { checkLine, hasNewer, upgradeChoices } from "../api/versions.ts";
+import { CredentialChange } from "../ui/CredentialChange.tsx";
+import { CredentialPicker, describeCredential, effectiveChoice } from "../ui/CredentialPicker.tsx";
 import { StatusBadge } from "../ui/StatusBadge.tsx";
+import { useCredentials, useTemplateURL } from "../ui/credentials.ts";
 import { useValidated } from "../ui/useValidated.ts";
 
 const asError = (e: unknown) => (e instanceof ApiError ? e : new ApiError(0, null, String(e)));
@@ -21,10 +25,21 @@ function refusal(error: ApiError): string {
   return check ? `${check}: ${error.message}` : error.message;
 }
 
+/**
+ * How an admitted address authenticates, from its form alone: gh: and
+ * https:// over https, git@ and ssh:// over SSH.
+ */
+function addressKind(address: string): "ssh" | "https" | null {
+  if (address.startsWith("gh:") || address.startsWith("https://")) return "https";
+  if (address.startsWith("git@") || address.startsWith("ssh://")) return "ssh";
+  return null;
+}
+
 export function TemplatesScreen() {
   const [templates, setTemplates] = useState<Template[] | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [registering, setRegistering] = useState(false);
+  const { credentials, error: credentialsError } = useCredentials();
 
   const load = () =>
     listTemplates()
@@ -51,6 +66,8 @@ export function TemplatesScreen() {
       </header>
       {registering ? (
         <Registration
+          credentials={credentials}
+          credentialsError={credentialsError}
           onRegistered={() => {
             setRegistering(false);
             void load();
@@ -82,6 +99,8 @@ export function TemplatesScreen() {
             <TemplateEntry
               key={t.id}
               template={t}
+              credentials={credentials}
+              credentialsError={credentialsError}
               onChanged={replace}
               onRemoved={() => setTemplates((list) => (list ?? []).filter((x) => x.id !== t.id))}
             />
@@ -92,20 +111,33 @@ export function TemplatesScreen() {
   );
 }
 
-function Registration({ onRegistered }: { onRegistered: () => void }) {
+function Registration({
+  credentials,
+  credentialsError,
+  onRegistered,
+}: {
+  credentials: Credentials | null;
+  credentialsError: string | null;
+  onRegistered: () => void;
+}) {
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [runnerImage, setRunnerImage] = useState("");
+  const [chosen, setChosen] = useState<BackupCredentialChoice | null>(null);
+  const { url, error: urlError, pending } = useTemplateURL(address);
+  const credential = effectiveChoice(url, credentials, chosen);
   const registration = (check: boolean) => ({
     name: name.trim(),
     address: address.trim(),
     ...(runnerImage.trim() ? { runnerImage: runnerImage.trim() } : {}),
+    ...(credential ? { credential } : {}),
     ...(check ? { check } : {}),
   });
   const { error, validated, busy, edited, run } = useValidated<Template>(
     JSON.stringify(registration(false)),
   );
-  const filled = name.trim() !== "" && address.trim() !== "";
+  // Validate waits for the address's reading, which decides the credential.
+  const filled = name.trim() !== "" && address.trim() !== "" && !pending;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -156,6 +188,19 @@ function Registration({ onRegistered }: { onRegistered: () => void }) {
           }}
         />
       </div>
+      <CredentialPicker
+        id="template-credential"
+        purpose="template"
+        url={url}
+        urlError={urlError}
+        credentials={credentials}
+        loadError={credentialsError}
+        value={credential}
+        onChange={(choice) => {
+          setChosen(choice);
+          edited();
+        }}
+      />
       <div className="field">
         <label className="field-label" htmlFor="runner-image">
           <span className="field-title">Runner image</span>
@@ -196,14 +241,18 @@ function Registration({ onRegistered }: { onRegistered: () => void }) {
   );
 }
 
-type Editing = "upgrade" | "edit" | null;
+type Editing = "upgrade" | "edit" | "credential" | null;
 
 function TemplateEntry({
   template: t,
+  credentials,
+  credentialsError,
   onChanged,
   onRemoved,
 }: {
   template: Template;
+  credentials: Credentials | null;
+  credentialsError: string | null;
   onChanged: (t: Template) => void;
   onRemoved: () => void;
 }) {
@@ -247,6 +296,9 @@ function TemplateEntry({
       <div>
         <h2 id={`template-${t.id}`}>{t.name}</h2>
         <p className="muted mono template-address">{t.address}</p>
+        <p className="muted">
+          {describeCredential(t.credential, null, credentials, addressKind(t.address))}
+        </p>
         <p
           className={`template-check ${t.lastCheck?.failure && !checking ? "form-error" : "muted"}`}
           title={t.lastCheck ? new Date(t.lastCheck.at).toLocaleString() : undefined}
@@ -298,6 +350,13 @@ function TemplateEntry({
         <button type="button" aria-expanded={editing === "edit"} onClick={() => toggle("edit")}>
           Edit
         </button>
+        <button
+          type="button"
+          aria-expanded={editing === "credential"}
+          onClick={() => toggle("credential")}
+        >
+          Change credential
+        </button>
         <button type="button" disabled={removing} onClick={() => void remove()}>
           Remove
         </button>
@@ -309,6 +368,18 @@ function TemplateEntry({
             onChanged(next);
             setEditing(null);
           }}
+        />
+      ) : null}
+      {editing === "credential" ? (
+        <TemplateCredentialChange
+          template={t}
+          credentials={credentials}
+          credentialsError={credentialsError}
+          onChanged={(next) => {
+            onChanged(next);
+            setEditing(null);
+          }}
+          onCancel={() => setEditing(null)}
         />
       ) : null}
       {editing === "edit" ? (
@@ -461,5 +532,38 @@ function DetailsEditor({
         </button>
       </div>
     </form>
+  );
+}
+
+/** Change a template's credential, for the URL its address names. */
+function TemplateCredentialChange({
+  template: t,
+  credentials,
+  credentialsError,
+  onChanged,
+  onCancel,
+}: {
+  template: Template;
+  credentials: Credentials | null;
+  credentialsError: string | null;
+  onChanged: (t: Template) => void;
+  onCancel: () => void;
+}) {
+  const { url, error } = useTemplateURL(t.address);
+  return (
+    <CredentialChange
+      id={`template-${t.id}`}
+      name={t.name}
+      url={url}
+      urlError={error}
+      current={t.credential}
+      purpose="template"
+      passed={`Checks passed · version ${t.currentVersion} fetches with this credential`}
+      save={(credential, check) => setTemplateCredential(t.id, credential, check)}
+      credentials={credentials}
+      credentialsError={credentialsError}
+      onChanged={onChanged}
+      onCancel={onCancel}
+    />
   );
 }

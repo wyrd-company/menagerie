@@ -152,7 +152,7 @@ func run(configPath string) error {
 	if err := importBackupRepository(ctx, cfg, root, data); err != nil {
 		return err
 	}
-	versions := &registry.Registry{Data: data, Templates: templates.New(cfg.TemplateService.Socket), Root: root}
+	versions := &registry.Registry{Data: data, Templates: templates.New(cfg.TemplateService.Socket), Credentials: credentials, Root: root}
 	hookErrors, stopHooks, err := serveHooks(ctx, cfg.TemplateService.HookRunnerSocket, parts.hooks, apps)
 	if err != nil {
 		return err
@@ -497,7 +497,7 @@ func newServer(cfg *config.Config, root *workspace.Root, data *store.Store, cred
 	service := templates.New(cfg.TemplateService.Socket)
 	backups := &backuprepos.Registry{Data: data, Credentials: credentials}
 	if versions == nil {
-		versions = &registry.Registry{Data: data, Templates: service, Root: root}
+		versions = &registry.Registry{Data: data, Templates: service, Credentials: credentials, Root: root}
 	}
 	var image func(context.Context, string) (string, error)
 	if images != nil {

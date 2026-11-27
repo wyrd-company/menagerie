@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,52 @@ func TestTheCredentialRouteRefusals(t *testing.T) {
 	}
 	if len(g.seen()) != 0 {
 		t.Fatalf("a refusal reached GitHub: %+v", g.seen())
+	}
+}
+
+func TestTheCredentialRouteMintsFromTheNamedAppOnly(t *testing.T) {
+	g := newGitHub(t, newClock())
+	// Each App has its own installation, so the token request tells which
+	// App minted.
+	first, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation})
+	second, _ := g.minter(t, map[string]int64{"example-org": sampleInstallation + 1})
+	url := g.server.URL + "/example-org/sample-repo"
+	// The first App serves the URL too, so only the name chooses the second.
+	apps := Apps{
+		{Name: "sample-first", Minter: first},
+		{Name: "sample-second", Minter: second},
+	}
+	status, doc, _ := post(t, Handler(apps), http.MethodPost, `{"url":"`+url+`","githubApp":"SAMPLE-second"}`)
+	if status != http.StatusOK || !strings.HasPrefix(doc["password"], "sample-token-") {
+		t.Fatalf("%d %v", status, doc)
+	}
+	for _, r := range g.seen() {
+		if m := tokenRoute.FindStringSubmatch(r.path); m != nil && m[1] != strconv.FormatInt(sampleInstallation+1, 10) {
+			t.Fatalf("installation %s minted, not the named App's", m[1])
+		}
+	}
+	cases := []struct {
+		name, body string
+		apps       Apps
+		status     int
+		reason     string
+	}{
+		{"not configured", `{"url":"` + url + `","githubApp":"sample-gone"}`, apps, http.StatusBadGateway, "no GitHub App named sample-gone is configured"},
+		{"none configured", `{"url":"` + url + `","githubApp":"sample-gone"}`, nil, http.StatusBadGateway, "no GitHub App named sample-gone is configured"},
+		{"another server", `{"url":"https://elsewhere.example.invalid/example-org/sample-repo","githubApp":"sample-second"}`, apps, http.StatusBadGateway, "GitHub App sample-second does not serve the URL"},
+		{"not a name", `{"url":"` + url + `","githubApp":"sample app"}`, apps, http.StatusBadRequest, "the request is not a credential request"},
+		{"empty name", `{"url":"` + url + `","githubApp":""}`, apps, http.StatusBadRequest, "the request is not a credential request"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			status, doc, _ := post(t, Handler(c.apps), http.MethodPost, c.body)
+			if status != c.status || doc["reason"] != c.reason || len(doc) != 1 {
+				t.Fatalf("%d %v", status, doc)
+			}
+		})
+	}
+	if g.count(http.MethodPost) != 1 {
+		t.Fatalf("token requests %d", g.count(http.MethodPost))
 	}
 }
 

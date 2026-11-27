@@ -497,7 +497,7 @@ github-app:
 	if s, _ := p.signIn(t, b, "sample-manager", site+"/"); s.status != http.StatusOK {
 		t.Fatalf("sign-in answered %d", s.status)
 	}
-	registerTemplate(t, b, site, "Sample kit", templateURL)
+	registerTemplate(t, b, site, "Sample kit", templateURL, `{"githubApp":"github-app"}`)
 
 	t.Run("Menagerie has no SSH identity", func(t *testing.T) {
 		c.t = t

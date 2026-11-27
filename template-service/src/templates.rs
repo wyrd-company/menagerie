@@ -2,7 +2,9 @@
 //! and version checks. Neither runs any of the template's content.
 use crate::Service;
 use crate::address;
-use crate::api::{AddressReply, AddressRequest, CheckReply, CheckRequest, VersionsReply};
+use crate::api::{
+    AddressReply, AddressRequest, CheckReply, CheckRequest, VersionsReply, VersionsRequest,
+};
 use crate::error::ServiceError;
 use crate::server::Call;
 
@@ -14,6 +16,13 @@ pub fn address(service: &Service, request: AddressRequest) -> Result<AddressRepl
         source: admitted.source,
         reference: admitted.reference,
         base: admitted.base,
+        // As a credential request asks for it: a user name does not opt
+        // an https repository out of the App.
+        url: if admitted.repo.starts_with("https://") {
+            toha::source::without_userinfo(&admitted.repo)
+        } else {
+            admitted.repo
+        },
     })
 }
 
@@ -21,7 +30,7 @@ pub fn address(service: &Service, request: AddressRequest) -> Result<AddressRepl
 /// through the transport and credentials a fetch of that address uses.
 pub fn versions(
     service: &Service,
-    request: AddressRequest,
+    request: VersionsRequest,
     call: &Call,
 ) -> Result<VersionsReply, ServiceError> {
     let (config, _, _) = service.host.context()?;
@@ -35,6 +44,7 @@ pub fn versions(
     let tags = crate::versions::list_tags(
         &admitted.repo,
         &service.settings.hook_runner_socket,
+        &call.scope,
         &call.ended,
         &call.handed,
     )?;

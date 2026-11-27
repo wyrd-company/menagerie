@@ -99,6 +99,12 @@ export interface Template {
   address: string;
   currentVersion: string;
   runnerImage: string | null;
+  /**
+   * What every Git operation on its repository authenticates with; null
+   * for a template an earlier release registered or imported, whose URL
+   * chooses its credential.
+   */
+  credential: BackupCredential | null;
   /** The names of the workspaces that use it. */
   workspaces: string[];
   /** The newest found version, or null when none is found. */
@@ -126,7 +132,7 @@ export type CheckFailure =
   | "template-service-unavailable";
 
 /** The registration checks, in the order they run. */
-export type TemplateCheck = "address" | "fetch" | "version" | "read" | "definition";
+export type TemplateCheck = "address" | "credential" | "fetch" | "version" | "read" | "definition";
 
 export type Operation =
   | "create"

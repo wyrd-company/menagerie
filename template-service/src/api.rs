@@ -3,11 +3,34 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
-/// Names a template by its address, for the address and versions routes.
+/// Names a template by its address, for the address route.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AddressRequest {
     pub address: String,
+}
+
+/// The one credential a template's Git connections use, as its
+/// registration records it: a GitHub App by its configured name, or an SSH
+/// public key in authorized-keys form that the agent at `SSH_AUTH_SOCK`
+/// holds. A request without one keeps the rule chosen by URL: the first App
+/// whose server holds an https URL, and every key the agent offers.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Credential {
+    #[serde(default)]
+    pub github_app: Option<String>,
+    #[serde(default)]
+    pub ssh_key: Option<String>,
+}
+
+/// Lists the versions of the repository an address without a ref names.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VersionsRequest {
+    pub address: String,
+    #[serde(default)]
+    pub credential: Option<Credential>,
 }
 
 /// What Toha's grammar makes of an address, reaching no network.
@@ -16,6 +39,9 @@ pub struct AddressReply {
     pub source: String,
     pub reference: Option<String>,
     pub base: String,
+    /// The Git URL a fetch of the address connects to, after Toha expands a
+    /// host shorthand: the URL a credential has to fit.
+    pub url: String,
 }
 
 /// A repository's versions, in ascending order.
@@ -36,6 +62,8 @@ pub struct CheckRequest {
     pub reference: String,
     #[serde(default)]
     pub since: Option<String>,
+    #[serde(default)]
+    pub credential: Option<Credential>,
 }
 
 /// A checked version: the commit its ref resolved to, whether the
@@ -66,6 +94,8 @@ pub struct StartRequest {
     /// one: a ref that resolves to another is refused.
     #[serde(default)]
     pub commit: Option<String>,
+    #[serde(default)]
+    pub credential: Option<Credential>,
 }
 
 /// Starts an upgrade. `reanswer` asks every question again, with the
@@ -85,6 +115,8 @@ pub struct UpgradeRequest {
     #[serde(default)]
     pub commit: Option<String>,
     #[serde(default)]
+    pub credential: Option<Credential>,
+    #[serde(default)]
     pub reanswer: bool,
 }
 
@@ -103,6 +135,8 @@ pub struct AnswerRequest {
     /// one: a ref that resolves to another is refused.
     #[serde(default)]
     pub commit: Option<String>,
+    #[serde(default)]
+    pub credential: Option<Credential>,
     /// Toha's staged record, as returned in the latest reply.
     pub session: Value,
     /// Toha's answers envelope `{"template","answers"}`.
@@ -126,6 +160,8 @@ pub struct ApplyRequest {
     /// one: a ref that resolves to another is refused.
     #[serde(default)]
     pub commit: Option<String>,
+    #[serde(default)]
+    pub credential: Option<Credential>,
     pub session: Value,
     #[serde(default)]
     pub hook_token: Option<String>,
@@ -139,6 +175,36 @@ pub struct Selector<'a> {
     pub reference: &'a str,
     pub commit: Option<&'a str>,
 }
+
+/// The credential a request names, which `server` puts in scope for the
+/// whole operation.
+/// A request that can name none, such as the address route's, keeps the
+/// default.
+pub trait Credentialed {
+    fn credential(&self) -> Option<&Credential> {
+        None
+    }
+}
+
+impl Credentialed for AddressRequest {}
+
+macro_rules! credentialed {
+    ($($t:ty),*) => {$(
+        impl Credentialed for $t {
+            fn credential(&self) -> Option<&Credential> {
+                self.credential.as_ref()
+            }
+        }
+    )*};
+}
+credentialed!(
+    VersionsRequest,
+    CheckRequest,
+    StartRequest,
+    UpgradeRequest,
+    AnswerRequest,
+    ApplyRequest
+);
 
 macro_rules! selector {
     ($t:ty) => {

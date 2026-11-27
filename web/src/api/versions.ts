@@ -45,6 +45,17 @@ const failures: Record<string, string> = {
   "invalid-address": "the template service refuses its address",
 };
 
+/** The failures the Git host answered, which name the credential it was offered. */
+const hostRefused = new Set(["template-not-found", "template-resolve-failed"]);
+
+/** A template's credential as a refusal names it; none for the rule chosen by URL. */
+function phrase(credential: Template["credential"]): string {
+  if (credential === null) return "";
+  return "githubApp" in credential
+    ? ` (fetched with GitHub App ${credential.githubApp})`
+    : ` (fetched with SSH key ${credential.fingerprint})`;
+}
+
 /** How long ago a time was, as the templates screen says it. */
 export function ago(at: string, now: number = Date.now()): string {
   const seconds = Math.max(0, Math.round((now - Date.parse(at)) / 1000));
@@ -61,5 +72,5 @@ export function checkLine(t: Template, now: number = Date.now()): string {
   const when = ago(t.lastCheck.at, now);
   if (!t.lastCheck.failure) return `Checked ${when}`;
   const why = own(failures, t.lastCheck.failure) ?? t.lastCheck.failure;
-  return `Check failed ${when}: ${why}. Previously found versions are kept.`;
+  return `Check failed ${when}: ${why}${hostRefused.has(t.lastCheck.failure) ? phrase(t.credential) : ""}. Previously found versions are kept.`;
 }

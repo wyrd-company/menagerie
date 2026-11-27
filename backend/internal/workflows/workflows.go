@@ -48,7 +48,7 @@ type Templates interface {
 	ApplyUpgrade(ctx context.Context, s templates.Selector, session json.RawMessage, hookToken string) (*templates.Applied, error)
 	// CheckSince checks a version and says whether its commit is since or
 	// descends from it.
-	CheckSince(ctx context.Context, address, ref, since string) (*templates.Checked, error)
+	CheckSince(ctx context.Context, address, ref, since string, credential *templates.Credential) (*templates.Checked, error)
 }
 
 // Runtime starts, stops and rebuilds devcontainers with their provisioning,
@@ -297,9 +297,11 @@ func (w *Workflows) start(req api.JobRequest) (jobsRunner, error) {
 }
 
 // selector names the workspace and the template version a job pinned: its
-// registered template's address with the current version's tag and commit.
+// registered template's address with the current version's tag and commit,
+// and the template's credential.
 func (w *Workflows) selector(name, folder string, tpl store.Template) templates.Selector {
-	return templates.Selector{Workspace: name, Target: folder, Address: tpl.Address, Ref: tpl.CurrentTag, Commit: tpl.CurrentCommit}
+	return templates.Selector{Workspace: name, Target: folder, Address: tpl.Address, Ref: tpl.CurrentTag, Commit: tpl.CurrentCommit,
+		Credential: templates.CredentialOf(tpl.Credential.App, tpl.Credential.Key)}
 }
 
 // hooks is the hook grant of one generate or apply request. Its zero

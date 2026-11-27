@@ -252,14 +252,14 @@ description: >-
   `/{owner}/{repo}.git`, with no query or fragment. Optional `github-app`
   is one App, as earlier releases configured it; a configuration gives
   `github-app` or `github-apps`, not both. Each App has a `name`, the name
-  a backup repository's credential calls it: letters, digits, `_`, `.` and
-  `-`, starting with a letter or digit, at most 100 characters, compared
-  without regard to case, and given once. It is required in `github-apps`;
-  in `github-app`, absent is `github-app`. A backup repository whose
-  credential names an App uses that App alone, and only for a URL on its
-  server. A backup repository registered by an earlier release, which has
-  no credential, and a template fetch use the first App whose server holds
-  the URL. A backup URL must also have no user information; one with a
+  a backup repository's or template's credential calls it: letters,
+  digits, `_`, `.` and `-`, starting with a letter or digit, at most 100
+  characters, compared without regard to case, and given once. It is
+  required in `github-apps`; in `github-app`, absent is `github-app`. A
+  backup repository or template whose credential names an App uses that
+  App alone, and only for a URL on its server. A backup repository or
+  template registered by an earlier release, which has no credential, uses
+  the first App whose server holds the URL. A backup URL must also have no user information; one with a
   user name gets no token. A template address may have a user name: the
   template service asks for the token by the address without it, so a
   user name does not opt out. Other URLs keep their own authentication,

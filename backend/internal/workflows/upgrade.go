@@ -15,6 +15,7 @@ import (
 
 	"github.com/wyrd-company/menagerie/backend/internal/api"
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
+	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/jobs"
 	"github.com/wyrd-company/menagerie/backend/internal/registry"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
@@ -160,13 +161,13 @@ func (u *upgrading) forward(ctx context.Context, run *jobs.Run, tpl store.Templa
 		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("neither the version nor the commit last applied to the workspace is known, so the upgrade cannot tell that version %s moves it forward; nothing was upgraded", tpl.CurrentVersion)}
 	}
 	fmt.Fprintf(run.Log(""), "the workspace's applied version is unknown; asking whether version %s's commit descends from its applied commit %q\n", tpl.CurrentVersion, applied.Commit)
-	checked, err := u.w.opts.Templates.CheckSince(ctx, tpl.Address, tpl.CurrentTag, applied.Commit)
+	checked, err := u.w.opts.Templates.CheckSince(ctx, tpl.Address, tpl.CurrentTag, applied.Commit, templates.CredentialOf(tpl.Credential.App, tpl.Credential.Key))
 	var unavailable *templates.UnavailableError
 	switch {
 	case errors.As(err, &unavailable):
 		return "", "", &jobs.Failure{Kind: KindTemplateUnavailable, Err: fmt.Errorf("the template service could not say whether version %s descends from the applied commit %q: %w; nothing was upgraded", tpl.CurrentVersion, applied.Commit, err)}
 	case err != nil:
-		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the template service refused to check version %s against the applied commit %q (%s); nothing was upgraded", tpl.CurrentVersion, applied.Commit, refusalKind(err))}
+		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("the template service refused to check version %s against the applied commit %q%s (%s); nothing was upgraded", tpl.CurrentVersion, applied.Commit, gitcreds.Phrase(tpl.Credential), refusalKind(err))}
 	case tpl.CurrentCommit != "" && checked.Commit != tpl.CurrentCommit:
 		return "", "", &jobs.Failure{Kind: KindTemplateRefused, Err: fmt.Errorf("version %s's tag is at commit %q, not the recorded %q; nothing was upgraded", tpl.CurrentVersion, checked.Commit, tpl.CurrentCommit)}
 	case !*checked.Descends:

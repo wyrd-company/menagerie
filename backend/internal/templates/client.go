@@ -55,6 +55,27 @@ type Selector struct {
 	// yet. A ref that resolves to another commit is refused as
 	// template-stale-revision.
 	Commit string `json:"commit,omitempty"`
+	// Credential is the template's credential, or nil for a template
+	// registered before templates named one.
+	Credential *Credential `json:"credential,omitempty"`
+}
+
+// Credential is the one credential a template's Git connections use: a
+// GitHub App by its configured name, or an SSH public key in
+// authorized-keys form. A request without one keeps the rule chosen by
+// URL.
+type Credential struct {
+	GitHubApp string `json:"githubApp,omitempty"`
+	SSHKey    string `json:"sshKey,omitempty"`
+}
+
+// CredentialOf is the request credential of an App name or an SSH key, at
+// most one of them given, or nil when neither is.
+func CredentialOf(app, key string) *Credential {
+	if app == "" && key == "" {
+		return nil
+	}
+	return &Credential{GitHubApp: app, SSHKey: key}
 }
 
 // Address is what the template service's reading of an address gives,
@@ -68,6 +89,10 @@ type Address struct {
 	// Base is the address as given without its ref; an https address also
 	// loses its user information.
 	Base string `json:"base"`
+	// URL is the Git URL a fetch of the address connects to, a gh: address
+	// expanded and an https URL without its user name: the URL a
+	// template's credential has to fit.
+	URL string `json:"url"`
 }
 
 // Version is one version of a repository: its numbers, its tag and the
@@ -207,17 +232,17 @@ func (c *Client) ReadAddress(ctx context.Context, address string) (*Address, err
 	if err := c.call(ctx, pathAddresses, map[string]string{"address": address}, &out); err != nil {
 		return nil, err
 	}
-	if out.Source == "" || out.Base == "" {
-		return nil, &UnavailableError{Err: errors.New("address reply names no source or base")}
+	if out.Source == "" || out.Base == "" || out.URL == "" {
+		return nil, &UnavailableError{Err: errors.New("address reply names no source, base or URL")}
 	}
 	return &out, nil
 }
 
 // ListVersions lists the versions of the repository address, which names
-// no ref, names.
-func (c *Client) ListVersions(ctx context.Context, address string) (*Versions, error) {
+// no ref, names, with the template's credential.
+func (c *Client) ListVersions(ctx context.Context, address string, credential *Credential) (*Versions, error) {
 	var out Versions
-	if err := c.call(ctx, pathVersions, map[string]string{"address": address}, &out); err != nil {
+	if err := c.call(ctx, pathVersions, request{Address: address, Credential: credential}, &out); err != nil {
 		return nil, err
 	}
 	if out.Source == "" || out.Versions == nil {
@@ -271,10 +296,19 @@ var (
 	fullCommit    = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 )
 
-// Check fetches address at ref and reads it, running nothing of it.
-func (c *Client) Check(ctx context.Context, address, ref string) (*Checked, error) {
+// request is the body of the versions and checks routes.
+type request struct {
+	Address    string      `json:"address"`
+	Ref        string      `json:"ref,omitempty"`
+	Since      string      `json:"since,omitempty"`
+	Credential *Credential `json:"credential,omitempty"`
+}
+
+// Check fetches address at ref with the template's credential and reads
+// it, running nothing of it.
+func (c *Client) Check(ctx context.Context, address, ref string, credential *Credential) (*Checked, error) {
 	var out Checked
-	if err := c.call(ctx, pathChecks, map[string]string{"address": address, "ref": ref}, &out); err != nil {
+	if err := c.call(ctx, pathChecks, request{Address: address, Ref: ref, Credential: credential}, &out); err != nil {
 		return nil, err
 	}
 	if out.Source == "" || !fullCommit.MatchString(out.Commit) {
@@ -285,9 +319,9 @@ func (c *Client) Check(ctx context.Context, address, ref string) (*Checked, erro
 
 // CheckSince checks a version as Check does and also asks whether its
 // commit is since or descends from it; the reply's Descends is never nil.
-func (c *Client) CheckSince(ctx context.Context, address, ref, since string) (*Checked, error) {
+func (c *Client) CheckSince(ctx context.Context, address, ref, since string, credential *Credential) (*Checked, error) {
 	var out Checked
-	if err := c.call(ctx, pathChecks, map[string]string{"address": address, "ref": ref, "since": since}, &out); err != nil {
+	if err := c.call(ctx, pathChecks, request{Address: address, Ref: ref, Since: since, Credential: credential}, &out); err != nil {
 		return nil, err
 	}
 	if out.Source == "" || !fullCommit.MatchString(out.Commit) || out.Descends == nil {

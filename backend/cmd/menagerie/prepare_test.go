@@ -86,10 +86,10 @@ func (r *readOnly) ReadAddress(_ context.Context, address string) (*templates.Ad
 	base, ref, _ := strings.Cut(strings.TrimPrefix(address, "https://"), "@")
 	return &templates.Address{Source: "https://" + base, Reference: &ref, Base: "https://" + base}, nil
 }
-func (r *readOnly) ListVersions(context.Context, string) (*templates.Versions, error) {
+func (r *readOnly) ListVersions(context.Context, string, *templates.Credential) (*templates.Versions, error) {
 	return nil, errors.New("not used")
 }
-func (r *readOnly) Check(context.Context, string, string) (*templates.Checked, error) {
+func (r *readOnly) Check(context.Context, string, string, *templates.Credential) (*templates.Checked, error) {
 	return nil, errors.New("not used")
 }
 

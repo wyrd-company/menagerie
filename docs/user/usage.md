@@ -86,8 +86,9 @@ pre-release or build part, such as `1.2.0-rc.1`, is not a version, and when
 
 ### Register a template
 
-Choose **Register template** and enter a display name, the template's address
-and, when its hooks need one, a [runner image](configuration.md#runner-images).
+Choose **Register template** and enter a display name, the template's address,
+its **Credential** and, when its hooks need one, a
+[runner image](configuration.md#runner-images).
 **Validate** runs the checks below and stores nothing; when they pass, the form
 shows `Checks passed` with the version, and **Save** registers the template,
 running the checks again. Save waits for a Validate of the values as they are:
@@ -98,12 +99,31 @@ ref, the template's current version is the repository's newest version; with
 a version's tag, such as `gh:example-org/kit@1.2.0`, it is that version. Its
 id, which never changes, comes from the name.
 
+The **Credential** is chosen as a
+[backup repository's](#backup-repositories) is, for the Git URL the address
+names: once you stop typing, Menagerie reads the address, and a `gh:`
+address names `https://github.com/owner/repository`. For an SSH address,
+choose one of the SSH keys Wyrwood's agent offers; the form shows its public
+key, to add to the template's repository as a deploy key, or to an account
+that can read it, before you validate. For an `https` address on a
+configured [GitHub App](configuration.md#github-app)'s server, choose one of
+the Apps that serve it; any other `https` address gets no credential. When
+only one fits, the form chooses it. **Validate** waits until the address is
+read. Every Git operation on the template's repository uses that credential
+alone: the checks, version checks, creating and upgrading workspaces, and
+**Apply branch**. A refused fetch names the credential, such as `the template
+could not be fetched with SSH key SHA256:…`, and so does the row's line for a
+failed version check. The Git host of a public repository asks for no
+credential, so its fetches offer none; **Validate** still has the App get a
+token for the repository, so an App that cannot is refused.
+
 Menagerie refuses the template at the first check that fails, naming that
 check under the form. The message never repeats the address:
 
 | Check        | Refused when                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `address`    | The address is not one of those forms: a folder, `file://`, a template name, `git://`, `http://`, or a password, even one holding `/`. Or it is not written plainly: in an `https://` or `ssh://` address a `:` before an `@`, as a port before a ref is (register it without the ref); a ref that holds `/` or `:`, or more than one `@` after the host; or a ref that holds a `.`, or follows `git@host:path`, but is not a version's tag |
+| `credential` | The credential does not fit the address: an SSH address needs an SSH key, an `https` address on an App's server an App that serves it, and no other `https` address takes one; or the key is provisioning's operator key; or the App cannot get a token for the repository, even a public one |
 | `fetch`      | The repository's versions cannot be listed: it does not exist, or the Git host refuses the credentials                                                                                                                                                                                                                                                                                                                                      |
 | `version`    | The repository has no version, the address's ref is not a version's tag, where the `address` check did not refuse it first, or the version's tag moved between the listing and the fetch (register again)                                                                                                                                                                                                                                                                                                              |
 | `fetch`      | The current version cannot be fetched                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -113,6 +133,17 @@ check under the form. The message never repeats the address:
 A template whose repository and folder are registered already is refused,
 naming that registration. Registering a template joins the workspaces whose
 applied record, `.toha.json`, names it.
+
+Each template's row shows its credential. **Change credential** chooses
+another, in the same way as a backup repository's: it starts from the saved
+credential, **Validate** fetches the current version with the new one, and
+**Save** records it only after that passes. Saving also records that fetch
+as the template's version check, so a check that failed with the earlier
+credential no longer shows. A template registered by an
+earlier release, or imported from the `templates` key, shows **Credential
+chosen by URL**: it uses the first App whose server holds an `https`
+address, or every key the agent offers for an SSH address, as before, until
+you change its credential.
 
 ### Check for new versions
 

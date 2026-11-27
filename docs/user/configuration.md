@@ -105,10 +105,14 @@ address, in one of these forms:
 - `gh:<owner>/<repository>@<ref>#<path>`, a GitHub repository over HTTPS,
   for public templates;
 - `git@<host>:<path>.git@<ref>#<path>` or
-  `ssh://git@<host>/<path>.git@<ref>#<path>`, over SSH with the Wyrwood
-  agent, for private templates;
+  `ssh://git@<host>/<path>.git@<ref>#<path>`, over SSH with a key from the
+  Wyrwood agent, for private templates;
 - `https://<host>/<path>.git@<ref>#<path>`, with a
   [GitHub App](#github-app) token for private templates on its server.
+
+The registration also names the template's credential, the SSH key or App
+every Git operation on its repository uses alone; see
+[Register a template](usage.md#register-a-template).
 
 `#<path>` names the template's folder in the repository and is optional.
 `@<ref>` is optional too and, when given, is a version's tag such as `1.2.0`;
@@ -125,8 +129,8 @@ also be written plainly: a user name and path of letters, digits and `.`
 `_` `~` `-` (a path also `/`), a ref of letters, digits and `.` `_` `-`, a
 `#` folder of those and `/`, a host in lower case, and no `%` escapes; and a
 ref that holds a `.`, or follows `git@host:path`, is a version's tag, such
-as `1.2.0`. Use the GitHub App or the SSH agent for private templates;
-see [Git hosts](install.md#git-hosts). It also refuses a local
+as `1.2.0`. Use a GitHub App or an SSH key for private templates; see
+[Git hosts](install.md#git-hosts). It also refuses a local
 folder, a `file://`, `git://` or `http://` address and a Toha template name.
 
 ### Version checks
@@ -139,8 +143,8 @@ template-versions:
   every: 30m
 ```
 
-A check lists the tags of the template's repository with the credentials a
-fetch of its address uses, and a version is a tag `MAJOR.MINOR.PATCH`, with
+A check lists the tags of the template's repository with the template's
+credential, and a version is a tag `MAJOR.MINOR.PATCH`, with
 an optional leading `v`. A manager can also check one template at any time;
 see [Check for new versions](usage.md#check-for-new-versions). `every` is a
 duration such as `45m`, `2h` or `1h30m`, and is required when
@@ -249,11 +253,12 @@ server whose path is `/<owner>/<repository>` or `/<owner>/<repository>.git`:
   repository's credential names the App and its URL is such an `https` URL
   with no user information, query or fragment. A backup repository URL with
   a user name gets no token and no other credential.
-- Template fetches, with `contents: read` on the repository, from every
-  `https` address of such a repository, with the first App whose server
-  holds it. A user name in the address does not opt out: the template
-  service asks for the token by the address without it, and the fetch sends
-  the token in its place.
+- Template fetches, with `contents: read` on the repository, when a
+  template's credential names the App and its address is such an `https`
+  address. A template registered by an earlier release, which names no App,
+  uses the first App whose server holds it. A user name in the address does
+  not opt out: the template service asks for the token by the address
+  without it, and the fetch sends the token in its place.
 
 Every other URL keeps its own authentication: SSH URLs use the Wyrwood
 agent, and Menagerie gives other `https` URLs no credential. Both can be
@@ -275,20 +280,21 @@ github-apps:
 
 `github-app` takes one App, as earlier releases configured it, with the same
 keys; a configuration gives `github-app` or `github-apps`, not both. A backup
-repository registered by an earlier release, which names no App, uses the
-first App whose server holds its URL, so moving `github-app` into
+repository or template registered by an earlier release, which names no
+App, uses the first App whose server holds its URL, so moving `github-app` into
 `github-apps` as the first entry changes nothing.
 
 | Key | Value |
 | --- | --- |
-| `name` | The name a backup repository's credential gives the App: letters, digits, `_`, `.` and `-`, compared without regard to case. Required in `github-apps`; in `github-app`, without it, `github-app`. Renaming an App fails the backups of the repositories that name it until you change their credential. |
+| `name` | The name a backup repository's or template's credential gives the App: letters, digits, `_`, `.` and `-`, compared without regard to case. Required in `github-apps`; in `github-app`, without it, `github-app`. Renaming an App fails the backups of the repositories, and the fetches of the templates, that name it until you change their credential. |
 | `app-id` | The App's id. |
 | `transit-key` | The Transit key, at the mount `transit`, that holds the App's private key: letters, digits, `_`, `.` and `-`. |
 | `installations` | Optional. The App's installation id by account name, compared in lower case. A repository whose owner is not listed has its installation looked up. |
 | `server` | Optional. The GitHub server's `https` origin; without it, `https://github.com`. The API is `https://api.github.com` for GitHub, `<server>/api/v3` for GitHub Enterprise Server. |
 
 Install each App on the backup repositories that name it with Contents read
-and write, and on each private template repository with Contents read.
+and write, and on the private template repositories that name it with
+Contents read.
 Import its private key into OpenBao's Transit engine as an RSA key, as
 [Installation](install.md#github-app) shows; the Wyrwood policy grants
 `update` on `transit/sign/<transit-key>/sha2-256`. For a `server` whose

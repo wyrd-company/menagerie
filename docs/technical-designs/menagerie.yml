@@ -1310,13 +1310,55 @@ proposed-design:
     The key list fails alone and the Apps still load. An operator-key check
     the agent cannot answer refuses the key, which may be the operator key,
     and each transfer with a key refuses it when the configuration has
-    since excluded it, by the agent's listing. Template fetches keep the
-    rule chosen by URL. The URL forms and the credential each takes are a
+    since excluded it, by the agent's listing. A template names its
+    credential the same way (see template-credentials). The URL forms and the credential each takes are a
     shared table, docs/specifications/assets/workspace-api/credential-url-cases.json,
     which the service's tests and the picker's both read. The picker is
     never stricter than the service: a URL the service refuses outright,
     marked refused in the table, it may read more loosely, and the
     service's refusal on save explains the URL.
+  template-credentials: >-
+    A template names its credential as a backup repository does: one
+    GitHub App by its configured name, or one SSH key by its public key,
+    recorded with the template, or none for a template an earlier release
+    registered or the templates key imported, whose URL keeps choosing.
+    Registration reads the address through the template service, which
+    reaches no network and answers the Git URL a fetch connects to, a `gh:`
+    address expanded and an `https` URL without its user name. The
+    credential check, the one backup repositories use, runs on that URL
+    before any fetch, and with an App it also mints a read token for the
+    repository from that App, since a public repository's fetch never asks
+    for one and so would never try it; the form offers the credentials that fit it,
+    reading the URL through `POST /api/templates/addresses`. Every template
+    service request about a registered template names its credential: the
+    version listing, the checks, create, upgrade and Apply branch's descent
+    check. With an App, each credential request names it, and the route
+    mints from that App only, failing the fetch when the App is not
+    configured or does not serve the URL. With a key, the template service
+    runs the operation inside Toha's `with_ssh_key` scope, so each SSH
+    connection of its Toha fetches offers that key alone from the agent,
+    once the agent lists it, and Toha refuses an SSH configuration that
+    would add another identity, which it reads with `ssh -G`. The version
+    listing is not Toha's, because Toha lists no tags, so it pins the key
+    itself: the agent must list the key, and `ssh` runs with
+    `IdentitiesOnly`, `IdentityFile` and `IdentityAgent`. It skips Toha's
+    `ssh -G` check, which Menagerie's image, setting no SSH configuration,
+    does not need; [Toha #94](https://github.com/wyrd-company/toha/issues/94)
+    would list tags through Toha. A refused fetch names the credential by
+    the App's name or the key's fingerprint, as do a refused descent check
+    of an upgrade or Apply branch and the Templates screen's line for a
+    failed version check. A fetch that the Git host does not ask a
+    credential for, a public repository's, offers none: Toha answers
+    challenges only, so a public template keeps working after its App is
+    removed, and its next credential change refuses that App. A change of a template's
+    credential is saved only after its current version, at the commit the
+    listing finds for its tag, passes the fetch, read and definition checks
+    with it. Its listing is then recorded as the template's version check,
+    so a failed check with the earlier credential no longer shows as the
+    new one's. Each change is counted with the template, and a version
+    check records its outcome only while the count is the one it started
+    with, so a check that started before a change records nothing, even
+    after a change back to the credential it used.
   git-and-credentials: >-
     The workspace repository, a workspace's backup repository (see
     backup-repositories), is a backup, not a synchronized copy. The local
@@ -1325,20 +1367,21 @@ proposed-design:
     It fetches only on Apply branch, and then only the named branch, into
     a private ref, through a remote it never writes to the workspace's Git
     configuration. Template fetching belongs to Toha. Every credential comes
-    through Wyrwood, chosen by URL; no key or token is stored in the
-    container. An SSH URL uses the SSH agent at Wyrwood's `ssh-agent.sock`,
+    through Wyrwood, chosen by the repository's or template's credential, or
+    by URL for one an earlier release registered; no key or token is stored
+    in the container. An SSH URL uses the SSH agent at Wyrwood's `ssh-agent.sock`,
     mounted from the host consumer directory. The agent offers the Git keys
     the Wyrwood policy grants, OpenBao Transit keys, and with provisioning
     also the operator key, which no Git host accepts. A backup repository
-    with a key as its credential is offered that key alone (see
-    repository-credentials), so each repository can have a deploy key of its
-    own. A template fetch, and a backup repository registered by an earlier
-    release, are offered every key, and a Git host signs in with the first
-    it knows; for them the agent must offer one Git key, which reaches every
-    such repository: a deploy key with write access on the backup repository
-    when there is one repository, else the SSH key of a machine user with
-    write access on every backup repository and read access on the private
-    template repositories. Toha fetches SSH templates through the same
+    or template with a key as its credential is offered that key alone (see
+    repository-credentials and template-credentials), so each repository
+    can have a deploy key of its own. A template and a backup repository
+    registered by an earlier release are offered every key, and a Git host
+    signs in with the first it knows; for them the agent must offer one Git
+    key, which reaches every such repository: a deploy key with write
+    access on the backup repository when there is one repository, else the
+    SSH key of a machine user with write access on every such backup
+    repository and read access on every such private template repository. Toha fetches SSH templates through the same
     agent; its git transport runs the image's ssh client with
     `SSH_AUTH_SOCK` set to Wyrwood's socket. Repositories on GitHub can
     use the GitHub App instead (see github-app), which needs no SSH key and
@@ -1348,10 +1391,9 @@ proposed-design:
     App's server whose path is `/{owner}/{repo}` or `/{owner}/{repo}.git`,
     with no query or fragment, uses a GitHub App installation token instead:
     a backup URL only without user information, a template address with or
-    without a user name. A backup repository whose credential names an App
-    uses that App alone; a template fetch, and a backup repository
-    registered by an earlier release, use the first App whose server holds
-    the URL. Each App mints its own tokens as below. The workspace service is the only minter. It signs the App's
+    without a user name. A backup repository or template whose credential
+    names an App uses that App alone; one registered by an earlier release
+    uses the first App whose server holds the URL. Each App mints its own tokens as below. The workspace service is the only minter. It signs the App's
     RS256 JWT, issued 60 seconds in the past and expiring 9 minutes after
     now, with the App's private key, an RSA key in OpenBao's Transit engine,
     through Wyrwood's `vault.sock` with no token of its own. It takes the
@@ -1399,12 +1441,16 @@ proposed-design:
   credential-route: >-
     The hook runner socket also serves the template service's credential
     route, `POST /v1/credentials/github` with the strict body `{"url"}`, an
-    `https` URL without user information. For a repository URL on a
-    configured App's server it answers, from the first such App, 200 `{"username":"x-access-token",
-    "password"}` with a contents read token for that one repository. It
-    answers 404 `{"reason"}` when no App is configured or the URL is on no
-    App's server, and the template service then keeps Toha's default
-    behaviour; 502 `{"reason"}` with the fixed reason when no token could be
+    `https` URL without user information, and `"githubApp"`, the App a
+    template's credential names. For a repository URL on a configured App's
+    server it answers, from the named App or else the first such App, 200
+    `{"username":"x-access-token", "password"}` with a contents read token
+    for that one repository. Without `githubApp`, it answers 404
+    `{"reason"}` when no App is configured or the URL is on no App's server,
+    and the template service then keeps Toha's default behaviour. It
+    answers 502 `{"reason"}` naming the App when the named App is not
+    configured or does not serve the URL, so the fetch fails instead of
+    going without; and with the fixed reason when no token could be
     minted; 400 `{"reason"}` for a body that is not one URL, and 405 for a
     method other than POST. Any process that can open the socket, which
     only the services' user can, gets read tokens for the repositories the

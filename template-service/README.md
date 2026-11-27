@@ -45,12 +45,17 @@ its exit code and captured streams.
 Private templates are fetched in one of two ways:
 
 - Over SSH, by Toha's Git transport, which runs the image's `ssh` client
-  with `SSH_AUTH_SOCK`.
+  with `SSH_AUTH_SOCK`. A request that names an SSH key as the template's
+  credential runs inside Toha's `with_ssh_key` scope, so its fetches offer
+  that key alone. The version listing (`src/versions.rs`) is not Toha's,
+  so it pins the key on `ssh` itself, without Toha's `ssh -G` check.
 - Over `https` with a GitHub App installation token. Each request runs its
   Toha work inside one Toha credential resolver scope (`src/credentials.rs`).
-  When an `https` remote asks for credentials, the resolver posts the URL to
-  the credential route on the workspace service's hook runner socket. The
-  route answers with a read token for that one repository. The URL carries
+  When an `https` remote asks for credentials, the resolver posts the URL,
+  and the GitHub App a request's credential names, to the credential route
+  on the workspace service's hook runner socket. The route answers with a
+  read token for that one repository, from the named App only, when one is
+  named. The URL carries
   no user name, so a user name in a template address does not opt out of
   the App. If the route answers 404, the fetch keeps Toha's default
   behaviour. If the route cannot mint a token, the fetch fails with the

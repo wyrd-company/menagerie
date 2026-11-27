@@ -25,9 +25,17 @@ type Template struct {
 	Address string
 	Source  string
 	// RunnerImage is the image of its hooks' throwaway containers, or "".
-	RunnerImage    string
-	CurrentVersion string
-	CurrentTag     string
+	RunnerImage string
+	// Credential is the one credential its Git connections use, or the
+	// zero Credential for a template an earlier release registered or
+	// imported, whose URL chooses it.
+	Credential Credential
+	// CredentialChanges counts the changes of its credential. A version
+	// check records its outcome only while the count is the one it
+	// started with.
+	CredentialChanges int
+	CurrentVersion    string
+	CurrentTag        string
 	// CurrentCommit is "" for an imported template no check has fetched.
 	CurrentCommit string
 	// Workspaces are the workspaces that use it, in name order.
@@ -122,13 +130,13 @@ var ErrNoTemplate = errors.New("no registered template has this id")
 var ErrNotNewer = errors.New("the version is not newer than the current version")
 
 const templateColumns = `id, name, address, source, coalesce(runner_image, ''), current_version, current_tag, coalesce(current_commit, ''),
-	coalesce(checked_at, ''), coalesce(check_failure, '')`
+	coalesce(checked_at, ''), coalesce(check_failure, ''), coalesce(credential_app, ''), coalesce(credential_key, ''), credential_changes`
 
 func scanTemplate(row interface{ Scan(...any) error }) (Template, error) {
 	var t Template
 	var checked string
 	err := row.Scan(&t.ID, &t.Name, &t.Address, &t.Source, &t.RunnerImage, &t.CurrentVersion, &t.CurrentTag, &t.CurrentCommit,
-		&checked, &t.CheckFailure)
+		&checked, &t.CheckFailure, &t.Credential.App, &t.Credential.Key, &t.CredentialChanges)
 	if err == nil && checked != "" {
 		if t.CheckedAt, err = time.Parse(time.RFC3339Nano, checked); err != nil {
 			err = fmt.Errorf("the last version check's time: %w", err)
@@ -280,9 +288,10 @@ func (t *Tx) RegisterTemplate(tpl Template, joins map[string]AppliedVersion) (Te
 			tpl.ID = fmt.Sprintf("%s-%d", base, n)
 		}
 	}
-	if _, err := t.exec(`INSERT INTO templates (id, name, address, source, runner_image, current_version, current_tag, current_commit)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		tpl.ID, tpl.Name, tpl.Address, tpl.Source, nullable(tpl.RunnerImage), tpl.CurrentVersion, tpl.CurrentTag, nullable(tpl.CurrentCommit)); err != nil {
+	if _, err := t.exec(`INSERT INTO templates (id, name, address, source, runner_image, current_version, current_tag, current_commit, credential_app, credential_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tpl.ID, tpl.Name, tpl.Address, tpl.Source, nullable(tpl.RunnerImage), tpl.CurrentVersion, tpl.CurrentTag, nullable(tpl.CurrentCommit),
+		nullable(tpl.Credential.App), nullable(tpl.Credential.Key)); err != nil {
 		return Template{}, err
 	}
 	if !tpl.CheckedAt.IsZero() {
@@ -400,44 +409,59 @@ func (s *Store) AppliedVersions(ctx context.Context) (out map[string]AppliedVers
 	return out, err
 }
 
-// RecordCheck records a template's successful version check, which ended at
-// at and found versions, in ascending order: they replace its found
-// versions. An imported template whose current commit is unknown takes the
-// commit, and the tag, of the found version that is its current version.
-// Each of its workspaces whose applied version is unknown takes the newest
-// version whose tag is at its applied commit.
-func (s *Store) RecordCheck(ctx context.Context, id string, versions []Version, at time.Time) (tpl Template, err error) {
+// RecordCheck records a template's successful version check, which
+// started when its CredentialChanges were changes, ended at at and found
+// versions, in ascending order: they replace its found versions. An
+// imported template whose current commit is unknown takes the commit, and
+// the tag, of the found version that is its current version. Each of its workspaces whose
+// applied version is unknown takes the newest version whose tag is at its
+// applied commit. A check that a credential change superseded while it
+// ran, even a change back to the credential it used, records nothing, and
+// the answer is the template as recorded.
+func (s *Store) RecordCheck(ctx context.Context, id string, changes int, versions []Version, at time.Time) (tpl Template, err error) {
 	err = s.Update(ctx, func(t *Tx) error {
 		current, err := t.Template(id)
-		if err != nil {
+		if err != nil || current.CredentialChanges != changes {
+			tpl = current
 			return err
 		}
-		if err := t.replaceVersions(id, versions, at); err != nil {
-			return err
-		}
-		if current.CurrentCommit == "" {
-			for _, v := range versions {
-				if v.Version == current.CurrentVersion {
-					if _, err := t.exec(`UPDATE templates SET current_tag = ?, current_commit = ? WHERE id = ?`, v.Tag, v.Commit, id); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		if err := t.completeApplied(id); err != nil {
-			return err
-		}
-		tpl, err = t.Template(id)
+		tpl, err = t.recordCheck(current, versions, at)
 		return err
 	})
 	return tpl, err
 }
 
+// recordCheck records versions, found at at, as current's version check;
+// see RecordCheck.
+func (t *Tx) recordCheck(current Template, versions []Version, at time.Time) (Template, error) {
+	id := current.ID
+	if err := t.replaceVersions(id, versions, at); err != nil {
+		return Template{}, err
+	}
+	if current.CurrentCommit == "" {
+		for _, v := range versions {
+			if v.Version == current.CurrentVersion {
+				if _, err := t.exec(`UPDATE templates SET current_tag = ?, current_commit = ? WHERE id = ?`, v.Tag, v.Commit, id); err != nil {
+					return Template{}, err
+				}
+			}
+		}
+	}
+	if err := t.completeApplied(id); err != nil {
+		return Template{}, err
+	}
+	return t.Template(id)
+}
+
 // RecordCheckFailure records a template's failed version check, which
-// ended at at for failure, one of the Check kinds; its found versions stay.
-func (s *Store) RecordCheckFailure(ctx context.Context, id, failure string, at time.Time) (tpl Template, err error) {
+// started when its CredentialChanges were changes and ended at at for
+// failure, one of the Check kinds; its found versions stay. As with
+// RecordCheck, a check a credential change superseded records nothing.
+func (s *Store) RecordCheckFailure(ctx context.Context, id string, changes int, failure string, at time.Time) (tpl Template, err error) {
 	err = s.Update(ctx, func(t *Tx) error {
-		if _, err := t.Template(id); err != nil {
+		current, err := t.Template(id)
+		if err != nil || current.CredentialChanges != changes {
+			tpl = current
 			return err
 		}
 		if _, err := t.exec(`UPDATE templates SET checked_at = ?, check_failure = ? WHERE id = ?`, at.UTC().Format(time.RFC3339Nano), failure, id); err != nil {
@@ -492,6 +516,27 @@ func (s *Store) EditTemplate(ctx context.Context, id string, name, runnerImage *
 			}
 		}
 		tpl, err = t.Template(id)
+		return err
+	})
+	return tpl, err
+}
+
+// SetTemplateCredential records c as the credential of the registered
+// template id, or is ErrNoTemplate, with versions, which a listing with c
+// found at at, as its version check, replacing a check with the earlier
+// credential, and counts the change, so a check that started before it
+// records nothing. It returns the template as recorded.
+func (s *Store) SetTemplateCredential(ctx context.Context, id string, c Credential, versions []Version, at time.Time) (tpl Template, err error) {
+	err = s.Update(ctx, func(t *Tx) error {
+		current, err := t.Template(id)
+		if err != nil {
+			return err
+		}
+		if _, err := t.exec(`UPDATE templates SET credential_app = ?, credential_key = ?, credential_changes = credential_changes + 1 WHERE id = ?`, nullable(c.App), nullable(c.Key), id); err != nil {
+			return err
+		}
+		current.Credential = c
+		tpl, err = t.recordCheck(current, versions, at)
 		return err
 	})
 	return tpl, err

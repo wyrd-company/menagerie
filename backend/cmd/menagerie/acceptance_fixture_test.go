@@ -250,10 +250,11 @@ path "transit/sign/sample-git" { capabilities = ["update"] }
 	if s, _ := p.signIn(t, manager, "sample-manager", site+"/"); s.status != http.StatusOK {
 		t.Fatalf("the manager's sign-in answered %d", s.status)
 	}
-	registerTemplate(t, manager, site, "Kept kit", host.URL("kept-kit.git"))
-	registerTemplate(t, manager, site, "Sample kit, held hook", host.URL("held-kit.git"))
+	gitKey := sshKeyCredential(transitKey(t, w, "sample-git"))
+	registerTemplate(t, manager, site, "Kept kit", host.URL("kept-kit.git"), gitKey)
+	registerTemplate(t, manager, site, "Sample kit, held hook", host.URL("held-kit.git"), gitKey)
 	if provisioned != nil {
-		registerTemplate(t, manager, site, "Workspace kit", host.URL("workspace-kit.git"))
+		registerTemplate(t, manager, site, "Workspace kit", host.URL("workspace-kit.git"), gitKey)
 	}
 	releaseKept()
 	releaseWorkspace()

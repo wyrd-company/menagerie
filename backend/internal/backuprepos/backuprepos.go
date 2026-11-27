@@ -21,8 +21,6 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/wyrd-company/menagerie/backend/internal/backup"
 	"github.com/wyrd-company/menagerie/backend/internal/gitcreds"
 	"github.com/wyrd-company/menagerie/backend/internal/store"
@@ -175,17 +173,12 @@ func (r *Registry) SetCredential(ctx context.Context, id string, credential stor
 // a *CheckError for one that names an App and a key, or a key that is not
 // a public key.
 func normalCredential(c store.Credential) (store.Credential, error) {
-	if c.App != "" && c.Key != "" {
-		return c, &CheckError{Check: CheckCredential, Message: "a credential is a GitHub App or an SSH key, not both"}
+	c, err := gitcreds.NormalCredential(c)
+	var fit *gitcreds.FitError
+	if errors.As(err, &fit) {
+		return c, &CheckError{Check: CheckCredential, Message: fit.Message}
 	}
-	if c.Key != "" {
-		key, ok := gitcreds.NormalKey(c.Key)
-		if !ok {
-			return c, &CheckError{Check: CheckCredential, Message: "the SSH key is not a public key in authorized-keys form"}
-		}
-		c.Key = key
-	}
-	return c, nil
+	return c, err
 }
 
 // check runs a registration's credential and write checks on repo.
@@ -205,27 +198,11 @@ func (r *Registry) check(ctx context.Context, repo store.BackupRepository) error
 	defer cancel()
 	if err := r.Remote(repo).CheckWrite(checkCtx, io.Discard); err != nil {
 		if checkCtx.Err() != nil && ctx.Err() == nil {
-			return &CheckError{Check: CheckWrite, Message: fmt.Sprintf("the repository did not answer within %s%s", wait, credentialPhrase(repo.Credential))}
+			return &CheckError{Check: CheckWrite, Message: fmt.Sprintf("the repository did not answer within %s%s", wait, gitcreds.Phrase(repo.Credential))}
 		}
-		return &CheckError{Check: CheckWrite, Message: "Menagerie could not write to the repository" + credentialPhrase(repo.Credential) + ": " + strings.TrimPrefix(err.Error(), "write check: ")}
+		return &CheckError{Check: CheckWrite, Message: "Menagerie could not write to the repository" + gitcreds.Phrase(repo.Credential) + ": " + strings.TrimPrefix(err.Error(), "write check: ")}
 	}
 	return nil
-}
-
-// credentialPhrase names c in a write check's refusal, so a manager knows
-// which credential the Git host refused: " with GitHub App {name}", or
-// " with SSH key {fingerprint}". The zero credential, chosen by URL, is "".
-// Neither names a secret.
-func credentialPhrase(c store.Credential) string {
-	switch {
-	case c.App != "":
-		return " with GitHub App " + c.App
-	case c.Key != "":
-		if key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.Key)); err == nil {
-			return " with SSH key " + ssh.FingerprintSHA256(key)
-		}
-	}
-	return ""
 }
 
 // For is the repository a workspace backs up to, or a *NoRepositoryError.

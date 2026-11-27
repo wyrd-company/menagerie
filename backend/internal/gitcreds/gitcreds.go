@@ -189,6 +189,39 @@ func NormalKey(publicKey string) (string, bool) {
 	return authorized(parsed), true
 }
 
+// NormalCredential is c with its key in the form a credential records, or
+// a *FitError for one that names an App and a key, or a key that is not a
+// public key.
+func NormalCredential(c store.Credential) (store.Credential, error) {
+	if c.App != "" && c.Key != "" {
+		return c, &FitError{Message: "a credential is a GitHub App or an SSH key, not both"}
+	}
+	if c.Key != "" {
+		key, ok := NormalKey(c.Key)
+		if !ok {
+			return c, &FitError{Message: "the SSH key is not a public key in authorized-keys form"}
+		}
+		c.Key = key
+	}
+	return c, nil
+}
+
+// Phrase names c in a refusal, so a manager knows which credential the Git
+// host refused: " with GitHub App {name}", or " with SSH key
+// {fingerprint}". The zero credential, chosen by URL, is "". Neither names
+// a secret.
+func Phrase(c store.Credential) string {
+	switch {
+	case c.App != "":
+		return " with GitHub App " + c.App
+	case c.Key != "":
+		if key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.Key)); err == nil {
+			return " with SSH key " + ssh.FingerprintSHA256(key)
+		}
+	}
+	return ""
+}
+
 // Fit checks that c is a credential a new registration of url can have: an
 // SSH URL takes an SSH key that is not the excluded key; an https URL that
 // an App's server holds takes an App that serves it; any other https URL
@@ -234,6 +267,39 @@ func (s *Source) Fit(ctx context.Context, url string, c store.Credential) error 
 	}
 	if _, ok := app.Repository(url); !ok {
 		return &FitError{Message: fmt.Sprintf("GitHub App %s does not serve the URL: it serves %s/{owner}/{repository} URLs with no user name, query or fragment", app.Name, app.Server)}
+	}
+	return nil
+}
+
+// Authenticate checks that c authenticates to url before a check depends
+// on it: a GitHub App mints a read token for the repository, so an App
+// that cannot sign, or whose installation does not cover the repository,
+// fails even where the Git host asks no credential, as a public
+// repository's does not. An SSH key, and the zero credential, need no
+// such check: an SSH host always asks for a key. c fits url (Fit). A
+// *FitError refuses it, naming the App and GitHub's fixed reason.
+func (s *Source) Authenticate(ctx context.Context, url string, c store.Credential) error {
+	if c.App == "" {
+		return nil
+	}
+	app, ok := s.Apps.Named(c.App)
+	if !ok {
+		return &FitError{Message: fmt.Sprintf("no GitHub App named %s is configured", c.App)}
+	}
+	repo, ok := app.Repository(url)
+	if !ok {
+		return &FitError{Message: fmt.Sprintf("GitHub App %s does not serve the URL", app.Name)}
+	}
+	if _, err := app.Token(ctx, repo, githubapp.Read); err != nil {
+		reason := "the token could not be minted"
+		var e *githubapp.Error
+		if errors.As(err, &e) {
+			reason = e.Reason
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &FitError{Message: fmt.Sprintf("GitHub App %s could not get a token for the repository: %s", app.Name, reason)}
 	}
 	return nil
 }

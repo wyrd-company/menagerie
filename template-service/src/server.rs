@@ -113,6 +113,9 @@ pub fn router(service: Arc<Service>) -> Router {
 pub struct Call {
     pub ended: Ended,
     pub handed: crate::credentials::Handed,
+    /// The credential the request names, for a connection the service
+    /// opens itself.
+    pub scope: crate::credentials::Scope,
 }
 
 /// One route's work.
@@ -124,7 +127,7 @@ async fn call<Req, Rep>(
     operation: Operation<Req, Rep>,
 ) -> Response
 where
-    Req: DeserializeOwned + Send + 'static,
+    Req: DeserializeOwned + crate::api::Credentialed + Send + 'static,
     Rep: Serialize + Send + 'static,
 {
     // The one way out of a route: every status and body, refusals and
@@ -142,7 +145,7 @@ async fn run<Req, Rep>(
     handed: crate::credentials::Handed,
 ) -> (StatusCode, Vec<u8>)
 where
-    Req: DeserializeOwned + Send + 'static,
+    Req: DeserializeOwned + crate::api::Credentialed + Send + 'static,
     Rep: Serialize + Send + 'static,
 {
     // The bounded scan runs first, so a body nested too deep is refused as
@@ -170,8 +173,13 @@ where
             ));
         }
     };
+    let scope = match crate::credentials::Scope::of(request.credential()) {
+        Ok(scope) => scope,
+        Err(refusal) => return refused(&refusal),
+    };
     // Every Toha fetch the operation makes, on this worker, asks the
-    // workspace service's credential route when an HTTPS remote challenges.
+    // workspace service's credential route when an HTTPS remote challenges,
+    // and offers only the request's SSH key when it names one.
     // `_alive` lives as long as this future: when the caller goes away the
     // future is dropped, which fires Toha's stop signal synchronously and
     // ends the resolver's credential requests.
@@ -182,13 +190,24 @@ where
             &service.settings.hook_runner_socket,
             kept.clone(),
             ended.clone(),
+            scope.clone(),
         );
+        let key = scope.key.clone();
         let call = Call {
             ended: ended.clone(),
             handed: kept,
+            scope,
         };
         ended.scope(|| {
-            toha::source::with_credential_resolver(resolver, || operation(&service, request, &call))
+            let resolving = || {
+                toha::source::with_credential_resolver(resolver, || {
+                    operation(&service, request, &call)
+                })
+            };
+            match key {
+                Some(key) => toha::source::with_ssh_key(key, resolving),
+                None => resolving(),
+            }
         })
     })
     .await;
@@ -272,6 +291,8 @@ pub async fn serve(
 
 #[cfg(test)]
 mod tests {
+    // A test operation whose request names no credential.
+    impl crate::api::Credentialed for std::path::PathBuf {}
     use super::*;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
