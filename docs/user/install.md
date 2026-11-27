@@ -411,6 +411,27 @@ needs the backup. A start that finds no data takes back what the workspaces,
 their definitions, their containers and Wyrwood still hold, as the first start
 after an upgrade does.
 
+### Upgrading from 0.5.1
+
+Release 0.5.2 lets each [backup repository](usage.md#backup-repositories) and
+each [template](usage.md#register-a-template) name its own GitHub App or SSH
+key. From 0.5.0, follow the next section first.
+
+1. Back up the `/var/lib/menagerie` volume. Release 0.5.2 adds credentials to
+   Menagerie's data, and 0.5.1 refuses to start on that data, so going back
+   needs the backup.
+2. Pull the image and recreate the container. The configuration needs no
+   change: `github-app` keeps working as one App named `github-app`, and
+   [`github-apps`](configuration.md#github-app) takes its place when you need
+   more than one App.
+3. Backup repositories and templates registered before the upgrade keep the
+   credential their URL chooses. To give one its own App or deploy key, choose
+   **Change credential** on its row.
+4. Update any script that registers backup repositories or templates through
+   the API. `POST /api/backup-repositories` and `POST /api/templates` now
+   refuse a request without a `credential` for an SSH address, or for an
+   `https` address on a GitHub App's server. The web UI always sends one.
+
 ### Upgrading from 0.5.0
 
 Release 0.5.1 lets each workspace back up to its own [backup
