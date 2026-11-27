@@ -560,8 +560,10 @@ path "transit/sign/sample-operator" { capabilities = ["update"] }
 			t.Fatal(err)
 		}
 		snap = waitJob(t, b, site, snap.JobID)
+		// The template names the Git key, so the fetch asks the agent for that
+		// key alone and is refused for its absence.
 		if snap.State != jobs.Failed || snap.Error == nil || snap.Error.Kind != "template-refused" ||
-			!strings.Contains(snap.Error.Message, "were not accepted by the remote") {
+			!strings.Contains(snap.Error.Message, "does not offer the key") || !strings.Contains(snap.Error.Message, gitFingerprint) {
 			t.Fatalf("create without its Git key ended %s: %+v", snap.State, snap.Error)
 		}
 		if _, err := os.Stat(filepath.Join(rootDir, "beta")); !os.IsNotExist(err) {
